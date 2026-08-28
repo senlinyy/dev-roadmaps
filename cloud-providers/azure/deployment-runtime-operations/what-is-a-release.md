@@ -13,17 +13,15 @@ aliases:
 
 ## Table of Contents
 
-1. [From Local Deploy to Azure Release](#from-local-deploy-to-azure-release)
-2. [Artifact: The Exact Package](#artifact-the-exact-package)
-3. [Runtime Target: Where the Package Runs](#runtime-target-where-the-package-runs)
-4. [Runtime Settings and Identity](#runtime-settings-and-identity)
-5. [Traffic Movement and Health Evidence](#traffic-movement-and-health-evidence)
-6. [Rollback Belongs in the Release](#rollback-belongs-in-the-release)
-7. [A Release Record Example](#a-release-record-example)
-8. [Official References](#official-references)
-
-## From Local Deploy to Azure Release
-<!-- section-summary: A release moves production from one known state to another known state with evidence. -->
+1. [What Changes Between a Local Deploy and an Azure Release?](#what-changes-between-a-local-deploy-and-an-azure-release)
+2. [What Is the Release Artifact?](#what-is-the-release-artifact)
+3. [Where Does the Artifact Run?](#where-does-the-artifact-run)
+4. [Which Settings and Identity Does the Runtime Need?](#which-settings-and-identity-does-the-runtime-need)
+5. [How Do Traffic and Health Evidence Prove the Release Works?](#how-do-traffic-and-health-evidence-prove-the-release-works)
+6. [How Does Rollback Fit the Release?](#how-does-rollback-fit-the-release)
+7. [What Should a Release Record Contain?](#what-should-a-release-record-contain)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
 Imagine a tiny app on one virtual machine. You build the code, copy the files to the server, edit an `.env` file, restart the process, run `curl /health`, and keep the previous folder nearby in case the new build hurts users. That simple workflow already contains the pieces of a release: a package, a place to run it, settings, traffic, health checks, and a path back.
 
@@ -31,7 +29,20 @@ Azure keeps those same practical pieces, but Azure gives each piece a resource n
 
 This module follows `devpolaris-orders-api`, a checkout service for a training platform. A customer buys a course, the API writes an order row to Azure SQL, uploads a receipt to Azure Storage, and sends telemetry to Application Insights. Production currently runs revision `devpolaris-orders-api--v30`. The team wants to release revision `devpolaris-orders-api--v31`, which adds retry logic when receipt uploads hit a short storage outage.
 
-That sounds like a code change, but production needs more than the new image. The release must prove the exact image digest, the runtime revision, the storage setting, the Key Vault reference, the managed identity permission, the traffic split, the health signal, and the rollback target. The table gives the release pieces before we walk through them.
+Keep these questions in view as you work through the lesson:
+
+1. **What Changes Between a Local Deploy and an Azure Release?**
+2. **What Is the Release Artifact?**
+3. **Where Does the Artifact Run?**
+4. **Which Settings and Identity Does the Runtime Need?**
+5. **How Do Traffic and Health Evidence Prove the Release Works?**
+6. **How Does Rollback Fit the Release?**
+7. **What Should a Release Record Contain?**
+
+## What Changes Between a Local Deploy and an Azure Release?
+<!-- section-summary: A release moves production from one known state to another known state with evidence. -->
+
+A new image is only one part of a production release. The release must prove the exact image digest, the runtime revision, the storage setting, the Key Vault reference, the managed identity permission, the traffic split, the health signal, and the rollback target. The table gives the release pieces before we walk through them.
 
 | Release part | Plain meaning | Azure example |
 |---|---|---|
@@ -47,12 +58,16 @@ That sounds like a code change, but production needs more than the new image. Th
 
 *A release is the controlled path from a candidate artifact to user traffic, health evidence, and a continue-or-recover decision.*
 
-## Artifact: The Exact Package
+## What Is the Release Artifact?
 <!-- section-summary: The artifact is the immutable package that production should run. -->
 
 An **artifact** is the thing you deploy. For this API, the artifact is a container image in Azure Container Registry. For another Azure app, it might be a ZIP package for App Service, a Function App package, a Helm chart, a Bicep file, or a VM image. The artifact gives the release a concrete object instead of a loose phrase like "the new code."
 
 Image tags help people talk about a build, but a tag can move. A release record should also capture an immutable identifier. For container images, that identifier is the **image digest**. The digest is a hash of the image content. If someone asks exactly which bytes production received, the digest answers that question.
+
+That digest answers a question a tag cannot answer reliably. A mutable tag such as `latest` or even `2026-06-24.3` can be pushed again. A content digest changes when the image content changes, so the record can prove that the artifact tested in the candidate is the artifact receiving production traffic.
+
+This creates a clean separation. **Build** turns source into an immutable artifact. **Deployment** places that artifact on a runtime target. **Release** exposes the deployed candidate to users under controlled settings and evidence. A deployment command returning success proves that Azure accepted a change; it does not prove that checkout works for customers.
 
 The release owner checks the image in the registry before deploying it:
 
@@ -83,7 +98,7 @@ The command asks Azure Container Registry for manifest metadata and filters to t
 
 For App Service, the artifact check may point at a ZIP package, a deployment ID, or a container image. For Functions, it may point at a package URL or a deployment history entry. The format changes, but the habit stays the same: record the exact package before traffic moves.
 
-## Runtime Target: Where the Package Runs
+## Where Does the Artifact Run?
 <!-- section-summary: The runtime target is the Azure resource that receives the artifact and exposes a candidate state. -->
 
 A **runtime target** is the Azure place that runs the artifact. In Azure Container Apps, a meaningful target is a revision. A revision is a snapshot of a container app version, including the container image and revision-scoped template settings. Azure Container Apps can keep several active revisions at the same time in multiple revision mode, which makes it useful for canaries, blue-green releases, and quick rollback.
@@ -139,7 +154,7 @@ Example output:
 
 *The artifact-to-evidence path ties the image digest to the candidate revision, direct smoke test, and live telemetry.*
 
-## Runtime Settings and Identity
+## Which Settings and Identity Does the Runtime Need?
 <!-- section-summary: Runtime settings and managed identity must match the artifact being released. -->
 
 **Runtime settings** are the values the app reads after Azure starts it. They include environment variables, app settings, connection strings, feature flags, telemetry connection strings, and secret references. The same artifact can behave differently in staging and production because each environment supplies different values.
@@ -195,7 +210,7 @@ Example output:
 
 `PrincipalId` is the service principal object Azure RBAC evaluates. `Type` shows whether the app has system-assigned identity, user-assigned identity, or both. The next action is to confirm that the expected principal has the expected roles at the narrow resource scopes. A missing Key Vault role often appears later as a startup failure or a secret reference that never resolves.
 
-## Traffic Movement and Health Evidence
+## How Do Traffic and Health Evidence Prove the Release Works?
 <!-- section-summary: Traffic movement exposes the candidate to users, so it needs direct checks and telemetry checks. -->
 
 **Traffic movement** is the moment the release starts touching users. Container Apps can split traffic between active revisions by percentage. App Service can swap a warmed slot into production or route a percentage of production traffic to a slot. The release plan should say which mechanism the team uses and which evidence must stay healthy after each step.
@@ -260,7 +275,7 @@ Example output:
 
 `-f` makes `curl` fail on HTTP error responses. `-sS` hides progress output while still printing errors. The health response proves the app and critical dependencies respond. The version response ties the request to the candidate revision, image digest, and feature flag. The next action is to compare real traffic telemetry with the release threshold.
 
-## Rollback Belongs in the Release
+## How Does Rollback Fit the Release?
 <!-- section-summary: Rollback is planned before traffic moves so recovery uses known commands and known targets. -->
 
 **Rollback** means restoring a previously known-good production state. In Container Apps, rollback often means moving traffic back to the stable revision. In App Service, rollback often means swapping the previous production slot back or routing traffic away from the candidate slot. In both cases, rollback should be written before the release begins.
@@ -295,7 +310,26 @@ This command restores user traffic to the stable revision. It does not erase the
 
 Rollback planning also needs configuration notes. If the release changed a shared Key Vault secret, storage container, feature flag, or App Service app setting, moving traffic back may be only half of the recovery. The previous code may read the new value unless the config rollback is documented. That is why the release record should name previous setting values or previous secret versions where the release changed them.
 
-## A Release Record Example
+Application rollback can be wider than code rollback. A database migration may have transformed persistent rows, a queue may contain messages in a new format, or an external client may already depend on the new behavior. Moving traffic to the old revision does not reverse those facts. The plan must name irreversible or forward-only changes and explain how old and new versions coexist during the rollout.
+
+A feature release can be separate again. The team may deploy code with a feature flag disabled, prove that the runtime is healthy, and later enable the behavior for a small cohort. The artifact stays the same while product exposure changes. The release record should therefore distinguish artifact version, runtime traffic, and feature exposure instead of treating them as one switch.
+
+The process can be read as a small state machine:
+
+```text
+built -> deployed candidate -> verified candidate -> partial traffic
+                                           |              |
+                                           v              v
+                                      rejected        full traffic
+                                           |              |
+                                           +---- rollback-+
+```
+
+Each transition has evidence and an owner. A candidate can exist without user traffic. Partial traffic continues only while health thresholds hold. Full traffic is a decision based on the watch window, and rollback returns exposure to the known-good state while preserving the failed candidate for investigation.
+
+One Azure term can cause confusion. **Azure DevOps Classic release pipelines** use *release* for a specific versioned set of artifacts plus the saved pipeline information—stages, tasks, policies, and deployment options—needed to execute it. A deployment is the execution of one stage from that Classic release object. This article uses *release* in the broader operating sense: the complete controlled change that reaches users and is verified or rolled back. When a runbook says "release," record which meaning it intends.
+
+## What Should a Release Record Contain?
 <!-- section-summary: The release record gives operators the exact state, evidence, owner, and recovery path. -->
 
 A **release record** is the written proof of what changed, why it changed, which checks passed, and how to recover. It can live in a deployment system, pull request, incident timeline, ticket, or runbook. The important part is that another operator can open it during stress and find concrete resource names, commands, and thresholds.
@@ -343,10 +377,44 @@ The record names the runtime target, the artifact digest, the settings, the iden
 
 The next article zooms into the two places where release mistakes often hide: runtime configuration and safe rollout controls. We will keep the same orders API and turn the settings, Key Vault references, slots, revisions, traffic weights, and rollback notes into a practical release workflow.
 
-## Official References
+
+---
+
+## Check Your Answers
+
+:::expand[What Changes Between a Local Deploy and an Azure Release?]{kind="recap"}
+A release moves production from one known state to another known state with evidence.
+:::
+
+:::expand[What Is the Release Artifact?]{kind="recap"}
+The artifact is the immutable package that production should run.
+:::
+
+:::expand[Where Does the Artifact Run?]{kind="recap"}
+The runtime target is the Azure resource that receives the artifact and exposes a candidate state.
+:::
+
+:::expand[Which Settings and Identity Does the Runtime Need?]{kind="recap"}
+Runtime settings and managed identity must match the artifact being released.
+:::
+
+:::expand[How Do Traffic and Health Evidence Prove the Release Works?]{kind="recap"}
+Traffic movement exposes the candidate to users, so it needs direct checks and telemetry checks.
+:::
+
+:::expand[How Does Rollback Fit the Release?]{kind="recap"}
+Rollback is planned before traffic moves so recovery uses known commands and known targets.
+:::
+
+:::expand[What Should a Release Record Contain?]{kind="recap"}
+The release record gives operators the exact state, evidence, owner, and recovery path.
+:::
+
+## References
 
 - [Update and deploy changes in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions)
 - [Traffic splitting in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting)
+- [Classic release pipelines in Azure DevOps](https://learn.microsoft.com/en-us/azure/devops/pipelines/release/?view=azure-devops)
 - [Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots)
 - [Configure an App Service app](https://learn.microsoft.com/en-us/azure/app-service/configure-common)
 - [az acr manifest](https://learn.microsoft.com/en-us/cli/azure/acr/manifest) - Azure CLI commands for listing and inspecting Azure Container Registry manifest metadata.

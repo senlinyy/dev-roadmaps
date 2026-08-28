@@ -12,19 +12,16 @@ aliases:
 
 ## Table of Contents
 
-1. [What Cost and Resilience Mean Together](#what-cost-and-resilience-mean-together)
-2. [The Service Story](#the-service-story)
-3. [Cost Shapes](#cost-shapes)
-4. [Failure Shapes](#failure-shapes)
-5. [Service Promises](#service-promises)
-6. [Redundancy and Recovery](#redundancy-and-recovery)
-7. [Tradeoff Table](#tradeoff-table)
-8. [Review Before Changing Spend](#review-before-changing-spend)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
-
-## What Cost and Resilience Mean Together
-<!-- section-summary: Cost explains what Azure keeps available for you, and resilience explains what that spending helps the workload survive. -->
+1. [Why Must Cost and Resilience Be Reviewed Together?](#why-must-cost-and-resilience-be-reviewed-together)
+2. [What Service Story Defines the Tradeoff?](#what-service-story-defines-the-tradeoff)
+3. [What Shapes Cloud Cost?](#what-shapes-cloud-cost)
+4. [What Failure Shapes Must the Design Survive?](#what-failure-shapes-must-the-design-survive)
+5. [What Do Azure Service Promises Cover?](#what-do-azure-service-promises-cover)
+6. [How Do Redundancy and Recovery Differ?](#how-do-redundancy-and-recovery-differ)
+7. [How Do You Compare the Tradeoffs?](#how-do-you-compare-the-tradeoffs)
+8. [What Evidence Should You Review Before Changing Spend?](#what-evidence-should-you-review-before-changing-spend)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Start with the moment a beginner will actually recognize: the Azure bill grows, and someone asks what can be turned down. Maybe the app has more replicas than normal traffic needs. Maybe storage keeps old files for too long. Maybe the log workspace stores debug noise for months. Those are normal cost questions, and they are worth asking.
 
@@ -32,17 +29,29 @@ The careful part is that each saving can also change a production promise. Fewer
 
 **Cost** is the money attached to the resources your workload asks Azure to provide. A virtual machine has a cost because Azure keeps compute capacity available. A database has a cost because Azure stores data, runs database engines, keeps backups, and offers performance. A log workspace has a cost because Azure ingests, indexes, and retains telemetry for later investigation.
 
+Keep these questions in view as you work through the lesson:
+
+1. **Why Must Cost and Resilience Be Reviewed Together?**
+2. **What Service Story Defines the Tradeoff?**
+3. **What Shapes Cloud Cost?**
+4. **What Failure Shapes Must the Design Survive?**
+5. **What Do Azure Service Promises Cover?**
+6. **How Do Redundancy and Recovery Differ?**
+7. **How Do You Compare the Tradeoffs?**
+8. **What Evidence Should You Review Before Changing Spend?**
+
+## Why Must Cost and Resilience Be Reviewed Together?
+<!-- section-summary: Cost explains what Azure keeps available for you, and resilience explains what that spending helps the workload survive. -->
+
 **Resilience** is the ability of a workload to keep giving users an acceptable experience during trouble, or to recover within an agreed time after trouble. Trouble can mean a process crash, a full virtual machine failure, an availability zone outage, a bad deployment, a mistaken delete, a corrupt database write, or a regional disruption. Resilience uses design choices like multiple instances, health checks, queue buffering, backups, restore testing, and failover paths.
 
 Those two ideas stay connected because every resilience choice asks Azure to hold something extra for you. Extra compute replicas cost money. Extra database capacity costs money. Extra copies of data cost money. Longer log retention costs money. A standby region costs money even on quiet days because you are buying a faster recovery path for a future bad day.
 
 The Azure Well-Architected Framework frames this as a business and engineering conversation. The Cost Optimization pillar asks teams to understand budgets, spending patterns, usage, and tradeoffs. The Reliability pillar asks teams to define what users need, design for faults, and recover within agreed targets. In real production work, those pillars meet in the same review: what promise are we buying, what failure does it cover, and what monthly spend does it add?
 
-AWS readers can map this to the same Well-Architected conversation. Cost Optimization asks whether spend matches value, and Reliability asks whether the workload can survive realistic failure. Azure uses Azure-specific services, but the review habit is very similar.
-
 This article connects five ideas in order. First, we will follow one concrete service. Then we will name the **cost shapes** that appear on the bill. After that we will name the **failure shapes** the service needs to survive. Then we will connect both sides through **service promises**, **redundancy**, **recovery**, and a simple **tradeoff table** that helps a team review a cost change before touching production.
 
-## The Service Story
+## What Service Story Defines the Tradeoff?
 <!-- section-summary: A concrete service makes the tradeoffs visible because each workflow has a different value, failure risk, and budget limit. -->
 
 Imagine a small company that sells tickets for local concerts and workshops. The public website lets customers browse events, buy seats, receive receipt PDFs, and change bookings. The internal team uses an admin dashboard to create events, review payouts, and export nightly reports for finance.
@@ -55,7 +64,7 @@ The platform engineer hears a second problem hiding inside the first one. Each p
 
 That is the whole article in miniature. Cost work starts with a bill, but production review has to connect the bill to a workflow. The checkout flow, receipt storage, admin dashboard, nightly report, and email worker all deserve different levels of protection because they do different jobs for the business.
 
-## Cost Shapes
+## What Shapes Cloud Cost?
 <!-- section-summary: Cost shapes name the billing pattern before the team decides whether a spend line is waste, useful capacity, or protection. -->
 
 A **cost shape** is the pattern behind a spend line. Azure resources do not all bill for the same kind of thing. Some charge because capacity exists all month. Some charge because work happened. Some charge because bytes stayed on disk. Some charge because data moved. Some charge because the team asked Azure to keep recovery copies.
@@ -84,11 +93,10 @@ Naming the cost shape matters because the fix depends on the shape. A large App 
 
 **Safety copies** can look like waste until a bad day arrives. Blob versioning, SQL backups, snapshots, and geo-redundant copies all increase storage spend because they keep more than the current live data. The important question is whether those copies support a real recovery promise. A receipt PDF may need versioning and soft delete because customers and finance need proof of purchase. A temporary resized image cache may only need a short retention window because the app can rebuild it.
 
-In AWS terms, this is the same family of decisions as paying for snapshots, object versions, backup plans, or cross-region copies. The key review is still whether the extra copy protects a workflow that the business actually needs to recover.
 
 Once the team can name the cost shape, the conversation gets more honest. The bill stops being one big scary number. It turns into a set of meters, and each meter points to a different kind of engineering decision.
 
-## Failure Shapes
+## What Failure Shapes Must the Design Survive?
 <!-- section-summary: Failure shapes name what can break, so the team can choose protection that matches the real problem. -->
 
 A **failure shape** is the layer where trouble happens. Azure has many reliability tools, but each one protects against a particular kind of failure. Multiple App Service instances help when one runtime instance fails. Availability zones help when a datacenter group has trouble. Backups help when data needs to return to an earlier state. A secondary region helps when the primary region is unusable for a serious period.
@@ -119,7 +127,7 @@ The ticketing service gives us five common failure shapes. These are the same sh
 
 Now the cost shapes have something to connect to. A second App Service instance maps to instance failure and capacity spikes. ZRS storage maps to zone trouble inside a supported region. Blob versioning maps to delete and overwrite mistakes. Geo-redundant storage maps to regional data durability, with details around read access, write failover, and replication lag.
 
-## Service Promises
+## What Do Azure Service Promises Cover?
 <!-- section-summary: Service promises connect business value to technical targets, so each workflow receives the amount of protection it actually needs. -->
 
 A **service promise** is the reliability statement attached to one user or business workflow. It explains what the team is trying to protect, how much downtime the workflow can tolerate, how much data loss the business can accept, and what kind of degraded behavior still counts as acceptable.
@@ -142,7 +150,7 @@ This table changes the tone of a cost review. A proposal to reduce checkout API 
 
 The service promise also keeps the team from buying premium protection everywhere. Production checkout may deserve zone-aware compute, strong database backups, and careful capacity headroom. A development copy of the admin dashboard can often run on a smaller SKU, shorter log retention, and cheaper storage redundancy because it serves a different promise.
 
-## Redundancy and Recovery
+## How Do Redundancy and Recovery Differ?
 <!-- section-summary: Redundancy keeps current service available through infrastructure faults, while recovery brings data or service back after a larger disruption or mistake. -->
 
 **Redundancy** means Azure or your architecture keeps more than one usable copy of something. Multiple API instances are compute redundancy. Zone-redundant storage is data redundancy inside a region. Geo-redundant storage is data redundancy across regions. Redundancy mainly helps when the current desired state is still the right state and the problem is infrastructure availability.
@@ -161,7 +169,7 @@ The cost side follows directly. ZRS can cost more than LRS because Azure stores 
 
 For the ticketing service, receipt PDFs may use blob versioning and soft delete because a mistaken delete creates support, finance, and customer trust problems. Event poster images may use shorter lifecycle retention because staff can re-upload them. The checkout database may keep stronger backup settings and regular restore drills because paid orders are the heart of the business. The admin dashboard may accept a slower restore because staff can pause event setup for a short period.
 
-## Tradeoff Table
+## How Do You Compare the Tradeoffs?
 <!-- section-summary: A tradeoff table makes the saving, the affected promise, and the failure shape visible in one place before production changes. -->
 
 A **tradeoff table** is a small review tool. It puts the cost change beside the service promise it affects. The table can stay small and practical. Its job is to force the team to say what they save, what they weaken or strengthen, and which workflow depends on that choice.
@@ -180,11 +188,17 @@ Here is a version for the ticketing service:
 
 This table helps because the team can review a cost decision with the same words every time. The review question changes from "Can we make Azure cheaper?" to "Which workflow, which failure shape, which promise, which saving, and which rollback plan are attached to this change?"
 
+Autoscaling does not remove the tradeoff. It reduces idle capacity when demand changes, but the team still pays for minimum instances, scale-out delay, monitoring, and the peak capacity that actually runs. Scaling can also move pressure into a database, queue, or external API. A cost review should ask whether the whole workflow handles the new concurrency, not merely whether the compute tier can add replicas.
+
+Sometimes **graceful degradation** is cheaper and more honest than duplicating every component. During a regional problem, checkout may remain available while recommendations, search suggestions, or delayed emails operate with reduced features. The business defines which reduced outcome is acceptable. This can protect the valuable workflow without buying full active-active capacity for every secondary feature.
+
+The goal is therefore not minimum cost. Minimum cost can mean one instance, no recovery copies, no telemetry, and no operational margin—an inexpensive design until the first failure. The goal is the lowest sustainable cost that still meets the named service promise and leaves a tested recovery path.
+
 The email worker row shows how a cost reduction can be a good architecture choice when it matches the promise. Receipt email can sit behind a queue, retry safely, and arrive later during a spike. That means the team can save money there without treating the public checkout path the same way.
 
 The receipt storage rows show how a cost increase can be the right choice when the promise deserves it. Versioning, soft delete, and redundancy all add storage spend, but they protect evidence the business may need after a customer dispute, an accidental delete, or a zone problem. The table makes that protection visible instead of hiding it inside a storage account setting.
 
-## Review Before Changing Spend
+## What Evidence Should You Review Before Changing Spend?
 <!-- section-summary: A safe cost review checks evidence, ownership, failure impact, and rollback before changing production resources. -->
 
 Azure gives teams several sources of cost and usage evidence. **Microsoft Cost Management** helps teams plan, analyze, and reduce spending. Cost Analysis can group spending by scope, service, resource, tag, and time period. Budgets can alert owners when actual or forecasted spend crosses a threshold. Azure Advisor can point out idle or underused resources, but the team still has to connect each recommendation to the workload's promise.
@@ -253,7 +267,7 @@ Those values line up with the tradeoff table. `capacity` is the number of App Se
 
 Cost optimization works best as an operating loop. Cost Management shows the spend. Tags and resource groups connect the spend to an owner. Metrics and logs show whether the resource carries real load. Service promises explain which workflows need protection. The tradeoff table records the decision. Monitoring and rollback watch the system after the change.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: Cost and resilience work well together when every spend line can point to a workflow, a failure shape, and a promise. -->
 
 The ticketing service started with a broad question: the Azure bill grew, and the team wanted to reduce it. After naming the pieces, the question became clearer. The team found always-on capacity in App Service, usage-based work in Functions, stored data in Blob Storage and Log Analytics, data movement in public and regional traffic, and safety copies in backups and versions.
@@ -270,13 +284,47 @@ This is why cost and resilience belong in the same review. A resource can be was
 
 For beginners, the practical habit is simple to remember: every Azure cost change answers three questions. What cost shape are we changing? What failure shape or service promise does it touch? What evidence tells us the change is safe for this workflow? Those three answers turn cost work from random cleanup into careful production engineering.
 
-## What's Next
+### What's Next
 
 Now that cost and resilience are connected, the next article gets more practical about visibility. It shows how Azure Cost Management, Cost Analysis, tags, budgets, Advisor, and right-sizing reviews help a team find the exact source of spend before changing resources.
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[Why Must Cost and Resilience Be Reviewed Together?]{kind="recap"}
+Cost explains what Azure keeps available for you, and resilience explains what that spending helps the workload survive.
+:::
+
+:::expand[What Service Story Defines the Tradeoff?]{kind="recap"}
+A concrete service makes the tradeoffs visible because each workflow has a different value, failure risk, and budget limit.
+:::
+
+:::expand[What Shapes Cloud Cost?]{kind="recap"}
+Cost shapes name the billing pattern before the team decides whether a spend line is waste, useful capacity, or protection.
+:::
+
+:::expand[What Failure Shapes Must the Design Survive?]{kind="recap"}
+Failure shapes name what can break, so the team can choose protection that matches the real problem.
+:::
+
+:::expand[What Do Azure Service Promises Cover?]{kind="recap"}
+Service promises connect business value to technical targets, so each workflow receives the amount of protection it actually needs.
+:::
+
+:::expand[How Do Redundancy and Recovery Differ?]{kind="recap"}
+Redundancy keeps current service available through infrastructure faults, while recovery brings data or service back after a larger disruption or mistake.
+:::
+
+:::expand[How Do You Compare the Tradeoffs?]{kind="recap"}
+A tradeoff table makes the saving, the affected promise, and the failure shape visible in one place before production changes.
+:::
+
+:::expand[What Evidence Should You Review Before Changing Spend?]{kind="recap"}
+A safe cost review checks evidence, ownership, failure impact, and rollback before changing production resources. Cost and resilience work well together when every spend line can point to a workflow, a failure shape, and a promise.
+:::
+
+## References
 
 - [Azure Well-Architected Framework: Cost Optimization design principles](https://learn.microsoft.com/en-us/azure/well-architected/cost-optimization/principles) - Explains cost discipline, cost efficiency, usage optimization, rate optimization, and ongoing monitoring.
 - [Azure Well-Architected Framework: Reliability design principles](https://learn.microsoft.com/en-us/azure/well-architected/reliability/principles) - Covers business requirements, resilience, recovery, operations, and reliability tradeoffs.

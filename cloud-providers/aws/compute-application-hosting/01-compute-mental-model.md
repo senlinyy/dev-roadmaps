@@ -31,15 +31,15 @@ At the lowest level, every application has the same physical requirement:
 
 The cloud does not remove servers from reality. It changes which server decisions your team must make and which AWS makes on your behalf.
 
-Three first-principles questions explain most AWS compute choices:
+Three first-principles decisions explain most AWS compute choices:
 
-1. **What unit do you deploy?**
-2. **Who decides where and when it runs?**
-3. **Who operates the machine underneath it?**
+1. **The unit you deploy.**
+2. **The system that decides where and when it runs.**
+3. **The team or platform that operates the machine underneath it.**
 
-EC2, ECS with Fargate, Lambda, and EKS draw their responsibility boundaries in different places. These three questions make those boundaries visible before any service comparison begins.
+EC2, ECS with Fargate, Lambda, and EKS draw their responsibility boundaries in different places. These three decisions make those boundaries visible before any service comparison begins.
 
-The sections below answer these questions in order:
+Keep these questions in view as you work through the lesson:
 
 1. **What Does Every Application Need to Run?**
 2. **Which Workload Shape Are You Deploying?**
@@ -290,7 +290,7 @@ event → bounded computation → result or next event
 
 Examples include an HTTP request, S3 object processing, SQS message handling, scheduled cleanup, or a database event that updates another system.
 
-Lambda becomes less natural when the essential design is, "Boot once, remain alive indefinitely, hold important local state, and accept arbitrary work forever." That is server or container shape.
+Lambda is a poor fit if the essential design is, "Boot once, remain alive indefinitely, hold important local state, and accept arbitrary work forever." That is server or container shape.
 
 AWS has added models such as Lambda Durable Functions and Lambda Managed Instances, but the ephemeral event-and-invocation model remains the clearest foundation for ordinary Lambda.
 

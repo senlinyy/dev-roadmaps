@@ -26,11 +26,22 @@ aliases:
 6. [How Do Wait, Parallel, and Map States Change Control Flow?](#how-do-wait-parallel-and-map-states-change-control-flow)
 7. [How Do You Observe, Redrive, and Pay for Workflows?](#how-do-you-observe-redrive-and-pay-for-workflows)
 8. [How Does a Complete Publishing Workflow Run?](#how-does-a-complete-publishing-workflow-run)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 AWS Step Functions solves a fundamental distributed-systems problem: **How do you reliably remember where a multi-step process is and what should happen next?** It moves fragile control state out of the memory of one Lambda function, container, or server and into a managed workflow service.
 
-The sections below answer these questions in order:
+Imagine an article-publishing process:
+
+```text
+validate article -> get approval -> publish article -> send notification
+```
+
+One function can call all four operations in sequence. That works only while every step is quick, every dependency responds, approval is immediate, the process never crashes, and nobody later needs a reliable record of what happened.
+
+Suppose validation and approval succeed, then the coordinator crashes while publication is in progress. On restart, should it begin again? That can repeat validation and approval. Should it resume at publication? A new process does not know which prior steps completed. Worse, publication may have succeeded while its response was lost, so "retry" could repeat a real side effect.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Does a Multi-Step Process Need Durable Memory?**
 2. **How Does Amazon States Language Describe a Workflow?**
@@ -43,16 +54,6 @@ The sections below answer these questions in order:
 
 ## Why Does a Multi-Step Process Need Durable Memory?
 <!-- section-summary: A distributed process must remember its identity, progress, data, failure policy, and next action even when the coordinating compute disappears. -->
-
-Imagine an article-publishing process:
-
-```text
-validate article -> get approval -> publish article -> send notification
-```
-
-One function can call all four operations in sequence. That works only while every step is quick, every dependency responds, approval is immediate, the process never crashes, and nobody later needs a reliable record of what happened.
-
-Suppose validation and approval succeed, then the coordinator crashes while publication is in progress. On restart, should it begin again? That can repeat validation and approval. Should it resume at publication? A new process does not know which prior steps completed. Worse, publication may have succeeded while its response was lost, so "retry" could repeat a real side effect.
 
 The coordinator needs durable answers to:
 
@@ -710,6 +711,8 @@ Step Functions = durable coordinator that remembers progress
 ```
 
 Step Functions is not primarily a diagramming tool. Its value is moving the fragile control state of a distributed process out of temporary application memory and into managed orchestration. Choices, waits, task tokens, retries, workflow types, execution history, idempotency, and redrive all follow from that problem.
+
+## Check Your Answers
 
 :::expand[Why Does a Multi-Step Process Need Durable Memory?]{kind="recap"}
 A distributed process must remember its identity, progress, data, failure policy, and next action even when the coordinating compute disappears.

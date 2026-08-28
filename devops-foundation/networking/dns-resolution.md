@@ -9,17 +9,16 @@ id: article-devops-foundation-networking-dns-resolution
 
 ## Table of Contents
 
-1. [What DNS Resolution Does](#what-dns-resolution-does)
-2. [Why DNS Is Distributed](#why-dns-is-distributed)
-3. [The Resolution Chain](#the-resolution-chain)
-4. [DNS Records Used in Real Work](#dns-records-used-in-real-work)
-5. [Debugging DNS with dig](#debugging-dns-with-dig)
-6. [TTL and Safe Cutovers](#ttl-and-safe-cutovers)
-7. [DNS Failure Modes](#dns-failure-modes)
-8. [References](#references)
-
-## What DNS Resolution Does
-<!-- section-summary: DNS resolution turns a human-friendly hostname into the address records machines need for routing. -->
+1. [What Does DNS Resolution Do?](#what-does-dns-resolution-do)
+2. [Why Is DNS Distributed?](#why-is-dns-distributed)
+3. [How Does the Resolution Chain Reach an Authoritative Answer?](#how-does-the-resolution-chain-reach-an-authoritative-answer)
+4. [Which DNS Record Types Describe a Service?](#which-dns-record-types-describe-a-service)
+5. [How Do You Debug DNS with dig?](#how-do-you-debug-dns-with-dig)
+6. [How Do Caching and TTL Shape a Safe Cutover?](#how-do-caching-and-ttl-shape-a-safe-cutover)
+7. [How Do DNS Transport and Security Boundaries Work?](#how-do-dns-transport-and-security-boundaries-work)
+8. [How Do You Diagnose DNS Failure Modes?](#how-do-you-diagnose-dns-failure-modes)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 You type `https://app.example.com/dashboard` because a name is easy to remember. Your computer cannot send a packet to a name, though. Before the browser can open a TCP connection, it needs an address such as `203.0.113.25` for IPv4 or `2001:db8:10::25` for IPv6.
 
@@ -36,6 +35,20 @@ dig +short app.example.com
 # 203.0.113.25
 ```
 
+Keep these questions in view as you work through the lesson:
+
+1. **What Does DNS Resolution Do?**
+2. **Why Is DNS Distributed?**
+3. **How Does the Resolution Chain Reach an Authoritative Answer?**
+4. **Which DNS Record Types Describe a Service?**
+5. **How Do You Debug DNS with `dig`?**
+6. **How Do Caching and TTL Shape a Safe Cutover?**
+7. **How Do DNS Transport and Security Boundaries Work?**
+8. **How Do You Diagnose DNS Failure Modes?**
+
+## What Does DNS Resolution Do?
+<!-- section-summary: DNS resolution turns a human-friendly hostname into the address records machines need for routing. -->
+
 The output matters because:
 
 - `app.example.com` is the human-friendly name from the URL.
@@ -44,7 +57,7 @@ The output matters because:
 
 The lookup unlocks the next step. The machine can now ask, "How do I reach `203.0.113.25`?" That routing question belongs to IP addressing, subnets, and route tables. DNS stays with name lookup, record ownership, caching, and the traps around stale or wrong answers.
 
-## Why DNS Is Distributed
+## Why Is DNS Distributed?
 <!-- section-summary: DNS maps human names to machine addresses through delegated, cacheable records. -->
 
 Picture a tiny lab where every machine has one local file that says which names point to which addresses. That can work for a few hosts. It breaks down once many teams create services, change load balancers, move domains between providers, and need users across the world to get the right answer without editing every laptop and server.
@@ -63,7 +76,7 @@ DNS also solves the repeated-lookup problem with **caching**. A resolver can reu
 
 Under the hood, DNS works through referrals. A resolver does not ask one giant database for every app server on the internet. It follows the name tree until it reaches the nameserver responsible for the zone. During a production change, keep two questions separate: did the right zone contain the right record, and are resolvers still serving an old cached answer?
 
-## The Resolution Chain
+## How Does the Resolution Chain Reach an Authoritative Answer?
 <!-- section-summary: A recursive resolver follows referrals from root to TLD to authoritative nameservers, then caches the answer for later clients. -->
 
 Follow one laptop opening `https://app.example.com/dashboard`. The browser asks the operating system for an address. On Linux, that small local lookup component is often a **stub resolver**. It checks local rules, cache, `/etc/hosts`, and resolver settings, then sends the question onward because it does not walk the whole DNS tree by itself.
@@ -105,7 +118,7 @@ The next decision depends on where the chain breaks. A wrong final A record mean
 
 _The image follows one lookup through the resolver chain so DNS delegation and caching have a visible path._
 
-## DNS Records Used in Real Work
+## Which DNS Record Types Describe a Service?
 <!-- section-summary: DNS records describe addresses, aliases, mail routing, verification text, and nameserver delegation. -->
 
 Now say the team is launching `app.example.com`. One name needs to send users to the web app. The `www` name should land in the same place. Email should still work for the domain. A SaaS vendor may ask for a text value that proves the team owns the domain. The authoritative nameserver handles those different needs with different record types.
@@ -213,7 +226,7 @@ The important production habit is to know which record owns the traffic switch. 
 
 For a production change, write down the exact owner before editing anything: hostname, record type, current value, new value, TTL, and provider. That small inventory prevents changes to a parked record, an unused `www` name, or a private DNS zone that the failing public client never uses.
 
-## Debugging DNS with dig
+## How Do You Debug DNS with `dig`?
 <!-- section-summary: `dig` shows the resolver, status, answer, record type, and TTL so DNS debugging can use direct evidence. -->
 
 A real DNS incident often starts with a mismatch. The browser still reaches the old load balancer. A teammate on another network sees the new one. The DNS provider screen shows the right record, while a client resolver returns stale data. `dig` turns that report into concrete facts: which resolver answered, which status came back, which records were returned, and how long the answer may stay cached.
@@ -303,7 +316,7 @@ dig @ns1.dns-provider.example app.example.com A
 
 The first output lists the nameservers delegated for `example.com`. The second output has the `aa` flag, which means authoritative answer. It also shows the A record directly from the nameserver that owns the zone. If the authoritative server returns the right value while recursive resolvers still disagree, cache or delegation is the next place to inspect.
 
-## TTL and Safe Cutovers
+## How Do Caching and TTL Shape a Safe Cutover?
 <!-- section-summary: TTL controls how long resolvers keep an answer, so traffic migrations need TTL planning before the record changes. -->
 
 The next beginner trap shows up during migrations. You change a DNS record, refresh your browser, and still land on the old server. That can be correct DNS behavior because resolvers cache answers.
@@ -354,7 +367,15 @@ After a TTL change, think about rollback and old-target health together. If the 
 
 _The image shows why safe DNS cutovers start before the record changes._
 
-## DNS Failure Modes
+## How Do DNS Transport and Security Boundaries Work?
+
+DNS normally uses UDP for small, ordinary queries because it avoids connection setup. It can use TCP when a response is truncated, for larger exchanges, and for operations such as zone transfer. Modern clients may also carry DNS over TLS or HTTPS between the client and a chosen resolver. Those encrypted transports hide that local resolver exchange from some observers; they do not make the DNS data authoritative or protect every hop in the resolution hierarchy.
+
+DNSSEC adds signed records that let a validating resolver detect forged or modified DNS data when the chain of trust is correctly configured. It authenticates DNS answers; it does not encrypt names, hide query traffic, or prove that the server reached after resolution is trustworthy. HTTPS still authenticates and protects the application connection.
+
+Security spans several control points: protect the registrar account, restrict authoritative DNS changes, validate delegated nameservers, avoid open recursive resolvers, and remove records that point at deprovisioned services. Cache poisoning targets answer integrity, DNS rebinding changes an answer's address over time to cross trust assumptions, and a dangling record can let someone claim the abandoned service it names.
+
+## How Do You Diagnose DNS Failure Modes?
 <!-- section-summary: DNS failures usually show up as missing names, server-side resolution errors, timeouts, stale answers, or split answers. -->
 
 The browser error "site cannot be reached" hides a lot of detail. The app may be healthy, the firewall may be open, and Nginx may be ready, while the browser never gets an address. DNS status is the first clue because it tells you whether the name is missing, the lookup path broke, or the resolver did not answer.
@@ -413,6 +434,94 @@ dig @1.1.1.1 +short app.example.com
 ```
 
 Both answers can be correct. The private resolver returns an internal address. The public resolver returns a public address. The question is which resolver the failing client used. If a production server should use the private address, check its resolver config, VPC DNS settings, and private hosted zone association. If an external user receives the private address, the public zone may contain an internal value by mistake. Once DNS gives the right IP for the client, the next check belongs to the IP and subnet layer.
+
+### What Does Delegation Actually Delegate?
+
+The DNS namespace is a tree. The root delegates top-level domains, a top-level domain delegates a registered domain, and that domain may delegate child zones. A zone is the portion of the namespace served from one administrative data set; it is not automatically identical to a domain name. An authoritative server answers from the zone data it serves rather than recursively asking the hierarchy on the client's behalf.
+
+Delegation uses `NS` records in the parent. When a delegated nameserver's own name lies inside the child zone, the parent may also need glue address records so a resolver can reach that server without first resolving through the zone it is trying to contact. Glue is referral support, not the authoritative address record for every purpose.
+
+The zone's `SOA` record identifies administrative and timing data, including a serial used between authoritative servers and a negative-caching value. `NS` identifies authoritative nameservers. A resolver following the hierarchy receives referrals until an authoritative server supplies an answer or a proof that the requested name or type does not exist.
+
+### How Do Recursive and Stub Resolvers Divide the Work?
+
+An application normally asks a local stub resolver. That stub sends the question to a recursive resolver configured by the host, network, VPN, or runtime. The recursive resolver performs or reuses the hierarchy walk, validates policy such as DNSSEC when enabled, caches the result, and returns an answer.
+
+This separation explains why two clients can disagree. They may use different recursive resolvers, have different local caches, search domains, VPN views, or address-family preferences. A public resolver's answer proves what that resolver sees; it does not prove what the affected application asked or received.
+
+Use `dig` to name the question and server explicitly:
+
+```bash
+dig @192.0.2.53 api.example.com A
+dig @192.0.2.53 api.example.com AAAA
+dig +trace api.example.com
+```
+
+Read the response code, answer section, authority section, flags, responding server, and query time. `NOERROR` with an empty answer can mean the name exists but not for the requested record type. `NXDOMAIN` says the name does not exist in the responding view. `SERVFAIL` often indicates an upstream, validation, or authoritative problem. A timeout means no usable response arrived; it does not by itself say the name is absent.
+
+### How Do Record Types Compose a Service?
+
+`A` maps a name to IPv4 and `AAAA` to IPv6. `CNAME` aliases one owner name to another canonical name, after which the target must be resolved. The DNS protocol's alias rules mean a CNAME owner generally cannot also carry unrelated ordinary records. Provider-specific flattening at a zone apex is an implementation feature, not a standard CNAME placed beside the apex's required zone records.
+
+`MX` selects mail exchangers by preference and names hosts whose addresses are resolved separately. `TXT` carries text used by ownership verification and mail policies as well as other application conventions. `PTR` supports reverse lookup from an address under the reverse namespace. `SRV` names service targets with ports, priority, and weight. `CAA` states which certificate authorities may issue for a name. `HTTPS` and `SVCB` can advertise service endpoints and connection parameters for clients that support them.
+
+DNS can distribute clients among several addresses, but it does not continuously observe application health unless another system updates the records. Clients and resolvers cache answers independently, connection reuse can outlive a lookup, and address ordering does not guarantee equal traffic. DNS-based distribution is therefore a steering mechanism rather than a request-by-request load balancer.
+
+### What Does a Safe Change Timeline Require?
+
+TTL is cache permission measured from when a resolver receives a record. Lowering a TTL immediately before a cutover does not shorten copies already cached under the old, longer TTL. Reduce it at least one previous TTL in advance, verify the lower authoritative value, keep both old and new endpoints safe during overlap, change the record, and observe multiple relevant resolvers and actual application traffic.
+
+Negative answers can be cached too. Creating a name soon after clients received `NXDOMAIN` may not make it visible immediately. CNAME chains can have a TTL at each step, so the effective behavior depends on more than the first record. Browser, operating-system, application, and recursive caches can each add another observation boundary.
+
+During an incident, compare the affected host's configured resolver, a selected recursive resolver, and the authoritative server. `dig +trace` reveals delegation, while a direct authoritative query tests source data. Then check whether the returned address has a working route, firewall path, listener, TLS identity, and application response. Successful DNS proves only name resolution.
+
+DNS changes also have an ownership chain. The registrar controls delegation of the registered domain, the DNS operator controls zone data, recursive resolvers control caches and validation, and clients control which resolver and record family they use. A correct record in the intended provider does not help when the parent delegates to different nameservers or the client is attached to another private view.
+
+Reverse DNS follows a separate delegated namespace based on address ownership. Adding a forward `A` record does not automatically create the corresponding `PTR`; the address provider commonly controls that reverse zone. Mail and security systems may compare forward and reverse data, but a PTR remains a name mapping, not proof that the host is safe.
+
+Operational monitoring should query authoritative data and user-visible recursive paths. It should distinguish `NXDOMAIN`, empty type answers, validation failure, timeout, and wrong-but-valid data. The most dangerous DNS failure can be a successful, cacheable answer that directs clients to the wrong service, so validate the endpoint reached after resolution.
+
+Resolver configuration includes search suffixes and name qualification. A short name such as `db` may be expanded with one or more search domains, while `db.example.com.` with a trailing root dot is fully qualified in DNS notation. Applications and libraries can differ in how they apply searches and retries. During diagnosis, use the exact name the application requested and compare it with a fully qualified query.
+
+UDP response truncation is visible through the `TC` flag and should lead a capable resolver to retry using TCP. A firewall that permits outbound UDP port 53 but blocks the required TCP path can create failures only for larger answers or validation data. Test both transport behavior and the recursive resolver actually configured for the client.
+
+The complete operational model is delegation for authority, recursion for lookup work, caching for scale, typed records for meaning, transport for message delivery, and endpoint tests for the service that DNS merely names. Each mechanism has its own owner and evidence.
+
+Record the queried name exactly, including type, resolver, client network, and time. Those details make a DNS answer reproducible instead of treating it as one global value.
+
+## Check Your Answers
+
+:::expand[What Does DNS Resolution Do?]{kind="recap"}
+DNS turns a typed name and record type into data such as addresses, aliases, mail routes, service targets, or policy.
+:::
+
+:::expand[Why Is DNS Distributed?]{kind="recap"}
+The hierarchical namespace delegates administrative zones so no single ordinary server must store and answer every name.
+:::
+
+:::expand[How Does the Resolution Chain Reach an Authoritative Answer?]{kind="recap"}
+A stub asks a recursive resolver, which follows cached or live referrals from root to authoritative zone data.
+:::
+
+:::expand[Which DNS Record Types Describe a Service?]{kind="recap"}
+Record types carry distinct contracts for addresses, aliases, mail, text policy, reverse names, services, certificate policy, and endpoints.
+:::
+
+:::expand[How Do You Debug DNS with `dig`?]{kind="recap"}
+Ask an explicit server and type, then read status, flags, answer, authority, server, timing, and delegation trace.
+:::
+
+:::expand[How Do Caching and TTL Shape a Safe Cutover?]{kind="recap"}
+TTL controls future cache lifetime, so lower it early, preserve overlap, and account for negative and chained caching.
+:::
+
+:::expand[How Do DNS Transport and Security Boundaries Work?]{kind="recap"}
+UDP, TCP, encrypted resolver transport, and DNSSEC protect different boundaries; HTTPS still secures the application connection.
+:::
+
+:::expand[How Do You Diagnose DNS Failure Modes?]{kind="recap"}
+Separate source data, delegation, resolver cache, client view, routing, connection, TLS, and application health.
+:::
 
 ![DNS resolution summary infographic showing records, delegation, caching, dig checks, TTLs, cutovers, and failure modes](/content-assets/articles/article-devops-foundation-networking-dns-resolution/dns-resolution-summary.png)
 

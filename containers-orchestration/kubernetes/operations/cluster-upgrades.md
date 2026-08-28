@@ -23,7 +23,18 @@ aliases:
 
 A Kubernetes upgrade is a controlled compatibility transition between two working cluster states. The control plane, nodes, add-ons, API clients, and workloads cannot all change at the same instant, so the middle of the upgrade is deliberately mixed.
 
-Seven questions turn that mixed state into an explainable plan:
+Moving from Kubernetes `1.35` to `1.36` changes more than one binary. The connected system can include:
+
+- API servers, controllers, schedulers, and etcd;
+- kubelets, kube-proxy, container runtimes, and node operating-system images;
+- CNI, CSI, DNS, ingress, autoscaling, policy, observability, and device plug-ins;
+- operators, webhooks, backup tools, CI/CD systems, `kubectl`, and client libraries;
+- manifests and controllers that call particular Kubernetes APIs;
+- workloads that must stay available while Pods move.
+
+Before the upgrade, these components agree on the old world. After it, they should agree on the new world. During the transition, a new API server may talk to an older kubelet, operator, or automation client. Upgrade safety therefore depends on every communication edge staying inside a supported combination.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What actually changes during a Kubernetes cluster upgrade?**
 2. **How do version-skew rules shape the upgrade order?**
@@ -37,17 +48,6 @@ Seven questions turn that mixed state into an explainable plan:
 <!-- section-summary: An upgrade moves a distributed system through mixed versions while every communicating pair must remain compatible. -->
 
 ### Model the cluster as a graph of compatibility contracts
-
-Moving from Kubernetes `1.35` to `1.36` changes more than one binary. The connected system can include:
-
-- API servers, controllers, schedulers, and etcd;
-- kubelets, kube-proxy, container runtimes, and node operating-system images;
-- CNI, CSI, DNS, ingress, autoscaling, policy, observability, and device plug-ins;
-- operators, webhooks, backup tools, CI/CD systems, `kubectl`, and client libraries;
-- manifests and controllers that call particular Kubernetes APIs;
-- workloads that must stay available while Pods move.
-
-Before the upgrade, these components agree on the old world. After it, they should agree on the new world. During the transition, a new API server may talk to an older kubelet, operator, or automation client. Upgrade safety therefore depends on every communication edge staying inside a supported combination.
 
 A compact model is:
 
@@ -238,7 +238,7 @@ flowchart TD
     Gate4 --> Remaining[Remaining workers]
 ```
 
-Place representative workloads on the canary. A new node that merely reports `Ready` proves mainly that its kubelet can communicate with the control plane. A canary becomes useful when it also runs the actual CNI, CSI, runtime, DaemonSets, security settings, and workload paths.
+Place representative workloads on the canary. A new node that merely reports `Ready` proves mainly that its kubelet can communicate with the control plane. A useful canary also runs the actual CNI, CSI, runtime, DaemonSets, security settings, and workload paths.
 
 Small batches are an observability technique. If the control plane and canary passed but errors begin after the first worker batch, the failed transition lies between those two states. A large batch destroys that precise boundary.
 

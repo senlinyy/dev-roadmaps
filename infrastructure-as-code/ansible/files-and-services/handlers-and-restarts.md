@@ -1,8 +1,8 @@
 ---
 title: "Handlers and Restarts"
-description: "Use Ansible handlers so services reload or restart only after relevant tasks change."
-overview: "Handlers connect changed tasks to delayed service actions."
-tags: ["ansible", "handlers", "services", "restarts"]
+description: "Learn how Ansible change events notify handlers, why handlers deduplicate disruptive work, and how timing, validation, failure, reload, and restart semantics interact."
+overview: "Changing configuration and changing a running process are separate operations. This article derives handlers from that boundary: modules emit meaningful changed events, notifications queue consequences, handlers run once at controlled points, and validation and recovery protect the service around restarts."
+tags: ["ansible", "handlers", "restarts", "changed", "services"]
 order: 3
 id: article-infrastructure-as-code-ansible-handlers-service-restarts
 aliases:
@@ -12,303 +12,435 @@ aliases:
 
 ## Table of Contents
 
-1. [Changed Files Need Service Actions](#changed-files-need-service-actions)
-2. [notify and handlers](#notify-and-handlers)
-3. [One Handler Run for Many Changes](#one-handler-run-for-many-changes)
-4. [Reload, Restart, and daemon_reload](#reload-restart-and-daemon_reload)
-5. [Handler Timing and flush_handlers](#handler-timing-and-flush_handlers)
-6. [Health Checks and Failure Boundaries](#health-checks-and-failure-boundaries)
-7. [Rolling Production Runs](#rolling-production-runs)
-8. [Rollback and Safety](#rollback-and-safety)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
-11. [References](#references)
+1. [Why Is Changing a File Different from Changing a Process?](#why-is-changing-a-file-different-from-changing-a-process)
+2. [How Does changed Become a Handler Event?](#how-does-changed-become-a-handler-event)
+3. [Why Does One Handler Run for Many Notifications?](#why-does-one-handler-run-for-many-notifications)
+4. [When Should a Service Reload or Restart?](#when-should-a-service-reload-or-restart)
+5. [When Do Handlers Run, and Why Flush Them?](#when-do-handlers-run-and-why-flush-them)
+6. [How Do Validation and changedwhen Protect Restarts?](#how-do-validation-and-changedwhen-protect-restarts)
+7. [What Happens to Handlers When Tasks Fail?](#what-happens-to-handlers-when-tasks-fail)
+8. [How Do You Design a Safe Handler Flow?](#how-do-you-design-a-safe-handler-flow)
+9. [Check Your Answers](#check-your-answers)
 
-## Changed Files Need Service Actions
-<!-- section-summary: Handlers connect changed configuration files to delayed service reloads and restarts. -->
+Writing a new configuration file does not make a running daemon reread it. Restarting a daemon on every Ansible run makes automation noisy and disruptive. Handlers connect these two facts: a state-aware task reports real change, and that event queues the necessary process consequence.
 
-The last two articles put files on disk. That is only half of the service story. A running process may keep the old environment, old certificate, or old Nginx route in memory until someone reloads or restarts it.
-
-A **handler** is a delayed task that runs after another task reports `changed` and sends a notification. Handlers are most common for service actions because one playbook may update several inputs for one service. The playbook should write all related files first, then run the service action once.
-
-Back to the orders platform. A deployment can update `/etc/orders-api/orders-api.env`, `/etc/orders-api/orders-api.yml`, `/etc/nginx/conf.d/orders-api.conf`, and a systemd drop-in. Restarting after each file would bounce the API several times. Skipping the restart would leave the process running with old settings. Handlers give the playbook a middle path: change files, queue service actions, and run those actions at controlled points.
-
-## notify and handlers
-<!-- section-summary: A task uses notify to queue a named handler when the task reports changed. -->
-
-A normal task uses `notify` to name a handler. If the task reports `ok`, Ansible queues nothing. If the task reports `changed`, Ansible queues that handler for that host. The handler itself lives under the play's `handlers` section or inside a role's `handlers/main.yml`.
-
-
-![Notify Handler Flow](/content-assets/articles/article-infrastructure-as-code-ansible-handlers-service-restarts/notify-handler-flow.png)
-
-*The handler flow shows several changed tasks notifying one handler queue so a service reload happens once, not after every task.*
+Suppose Nginx reads `/etc/nginx/nginx.conf` when it starts or reloads. Ansible renders a new file:
 
 ```yaml
-- name: Render orders API environment file
+- name: Render Nginx configuration
   ansible.builtin.template:
-    src: orders-api.env.j2
-    dest: /etc/orders-api/orders-api.env
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
     owner: root
-    group: orders
-    mode: "0640"
-  notify: Restart orders API
+    group: root
+    mode: "0644"
+```
+
+The filesystem now contains the desired bytes. The running Nginx process may still use the old in-memory configuration. These are two states:
+
+```text
+file state
+    desired configuration stored on disk
+
+process state
+    configuration currently loaded by daemon
+```
+
+Adding an unconditional restart task closes the gap but restarts on every run:
+
+```yaml
+- name: Restart Nginx
+  ansible.builtin.service:
+    name: nginx
+    state: restarted
+```
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Is Changing a File Different from Changing a Process?**
+2. **How Does `changed` Become a Handler Event?**
+3. **Why Does One Handler Run for Many Notifications?**
+4. **When Should a Service Reload or Restart?**
+5. **When Do Handlers Run, and Why Flush Them?**
+6. **How Do Validation and `changed_when` Protect Restarts?**
+7. **What Happens to Handlers When Tasks Fail?**
+8. **How Do You Design a Safe Handler Flow?**
+
+## Why Is Changing a File Different from Changing a Process?
+<!-- section-summary: File state and process state have separate lifecycles, so automation must connect a meaningful file change to the correct service action. -->
+
+Even a fully compliant host experiences disruption. The run also reports change every time, making true configuration drift harder to see.
+
+The intended relationship is conditional:
+
+```text
+configuration changed
+    -> process must react
+
+configuration already correct
+    -> process should remain undisturbed
+```
+
+Handlers are Ansible's event mechanism for this relationship.
+
+## How Does `changed` Become a Handler Event?
+<!-- section-summary: A notifying task queues its handler only when the task reports changed for that host. -->
+
+Attach `notify` to the configuration task:
+
+```yaml
+- name: Render Nginx configuration
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Nginx
 
 handlers:
-  - name: Restart orders API
+  - name: Restart Nginx
     ansible.builtin.service:
-      name: orders-api
+      name: nginx
       state: restarted
 ```
 
-The handler name is part of the operator experience. A log line that says `RUNNING HANDLER [Restart orders API]` tells the person watching the run exactly what happened. A vague name like `restart service` forces the reader to inspect the YAML while production is changing.
+The template module renders candidate content, compares it with the destination, and reports `changed` only if it replaces the file or its managed metadata changes. Ansible queues `Restart Nginx` for that host only on the changed path.
 
-Handlers can also use `listen` to separate the event topic from the concrete handler task name. This helps when several tasks need to notify a business event like `orders api config changed`, while the handler can keep a precise name.
+```text
+task result = ok
+    -> no notification
 
-```yaml
-- name: Render orders API config
-  ansible.builtin.template:
-    src: orders-api.yml.j2
-    dest: /etc/orders-api/orders-api.yml
-    mode: "0640"
-    validate: /usr/local/bin/orders-api --check-config %s
-  notify: orders api config changed
-
-handlers:
-  - name: Restart orders API after config changes
-    listen: orders api config changed
-    ansible.builtin.service:
-      name: orders-api
-      state: restarted
+task result = changed
+    -> matching handler becomes pending
 ```
 
-## One Handler Run for Many Changes
-<!-- section-summary: Ansible deduplicates handler notifications by name for each host. -->
+This is why accurate change reporting is foundational. A task that always reports changed creates false events. A task that incorrectly reports `ok` suppresses a necessary process reaction.
 
-Handlers are queued per host and deduplicated by handler name. If three tasks notify `Restart orders API` on the same host, Ansible runs that handler once for that host at the handler phase. This is one of the main reasons handlers work well for service restarts.
+Handlers are better than manually registering the template result and writing `when: config.changed` on a restart task. Notifications declare the dependency next to the change source, several sources can share the reaction, and Ansible handles deduplication and normal handler timing.
 
-The orders API has several inputs that all require a restart:
+A handler is still an ordinary task. It can use modules, variables, privilege escalation, delegation, conditions, and fully qualified collection names. Its special property is how it is scheduled: by notification rather than direct position in the normal task list.
+
+## Why Does One Handler Run for Many Notifications?
+<!-- section-summary: Multiple changed tasks can notify one named consequence, which runs once per host at the handler point. -->
+
+A service may read several managed files:
 
 ```yaml
-- name: Render orders API environment file
+- name: Render main Nginx configuration
   ansible.builtin.template:
-    src: orders-api.env.j2
-    dest: /etc/orders-api/orders-api.env
-    mode: "0640"
-  notify: Restart orders API
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+  notify: Restart Nginx
 
-- name: Render orders API config file
+- name: Render application site
   ansible.builtin.template:
-    src: orders-api.yml.j2
-    dest: /etc/orders-api/orders-api.yml
-    mode: "0640"
-    validate: /usr/local/bin/orders-api --check-config %s
-  notify: Restart orders API
+    src: app.conf.j2
+    dest: /etc/nginx/conf.d/app.conf
+  notify: Restart Nginx
 
-- name: Render orders API systemd limits
-  ansible.builtin.template:
-    src: orders-api-limits.conf.j2
-    dest: /etc/systemd/system/orders-api.service.d/limits.conf
-    mode: "0644"
-  notify:
-    - Reload systemd
-    - Restart orders API
+- name: Install TLS parameters
+  ansible.builtin.copy:
+    src: tls.conf
+    dest: /etc/nginx/conf.d/tls.conf
+  notify: Restart Nginx
 ```
 
-If all three files change, the service still restarts once. The systemd reload also runs once. That keeps the playbook efficient and keeps the service from bouncing repeatedly during one deployment.
+If all three change, the named handler is pending once. Nginx restarts once rather than after every file:
 
-This also makes `changed` output meaningful. A handler runs because one or more inputs changed. If the playbook reports no changes, the service stays alone. Operators can trust that a restart in the output corresponds to real configuration drift or a deliberate update.
+```text
+main config changed -----+
+site changed ------------+--> Restart Nginx once
+TLS parameters changed --+
+```
 
-## Reload, Restart, and daemon_reload
-<!-- section-summary: Reload rereads supported config, restart replaces the process, and daemon_reload refreshes systemd unit metadata. -->
+Deduplication limits disruption and lets all configuration reach disk before the process reloads it. It also makes task order easier to reason about: file operations finish, then the queued consequence runs.
 
-A **reload** asks a service to reread configuration while keeping the process running, if the service supports that action. A **restart** stops and starts the process. A **systemd daemon reload** tells systemd to reread unit files and drop-ins, which is separate from restarting the service process.
-
-
-![Reload Restart Decision](/content-assets/articles/article-infrastructure-as-code-ansible-handlers-service-restarts/reload-restart-decision.png)
-
-*The decision board separates reload, restart, daemon_reload, flush_handlers, and health checks so service actions stay deliberate.*
-
-Nginx usually supports reloads for site configuration changes:
+Handler names share a play-level namespace after roles and includes are assembled. A later handler with the same name can shadow another in confusing ways. Use distinctive names or `listen` topics:
 
 ```yaml
-- name: Render orders Nginx site
-  ansible.builtin.template:
-    src: orders-api.nginx.conf.j2
-    dest: /etc/nginx/conf.d/orders-api.conf
-    mode: "0644"
-    validate: /usr/local/sbin/validate-nginx-fragment %s
-  notify: Reload Nginx
-
 handlers:
-  - name: Reload Nginx
+  - name: Reload Nginx configuration
     ansible.builtin.service:
       name: nginx
       state: reloaded
+    listen: nginx configuration changed
 ```
 
-The orders API environment file usually needs a restart because the process reads environment variables at startup. A systemd drop-in also needs systemd to reread unit metadata before the service action.
+Tasks notify the topic, and one or several handlers can listen. Treat public notification names as role interfaces.
+
+Handler scheduling is per host. If configuration changes on `web01` but not `web02`, only `web01` queues the handler. In a large fleet, accurate change signals prevent a harmless one-host correction from restarting every server.
+
+## When Should a Service Reload or Restart?
+<!-- section-summary: Reload asks a capable service to reread configuration with less disruption, while restart stops and starts the process; systemd daemon reload is a separate operation. -->
+
+Choose the consequence the service actually requires.
 
 ```yaml
-handlers:
-  - name: Reload systemd
-    ansible.builtin.systemd_service:
-      daemon_reload: true
-
-  - name: Restart orders API
-    ansible.builtin.service:
-      name: orders-api
-      state: restarted
+- name: Reload Nginx
+  ansible.builtin.service:
+    name: nginx
+    state: reloaded
 ```
 
-Handler order follows the order handlers are defined, not the order tasks notify them. That means `Reload systemd` should appear before `Restart orders API` when a service drop-in changes. The notification names can come from several tasks, and the handler list still controls the final order.
-
-Production playbooks should encode the service's real behavior. Reload Nginx when Nginx can reread the route safely. Restart the application when runtime settings require a new process. Reload systemd when unit files or drop-ins change. This turns service knowledge into repeatable automation instead of a checklist someone keeps in their head.
-
-## Handler Timing and flush_handlers
-<!-- section-summary: Handlers normally run after normal tasks, and flush_handlers can run queued handlers before later checks. -->
-
-Handlers normally run after the normal tasks in a play finish for a host. That timing is useful because all related inputs can land first. It also means a later normal task may run before a queued restart or reload.
-
-The orders deployment needs a health check after the API restarts. If the health check runs before the handler phase, it may read the old process state. The playbook can explicitly flush queued handlers before the check.
+A reload normally asks the daemon to reread supported configuration while continuing service. A restart stops and starts the process:
 
 ```yaml
-- name: Apply queued service actions before health checks
+- name: Restart application
+  ansible.builtin.service:
+    name: application
+    state: restarted
+```
+
+Reload can reduce interruption, but only if the daemon supports it and the changed setting takes effect through reload. Some binary, environment, or unit changes require restart. Use service documentation and test the behavior.
+
+`daemon_reload` in the systemd module is different. It asks the systemd manager to reread unit definitions after a unit file or drop-in changes:
+
+```yaml
+- name: Reload systemd and restart application
+  ansible.builtin.systemd_service:
+    name: application
+    daemon_reload: true
+    state: restarted
+```
+
+Systemd daemon reload does not reload the application configuration by itself. It updates systemd's view; `state` then controls the service process. A handler can combine the two when the managed unit file changed.
+
+Choose handler names that describe the exact consequence: `Reload Nginx`, `Restart application`, or `Reload systemd and restart application`. Avoid one vague restart topic shared by unrelated services.
+
+## When Do Handlers Run, and Why Flush Them?
+<!-- section-summary: Pending handlers normally run at defined end points, while flush_handlers deliberately applies queued consequences before later work. -->
+
+Handlers normally run after the relevant main task section for a play, not immediately after the notifying task. This allows several changes to accumulate and preserves deduplication.
+
+That timing can be too late when later tasks require the new process state:
+
+```text
+render configuration
+    -> handler pending
+run health check
+    -> still testing old process configuration
+```
+
+Flush pending handlers first:
+
+```yaml
+- name: Apply queued service changes
   ansible.builtin.meta: flush_handlers
 
-- name: Check orders API health endpoint
+- name: Verify local service health
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ orders_api_port }}/health"
+    url: http://127.0.0.1:8080/health
     status_code: 200
-    return_content: true
-  register: orders_health
-  retries: 12
-  delay: 5
-  until: orders_health.status == 200
 ```
 
-`force_handlers` belongs in the same discussion. It tells Ansible to run notified handlers even when a later task fails on that host. That can be useful when a changed config must be reloaded to leave the host consistent, and it can be risky when the changed config is the reason validation failed. Treat it as an operational decision, not a default.
+`flush_handlers` runs all pending handlers for the affected hosts at that point. It is not scoped only to the task immediately above, so understand every notification already queued.
 
-This pattern gives the playbook a clean rhythm: render and validate inputs, flush handlers once, then check the running service. Frequent flushes can bring back repeated service actions, so teams usually group related file tasks and flush at the point where the new process state is needed.
+Role and play boundaries can introduce other handler insertion points, such as after pre-tasks, role tasks, or post-tasks. The practical rule is to know whether downstream work depends on the consequence. Use normal deferred timing when no task needs the restarted state; flush intentionally when validation or orchestration does.
 
-## Health Checks and Failure Boundaries
-<!-- section-summary: Service automation should validate inputs before replacement and check the running process after handlers run. -->
+Repeated notifications after a flush can queue the same handler again for a later handler point. A single play can therefore run a handler more than once if changes occur in distinct phases separated by flushes.
 
-Handlers run for hosts that stay active in the play. If a later task fails before the handler phase, the queued handler for that host may stay unrun unless the play uses forced handler behavior. That matters because a config file could change on disk while the running process still has old state.
+## How Do Validation and `changed_when` Protect Restarts?
+<!-- section-summary: Validate candidate configuration before installation and make custom commands emit truthful change events so handlers react only to safe, real changes. -->
 
-The safest production shape is to catch bad input before replacement, then check the running process after the handler. Template validation handles the first half. A health check after `flush_handlers` handles the second half.
+A handler triggered by an invalid configuration can restart a working service into failure. Many file modules support validation against a temporary candidate:
 
 ```yaml
-- name: Render orders API config file
+- name: Render validated Nginx configuration
   ansible.builtin.template:
-    src: orders-api.yml.j2
-    dest: /etc/orders-api/orders-api.yml
-    mode: "0640"
-    validate: /usr/local/bin/orders-api --check-config %s
-  notify: Restart orders API
-
-- name: Flush service changes before checking the API
-  ansible.builtin.meta: flush_handlers
-
-- name: Confirm orders API reports ready
-  ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ orders_api_port }}/ready"
-    status_code: 200
-  register: ready_check
-  retries: 10
-  delay: 3
-  until: ready_check.status == 200
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+    validate: /usr/sbin/nginx -t -c %s
+  notify: Reload Nginx
 ```
 
-When a handler fails, read the service logs before guessing at the Ansible task. For a systemd service, `journalctl` usually tells you whether the app rejected config, failed to bind a port, missed an environment variable, or crashed during startup.
+The module renders a temporary file, substitutes its path for `%s`, runs the validator safely, and replaces the live destination only if validation succeeds. A failed candidate does not notify the handler because the managed file did not change successfully.
 
-```bash
-ansible -i inventories/staging orders_web -m ansible.builtin.command -a "systemctl status orders-api --no-pager"
-ansible -i inventories/staging orders_web -m ansible.builtin.command -a "journalctl -u orders-api -n 80 --no-pager"
-```
-
-## Rolling Production Runs
-<!-- section-summary: Serial batches keep service-handler changes from restarting the whole fleet at once. -->
-
-Handlers run per host, and production usually needs a rollout boundary around that behavior. If every host in the orders fleet restarts at the same time, the load balancer may see all backends disappear at once. A small fleet can still feel that outage if traffic is active.
-
-Use `serial` to move through production in batches. With three orders web servers, `serial: 1` gives the clearest first rollout. Each host gets its file changes, handler actions, and health checks before the next host starts.
+Purpose-built modules usually provide accurate `changed`. Custom commands need a contract:
 
 ```yaml
-- name: Configure orders web servers
-  hosts: orders_web
+- name: Apply routing policy
+  ansible.builtin.command: policyctl apply /etc/application/policy.yml
+  register: policy_result
+  changed_when: "'updated' in policy_result.stdout"
+  notify: Reload application
+```
+
+If the tool prints `already current`, the task reports `ok` and no handler runs. Also define `failed_when` if the command uses nonstandard exit codes.
+
+Read-only probes should use `changed_when: false`; otherwise they can trigger change-driven logic or make every run appear mutating. Do not set every command to false blindly: a real change must remain observable.
+
+Deterministic templates matter. Timestamps, unordered data, or changing whitespace can rewrite the same logical configuration and fire handlers on every run. Stabilize rendering and test a second run for zero unnecessary change.
+
+## What Happens to Handlers When Tasks Fail?
+<!-- section-summary: A later task failure can prevent queued handlers, forced handlers alter that behavior, and neither option creates transaction rollback. -->
+
+Suppose configuration changes and queues a restart, then a later task fails. By default, Ansible may not run the handler on that failed host. The new file can remain on disk while the old process continues using the previous in-memory configuration.
+
+This can be safer than restarting into an incompletely configured system, or it can leave an inconsistent host. The right answer depends on the role's ordering and failure design.
+
+Forced handlers can run notified handlers even after later task failure:
+
+```yaml
+- name: Configure service
+  hosts: web
+  force_handlers: true
+```
+
+Use this only when applying the notified consequence is safer than leaving it pending. An unreachable host still cannot run a handler, and a handler can itself fail.
+
+The stronger design validates inputs, writes coherent configuration before notification, and flushes at an intentional point before dependent verification. Blocks and rescue tasks can keep a failed host drained or restore a previous file, but handlers themselves are not transactions.
+
+A restart does not roll back a bad application version. If a handler succeeds and health later fails, recovery needs an explicit previous package, configuration, traffic, or data procedure. Notifications describe consequences of change, not inverse operations.
+
+In fleet rollouts, combine handlers with `serial`. Only hosts whose files change restart, and batches limit simultaneous disruption. Verify each host before the next batch.
+
+## How Do You Design a Safe Handler Flow?
+<!-- section-summary: Safe handler design creates truthful events, validates candidates, selects the least disruptive consequence, controls timing, and verifies the service afterward. -->
+
+A complete flow is:
+
+```yaml
+---
+- name: Configure application service
+  hosts: web
   become: true
   serial: 1
-  tasks:
-    - name: Render orders API config file
-      ansible.builtin.template:
-        src: orders-api.yml.j2
-        dest: /etc/orders-api/orders-api.yml
-        mode: "0640"
-        validate: /usr/local/bin/orders-api --check-config %s
-      notify: Restart orders API
 
-    - name: Apply queued service actions before health checks
+  tasks:
+    - name: Render validated application configuration
+      ansible.builtin.template:
+        src: application.yml.j2
+        dest: /etc/application/application.yml
+        owner: root
+        group: application
+        mode: "0640"
+        validate: /usr/local/bin/application --check-config %s
+      notify: Restart application
+
+    - name: Render systemd unit
+      ansible.builtin.template:
+        src: application.service.j2
+        dest: /etc/systemd/system/application.service
+        mode: "0644"
+      notify: Reload systemd and restart application
+
+    - name: Apply pending process changes
       ansible.builtin.meta: flush_handlers
 
-    - name: Confirm orders API is ready
+    - name: Wait for application health
       ansible.builtin.uri:
-        url: "http://127.0.0.1:8080/ready"
+        url: http://127.0.0.1:8080/health
         status_code: 200
-      register: ready_check
-      retries: 10
-      delay: 3
-      until: ready_check.status == 200
+      register: health_result
+      retries: 12
+      delay: 5
+      until: health_result.status == 200
+      changed_when: false
+
+  handlers:
+    - name: Restart application
+      ansible.builtin.service:
+        name: application
+        state: restarted
+
+    - name: Reload systemd and restart application
+      ansible.builtin.systemd_service:
+        name: application
+        daemon_reload: true
+        state: restarted
 ```
 
-This is where handlers and rollout strategy meet. A handler controls when a service reacts on one host. `serial` controls how many hosts can be in that service-action path at the same time.
+If both templates change, two distinct handlers run because the consequences differ. If neither changes, no process action occurs. Candidate validation prevents an invalid app file from replacing the destination. Flushing ensures the health task sees the new process state. `serial: 1` bounds fleet disruption.
 
-## Rollback and Safety
-<!-- section-summary: Rollback uses previous source content, backups, and service logs to return the process to a known good state. -->
+Review handler flows with these questions:
 
-Rollback for handler-driven changes starts with the files that triggered the handler. If a bad config file restarted the API, revert the Git change or redeploy the previous release variables, then run the playbook again through the same `serial` boundary. That keeps disk state, process state, and repository state aligned.
-
-For an immediate host-level recovery, restore the backup file created by `template` or `copy`, validate it, and restart or reload the service. Then follow up with the source rollback so the next Ansible run uses the corrected source instead of reapplying the bad file.
-
-```bash
-sudo cp /etc/orders-api/orders-api.yml.12345.2026-06-13@13:10:24~ /etc/orders-api/orders-api.yml
-sudo /usr/local/bin/orders-api --check-config /etc/orders-api/orders-api.yml
-sudo systemctl restart orders-api
-sudo systemctl is-active orders-api
+```text
+Does the source task report changed accurately?
+Is the candidate validated before the event exists?
+Is reload sufficient, or is restart required?
+Does systemd itself need daemon_reload?
+Can several changes share one deduplicated consequence?
+When must the consequence occur?
+What happens if a later task or the handler fails?
+How is actual service health verified?
+What explicit recovery restores a bad release?
 ```
 
-For Nginx, validate before the reload:
+The deepest model is an event pipeline:
 
-```bash
-sudo nginx -t
-sudo systemctl reload nginx
+```text
+observed state differs
+    -> state-aware task changes it
+    -> truthful changed event
+    -> named consequence queued once
+    -> handler runs at controlled point
+    -> service health proves the new runtime state
 ```
 
-The safety habit is simple in practice. Validate before replacement, notify handlers only from tasks that actually changed service inputs, flush before health checks, read service logs on failure, and roll through production in batches.
+Well-designed production handlers make operational disruption conditional, deduplicated, explainable, and composable. They are safest when event sources, consequences, timing, and recovery are all explicit.
 
-## Putting It All Together
-<!-- section-summary: Handlers turn changed task results into controlled, verified service actions. -->
+Handlers also interact with host batching. In a `serial` play, each batch reaches its handler point before the next batch begins. That allows changed hosts in the first batch to restart and pass verification while later hosts remain untouched. A global delegated handler can behave differently, so avoid using an ordinary per-host notification for an action that should happen only once across the entire fleet.
 
-The orders fleet now has a complete file-to-service path. Template and partial-edit tasks write files. Changed tasks notify handlers. Handler notifications collapse into one reload or restart per host. `flush_handlers` gives the playbook a clear point where the service should react before health checks run.
+Notifications refer to handler names or listen topics after Ansible inserts handlers from roles and imports. A dynamically included handler is not available until its include is processed, so task organization can affect name resolution. Keep essential handlers in predictable role or play handler sections and use fully descriptive public topics.
 
+Handler ordering follows definition order, not notification order. If tasks notify `Reload systemd` and `Restart application`, define the handlers in the safe sequence. A combined handler is clearer when the actions must be atomic in ordering, while separate listeners are useful when one event legitimately triggers several independent consequences.
 
-![Handlers Summary](/content-assets/articles/article-infrastructure-as-code-ansible-handlers-service-restarts/handlers-summary.png)
+Handler task conditions are evaluated when the handler runs. The variables and facts available then may differ from the notifying moment. Avoid registering a short-lived loop result and assuming a shared handler can safely interpret one iteration. Notifications should usually express a stable event such as “application configuration changed.”
 
-*The summary connects change signals, one queued handler action, the chosen service operation, verification, and rollout.*
+Check mode can predict notifications when source modules support change prediction, but the handler normally does not perform the real restart. Review the predicted changed tasks and remember that the service's response remains untested until the canary execution.
 
-The production rollout has a shape too. Validation protects the live file, handlers apply process changes, health checks confirm the new process, and `serial` keeps the fleet available while each host updates. If the service fails, logs and backups point to a practical rollback path.
+Finally, restart safety includes availability outside the host. Drain from traffic before a disruptive handler, flush and verify locally, then restore the host and verify from the load balancer or client boundary. A correct handler solves process reaction; the surrounding rollout solves user continuity.
 
-As these tasks, templates, files, and handlers grow, copying them across playbooks is painful. Roles give this service automation a reusable home, and the next article starts that structure.
+Use task output from a second canary run as an idempotency check. If templates remain stable, handlers should stay silent. An unexpected restart is operational evidence: find the changing source, nondeterministic render, metadata drift, or false `changed_when` before exposing more hosts to repeated disruption.
 
-## What's Next
+Handler behavior should be verified under both single and multiple notifications. Change one managed file, then several files that notify the same listener, and confirm the service action runs once at the intended boundary. Also test an unchanged second run so a noisy upstream task does not silently turn the delayed handler into an unconditional restart.
 
-The next article covers structuring roles. Once the orders API setup has directories, templates, files, handlers, defaults, and health checks, a role gives that work a conventional directory layout and a clearer interface for staging and production.
+Choose reload versus restart from the service's real semantics. A reload may preserve connections but ignore options that require a full restart; a restart applies everything but removes capacity. Validate which configuration fields changed, document the supported action, and pair it with the rollout and health checks appropriate to that disruption.
+
+Ansible normally suppresses a notified handler on a host after a later task failure because applying the consequence may be unsafe. `--force-handlers` or `force_handlers: true` changes that behavior. Use it only when the handler is known to move the host toward a safer state even after partial failure; forcing a restart after invalid configuration was written can turn a contained task error into an outage.
+
+## Check Your Answers
+
+:::expand[Why Is Changing a File Different from Changing a Process?]{kind="recap"}
+The file can contain new configuration while the daemon still uses old in-memory state. Automation must connect the two without unconditional disruption.
+:::
+
+:::expand[How Does `changed` Become a Handler Event?]{kind="recap"}
+A notifying task queues its handler only when it reports changed. Accurate module and custom-command change semantics are therefore essential.
+:::
+
+:::expand[Why Does One Handler Run for Many Notifications?]{kind="recap"}
+Several changed sources can notify one named consequence, which Ansible deduplicates per host at the handler point.
+:::
+
+:::expand[When Should a Service Reload or Restart?]{kind="recap"}
+Reload is less disruptive when supported; restart recreates the process. Systemd daemon reload only rereads unit definitions and is a separate action.
+:::
+
+:::expand[When Do Handlers Run, and Why Flush Them?]{kind="recap"}
+Handlers normally run after queued task phases. Flush them when downstream tasks must observe the new runtime state, knowing all pending handlers run.
+:::
+
+:::expand[How Do Validation and `changed_when` Protect Restarts?]{kind="recap"}
+Validate temporary candidates before replacing live files, and make command tasks report real change so unsafe or unnecessary restarts are not triggered.
+:::
+
+:::expand[What Happens to Handlers When Tasks Fail?]{kind="recap"}
+Later failures may suppress queued handlers; forced handlers change that choice. Neither behavior supplies rollback, so design coherent ordering and recovery.
+:::
+
+:::expand[How Do You Design a Safe Handler Flow?]{kind="recap"}
+Combine truthful events, candidate validation, precise reload or restart actions, intentional timing, fleet batching, health checks, and explicit recovery.
+:::
 
 ---
 
 **References**
 
-- [Handlers: running operations on change](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_handlers.html) - Official guide for `notify`, handler timing, handler insertion order, and handler behavior.
-- [ansible.builtin.service](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/service_module.html) - Official module documentation for managing services through the generic service proxy.
-- [ansible.builtin.systemd_service](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/systemd_service_module.html) - Official module documentation for systemd units, daemon reloads, and service state.
-- [Error handling in playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html) - Official guide for failure behavior, forced handlers, and recovery controls.
-- [Validating tasks: check mode and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html) - Official guide for previewing changes before service actions.
+- [Ansible: Handlers](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_handlers.html)
+- [Ansible: Defining changed](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_error_handling.html#defining-changed)
+- [Ansible: Template module](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/template_module.html)
+- [Ansible: Service module](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/service_module.html)
+- [Ansible: systemd_service module](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/systemd_service_module.html)
+- [Ansible: Error handling and forced handlers](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_error_handling.html)

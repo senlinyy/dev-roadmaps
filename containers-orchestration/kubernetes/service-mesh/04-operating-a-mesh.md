@@ -31,7 +31,7 @@ reporting path: proxies and applications → telemetry pipeline → backend and 
 
 All three paths must work, but they do not fail at the same time or produce the same symptoms.
 
-Seven questions connect those responsibilities:
+Keep these questions in view as you work through the lesson:
 
 1. **What extra system does a team operate after adding a mesh?**
 2. **Where does telemetry come from along one meshed request?**
@@ -183,7 +183,7 @@ Retries also separate logical requests from upstream attempts. Three configured 
 
 Measure both requests and attempts, and correlate source and destination records by trace identity and workload metadata.
 
-A retry changes the unit being counted. One logical checkout operation can create four upstream attempts. Request-rate dashboards and dependency-capacity calculations become misleading when they combine those units, so name and measure them separately.
+A retry changes the unit being counted. One logical checkout operation can create four upstream attempts. Combining those units misleads request-rate dashboards and dependency-capacity calculations, so name and measure them separately.
 
 ### Reconcile timing from increasingly narrow observers
 

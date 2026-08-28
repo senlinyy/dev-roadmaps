@@ -19,9 +19,15 @@ id: article-containers-orchestration-kubernetes-configuration-storage-persistent
 8. [Check Your Answers](#check-your-answers)
 9. [References](#references)
 
-Kubernetes storage becomes easier to reason about when you begin with one question: what must happen when application data should outlive the process, container, Pod, or node currently using it?
+Begin reasoning about Kubernetes storage with one question: what must happen when application data should outlive the process, container, Pod, or node currently using it?
 
-PersistentVolumes, PersistentVolumeClaims, StorageClasses, CSI drivers, access modes, binding, reclaim policies, and recovery all follow from that lifecycle problem. The article connects them through seven questions:
+PersistentVolumes, PersistentVolumeClaims, StorageClasses, CSI drivers, access modes, binding, reclaim policies, and recovery all follow from that lifecycle problem.
+
+On an ordinary machine, a process can stop while the disk and its files remain. Containers add a writable filesystem, but containers are intentionally disposable. Kubernetes goes further: Pods are disposable runtime units that controllers can replace.
+
+Suppose a Deployment owns Pod A. If the Pod crashes or its node disappears, Kubernetes can create Pod B from the same workload definition. Pod B is a new Pod, not a resurrected Pod A. Data written only inside Pod A's container filesystem does not automatically reappear inside Pod B.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why does application data need a lifecycle beyond a Pod?**
 2. **What jobs do a PVC, PV, and StorageClass each perform?**
@@ -33,10 +39,6 @@ PersistentVolumes, PersistentVolumeClaims, StorageClasses, CSI drivers, access m
 
 ## Why does application data need a lifecycle beyond a Pod?
 <!-- section-summary: Pods are replaceable, so persistent data needs an identity and lifetime independent of any one Pod. -->
-
-On an ordinary machine, a process can stop while the disk and its files remain. Containers add a writable filesystem, but containers are intentionally disposable. Kubernetes goes further: Pods are disposable runtime units that controllers can replace.
-
-Suppose a Deployment owns Pod A. If the Pod crashes or its node disappears, Kubernetes can create Pod B from the same workload definition. Pod B is a new Pod, not a resurrected Pod A. Data written only inside Pod A's container filesystem does not automatically reappear inside Pod B.
 
 That behavior can suit caches or temporary work. It usually does not suit PostgreSQL, MySQL, Elasticsearch, uploaded files, queues, or Git repositories.
 

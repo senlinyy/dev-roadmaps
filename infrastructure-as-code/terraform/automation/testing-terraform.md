@@ -1,74 +1,87 @@
 ---
 title: "Testing Terraform"
-description: "Terraform testing catches mistakes before CI/CD by combining local checks, module tests, linting, plan review, and selective integration tests."
-overview: "Terraform testing works best as a set of layers. This article starts on the developer machine with formatting and validation, then tests a reusable module contract, adds provider-aware linting, reviews the plan as evidence, and finishes with sandbox integration tests for behavior only the cloud API can prove."
-tags: ["testing", "tflint", "terraform test", "checkov", "terraform"]
+description: "Learn how formatting, validation, Terraform tests, mocking, linting, plans, conditions, and integration tests answer different infrastructure questions."
+overview: "Infrastructure testing is a ladder of evidence. Cheap checks catch source and contract mistakes; provider-aware tools and plans add context; integration tests answer the cloud-only questions that mocks cannot. This article shows how to choose the smallest check strong enough for each risk."
+tags: ["terraform", "testing", "terraform-test", "linting", "integration-tests"]
 order: 1
 id: article-iac-terraform-automation-testing
 ---
 
 ## Table of Contents
 
-1. [A Reusable Team Module](#a-reusable-team-module)
-2. [Local Checks Before Anything Else](#local-checks-before-anything-else)
-3. [The Module Contract Test](#the-module-contract-test)
-4. [Provider-Aware Linting](#provider-aware-linting)
-5. [Plan Review as Evidence](#plan-review-as-evidence)
-6. [Integration Tests for Cloud-Only Behavior](#integration-tests-for-cloud-only-behavior)
-7. [The Right Check for the Risk](#the-right-check-for-the-risk)
-8. [Putting It All Together](#putting-it-all-together)
+1. [What Does It Mean to Test Terraform?](#what-does-it-mean-to-test-terraform)
+2. [Which Cheap Checks Should Run First?](#which-cheap-checks-should-run-first)
+3. [How Do Terraform Tests Check a Module Contract?](#how-do-terraform-tests-check-a-module-contract)
+4. [What Do Mocks Prove and Hide?](#what-do-mocks-prove-and-hide)
+5. [How Do Validation and Provider-Aware Linting Differ?](#how-do-validation-and-provider-aware-linting-differ)
+6. [Why Is Plan Review a Form of Testing?](#why-is-plan-review-a-form-of-testing)
+7. [When Do You Need Real Infrastructure?](#when-do-you-need-real-infrastructure)
+8. [How Do You Build a Terraform Testing Strategy?](#how-do-you-build-a-terraform-testing-strategy)
+9. [Check Your Answers](#check-your-answers)
 
-This article follows a small Terraform module through the same checks a real platform team uses before a pipeline ever applies infrastructure. The module creates a log bucket for the billing service. The examples use AWS S3 because the resource shape is easy to read, but the testing pattern applies to Azure, Google Cloud, Kubernetes, and other providers too.
+Terraform testing does not have one universal target. Configuration can parse correctly while encoding the wrong retention rule. A mock can prove expression logic while hiding an invalid cloud service value. A plan can show what Terraform intends to do without proving the new application will work after the API calls complete.
 
-The order matters. A local formatting error should fail before a cloud plan starts. A module contract error should fail before a production stack imports the module. A provider rule should fail before the reviewer studies a long plan. The plan itself gives evidence for the next article, where CI/CD protects the same checks inside a shared workflow.
-
-## A Reusable Team Module
-<!-- section-summary: Terraform tests make the most sense for module rules that callers depend on. -->
-
-Imagine the platform team owns a reusable module called `log_bucket`. Product teams use it whenever a service needs a bucket for audit logs, application logs, or exported reports. The billing service calls the module with `service_name = "billing"` and `environment = "prod"`, and the platform naming standard expects the bucket name `dp-billing-prod-logs`.
-
-![Terraform Test Pyramid](/content-assets/articles/article-iac-terraform-automation-testing/terraform-test-pyramid.png)
-
-*The testing pyramid shows why fast local checks sit below slower provider and sandbox tests.*
-
-The first version of the module has a small mistake:
+Consider a small log-retention rule:
 
 ```hcl
 variable "environment" {
   type = string
 }
 
-variable "service_name" {
-  type = string
-}
-
 locals {
-  bucket_name = "dp-${var.environment}-${var.service_name}-logs"
+  retention_days = var.environment == "prod" ? 30 : 7
 }
 
-resource "aws_s3_bucket" "logs" {
-  bucket = local.bucket_name
-
-  tags = {
-    service     = var.service_name
-    environment = var.environment
-    managed_by  = "terraform"
-  }
-}
-
-output "bucket_name" {
-  value = aws_s3_bucket.logs.bucket
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/app/${var.environment}"
+  retention_in_days = local.retention_days
 }
 ```
 
-Terraform can parse this configuration. AWS can also create a bucket with that name if the name is globally available. The problem lives in the team's own contract: service name should come before environment name. If this reaches production, dashboards, IAM conditions, lifecycle jobs, and cost reports may look for `dp-billing-prod-logs` while Terraform created `dp-prod-billing-logs`.
+The configuration can be valid HCL and use a real provider argument while still implementing the business rule backward. If the intended rule was production 7 days and development 30 days—or more plausibly production 30 and development 7—the parser cannot choose the team's intent.
 
-This is a good testing example because it shows the difference between **valid Terraform** and **correct infrastructure for this organization**. Terraform language checks can prove the syntax and references work. Module tests can prove the module returns the values callers expect. Provider-aware checks can compare the resource settings with cloud standards. A plan review can show the exact production effect.
+Keep these questions in view as you work through the lesson:
 
-## Local Checks Before Anything Else
-<!-- section-summary: Formatting, initialization without a backend, and validation give fast feedback before module tests or provider checks run. -->
+1. **What Does It Mean to Test Terraform?**
+2. **Which Cheap Checks Should Run First?**
+3. **How Do Terraform Tests Check a Module Contract?**
+4. **What Do Mocks Prove and Hide?**
+5. **How Do Validation and Provider-Aware Linting Differ?**
+6. **Why Is Plan Review a Form of Testing?**
+7. **When Do You Need Real Infrastructure?**
+8. **How Do You Build a Terraform Testing Strategy?**
 
-The first checks should run on the developer machine and in every pull request. They need to be fast, boring, and reliable because they protect the rest of the workflow from basic noise.
+## What Does It Mean to Test Terraform?
+<!-- section-summary: Terraform tests can examine source shape, evaluated configuration, proposed state transitions, provider assumptions, or real remote behavior. -->
+
+Different tests ask different questions:
+
+```text
+Does the source follow canonical formatting?
+Can Terraform parse and type-check the configuration?
+Given inputs, does the module produce the intended values and graph?
+Does provider-aware analysis recognize suspicious arguments?
+What transition does Terraform propose for a real state?
+Will the provider API accept the request?
+Does the created infrastructure actually behave correctly?
+```
+
+Testing Terraform means gathering enough evidence for the risk under review. The cheapest useful check should run frequently, while expensive real-infrastructure checks should focus on uncertainty that only the remote system can resolve.
+
+Infrastructure has two important dimensions. **Configuration behavior** includes expressions, branches, resource counts, names, inputs, and outputs. **Deployment behavior** includes API validation, permissions, quotas, eventual consistency, runtime health, and cleanup. Terraform-native plan tests can cover much of the first dimension without creating objects; integration tests cover selected parts of the second.
+
+No single green result means “the infrastructure is correct.” A strong test report states which claim passed and which uncertainty remains.
+
+Testing also has a time dimension. A static check can be repeated against the same source with the same result. A plan and integration test observe mutable remote systems, so their evidence can become stale. Record the configuration revision, provider versions, target, and run time whenever results depend on external state.
+
+The subject under test should be small enough to diagnose. A failed assertion about a module output gives a direct contract signal. A failed end-to-end environment containing hundreds of resources may expose the same bug only after a long run, mixed with unrelated provider failures. Layering tests preserves both speed and explanatory value.
+
+Negative cases matter. A test suite that only proves valid production inputs succeed says nothing about rejected environments, disabled branches, missing keys, or dangerous combinations. Assertions should cover both intended presence and intended absence.
+
+## Which Cheap Checks Should Run First?
+<!-- section-summary: Formatting and validation provide fast source-level evidence before tests need credentials, a backend, or real infrastructure. -->
+
+Start with:
 
 ```bash
 terraform fmt -check -recursive
@@ -76,330 +89,410 @@ terraform init -backend=false
 terraform validate
 ```
 
-`terraform fmt -check -recursive` scans the current directory and child directories for files that do not match Terraform's standard formatting. The `-check` flag makes the command report drift instead of rewriting files, which fits CI because the job should fail and ask the author to format locally.
+`terraform fmt` checks canonical formatting. It is intentionally narrow: it does not inspect cloud accounts, state, or business intent. Run it locally and in CI so feedback is quick and the pipeline independently verifies the repository.
 
-`terraform init -backend=false` downloads providers and modules without configuring the remote backend. That is useful for reusable module folders because the module may have no real state of its own. It also keeps a fast local check from touching production state configuration.
+`terraform validate` checks syntax and internal consistency, including references, argument shapes, and value types that Terraform and installed provider schemas can understand. It can catch a misspelled variable reference or an invalid block structure.
 
-`terraform validate` checks the initialized configuration for Terraform language errors. It catches invalid references, missing required arguments, unsupported block types, and type mismatches that Terraform can detect without creating a plan for a real environment.
+Reusable-module validation often initializes with `-backend=false` because the module should not need access to a deployment backend merely to install provider requirements and validate its configuration. Deployable roots later need real backend initialization for a target-aware plan.
 
-The same Terraform version should run locally and in CI. A module can declare the supported CLI range with `required_version`, and the repository can pin the exact CI version in one place, such as a tool-version file or a CI variable named `TERRAFORM_VERSION`. The first line of a check job should print the version so the run record shows which Terraform binary evaluated the module:
+Validation does not call every remote API or prove eventual values. A syntactically valid instance type string may not exist in the selected region. A valid bucket configuration can request a globally unavailable name. A valid policy can still grant the wrong business access.
 
-```bash
-terraform version
-```
-
-A healthy run prints the pinned version instead of whatever happened to be installed on the machine:
-
-```console
-Terraform v<repo-pinned-version>
-```
-
-A typical validation failure looks like this:
-
-```console
-Error: Reference to undeclared input variable
-
-  on main.tf line 9, in locals:
-   9:   bucket_name = "dp-${var.servce_name}-${var.environment}-logs"
-
-An input variable with the name "servce_name" has not been declared.
-```
-
-That output gives the author the file, line, expression, and missing variable name. The team should fix this before running slower checks. These commands remove broken Terraform from the path early, before the workflow reaches slower naming and security checks.
-
-Local checks also give the next article a clean starting point. CI/CD should run the same commands, and the author should see most of these failures before opening a pull request. A shared pipeline should protect the team instead of acting as the first place obvious local mistakes appear.
-
-## The Module Contract Test
-<!-- section-summary: Native Terraform tests can plan a module with example inputs and assert the caller-facing outputs or validation failures. -->
-
-After the basic language checks pass, the next risk is the module contract. A **module contract** means the behavior callers rely on: required inputs, defaults, outputs, tags, naming rules, optional resource toggles, and validation errors. For the log bucket module, the most visible contract is the bucket name.
-
-Terraform test files use the `.tftest.hcl` extension. A test can run a plan with example input values and assert the result. A common file name for this module is `tests/log_bucket.tftest.hcl`. The test has three pieces: example variables, the assertion, and the message Terraform prints after the assertion fails:
+Variable validation adds another cheap boundary:
 
 ```hcl
-run "prod_bucket_name" {
+variable "environment" {
+  type = string
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "Environment must be dev, staging, or prod."
+  }
+}
+```
+
+This rejects unsupported caller inputs wherever the variable is used. It is part of the module contract, not a replacement for tests. A test can show that supported inputs produce the intended resources and that invalid inputs fail as designed.
+
+Cheap checks belong before cloud credentials, locks, or integration resources. They reduce feedback time and prevent simple source errors from consuming expensive test environments.
+
+Initialization itself should be deterministic. Commit `.terraform.lock.hcl` for deployable roots, pin the Terraform CLI range used by CI, and avoid silently upgrading providers during a test run. A changed provider schema can alter validation and plan behavior even when the module source is unchanged.
+
+Formatting failures usually should be fixed mechanically with `terraform fmt`, not debated in review. Validation failures need their full diagnostic, including file and expression context. CI should preserve readable output without enabling provider debug logs that may disclose credentials or sensitive arguments.
+
+Validation can run on a child module without concrete caller values because type declarations and defaults define much of the contract. Tests supply representative inputs to evaluate branches. A real root plan adds backend state, provider identity, and remote observations. Keeping these phases separate avoids giving basic validation more authority than it needs.
+
+Syntax and type checks also do not establish organizational conventions. Terraform accepts many valid names, tag shapes, and resource combinations. Those belong in module tests, linters, policy, or shared abstractions according to whether the rule is local intent, a known static risk, or organization-wide authorization.
+
+## How Do Terraform Tests Check a Module Contract?
+<!-- section-summary: Terraform test files supply inputs, run plan or apply behavior, and assert properties of resources and outputs. -->
+
+A reusable module has a contract:
+
+```text
+inputs
+    -> evaluated configuration and resource graph
+    -> outputs and externally visible behavior
+```
+
+For the retention example, the contract includes:
+
+```text
+environment = prod -> retention_in_days = 30
+environment = dev  -> retention_in_days = 7
+```
+
+A Terraform test can express that rule:
+
+```hcl
+# tests/retention.tftest.hcl
+run "production_retention" {
   command = plan
 
   variables {
-    environment  = "prod"
-    service_name = "billing"
+    environment = "prod"
   }
 
   assert {
-    condition     = output.bucket_name == "dp-billing-prod-logs"
-    error_message = "bucket_name should use service, environment, and logs in that order."
+    condition = (
+      aws_cloudwatch_log_group.app.retention_in_days == 30
+    )
+    error_message = "Production must use 30-day retention."
   }
 }
 ```
 
-The `run` block names this test case. `command = plan` tells Terraform to evaluate a plan rather than apply real infrastructure. The `variables` block gives the module a production-like example. The `assert` block checks the output that callers use.
+The run supplies a production input, evaluates a plan, and inspects the planned resource property. `command = plan` avoids creating infrastructure, making this analogous to a configuration unit test.
 
-The developer can run the test from the module directory:
+Terraform “unit tests” differ from ordinary pure-function tests because the subject is declarative configuration and a resource graph. Assertions can inspect resource instances, output values, conditions, and the effects of `count`, `for_each`, and expressions.
 
-```bash
-terraform test
-```
-
-With the original module, the test fails because the output value uses the wrong order:
-
-```console
-tests/log_bucket.tftest.hcl... in progress
-  run "prod_bucket_name"... fail
-
-Error: Test assertion failed
-
-bucket_name should use service, environment, and logs in that order.
-```
-
-The fix is small and direct:
+Branches are especially valuable to test:
 
 ```hcl
-locals {
-  bucket_name = "dp-${var.service_name}-${var.environment}-logs"
+count = var.enable_monitoring ? 1 : 0
+
+instance_type = var.environment == "prod" ? "m7i.large" : "t3.micro"
+
+for_each = {
+  for name, app in var.apps : name => app
+  if app.enabled
 }
 ```
 
-The value of the test is bigger than the fix. A future refactor can move locals around, add prefixes, or add new environments, and this test still protects what the caller expects. The test speaks in the language of the module's public behavior instead of repeating every resource argument.
-
-Terraform tests can also check validation behavior. Imagine production buckets require a customer-managed KMS key. The module may define a validation rule on `kms_key_id`, and the test can expect a failure if production leaves that value empty:
+A production plan may exercise only `prod + monitoring`. Tests can cover `prod + no monitoring`, `dev + monitoring`, and `dev + no monitoring`, including the zero-instance case:
 
 ```hcl
-run "prod_requires_kms_key" {
+run "monitoring_disabled" {
   command = plan
 
   variables {
-    environment  = "prod"
-    service_name = "billing"
-    kms_key_id   = null
+    environment       = "dev"
+    enable_monitoring = false
   }
 
-  expect_failures = [
-    var.kms_key_id,
-  ]
+  assert {
+    condition     = length(aws_cloudwatch_metric_alarm.app) == 0
+    error_message = "Monitoring resources should not exist."
+  }
 }
 ```
 
-`expect_failures` says the test should pass only if Terraform rejects the listed value. That gives the module a regression test for an important production rule. A test like this catches a weakened validation rule before a real stack plans an unencrypted bucket.
+Tests protect the module's intended abstraction. They should describe outcomes important to callers rather than every implementation detail, or harmless refactors will break the suite without changing the contract.
 
-Good module tests stay close to decisions the module owns. They check names, tags, outputs, validation, optional resources, and conditional behavior. Tests that simply copy Terraform's syntax checks usually add noise because `terraform validate` already covers that layer.
-
-## Provider-Aware Linting
-<!-- section-summary: Linters and scanners add cloud-specific rules that Terraform validate cannot know by itself. -->
-
-The module now passes Terraform language checks and module contract tests. The next layer asks whether the resource shape follows the team's cloud standards. Terraform itself usually cannot know that your organization requires encryption, public access blocks, approved regions, minimum retention, or a particular tag set.
-
-Tool installation and version pinning should happen before their commands appear in CI. TFLint has its own binary and provider rulesets. Checkov is commonly installed as a pinned Python package or run from a pinned container image. The exact version numbers should live in repository tooling config or CI variables, so a pull request that changes the scanner version receives the same review as a rule change.
-
-Two common commands in this layer are:
-
-```bash
-tflint --version
-checkov --version
-tflint --init
-tflint --recursive
-checkov -d .
-```
-
-The version commands should print the repository-pinned versions:
-
-```console
-TFLint version <repo-pinned-version>
-<repo-pinned-checkov-version>
-```
-
-`tflint --init` downloads the configured ruleset plugins from `.tflint.hcl`. It belongs after TFLint config changes and before `tflint --recursive` in CI. `tflint --recursive` scans Terraform files across nested module and environment folders. TFLint can use provider rulesets, so an AWS-focused repository can catch issues such as invalid instance types, deprecated arguments, missing provider constraints, or resource values that do not match the provider's expected shape.
-
-`checkov -d .` scans the directory tree for security and compliance rules. Tools such as Checkov, tfsec, Terrascan, and Trivy can catch missing encryption, public access settings, overly broad IAM, and other security patterns. The exact scanner matters less than the quality of the rules and how clearly failures explain the fix.
-
-A useful finding names the file, resource, rule, and reason:
-
-```console
-FAILED CKV_AWS_21: "Ensure all data stored in the S3 bucket have versioning enabled"
-File: /modules/log_bucket/main.tf:18-30
-Resource: aws_s3_bucket.logs
-```
-
-That output gives the author enough context to decide whether the module needs a fix or a reviewed exception. A vague warning such as `security failed` slows the team down because nobody knows which resource or standard caused the failure.
-
-Tool configuration should live in the repository so rule changes go through review. A small `.tflint.hcl` can enable the AWS ruleset:
+Assertions can reference outputs when outputs are the public contract:
 
 ```hcl
-plugin "aws" {
-  enabled = true
-  version = "0.32.0"
-  source  = "github.com/terraform-linters/tflint-ruleset-aws"
+run "development_retention_output" {
+  command = plan
+
+  variables {
+    environment = "dev"
+  }
+
+  assert {
+    condition     = output.retention_days == 7
+    error_message = "Development must expose seven-day retention."
+  }
 }
 ```
 
-This file tells TFLint to load the AWS ruleset at a specific version. Pinning the ruleset helps make CI results repeatable. The platform team can update the version in a normal pull request, read the new findings, and decide which standards should be required.
+Resource assertions are appropriate when the module contract includes provider configuration that callers rely on. Output assertions reduce coupling when the internal resource layout is meant to remain private. Choose the boundary deliberately.
 
-Skip comments and exceptions should stay rare and specific. A useful skip names the rule, the resource, and the reason. A broad repository-wide skip makes the pipeline look green while the original risk stays hidden. If the same skip appears many times, the platform team should either improve the module or decide that the rule does not match the organization's current standard.
+Test names and messages should explain the business rule. “Assertion failed” sends a maintainer back through the expressions; “Production must use 30-day retention” identifies the expected contract. Realistic supported inputs turn a small test file into executable documentation.
 
-## Plan Review as Evidence
-<!-- section-summary: The Terraform plan shows the evaluated create, update, replace, delete, and output changes for a specific target. -->
+`command = apply` is not a stronger version of every plan test. It changes the cost and side effects. Use it only when assertions require provider-created results or remote behavior. Most branching and composition cases remain clearer with `command = plan`.
 
-Local checks, module tests, and linters all run before the target environment plan. The plan is different because it combines the configuration, input values, provider data, and current state for one stack. That is where reviewers see what Terraform intends to change.
+Tests should also cover stable identity. If a collection uses `for_each`, assert the expected keys where those keys are part of the interface. This catches a refactor that changes addresses even if resource counts remain equal.
 
-![Plan Fixture Flow](/content-assets/articles/article-iac-terraform-automation-testing/plan-fixture-flow.png)
+## What Do Mocks Prove and Hide?
+<!-- section-summary: Mock providers isolate configuration logic by supplying fake provider values, but deliberately remove evidence about real APIs and service behavior. -->
 
-*The fixture flow shows how a plan turns into review evidence and policy input instead of being treated as terminal noise.*
+Provider calls can make a test slow, expensive, credential-dependent, or destructive. Terraform tests can use provider mocking to supply computed values and evaluate configuration without calling the real cloud.
 
-For a production stack, the command usually saves the plan and renders a readable copy:
+Conceptually:
 
-```bash
-terraform plan -var-file=terraform.tfvars -out=tfplan
-terraform show -no-color tfplan > tfplan.txt
+```text
+real provider test
+    configuration -> provider plugin -> remote API
+
+mocked provider test
+    configuration -> mock provider values -> assertions
 ```
 
-`terraform plan -var-file=terraform.tfvars -out=tfplan` loads the target values and saves the exact planned actions in `tfplan`. `terraform show -no-color tfplan > tfplan.txt` turns the saved plan into plain text for review without terminal color codes.
+Mocks are valuable when the question is about Terraform logic: Was the correct branch selected? Did a module compose the expected name? Did enabled inputs create the right number of resource instances? Did an output preserve the expected keys?
 
-After the module fix, the readable plan should show the expected bucket name and tags:
+They create a clean boundary because remote credentials, quotas, and service latency are not involved. Tests run quickly and can be deterministic.
 
-```console
-  # aws_s3_bucket.logs will be created
-  + resource "aws_s3_bucket" "logs" {
-      + bucket = "dp-billing-prod-logs"
-      + tags   = {
-          + "environment" = "prod"
-          + "managed_by"  = "terraform"
-          + "service"     = "billing"
-        }
-    }
+That speed comes from intentionally throwing away evidence. A mock cannot prove:
 
-Changes to Outputs:
-  + bucket_name = "dp-billing-prod-logs"
-
-Plan: 1 to add, 0 to change, 0 to destroy.
+```text
+the cloud accepts the arguments
+the name is globally available
+the execution role has permission
+the selected region supports the feature
+the resource becomes healthy
+the service applies the setting exactly as expected
+cleanup will succeed
 ```
 
-Reviewers should check the target context before they read individual resources. The target context includes the working directory, backend key, workspace if the team uses workspaces, cloud account or subscription, region, variable file, and Terraform version. A perfect bucket change in the wrong account is still a failed deployment.
+A mock returns the values the test defines. If the mock gives an impossible ID or reports success for an invalid configuration, Terraform can still evaluate dependent expressions. That is useful for isolation, not proof of provider realism.
 
-The action summary matters too. `Plan: 1 to add, 0 to change, 0 to destroy.` gives a quick shape of the change, but the details still need review. One update can be risky if it opens a network rule, rotates a credential, lowers retention, or changes a database setting. A replacement can be safe for a stateless cache and dangerous for a stateful database.
+Use mocks for configuration uncertainty and real infrastructure for service uncertainty. Do not call a mocked test an integration test merely because the configuration contains provider resources.
 
-Saved plan files need careful handling. Terraform can mark values as sensitive in terminal output, but saved binary plans and plan JSON can still contain configuration, input values, planned values, and secrets. The text summary helps humans review. The binary plan and JSON plan should have restricted artifact access, short retention, and environment-scoped permissions.
+Mocks should remain minimal. Configure only the computed values the contract needs, and avoid recreating the entire cloud API in test fixtures. An elaborate fake becomes another implementation that can drift from the provider it imitates.
 
-This plan evidence connects directly to CI/CD. The next article moves the same checks into a protected workflow, publishes a readable plan for review, and applies only after approvals and locks protect the target stack.
+Defaults from a mock provider can make dependent resources evaluable, while per-resource overrides supply values needed by one case. Review those fake values as test inputs. If several assertions rely on a mocked ARN shape, document that the test proves string flow, not that AWS will issue that ARN.
 
-## Integration Tests for Cloud-Only Behavior
-<!-- section-summary: Integration tests apply real infrastructure in a sandbox for provider behavior that static checks and plans cannot prove. -->
+Mocking is particularly useful for child modules that call data sources. A module may transform a looked-up image ID or account value into resource arguments. The mock can return a deterministic result so the test exercises the transformation. A separate integration test can verify that the real lookup filters select the intended remote object.
 
-Some behavior only appears after a provider API runs. General purpose S3 bucket names must be unique across all AWS accounts in the partition, so a sandbox test should never depend on a fixed name like `dp-billing-test-logs` being available forever. A pull request number, run id, short commit SHA, or random suffix can go into the test inputs, and the actual bucket name should come from Terraform output before the AWS call. IAM policies may behave differently once AWS evaluates a real request. Load balancer health checks need real targets. Database parameter changes may have restart behavior that a plan cannot fully prove.
+Keep at least one route from configuration to reality for high-risk modules. A large suite of mocks can become internally consistent while provider releases or platform policy drift outside it. Target-aware plans and focused integration tests supply that missing evidence.
 
-That is where **integration tests** help. An integration test creates real infrastructure in a sandbox, verifies the behavior, and destroys it. It spends real cloud resources, so it should be used for modules where the extra confidence is worth the cost and time.
+## How Do Validation and Provider-Aware Linting Differ?
+<!-- section-summary: Validation checks Terraform's structural model, while provider-aware linting adds known semantic rules without becoming the remote provider API. -->
 
-A simple sandbox flow for the log bucket module has four pieces: initialize without a backend, apply in the sandbox, read the Terraform output, and ask AWS for the actual tags:
+Terraform can validate this shape:
 
-```bash
-terraform init -backend=false
-terraform apply -auto-approve -var-file=test.tfvars
-TEST_BUCKET="$(terraform output -raw bucket_name)"
-aws s3api get-bucket-tagging --bucket "$TEST_BUCKET"
-terraform destroy -auto-approve -var-file=test.tfvars
-```
-
-`terraform init -backend=false` prepares the test directory without connecting to production state. `terraform apply -auto-approve -var-file=test.tfvars` creates the sandbox resources with test values. `terraform output -raw bucket_name` reads the exact globally unique name Terraform created. `aws s3api get-bucket-tagging` asks AWS for the real bucket tags, so the test checks actual provider behavior rather than Terraform's planned values. `terraform destroy -auto-approve` removes the resources with the same test values.
-
-These examples assume AWS CLI v2, and the test job should print the version:
-
-```bash
-aws --version
-```
-
-The output should identify the AWS CLI v2 binary:
-
-```console
-aws-cli/2.x.x Python/3.x.x ...
-```
-
-The test identity needs `s3:GetBucketTagging` for the bucket. If AWS returns `NoSuchTagSet`, the bucket exists but has no tags, which is a useful integration-test failure for this module.
-
-Successful tag verification returns a tag set like this:
-
-```json
-{
-  "TagSet": [
-    {
-      "Key": "service",
-      "Value": "billing"
-    },
-    {
-      "Key": "environment",
-      "Value": "test"
-    },
-    {
-      "Key": "managed_by",
-      "Value": "terraform"
-    }
-  ]
+```hcl
+resource "aws_instance" "app" {
+  ami           = "ami-123456"
+  instance_type = "definitely-not-a-real-instance-type"
 }
 ```
 
-The `-auto-approve` flag belongs only in controlled automation or a disposable sandbox test. It skips Terraform's interactive confirmation prompt, so the identity, account, variable file, and cleanup process must be tightly scoped. A production apply should use the protected workflow from the next article.
+The argument may be the correct type—a string—even though AWS will reject its value. Provider-aware linters can add rules derived from provider knowledge, deprecations, and common mistakes. Static security tools can flag public access, missing encryption, or overly broad policies.
 
-Integration tests need cleanup even after failure. A shell runner can use a trap:
+These tools sit between structural validation and a live plan or apply:
 
-```bash
-set -euo pipefail
-trap 'terraform destroy -auto-approve -var-file=test.tfvars' EXIT
+```text
+fmt
+    source style
 
-terraform init -backend=false
-terraform apply -auto-approve -var-file=test.tfvars
-TEST_BUCKET="$(terraform output -raw bucket_name)"
-aws s3api get-bucket-tagging --bucket "$TEST_BUCKET"
+validate
+    Terraform syntax, types, references, schema shape
+
+provider-aware lint and static security
+    known semantic and risk patterns
+
+plan
+    proposed transition for a selected target
+
+integration
+    real service behavior
 ```
 
-`set -euo pipefail` stops the script on failed commands, unset variables, and failed pipeline stages. The `EXIT` trap runs the destroy command whenever the script exits, including after a failed verification command. Sandbox cost limits still matter, and the trap catches many ordinary failure paths.
+Provider-aware linting still is not the provider API. It cannot know every account policy, current quota, regional rollout, name collision, runtime interaction, or remote state. Rule sets also change over time and can produce false positives or miss valid organization-specific risks.
 
-The test identity should have permission only in the sandbox account or project. The names should include a unique suffix, such as a pull request number or short commit SHA. The account should have budget alerts and cleanup jobs because failed cleanup is the most common way infrastructure tests create surprise costs.
+Treat linter configuration as maintained code. Pin versions, review suppressions, explain exceptions, and avoid disabling a whole rule when one narrow case is justified. A tool is valuable when its findings lead to clear fixes and its limitations are understood.
 
-## The Right Check for the Risk
-<!-- section-summary: A useful Terraform test suite maps each risk to the cheapest reliable check that can catch it. -->
+Built-in preconditions and postconditions form another layer. They encode invariants close to the module and fail whenever the configuration is used. Tests verify that those conditions behave correctly. Policy as code enforces cross-repository organizational rules outside the module.
 
-Terraform testing works well with a clear job for each layer. The team should avoid sending every risk to the slowest test. A naming rule can use a native module test. A missing tag can use a module test, scanner, or policy rule depending on where the standard lives. A real provider behavior needs a sandbox integration test.
+A precondition is valuable when the resource cannot be used safely unless an assumption holds. A postcondition can prevent downstream Terraform actions when a provider result violates a contract. Neither automatically reverses earlier operations. Test both the accepted and rejected path so a later expression change does not silently weaken the guard.
 
-This table gives a practical map:
+Static security analysis should prioritize outcome-oriented findings: public exposure, unencrypted storage, unrestricted ingress, or missing logging. Style preferences are cheaper to enforce with formatting or module conventions. When every preference blocks CI, teams learn to add broad suppressions and the truly dangerous findings become harder to see.
 
-| Risk | Best first check | Why this check fits |
-|---|---|---|
-| Formatting drift | `terraform fmt -check -recursive` | Fast and deterministic across the repository |
-| Invalid references or types | `terraform validate` | Terraform can catch the language issue before planning a target stack |
-| Wrong module output | `terraform test` | The module can assert caller-facing behavior with example variables |
-| Missing required tags | Module test, scanner, or policy | The right layer depends on whether the rule is module-specific or organization-wide |
-| Deprecated provider argument | TFLint provider ruleset | Provider-aware linting catches this before a live plan review |
-| Public access or missing encryption | Security scanner or policy | Security standards should produce clear, repeatable failures |
-| Provider behavior after creation | Sandbox integration test | The cloud API must answer the question |
-| Production replacement or delete | Plan review and policy | The action depends on state and must be reviewed in target context |
+Provider-aware tool versions and rule packs are dependencies. Pin them, review upgrades, and test their configuration. If a suppression is necessary, scope it to the exact resource and include a reason rather than disabling the rule repository-wide.
 
-This map also helps with maintenance. If a check fails often for the same harmless reason, the team should tune it. Noisy checks teach people to ignore the pipeline. High-signal checks build trust because a failure usually points to a real fix.
+## Why Is Plan Review a Form of Testing?
+<!-- section-summary: A Terraform plan tests the proposed state transition for a particular configuration, state, variable set, provider context, and point in time. -->
 
-## Putting It All Together
-<!-- section-summary: Terraform testing is layered: local checks, module contract tests, provider-aware rules, plan evidence, and selective sandbox tests. -->
+Suppose production currently has three application instances. A configuration change modifies an image and a lifecycle rule. Only a plan against the production state can show whether Terraform proposes in-place updates, replacements, extra capacity, or deletion.
 
-The log bucket module started with a small naming bug. Formatting and validation gave quick local feedback, but the naming rule needed a native module test. Provider-aware linting and scanners added cloud standards such as tags, versioning, public access, and encryption. The plan showed the final evaluated change for the target stack. Integration tests stayed available for the cases where a real cloud API response matters.
+`terraform plan` compares configuration with state and current remote information and proposes operations without carrying them out. A plan without `-out` is speculative: useful evidence now, but potentially stale before later apply.
 
-![Testing Summary](/content-assets/articles/article-iac-terraform-automation-testing/testing-summary.png)
+Plan review is testing because it evaluates a concrete proposition:
 
-*The summary board maps each Terraform risk to the check that catches it soonest.*
+> For this root, state, variables, provider context, dependency set, and current remote system, what does Terraform intend to do?
 
-The practical habit is simple to describe and powerful in daily work. A developer runs the fast checks locally. The module protects its contract with `terraform test`. The repository keeps lint and scanner rules close to the code. The plan gives reviewers evidence. Slow integration tests run only for modules where real provider behavior justifies the time and cost.
+Reviewers inspect:
 
-This testing foundation sets up the CI/CD workflow. The next article takes these same checks and places them inside a protected pipeline with target context, plan artifacts, approvals, state locking, evidence, and a rollback note.
+```text
+resource addresses
+create, update, replace, and delete actions
+replacement reasons
+changes to identity and for_each keys
+unknown values
+sensitive-value boundaries
+output changes
+unexpected drift
+blast radius
+```
+
+A source diff can look harmless while an address rename produces destroy and create actions. Conversely, a large refactor with correct `moved` blocks can produce no remote change. The plan observes Terraform's state-aware interpretation rather than guessing from text.
+
+Plan review does not prove that the operations will succeed or that the application will work. Permissions can differ at apply, remote conditions can change, and provider APIs can reject or partially complete operations. Runtime health lies beyond the plan.
+
+A saved plan provides stronger deployment evidence because the exact approved decision can be applied later:
+
+```bash
+terraform plan -out=tfplan
+terraform show -no-color tfplan
+terraform apply tfplan
+```
+
+Protect the artifact because plans can contain sensitive values. Also verify the target context beside the plan; an accurate plan against the wrong state or account is still the wrong evidence.
+
+Plan testing can be automated without reducing the plan to counts. Machine-readable JSON lets policy inspect action types and final values, but unknown and sensitive values need careful semantics. Human rendering remains valuable for relationships, replacement reasons, and changes a generic rule does not understand.
+
+Drift adds another input. A configuration change may appear to modify one tag, while refresh discovers an out-of-band security-group edit. The plan combines both. Reviewers should distinguish changes caused by the commit from drift that needs separate ownership or remediation.
+
+Address migrations deserve focused plan assertions or review. Renaming a resource, changing `count` to `for_each`, or moving into a module can propose replacement unless `moved` blocks preserve identity. Tests may validate the new graph shape, but only a plan against existing state proves the migration behavior for that deployment.
+
+Saved plans strengthen the handoff to deployment, not the underlying functional test. They execute the approved transition under compatible conditions. Runtime verification still follows apply because a correct plan can encounter provider errors or create unhealthy infrastructure.
+
+## When Do You Need Real Infrastructure?
+<!-- section-summary: Integration tests create real resources only for questions involving provider APIs, account policy, service behavior, readiness, or cleanup. -->
+
+Some questions exist only after a remote API runs:
+
+```text
+Is a name available in this account or global namespace?
+Does the role really have permission?
+Does the region support the feature?
+Does the service normalize or reject this setting?
+Does a load balancer declare the target healthy?
+Does a policy allow the intended request and deny another?
+Can the resource be destroyed cleanly?
+```
+
+A Terraform test run can use `command = apply` to create infrastructure, assert resulting values or behavior, and perform cleanup. The test should run in an isolated account or project with restricted credentials, cost controls, unique names, and no path to production data.
+
+Use unique, traceable inputs rather than fixed global names. A run ID, pull-request number, short commit SHA, or random suffix can distinguish resources. Read the actual created name from Terraform outputs before making provider CLI or application checks.
+
+Integration tests should target cloud-only uncertainty. Do not spend minutes and money creating a bucket merely to test a string concatenation that a plan assertion can prove. Do create one when the risk depends on provider authorization, service rules, or runtime behavior.
+
+Cleanup failure is part of integration-test risk. A failed assertion or interrupted runner can leave billable infrastructure. Use time-to-live tags, periodic janitor jobs, budget alerts, restricted quotas, and a runbook for leaked resources. Record the state and identifiers needed for cleanup.
+
+Some behavior extends beyond resources. A real test may need to send a request, verify DNS resolution, read an object under an application identity, or observe a rollout. Terraform can provision the test fixture, but the assertion may belong to a service-specific tool.
+
+An integration test proves behavior in the tested account, region, provider version, and time. It increases confidence; it does not establish a timeless universal guarantee.
+
+Design integration credentials for the fixture. The role should create only the resource types under test in an isolated boundary and should not reach production. Use provider-side policy and quotas in addition to naming conventions. If the test needs destructive permissions for cleanup, scope them to resources carrying the run's traceable tags where the platform supports it.
+
+Separate setup failure, assertion failure, and cleanup failure in the report. A permission error during creation does not disprove the module's business assertion, though it does reveal the test environment is unusable. A passed assertion followed by failed destroy means the behavior was observed but the run still requires operational cleanup.
+
+Integration state must survive long enough to clean up. An ephemeral runner that loses local state after a failure can strand resources. Use a recoverable test backend or preserve the state securely until cleanup completes, then expire it according to policy.
+
+End-to-end checks should use the identity a real consumer would use. Testing a secret read as an administrator proves less than testing it through the application's workload role. Testing a service from inside its network boundary proves something different from a public client request. State the vantage point in the assertion.
+
+## How Do You Build a Terraform Testing Strategy?
+<!-- section-summary: Build a pyramid of frequent cheap checks, focused plan and mock tests, fewer provider-aware tests, and narrow real-infrastructure tests. -->
+
+A useful testing pyramid is:
+
+```text
+many:   fmt, validate, variable validation
+many:   plan-based Terraform tests and focused mocks
+some:   provider-aware lint and static security analysis
+every deployment: target-aware plan review and policy
+few:    real integration and end-to-end behavior tests
+```
+
+The bottom layers are fast and deterministic, so they run on every change. Higher layers cost more authority, time, money, and cleanup effort, so they focus on uncertainty lower layers cannot answer.
+
+In CI, a module change can follow this flow:
+
+```bash
+terraform fmt -check -recursive
+terraform init -backend=false
+terraform validate
+terraform test
+# run pinned linters and security rules
+# plan affected real roots under verified read-oriented identities
+# run selected integration suite in an isolated test environment
+```
+
+Keep two distinctions explicit:
+
+```text
+tests
+    assert intended configuration behavior across chosen cases
+
+plans
+    show proposed changes for one selected state and current target
+```
+
+and:
+
+```text
+mocks
+    isolate Terraform logic by removing remote behavior
+
+integration
+    spends real API calls to observe remote behavior
+```
+
+For the retention module, format and validation catch source errors, plan-based tests assert production and development retention branches, a linter checks provider-aware issues, a target plan shows the effect on an existing log group, and an isolated integration test is reserved for provider behavior that cannot be established otherwise.
+
+Choose tests by risk, not by fashion. If the failure is a wrong branch, write a configuration test. If it is an invalid provider value, add lint or a focused integration test. If it is accidental replacement, require plan review. If it is runtime reachability, run a real end-to-end check.
+
+The first-principles model is evidence with boundaries. Every test removes some uncertainty while leaving other uncertainty intact. A trustworthy pipeline makes those boundaries visible instead of summarizing all green checks as “Terraform is safe.”
+
+Maintain a risk-to-check map for important modules. Naming and branching can be covered by plan tests. Public exposure and required tags can use static analysis and policy. Provider acceptance can use a small integration fixture. Service readiness can use an end-to-end probe. Destructive changes require target plan review and approval. This prevents expensive tests from being added without a specific claim.
+
+When a production incident escapes the suite, add evidence at the lowest layer capable of detecting the cause. A typo belongs in validation or a contract test, not an always-on cloud environment. A region-specific API rule belongs in provider-aware or integration coverage. A bad rollout health signal belongs in runtime verification. The suite becomes more useful without becoming uniformly slower.
+
+Tests that create infrastructure should also verify Terraform's ownership record. A passing service check can coexist with the wrong state address, an accidental replacement, or an unmanaged object. Inspect the applied state and a second clean plan before destroying the fixture; this proves both runtime behavior and convergence under Terraform's control loop.
+
+## Check Your Answers
+
+:::expand[What Does It Mean to Test Terraform?]{kind="recap"}
+Testing can target source shape, evaluated configuration, proposed transitions, provider assumptions, or real service behavior. Name the proposition each check supports.
+:::
+
+:::expand[Which Cheap Checks Should Run First?]{kind="recap"}
+Run formatting, backend-free initialization, validation, and input validation early. They catch fast failures without cloud write authority or integration cost.
+:::
+
+:::expand[How Do Terraform Tests Check a Module Contract?]{kind="recap"}
+Test files supply inputs and use plan or apply runs with assertions. They are especially useful for branches, counts, keys, outputs, and module outcomes.
+:::
+
+:::expand[What Do Mocks Prove and Hide?]{kind="recap"}
+Mocks make configuration tests fast and isolated, but they discard evidence about permissions, quotas, provider validation, availability, and runtime behavior.
+:::
+
+:::expand[How Do Validation and Provider-Aware Linting Differ?]{kind="recap"}
+Validation checks Terraform's structural model; linting adds known provider and risk rules. Neither is the live API or a target-aware plan.
+:::
+
+:::expand[Why Is Plan Review a Form of Testing?]{kind="recap"}
+A plan tests Terraform's proposed transition for one context and time. It reveals address, replacement, drift, and blast-radius behavior but not runtime success.
+:::
+
+:::expand[When Do You Need Real Infrastructure?]{kind="recap"}
+Use isolated integration tests for API acceptance, authorization, regional behavior, readiness, and cleanup questions that lower layers cannot answer.
+:::
+
+:::expand[How Do You Build a Terraform Testing Strategy?]{kind="recap"}
+Run many cheap checks, focused mocks and plan tests, provider-aware analysis, every-deployment plans, and a small set of risk-driven integration tests.
+:::
 
 ---
 
 **References**
 
-- [Terraform tests](https://developer.hashicorp.com/terraform/language/tests)
-- [`terraform test`](https://developer.hashicorp.com/terraform/cli/commands/test)
-- [`terraform fmt`](https://developer.hashicorp.com/terraform/cli/commands/fmt)
-- [`terraform init`](https://developer.hashicorp.com/terraform/cli/commands/init)
-- [`terraform validate`](https://developer.hashicorp.com/terraform/cli/commands/validate)
-- [`terraform plan`](https://developer.hashicorp.com/terraform/cli/commands/plan)
-- [`terraform show`](https://developer.hashicorp.com/terraform/cli/commands/show)
+- [Terraform CLI: fmt](https://developer.hashicorp.com/terraform/cli/commands/fmt)
+- [Terraform CLI: validate](https://developer.hashicorp.com/terraform/cli/commands/validate)
+- [Terraform: Tests](https://developer.hashicorp.com/terraform/language/tests)
+- [Terraform: Mocking providers](https://developer.hashicorp.com/terraform/language/tests/mocking)
+- [Terraform CLI: plan](https://developer.hashicorp.com/terraform/cli/commands/plan)
+- [Terraform: Custom conditions](https://developer.hashicorp.com/terraform/language/expressions/custom-conditions)
 - [TFLint](https://github.com/terraform-linters/tflint)
-- [TFLint AWS ruleset](https://github.com/terraform-linters/tflint-ruleset-aws)
-- [Checkov](https://www.checkov.io/)
-- [Checkov installation](https://github.com/bridgecrewio/checkov#installation)
-- [AWS CLI installation](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
-- [Amazon S3 bucket naming rules](https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html)
-- [AWS CLI get-bucket-tagging command](https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-tagging.html)

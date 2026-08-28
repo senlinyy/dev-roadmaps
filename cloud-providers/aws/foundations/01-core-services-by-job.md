@@ -1,7 +1,7 @@
 ---
 title: "AWS Core Services by Job"
 description: "Core AWS service families mapped to compute, traffic, network boundaries, state, access, signals, cost, and recovery."
-overview: "AWS becomes easier to understand when each service name is attached to the application job it performs. Follow one request from DNS to compute and data, then use the same map to reason about permissions, failures, recovery, and cost."
+overview: "Attach each AWS service name to the application job it performs to make the platform easier to understand. Follow one request from DNS to compute and data, then use the same map to reason about permissions, failures, recovery, and cost."
 tags: ["aws", "foundations", "ec2", "ecs", "lambda", "s3", "iam", "cloudwatch", "rds"]
 order: 1
 id: article-cloud-iac-cloud-providers-core-services
@@ -25,9 +25,6 @@ aliases:
 8. [How Do You Follow One Request and Debug a Failure?](#how-do-you-follow-one-request-and-debug-a-failure)
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-## How Do AWS Services Map to Application Jobs?
-<!-- section-summary: AWS services are easier to learn when each one is connected to an application job instead of memorized as an isolated product name. -->
 
 The easiest way to begin learning AWS is to set the product catalogue aside for a moment. Every real application has a small set of unavoidable jobs. Code needs a CPU on which to execute. Users need a stable route to that code. Network controls need to block connections that should never occur. Data must survive after a request or process ends. Applications and people must prove who they are before they act. Failures must leave useful evidence. The system must also tolerate expected failures without creating unlimited cost.
 
@@ -67,9 +64,7 @@ Cost tools show what the resources cost.
 Redundancy and backups determine how the system survives failure.
 ```
 
-The diagram is a job map, not a required architecture. A small application may use only some of these services. Another application may choose a different compute or database service. The important point is that the names occupy different places in the same physical story: a request arrives, code runs, data is read or written, permissions are checked, and evidence is produced.
-
-The sections below answer these questions in order:
+Keep these questions in view as you work through the lesson:
 
 1. **How Do AWS Services Map to Application Jobs?**
 2. **Where Does the Code Run?**
@@ -79,6 +74,11 @@ The sections below answer these questions in order:
 6. **How Do Workloads Receive Permissions and Secrets?**
 7. **How Do Availability, Recovery, and Cost Shape the Design?**
 8. **How Do You Follow One Request and Debug a Failure?**
+
+## How Do AWS Services Map to Application Jobs?
+<!-- section-summary: AWS services are easier to learn when each one is connected to an application job instead of memorized as an isolated product name. -->
+
+The diagram is a job map, not a required architecture. A small application may use only some of these services. Another application may choose a different compute or database service. The important point is that the names occupy different places in the same physical story: a request arrives, code runs, data is read or written, permissions are checked, and evidence is produced.
 
 These questions separate ideas that beginners often blend together. A route does not grant permission. Compute is not durable state. High availability is not backup. Once those boundaries are clear, the AWS service catalogue becomes a collection of tools for familiar application problems.
 

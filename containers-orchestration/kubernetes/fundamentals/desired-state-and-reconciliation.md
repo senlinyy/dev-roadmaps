@@ -21,9 +21,6 @@ id: article-containers-orchestration-kubernetes-fundamentals-desired-state-and-r
 10. [What's Next](#whats-next)
 11. [References](#references)
 
-## What Are Desired State and Reconciliation in Plain Terms?
-<!-- section-summary: Desired state is a durable description of the result Kubernetes should maintain; reconciliation is the continuing feedback loop that compares that description with observations and makes corrective changes. -->
-
 The previous article introduced the control plane as the part of Kubernetes that accepts requests, stores API objects, and coordinates work across the cluster. The idea that connects those components is **reconciliation**.
 
 **You record what the cluster should look like. Kubernetes repeatedly observes what it currently looks like and takes steps that bring the two closer together.**
@@ -58,6 +55,20 @@ spec:
               path: /ready
               port: 8080
 ```
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Are Desired State and Reconciliation in Plain Terms?**
+2. **Where Do Desired and Observed State Appear in an API Object?**
+3. **How Does a Controller Notice That It Has Work to Do?**
+4. **What Happens During One Reconciliation?**
+5. **How Do Several Reconciliation Loops Produce a Running Application?**
+6. **What Happens When the Cluster, a Person, or Another Controller Changes State?**
+7. **Which Problems Can Reconciliation Repair?**
+8. **How Do You Prove That the Latest Desired State Took Effect?**
+
+## What Are Desired State and Reconciliation in Plain Terms?
+<!-- section-summary: Desired state is a durable description of the result Kubernetes should maintain; reconciliation is the continuing feedback loop that compares that description with observations and makes corrective changes. -->
 
 The important request is larger than “start three containers once.” It means:
 
@@ -100,17 +111,6 @@ next useful change: create one replacement Pod object
 The object remains in the API after `kubectl` exits. A controller can restart, rebuild its view from the API, and calculate the same gap. A lost notification can delay the calculation, while a later observation still reveals that three were requested and two exist.
 
 This is the deeper reason Kubernetes asks for outcomes. Machines, processes, network connections, and controllers all change over time. A persistent target plus repeated comparison gives the system a way to recover from changes that nobody predicted when the original request was submitted. A detailed execution script ends after its listed actions; the stored outcome continues guiding later corrections.
-
-These questions guide the rest of the article:
-
-1. **What are desired state and reconciliation in plain terms?**
-2. **Where do desired and observed state appear in an API object?**
-3. **How does a controller notice that it has work to do?**
-4. **What happens during one reconciliation?**
-5. **How do several reconciliation loops produce a running application?**
-6. **What happens when the cluster, a person, or another controller changes state?**
-7. **Which problems can reconciliation repair?**
-8. **How do you prove that the latest desired state took effect?**
 
 ## Where Do Desired and Observed State Appear in an API Object?
 <!-- section-summary: Spec, status, generation, observedGeneration, and resourceVersion answer different questions about the requested configuration, controller progress, and stored API revision. -->
@@ -883,35 +883,35 @@ This final check catches the gap between “three healthy Pods exist” and “t
 ## Check Your Answers
 <!-- section-summary: These answers connect persistent intent, object versions, List and Watch, bounded reconciliation, cooperating loops, state changes, repair limits, and verification. -->
 
-:::expand[What are desired state and reconciliation in plain terms?]{kind="recap"}
+:::expand[What Are Desired State and Reconciliation in Plain Terms?]{kind="recap"}
 Desired state is the durable result recorded in an API object's configuration. Reconciliation is the continuing feedback loop that reads that result, observes the resources or external systems under its responsibility, calculates the gap, makes a bounded corrective change, and later repeats from fresh state.
 :::
 
-:::expand[Where do desired and observed state appear in an API object?]{kind="recap"}
+:::expand[Where Do Desired and Observed State Appear in an API Object?]{kind="recap"}
 `spec` normally carries the requested configuration, while `status` carries a controller's latest report. `metadata.generation` identifies the desired configuration, `status.observedGeneration` shows which desired generation the controller processed, and `metadata.resourceVersion` identifies the stored API revision used for watches and concurrency.
 :::
 
-:::expand[How does a controller notice that it has work to do?]{kind="recap"}
+:::expand[How Does a Controller Notice That It Has Work to Do?]{kind="recap"}
 The controller lists objects to establish a current snapshot, watches from the returned resource version, updates a local cache, and places affected keys on a work queue. Events wake the controller, while the newest cached state supplies the calculation. An expired watch history leads to another list and a rebuilt view.
 :::
 
-:::expand[What happens during one reconciliation?]{kind="recap"}
+:::expand[What Happens During One Reconciliation?]{kind="recap"}
 A worker reads one key, gathers the latest desired and observed objects, calculates a gap, and chooses a small API action. A ReplicaSet requesting three Pods while owning two leads to one Pod creation. Ownership, current-state checks, optimistic concurrency, and rate-limited retries make repeated passes safe.
 :::
 
-:::expand[How do several reconciliation loops produce a running application?]{kind="recap"}
+:::expand[How Do Several Reconciliation Loops Produce a Running Application?]{kind="recap"}
 The Deployment controller manages ReplicaSets, the ReplicaSet controller creates Pod records, the scheduler binds each Pod to a Node, the kubelet starts containers and reports conditions, and the EndpointSlice controller publishes ready Service backends. Each API output supplies evidence or desired input for another loop.
 :::
 
-:::expand[What happens when the cluster, a person, or another controller changes state?]{kind="recap"}
+:::expand[What Happens When the Cluster, a Person, or Another Controller Changes State?]{kind="recap"}
 Deleting a managed Pod changes the observed population, so the ReplicaSet replaces it. Scaling changes the desired count. An image update creates a new Pod-template revision and ReplicaSet. HPA and GitOps add outer loops that can update fields consumed by the built-in workload controllers.
 :::
 
-:::expand[Which problems can reconciliation repair?]{kind="recap"}
+:::expand[Which Problems Can Reconciliation Repair?]{kind="recap"}
 Repair works when the desired result is declared, a controller understands the gap, and a real corrective action is available. Missing Pods and dead containers fit those loops. Capacity shortages, unavailable images, quota, missing controllers, and application logic errors require new capacity, configuration, software, or operational decisions.
 :::
 
-:::expand[How do you prove that the latest desired state took effect?]{kind="recap"}
+:::expand[How Do You Prove That the Latest Desired State Took Effect?]{kind="recap"}
 Verify the live spec, compare generation with observedGeneration, inspect ReplicaSets and Pods, read conditions and Events, confirm ready EndpointSlices, wait for rollout completion, and test the application's real behavior. Each step proves a different handoff from API acceptance to a useful service.
 :::
 

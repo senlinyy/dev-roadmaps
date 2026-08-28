@@ -37,9 +37,6 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## How Does a Caller Receive AWS Access?
-<!-- section-summary: A long-lived identity authenticates, obtains a short-lived AWS session, signs a request, and then faces authorization policy evaluation. -->
-
 The cleanest way to understand access for people and applications is to start with one question: **when something asks AWS to perform an action, how does AWS decide whether to allow it?**
 
 Every request can be reduced to:
@@ -76,6 +73,20 @@ Four words in that flow are frequently mixed together.
 
 An **identity** answers “Who are you?” Alice in the corporate directory, a GitHub Actions workflow, an EC2 instance, and a Kubernetes workload are all possible starting identities.
 
+Keep these questions in view as you work through the lesson:
+
+1. **How Does a Caller Receive AWS Access?**
+2. **Why Is the IAM Role the Central Access Identity?**
+3. **How Do Permission Sets and Account Assignments Work?**
+4. **How Does CLI Access Work Without Permanent Keys?**
+5. **How Do Applications Receive Runtime Credentials?**
+6. **How Do CI Jobs and External Workloads Federate?**
+7. **How Do You Identify the Real Caller During an Incident?**
+8. **How Does the Complete Access Chain Fit Together?**
+
+## How Does a Caller Receive AWS Access?
+<!-- section-summary: A long-lived identity authenticates, obtains a short-lived AWS session, signs a request, and then faces authorization policy evaluation. -->
+
 A **credential** proves identity or, in many AWS flows, proves possession of an already-created session. Temporary API credentials include an `AccessKeyId`, a `SecretAccessKey`, and a `SessionToken`. AWS STS issues many of these temporary credentials, and they expire automatically.
 
 A **permission** answers “What may this identity or session do?” A permission might allow `s3:GetObject` on objects under `arn:aws:s3:::company-reports/*`.
@@ -91,17 +102,6 @@ short-lived AWS session
         ↓
 perform work
 ```
-
-The sections below answer these questions in order:
-
-1. **How Does a Caller Receive AWS Access?**
-2. **Why Is the IAM Role the Central Access Identity?**
-3. **How Do Permission Sets and Account Assignments Work?**
-4. **How Does CLI Access Work Without Permanent Keys?**
-5. **How Do Applications Receive Runtime Credentials?**
-6. **How Do CI Jobs and External Workloads Federate?**
-7. **How Do You Identify the Real Caller During an Incident?**
-8. **How Does the Complete Access Chain Fit Together?**
 
 ## Why Is the IAM Role the Central Access Identity?
 <!-- section-summary: A role is a reusable set of AWS permissions that a trusted person, workload, service, account, or federated identity can temporarily become. -->

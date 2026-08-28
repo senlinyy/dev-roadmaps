@@ -32,7 +32,7 @@ Without NetworkPolicy, a routable Pod such as `random-pod` can also try to reach
 
 Connectivity and permission answer different questions. A Service creates a stable route to the backend. NetworkPolicy decides whether Pods with the frontend identity may send TCP traffic to that destination port, while unrelated workloads remain blocked.
 
-We will build that boundary by answering six questions:
+Keep these questions in view as you work through the lesson:
 
 1. **Why are reachability and permission separate?**
 2. **What exactly changes when a policy selects a Pod?**

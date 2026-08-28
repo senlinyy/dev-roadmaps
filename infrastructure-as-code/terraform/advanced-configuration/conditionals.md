@@ -1,7 +1,7 @@
 ---
 title: "Conditionals"
-description: "Conditional expressions decide which resources Terraform creates and what values they receive based on input variables, environment settings, and computed conditions."
-overview: "Conditionals let your Terraform configuration adapt to different situations without duplicating code. This article covers the ternary expression, count-based resource toggling, for_each filtering, and how to write conditions that make configurations flexible without making them unreadable."
+description: "Conditional expressions decide which values and collections Terraform sees based on boolean conditions."
+overview: "Terraform conditionals are value-producing expressions rather than imperative if statements. This article follows that model through typed choices, null omission, optional resources, validation, filtered collections, and readable policy design."
 tags: ["conditionals", "count", "for_each", "ternary", "terraform"]
 order: 3
 id: article-iac-terraform-advanced-conditionals
@@ -9,259 +9,210 @@ id: article-iac-terraform-advanced-conditionals
 
 ## Table of Contents
 
-1. [One Optional Setting](#one-optional-setting)
-2. [True and False Expressions](#true-and-false-expressions)
-3. [Using null to Omit a Setting](#using-null-to-omit-a-setting)
-4. [Creating an Optional Resource](#creating-an-optional-resource)
-5. [Validating the Inputs](#validating-the-inputs)
-6. [Filtering a Collection](#filtering-a-collection)
-7. [Keeping Logic Untangled](#keeping-logic-untangled)
-8. [Putting It All Together](#putting-it-all-together)
+1. [What Does a Terraform Conditional Actually Do?](#what-does-a-terraform-conditional-actually-do)
+2. [How Do Conditions Choose Compatible Values?](#how-do-conditions-choose-compatible-values)
+3. [How Does null Omit an Optional Value?](#how-does-null-omit-an-optional-value)
+4. [How Does a Condition Control Resource Existence?](#how-does-a-condition-control-resource-existence)
+5. [How Do Conditions Validate Requirements?](#how-do-conditions-validate-requirements)
+6. [How Does Filtering Choose Named Resources?](#how-does-filtering-choose-named-resources)
+7. [How Do You Keep Conditional Logic Readable?](#how-do-you-keep-conditional-logic-readable)
+8. [How Do the Conditional Patterns Fit Together?](#how-do-the-conditional-patterns-fit-together)
+9. [Check Your Answers](#check-your-answers)
 
-The loops article focused on repetition. This article focuses on choices. A Terraform conditional can choose a value for one argument, omit an optional setting, create zero or one resources, or filter a collection before `for_each` creates instances.
+Terraform conditionals are easier to understand when you stop treating them as procedural `if` statements. They do not decide which lines run. They produce values that arguments, `count`, `for_each`, or validation rules consume.
 
-The safe order is important. First change values while the resource address stays the same. Then change resource shape for modules that truly need a different shape. Shape changes affect state addresses, so they need the same careful review you used for `count` and `for_each` in the loops article.
-
-## One Optional Setting
-<!-- section-summary: A conditional starts as one small choice, such as using a larger log retention period in production than in development. -->
-
-Imagine a small billing service that writes application logs to CloudWatch. In development, the team only needs logs for a week because the environment changes often. In production, the same service needs ninety days of logs because incidents, audits, and customer questions often arrive later.
-
-The resource is the same in both environments. Only one setting changes:
+Terraform resource arguments already receive values from expressions:
 
 ```hcl
-variable "environment" {
-  type    = string
-  default = "dev"
-}
-
-resource "aws_cloudwatch_log_group" "app" {
-  name              = "/apps/billing"
-  retention_in_days = var.environment == "prod" ? 90 : 7
+resource "aws_instance" "web" {
+  instance_type = "t3.micro"
 }
 ```
 
-The expression after `retention_in_days` is a **conditional expression**. Terraform evaluates the part before the question mark first. If `var.environment == "prod"` is true, it uses `90`. If the expression is false, it uses `7`.
+The literal expression produces one string. A variable reference, function call, or conditional can produce the same argument value:
 
-This small example is the best place to start because the resource does not change shape yet. The log group always exists. Terraform only chooses one value for one argument, and the plan will show the selected retention period before anything is applied.
-
-A development plan shows the evaluated value, not the expression:
-
-```bash
-terraform plan -var='environment=dev'
+```hcl
+instance_type = var.instance_type
+instance_type = lookup(var.instance_types, var.environment)
+instance_type = var.environment == "prod" ? "t3.large" : "t3.micro"
 ```
 
-The `-var` flag supplies one input value directly on the command line for this small comparison. In team workflows, the same value usually comes from a checked-in environment file or CI variable.
+In every case Terraform asks, “what value should `instance_type` have?” The conditional syntax is:
 
-```console
-  # aws_cloudwatch_log_group.app will be created
-  + resource "aws_cloudwatch_log_group" "app" {
-      + name              = "/apps/billing"
-      + retention_in_days = 7
-    }
+```hcl
+condition ? value_if_true : value_if_false
 ```
 
-The important line is `retention_in_days = 7`. Terraform has already evaluated the conditional expression before it prints the planned resource.
+For production, `var.environment == "prod"` is true and the complete expression becomes `"t3.large"`. For development it becomes `"t3.micro"`. Terraform then places the selected string into the resource graph.
 
-A production plan keeps the same resource address and gives the argument a different value:
+Keep these questions in view as you work through the lesson:
 
-```bash
-terraform plan -var='environment=prod'
+1. **What Does a Terraform Conditional Actually Do?**
+2. **How Do Conditions Choose Compatible Values?**
+3. **How Does `null` Omit an Optional Value?**
+4. **How Does a Condition Control Resource Existence?**
+5. **How Do Conditions Validate Requirements?**
+6. **How Does Filtering Choose Named Resources?**
+7. **How Do You Keep Conditional Logic Readable?**
+8. **How Do the Conditional Patterns Fit Together?**
+
+## What Does a Terraform Conditional Actually Do?
+<!-- section-summary: A conditional evaluates one boolean and produces one of two values; another Terraform construct determines what that result means. -->
+
+The condition itself must produce a boolean. Typical forms include:
+
+```hcl
+var.environment == "prod"
+var.instance_count > 0
+var.region != ""
+var.enable_monitoring
+
+var.environment == "prod" && var.enable_monitoring
+var.environment == "dev" || var.environment == "staging"
+!var.enable_monitoring
 ```
 
-```console
-      + retention_in_days = 90
+`&&`, `||`, and `!` combine or negate boolean values. The ternary still has only one job: select one result after evaluating that boolean.
+
+This distinction prevents duplicated resources when only one setting varies:
+
+```hcl
+resource "aws_instance" "web" {
+  ami = var.ami
+
+  instance_type = var.environment == "prod" ? "t3.large" : "t3.micro"
+}
 ```
 
-The production run shows the same argument with the production value. That is the review point: the condition changes the value sent into the resource, not the resource address.
+The instance always exists at `aws_instance.web`. Only its selected type changes. Keep the resource unconditional when the real choice concerns one of its values.
 
-That under-the-hood detail matters for review. Terraform does not keep both branches in the planned resource. It evaluates the condition during planning, chooses one result, and sends the chosen value into the resource graph.
+The plan shows the evaluated result rather than preserving both branches as future runtime choices. A production plan contains `instance_type = "t3.large"`; a development plan contains `"t3.micro"`. This is why the condition and all values needed to choose graph shape must be available at the appropriate planning phase.
 
-## True and False Expressions
-<!-- section-summary: Terraform conditionals choose between two values after evaluating a boolean expression. -->
+The resource example also illustrates the smallest safe change. Duplicating one instance block per environment creates separate addresses and repeated settings. Keeping one address and selecting the one differing argument preserves identity while expressing the actual policy.
 
-A **boolean expression** is any Terraform expression that produces `true` or `false`. Equality checks, number comparisons, and feature flags are common examples. Terraform uses those results to choose the value on the true side or the false side.
+## How Do Conditions Choose Compatible Values?
+<!-- section-summary: The true and false branches should answer the same kind of question so the conditional has one predictable result type. -->
+
+Terraform needs a single type for the whole expression. These choices are clear:
+
+```hcl
+var.production ? "t3.large" : "t3.micro"
+var.production ? 5 : 1
+var.production ? ["a", "b"] : []
+```
+
+Both branches answer the same question with compatible strings, numbers, or collections. This is confusing:
+
+```hcl
+var.enabled ? 12 : "disabled"
+```
+
+Terraform may sometimes convert values to a common type, but implicit conversion can make later behavior surprising. Prefer branches with an obvious shared meaning and shape.
 
 ![Conditional Evaluation](/content-assets/articles/article-iac-terraform-advanced-conditionals/conditional-evaluation.png)
 
-*The evaluation path shows how Terraform chooses one branch, then still expects the chosen value to fit the argument type.*
-
-Here are a few choices for the same billing service:
+A boolean does not need to be converted back into itself. Use:
 
 ```hcl
-locals {
-  is_prod               = var.environment == "prod"
-  log_retention_days    = local.is_prod ? 90 : 7
-  min_instance_count    = local.is_prod ? 3 : 1
-  deletion_protection   = local.is_prod
-  alarm_evaluation_time = local.is_prod ? 300 : 60
+condition = var.enabled
+condition = !var.enabled
+```
+
+instead of:
+
+```hcl
+condition = var.enabled ? true : false
+condition = var.enabled == false
+```
+
+Ask whether two possible values genuinely need selection. If the expression is already the desired boolean, use it directly.
+
+Condition and results are separate concepts. In `var.environment == "prod" ? "t3.large" : "t3.micro"`, the comparison produces a boolean, while both result expressions produce strings. Keeping those roles visible makes more complex logic easier to debug.
+
+## How Does `null` Omit an Optional Value?
+<!-- section-summary: null represents absence, which lets a conditional omit an optional argument instead of sending an empty or invented value. -->
+
+Terraform's `null` value means absence. For an optional resource argument, assigning `null` generally behaves as though the argument were not specified, allowing provider or argument defaults to apply where supported.
+
+Suppose production needs a custom timeout while other environments should use default behavior:
+
+```hcl
+resource "something" "example" {
+  timeout = var.environment == "prod" ? 60 : null
 }
 ```
 
-`local.deletion_protection` uses the boolean directly because it already has the right type. A ternary like `local.is_prod ? true : false` would add noise without changing the result.
-
-Terraform expects both result values in a conditional to have compatible types. `local.is_prod ? 90 : 7` is clear because both sides are numbers. `local.is_prod ? 90 : "seven"` asks Terraform to reconcile a number and a string, which can produce confusing type conversion. Production modules should keep the two branches the same kind of value.
-
-For optional object settings, make the type explicit so Terraform and the reader agree about the shape:
-
-```hcl
-variable "alarm_overrides" {
-  type = object({
-    evaluation_periods = optional(number)
-    threshold          = optional(number)
-  })
-  default = {}
-}
-
-locals {
-  alarm_threshold = var.alarm_overrides.threshold != null ? var.alarm_overrides.threshold : 0
-}
-```
-
-This is safer than mixing an object on one side and a string or empty map on the other side. Terraform's type system tries to find one final type for the expression before it can build the plan. Matching branch types keep the plan predictable.
-
-## Using null to Omit a Setting
-<!-- section-summary: null is useful for optional provider arguments that should be left out instead of sent with an empty value. -->
-
-Now the billing service gets a simple production-only alarm. In development, the team still wants the log group, but they do not want an alarm action wired to a paging topic. A common first attempt is to use an empty string for the missing ARN.
+Production sends `60`; non-production omits the argument. This differs from `0`, which is an actual numeric value.
 
 ![Null Vs Omitted Boundary](/content-assets/articles/article-iac-terraform-advanced-conditionals/null-vs-omitted-boundary.png)
 
-*`null` is safest for provider schemas that treat an omitted argument differently from an explicit value, and this boundary view shows that handoff.*
+Keep absence separate from empty values:
+
+```text
+null ≠ ""
+null ≠ []
+null ≠ {}
+null ≠ 0
+null ≠ false
+```
+
+An empty string is still a supplied string. An empty list is still a supplied collection. `false` is still a boolean decision. Providers can interpret each differently from omission.
+
+This pattern is useful for an optional description:
 
 ```hcl
-variable "pager_topic_arn" {
-  type    = string
-  default = null
-}
-
-resource "aws_cloudwatch_metric_alarm" "errors" {
-  alarm_name          = "billing-errors"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
-  metric_name         = "Errors"
-  namespace           = "Billing/App"
-  period              = 60
-  statistic           = "Sum"
-  threshold           = 0
-
-  alarm_actions = var.environment == "prod" && var.pager_topic_arn != null ? [var.pager_topic_arn] : []
-}
+description = var.add_description ? "Production server" : null
 ```
 
-An empty list works for `alarm_actions` because the argument expects a list. For single optional arguments, Terraform often uses **null** to mean "leave this unset". The provider receives no value for that argument, which is different from sending an empty string or a made-up placeholder.
+The question is whether the argument should participate. If yes, produce a value; if no, produce absence. `null` cannot make a required provider argument valid, and a redundant expression such as `var.custom_timeout != null ? var.custom_timeout : null` can simply be `var.custom_timeout`.
+
+## How Does a Condition Control Resource Existence?
+<!-- section-summary: A conditional still produces a value; count or for_each interprets that value as the number or identities of resource instances. -->
+
+Making one argument `null` does not remove a resource block. To create zero or one instances, convert the boolean into a number for `count`:
 
 ```hcl
-variable "kms_key_id" {
-  type    = string
-  default = null
-}
+resource "aws_instance" "bastion" {
+  count = var.create_bastion ? 1 : 0
 
-resource "aws_cloudwatch_log_group" "app" {
-  name              = "/apps/billing"
-  retention_in_days = local.log_retention_days
-  kms_key_id        = var.environment == "prod" ? var.kms_key_id : null
+  ami           = var.ami
+  instance_type = "t3.micro"
 }
 ```
 
-This says production may use a customer-managed KMS key, while development leaves the provider default alone. The key detail is that `null` keeps the configuration honest. Terraform can omit the argument instead of smuggling an empty value into the provider call.
+When true, the conditional produces `1`, and `count` creates one instance. When false, it produces `0`, and Terraform manages none. The conditional never becomes an imperative `if`; `count` assigns infrastructure meaning to the numeric result.
 
-The plan usually makes this visible. If `kms_key_id` is `null`, the argument does not appear as a configured value. If someone uses an empty string instead, the provider may receive an empty string and reject it with a provider-specific validation error. That is a common production mistake because empty strings look harmless in variables, but many provider APIs treat them as real values.
-
-`nullable = false` fits inputs where callers must always pass a real value:
+Adding `count` changes address shape. The possible instance is `aws_instance.bastion[0]`, so an optional output must account for the zero case:
 
 ```hcl
-variable "service_name" {
-  type     = string
-  nullable = false
+output "bastion_ip" {
+  value = var.create_bastion ? aws_instance.bastion[0].public_ip : null
 }
 ```
 
-For this log group key, `null` is part of the design because development intentionally omits the setting. For a service name, `null` would hide a broken caller, so the variable should reject it.
+The index exists because `count` creates a collection of instances. Refactoring an existing uncounted resource to `count` changes its address and may require a `moved` block to preserve state identity.
 
-## Creating an Optional Resource
-<!-- section-summary: count can turn one optional resource on or off, but every reference to that resource must handle the zero-instance case. -->
+Every reference must handle the optional shape. A resource that exists only under the same condition can safely read `[0]`. An unconditional consumer cannot assume index zero exists when the feature is disabled. It needs its own matching condition or an optional value that becomes `null` in the zero-instance case.
 
-The previous section used an existing topic ARN as an input. Now the module will create its own pager topic. The topic only exists for production because development does not page anyone. This is where a value conditional turns into a resource-shape conditional.
+`for_each` expresses the same zero-or-one idea with named identity:
 
 ```hcl
-resource "aws_sns_topic" "pager" {
-  count = var.environment == "prod" ? 1 : 0
-  name  = "billing-prod-pager"
-}
+resource "aws_instance" "bastion" {
+  for_each = var.create_bastion ? { bastion = {} } : {}
 
-resource "aws_cloudwatch_metric_alarm" "errors" {
-  count = var.environment == "prod" ? 1 : 0
-
-  alarm_name          = "billing-errors"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
-  metric_name         = "Errors"
-  namespace           = "Billing/App"
-  period              = 60
-  statistic           = "Sum"
-  threshold           = 0
-  alarm_actions       = [aws_sns_topic.pager[0].arn]
+  ami           = var.ami
+  instance_type = "t3.micro"
 }
 ```
 
-`count` expects a number, so the conditional returns `1` or `0`. For production, Terraform creates one topic and one alarm. For development, Terraform creates zero topics and zero alarms.
+The enabled collection contains one key, producing `aws_instance.bastion["bastion"]`. The disabled collection is empty. Use this form when named identity fits better than positional identity.
 
-The reference uses `[0]` because a counted resource is a list of instances. This is safe here because both resources use the same condition. Terraform never creates the alarm without also creating the topic it reads.
+Both designs turn a boolean into data. `count` asks how many interchangeable instances exist. `for_each` asks which named identities exist. The conditional does not directly create or skip anything; it chooses the number or collection that the meta-argument interprets.
 
-The development plan shows the shape clearly:
+## How Do Conditions Validate Requirements?
+<!-- section-summary: Validation consumes a boolean as an acceptance rule, including requirements that apply only when another feature is enabled. -->
 
-```console
-Plan: 0 to add, 0 to change, 0 to destroy.
-```
-
-The production plan shows one instance at each counted address:
-
-```console
-  # aws_sns_topic.pager[0] will be created
-  + resource "aws_sns_topic" "pager" {
-      + name = "billing-prod-pager"
-    }
-
-  # aws_cloudwatch_metric_alarm.errors[0] will be created
-  + resource "aws_cloudwatch_metric_alarm" "errors" {
-      + alarm_actions = (known after apply)
-    }
-```
-
-The address change is the part beginners often miss. Adding `count` changes the resource address from `aws_sns_topic.pager` to `aws_sns_topic.pager[0]`. If an existing production resource already lives in state at the uncounted address, the team should use a `moved` block or a state move during the refactor so Terraform does not plan to delete and recreate a working topic only because the address changed.
-
-After apply, the state list uses those counted addresses too:
-
-```bash
-terraform state list
-```
-
-```console
-aws_cloudwatch_metric_alarm.errors[0]
-aws_sns_topic.pager[0]
-```
-
-That output is the state identity risk in plain form. A value conditional changed only `retention_in_days`. A resource conditional changed the address shape Terraform stores.
-
-For a single optional output, Terraform's `one()` function can make the zero-or-one shape clearer:
-
-```hcl
-output "pager_topic_arn" {
-  value = one(aws_sns_topic.pager[*].arn)
-}
-```
-
-If the topic exists, the output is the ARN. If the topic has zero instances, the output is `null`. That gives callers a clean optional value instead of asking them to guess whether index zero exists.
-
-One common mistake is to reference `aws_sns_topic.pager[0].arn` from an output or another resource that still exists for the disabled case. Terraform then has no instance at index zero. The reference should stay inside a resource that uses the same condition, or the zero-or-one list can be converted with `one()` so the caller handles `null`.
-
-## Validating the Inputs
-<!-- section-summary: Validation keeps conditionals small by rejecting impossible combinations before the plan reaches provider calls. -->
-
-The billing module has a small problem now. Production needs a KMS key, but the variable default is `null`. Without validation, someone can run a production plan with no key and only discover the mistake during review or after a provider error.
-
-Terraform variable validation lets the module reject that combination early:
+Conditions can reject invalid configuration instead of selecting a value. Variable validation needs one boolean condition that must be true:
 
 ```hcl
 variable "environment" {
@@ -269,173 +220,308 @@ variable "environment" {
 
   validation {
     condition     = contains(["dev", "staging", "prod"], var.environment)
-    error_message = "environment must be dev, staging, or prod."
+    error_message = "Environment must be dev, staging, or prod."
   }
 }
+```
 
-variable "kms_key_id" {
+There is no ternary because validation does not need two result values. It asks only whether the input is acceptable.
+
+Conditional requirements often use this logical form:
+
+```text
+feature does not apply OR its requirement holds
+```
+
+For backups:
+
+```hcl
+variable "enable_backup" {
+  type = bool
+}
+
+variable "backup_bucket" {
   type    = string
   default = null
 
   validation {
-    condition     = var.environment != "prod" || var.kms_key_id != null
-    error_message = "prod requires kms_key_id so logs are encrypted with the production key."
+    condition     = !var.enable_backup || var.backup_bucket != null
+    error_message = "backup_bucket must be provided when backups are enabled."
   }
 }
 ```
 
-The second condition reads as a rule for the module. Non-production environments may omit the key. Production must pass it. The important part is that the rule lives beside the input, so a caller gets a direct error before Terraform builds a surprising plan.
+If backups are disabled, the left side is true and no bucket is required. If enabled, the left side is false, so the bucket must be present. Only “enabled and missing” fails.
 
-Validation also reduces tangled resource logic. Instead of checking for every bad combination inside every resource, the module rejects invalid inputs once and lets the resource blocks stay simple.
+The truth table makes the rule explicit:
 
-The failure is direct:
+| Backups enabled | Bucket supplied | Valid |
+|---|---|---|
+| false | no | yes |
+| false | yes | yes |
+| true | yes | yes |
+| true | no | no |
 
-```bash
-terraform plan -var='environment=prod'
-```
+Translating a sentence into boolean logic before writing HCL is often easier than building a nested conditional. “Either the feature is off, or the requirement holds” is a reusable pattern.
 
-This command deliberately omits `kms_key_id` while setting the environment to production, so validation should stop the plan before resource changes are proposed.
+Validation keeps resource blocks simpler by rejecting impossible caller combinations at the boundary. It also produces an error message that explains the rule before a provider API sees incomplete configuration.
 
-```console
-Error: Invalid value for variable
+The underlying pattern remains boolean evaluation. A ternary uses a boolean to choose a value. `validation.condition` uses a boolean to accept or reject an operation. Choose the consuming construct based on the outcome you need.
 
-prod requires kms_key_id so logs are encrypted with the production key.
-```
+## How Does Filtering Choose Named Resources?
+<!-- section-summary: A for expression can filter a map, and for_each then creates one stable resource instance for every retained key. -->
 
-The output names the variable error and prints the custom validation message. That is the useful failure: the caller learns what production requires before Terraform reaches provider APIs.
-
-That kind of failure is useful because it names the business rule before a late provider error appears. In production modules, validation fits environment names, mutually required inputs, allowed instance sizes, retention limits, and any setting where a bad value would create a risky plan.
-
-This example uses validation that compares two variables. It requires Terraform 1.9 or later, because earlier Terraform versions allowed variable validation to refer only to the variable being validated. This is often called cross-object validation because the rule can compare the current variable with another variable, local value, data source, or resource attribute that Terraform can evaluate at the right time.
-
-The validation feature should match the thing you are protecting. Variable validation fits caller input rules such as "prod requires a KMS key." A resource precondition fits a rule the resource needs before Terraform sends the provider request. A postcondition fits a rule that should be true after a resource or data source is evaluated. A check block fits ongoing assertions that should report problems without necessarily blocking every plan. That choice keeps conditionals small because each rule lives beside the object it protects.
-
-If you maintain older Terraform projects, put the related settings inside one object variable, use a resource precondition, or enforce the combination in Terraform tests or policy-as-code. The important teaching point is the same: reject unsafe input combinations before provider calls create a confusing plan.
-
-## Filtering a Collection
-<!-- section-summary: for_each filtering handles collection items that need an extra resource without many separate booleans. -->
-
-The billing service grows from one team to three teams. Only the production owners should receive the pager topic policy. A boolean `count` works for one optional object, but it gets awkward for the question "which people in this map need the extra thing?"
+Suppose input describes several servers and marks which ones are enabled:
 
 ```hcl
-variable "team_members" {
+variable "servers" {
   type = map(object({
-    email      = string
-    pages_prod = bool
+    instance_type = string
+    enabled       = bool
   }))
-}
 
-resource "aws_iam_user" "member" {
-  for_each = var.team_members
-  name     = each.key
-}
+  default = {
+    web = {
+      instance_type = "t3.micro"
+      enabled       = true
+    }
 
-resource "aws_iam_user_policy_attachment" "pager_publish" {
-  for_each = {
-    for name, member in var.team_members : name => member
-    if member.pages_prod
+    worker = {
+      instance_type = "t3.micro"
+      enabled       = false
+    }
+
+    api = {
+      instance_type = "t3.small"
+      enabled       = true
+    }
   }
-
-  user       = aws_iam_user.member[each.key].name
-  policy_arn = aws_iam_policy.publish_to_pager.arn
 }
 ```
 
-The `for` expression builds a smaller map containing only members where `pages_prod` is true. `for_each` then creates one attachment for each selected member. The stable map keys keep Terraform's state addresses readable, such as `aws_iam_user_policy_attachment.pager_publish["alice"]`.
-
-This is a conditional too, but it works at the collection level. The rule lives next to the resource that needs it, and Terraform still has stable identities for every selected item.
-
-A plan for two selected members produces addresses that show the selected keys:
-
-```console
-  # aws_iam_user_policy_attachment.pager_publish["alice"] will be created
-  # aws_iam_user_policy_attachment.pager_publish["mira"] will be created
-```
-
-If `mira` turns `pages_prod` off later, Terraform removes only `aws_iam_user_policy_attachment.pager_publish["mira"]`. Alice's address stays the same. That is why `for_each` filtering usually fits optional resources attached to named items.
-
-The same identity rule still applies. If the key changes from `mira` to `miriam`, Terraform treats that as one address removed and one address added unless the refactor includes a `moved` block. Stable keys should hold identity, while display names, email addresses, and team labels belong in the value object.
-
-## Keeping Logic Untangled
-<!-- section-summary: Large conditional expressions should usually move into locals, maps, or validation rules so resource blocks stay readable. -->
-
-Small conditionals are useful. Deep nested conditionals are hard to review because the reader has to track several branches at once. Production modules usually stay clearer with branching logic moved into named locals.
-
-Instead of stacking environment checks inside the resource:
-
-```hcl
-resource "aws_instance" "app" {
-  ami           = var.ami_id
-  instance_type = var.environment == "prod" ? "t3.large" : var.environment == "staging" ? "t3.small" : "t3.micro"
-}
-```
-
-A map can name the allowed choices:
+A `for` expression can derive a smaller map:
 
 ```hcl
 locals {
-  instance_type_by_environment = {
+  enabled_servers = {
+    for name, server in var.servers :
+    name => server
+    if server.enabled
+  }
+}
+```
+
+The worker is excluded, while the `web` and `api` keys remain. `for_each` consumes that result:
+
+```hcl
+resource "aws_instance" "server" {
+  for_each = local.enabled_servers
+
+  ami           = var.ami
+  instance_type = each.value.instance_type
+
+  tags = {
+    Name = each.key
+  }
+}
+```
+
+Terraform creates `aws_instance.server["web"]` and `aws_instance.server["api"]`. Disabling `api` removes only that key's instance; `web` keeps its identity. Filtering plus `for_each` is a data transformation followed by named resource expansion.
+
+The plan therefore explains the selection through addresses. Stable keys such as `"web"` and `"api"` make it obvious which item is added or removed. If a key is renamed, Terraform sees a different identity even when the object value looks similar, so key design belongs in the conditional review.
+
+The shape must be known early enough for planning. Caller-provided map keys work. Provider-assigned IDs that are unknown until apply cannot decide `for_each` keys, because Terraform needs the resource instance addresses before it performs provider operations.
+
+The broader lesson is to transform input data until it describes exactly which infrastructure instances should exist. Terraform does not need an imperative loop or branch when a filtered collection already expresses the desired graph.
+
+## How Do You Keep Conditional Logic Readable?
+<!-- section-summary: Derive policy in named locals, use maps for multi-way lookup, and reserve ternaries for genuine two-way choices. -->
+
+Nested ternaries can mix environment policy with resource mechanics:
+
+```hcl
+resource "aws_instance" "web" {
+  instance_type = var.environment == "prod" && var.high_traffic
+    ? "m7i.large"
+    : var.environment == "prod"
+      ? "m7i.medium"
+      : var.environment == "staging"
+        ? "t3.small"
+        : "t3.micro"
+}
+```
+
+Move a genuine choice into a named local so the resource focuses on infrastructure:
+
+```hcl
+locals {
+  instance_type = (
+    var.environment == "prod"
+    ? (var.high_traffic ? "m7i.large" : "m7i.medium")
+    : var.environment == "staging"
+      ? "t3.small"
+      : "t3.micro"
+  )
+}
+
+resource "aws_instance" "web" {
+  ami           = var.ami
+  instance_type = local.instance_type
+}
+```
+
+When the logic is really a lookup, model it as data:
+
+```hcl
+locals {
+  instance_types = {
     dev     = "t3.micro"
     staging = "t3.small"
-    prod    = "t3.large"
+    prod    = "m7i.medium"
+  }
+
+  instance_type = local.instance_types[var.environment]
+}
+```
+
+Use a conditional for a true two-way choice and a map for a multi-way mapping. Validation can ensure the lookup key is one of the supported environments.
+
+Keep booleans direct, keep branch types compatible, and check address consequences whenever `count` or `for_each` changes graph shape. A concise expression is useful only when reviewers can explain both outcomes and the identity of every resulting resource.
+
+Separate policy derivation from resource mechanics. Locals give a complex decision one name and one review location. Validation rejects unsupported environment names before a map lookup. Resources then consume already-shaped values rather than reimplementing the same branching rule in several places.
+
+Do not abstract repetition merely to make every expression clever. Two clear compatible values can stay in one ternary. A named lookup can replace repeated environment branches. A filtered map is appropriate when it directly represents the desired named instances. Choose the smallest expression that describes the decision honestly.
+
+## How Do the Conditional Patterns Fit Together?
+<!-- section-summary: Terraform conditionals shape values and collections, while arguments, meta-arguments, and validation determine the operational effect. -->
+
+A complete module can combine the patterns. It validates the environment, chooses a production instance type, requires an email only when monitoring is enabled, filters enabled applications, and creates monitors only for those applications when the feature is on.
+
+```hcl
+variable "environment" {
+  type = string
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "Environment must be dev, staging, or prod."
   }
 }
 
-resource "aws_instance" "app" {
-  ami           = var.ami_id
-  instance_type = local.instance_type_by_environment[var.environment]
+variable "enable_monitoring" {
+  type    = bool
+  default = false
+}
+
+variable "alert_email" {
+  type    = string
+  default = null
+
+  validation {
+    condition     = !var.enable_monitoring || var.alert_email != null
+    error_message = "alert_email is required when monitoring is enabled."
+  }
+}
+
+variable "applications" {
+  type = map(object({
+    enabled = bool
+  }))
 }
 ```
 
-The validation from the previous section makes this lookup safe because unknown environment names are rejected before the lookup happens. The resource block now shows the real infrastructure setting, while the environment table shows the business decision.
-
-There is another boundary to respect. `count` and `for_each` keys must be known during planning because Terraform needs to know how many graph nodes to create. Conditions based on variables are fine. Conditions based on values that only exist after apply, such as a generated private IP or newly assigned ARN, cannot decide resource count or keys.
-
-For example, this shape will fail because the key depends on an ID that AWS returns after creation:
+Derive the policy:
 
 ```hcl
-resource "aws_cloudwatch_metric_alarm" "by_instance" {
-  for_each = toset(aws_instance.app[*].id)
+locals {
+  instance_type = var.environment == "prod" ? "t3.large" : "t3.micro"
 
-  alarm_name = "cpu-${each.key}"
+  enabled_applications = {
+    for name, app in var.applications : name => app
+    if app.enabled
+  }
 }
 ```
 
-Terraform needs the `for_each` keys before it can create the alarm instances, but the instance IDs are unknown until apply. Caller-provided keys, such as a map of instance names, define the graph shape; provider-assigned IDs can still be read inside the resource body after that shape is already known.
+Create named application instances and optional monitors:
 
-## Putting It All Together
-<!-- section-summary: Good Terraform conditionals start small, validate inputs, use null for omission, and keep resource identity predictable. -->
+```hcl
+resource "aws_instance" "application" {
+  for_each = local.enabled_applications
 
-The billing example started with one optional setting: production keeps logs longer than development. Then the same idea grew naturally. A boolean expression chose values, `null` omitted an optional argument, `count` created a production-only alarm, validation rejected bad input combinations, and `for_each` filtered a collection of people.
+  ami           = var.ami
+  instance_type = local.instance_type
+
+  tags = {
+    Name = each.key
+  }
+}
+
+resource "some_monitor" "application" {
+  for_each = var.enable_monitoring ? local.enabled_applications : {}
+
+  instance_id = aws_instance.application[each.key].id
+  alert_email = var.alert_email
+}
+```
 
 ![Conditionals Summary](/content-assets/articles/article-iac-terraform-advanced-conditionals/conditionals-summary.png)
 
-*The summary board collects the safe uses of conditionals: small choices, stable types, clear defaults, and reviewable plans.*
+The pipeline is inputs, boolean rules, derived values and collections, then resource instances. Most problems reduce to choosing one value, choosing a value or `null`, choosing zero or one with `count`, choosing named objects through filtered `for_each`, or accepting configuration through validation.
 
-That is the usual path for production Terraform. The smallest condition should solve the real difference. Validation protects modules from bad caller combinations. Stable keys protect collection resources. Repeated business decisions belong in locals so the resource blocks remain readable during code review.
+The first-principles question is never “where can I put an `if`?” Ask what value or collection Terraform should see in each case, then choose the argument or construct that consumes it.
 
-A practical review runbook for conditional-heavy modules is short:
+Review conditional-heavy configuration in two layers. First evaluate the data: which boolean is true, which branch wins, which values become `null`, and which keys survive a filter? Then evaluate the consumer: does an argument receive a setting, does `count` create zero or one indexed instances, does `for_each` create named instances, or does validation stop the operation? This separates expression correctness from lifecycle consequences.
 
-```bash
-terraform fmt -check
-terraform validate
-terraform plan -var-file=dev.tfvars
-terraform plan -var-file=prod.tfvars
-```
+Compare plans for representative inputs rather than reasoning from syntax alone. Development and production plans should reveal the selected instance types, omitted arguments, instance addresses, and action counts. A change that was expected to alter one value but instead changes addresses or destroys resources signals that the condition is controlling graph shape or identity more broadly than intended.
 
-`fmt -check` reports files that need formatting, which makes formatting drift visible in CI without rewriting files. `validate` checks Terraform syntax and provider schema shape before any plan review. Each `-var-file` loads one environment's inputs, so the reviewer can compare development and production behavior without guessing which values Terraform used.
+Finally, remember that conditions cannot make unknown provider results decide resource addresses after planning has begun. Terraform must know `count` and `for_each` shape before apply. Use stable caller-supplied keys to decide which nodes exist, then use provider-generated values inside those already-declared nodes. This keeps the configuration declarative and the plan complete enough to review.
 
-The two plans deserve comparison across resource addresses, action counts, omitted `null` arguments, and any replacement marker. The condition should explain a real environment difference. If the plan changes resource identity, either make that address change intentional with a `moved` block or simplify the expression before the module reaches production.
+These habits scale from one optional argument to an entire shared production module. The syntax remains the same, but the operational cost of unclear types, unstable keys, or hidden requirements grows with every caller, environment, plan, and state boundary. Keep each condition close to the decision it represents, name repeated policy once, and let Terraform's derived values describe the desired graph directly and predictably.
 
----
+That is the practical discipline behind every safe Terraform conditional in reviewed production infrastructure code.
 
-**References**
+Conditional branches must produce compatible types because Terraform needs one expression type even when only one branch is selected. Use conditionals to choose values or collections from explicit inputs, not to hide broad environment-specific architectures inside one unreadable expression. For optional resources, consider how switching the condition changes addresses, outputs, and dependencies, and review both enabled and disabled plans. A false branch can destroy a previously managed instance when the desired graph no longer contains it, so toggles deserve the same lifecycle review as any resource removal.
 
-- [Terraform conditional expressions](https://developer.hashicorp.com/terraform/language/expressions/conditionals)
-- [Terraform input variables, validation, and nullable inputs](https://developer.hashicorp.com/terraform/language/block/variable)
-- [Terraform custom conditions and validation choices](https://developer.hashicorp.com/terraform/language/validate)
-- [Terraform type constraints and optional attributes](https://developer.hashicorp.com/terraform/language/expressions/type-constraints)
-- [Terraform count meta-argument](https://developer.hashicorp.com/terraform/language/meta-arguments/count)
-- [Terraform for_each meta-argument](https://developer.hashicorp.com/terraform/language/meta-arguments/for_each)
-- [Terraform one function](https://developer.hashicorp.com/terraform/language/functions/one)
-- [Terraform moved blocks for refactoring](https://developer.hashicorp.com/terraform/language/modules/develop/refactoring)
+## Check Your Answers
+
+:::expand[What Does a Terraform Conditional Actually Do?]{kind="recap"}
+It evaluates a boolean and produces one of two values. Terraform arguments and meta-arguments give that result its infrastructure meaning.
+:::
+
+:::expand[How Do Conditions Choose Compatible Values?]{kind="recap"}
+The branches should answer the same question with compatible types. Use existing booleans directly instead of wrapping them in redundant ternaries.
+:::
+
+:::expand[How Does `null` Omit an Optional Value?]{kind="recap"}
+`null` represents absence and can omit an optional argument. Empty strings, collections, zero, and false are real values, not absence.
+:::
+
+:::expand[How Does a Condition Control Resource Existence?]{kind="recap"}
+The condition produces `1` or `0` for `count`, or a non-empty or empty collection for `for_each`. Those meta-arguments control instance shape and addresses.
+:::
+
+:::expand[How Do Conditions Validate Requirements?]{kind="recap"}
+Validation consumes a boolean and rejects false conditions. `!feature || requirement` expresses a requirement that applies only when the feature is enabled.
+:::
+
+:::expand[How Does Filtering Choose Named Resources?]{kind="recap"}
+A `for` expression filters an input map, and `for_each` creates one stable instance for each retained key.
+:::
+
+:::expand[How Do You Keep Conditional Logic Readable?]{kind="recap"}
+Move policy into named locals, use maps for multi-way lookups, and keep ternaries for genuine two-way choices with reviewable types and identities.
+:::
+
+:::expand[How Do the Conditional Patterns Fit Together?]{kind="recap"}
+Conditionals shape values and collections; arguments change settings, `count` and `for_each` change graph shape, and validation accepts or rejects inputs.
+:::
+
+### References
+
+- [Expressions](https://developer.hashicorp.com/terraform/language/expressions)
+- [Configuration syntax](https://developer.hashicorp.com/terraform/language/syntax/configuration)
+- [Conditional expressions](https://developer.hashicorp.com/terraform/language/expressions/conditionals)
+- [Types and values](https://developer.hashicorp.com/terraform/language/expressions/types)
+- [`count` reference](https://developer.hashicorp.com/terraform/language/meta-arguments/count)
+- [`variable` validation](https://developer.hashicorp.com/terraform/language/block/variable)
+- [`for` expressions](https://developer.hashicorp.com/terraform/language/expressions/for)

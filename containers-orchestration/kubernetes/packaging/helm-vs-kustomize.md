@@ -34,7 +34,9 @@ spec:
 
 Both tools exist because maintaining separate, nearly identical copies of every object for every environment is error-prone. The choice is about the authoring and lifecycle model before those objects reach the API server, not a different kind of runtime Deployment.
 
-Seven questions turn that distinction into a tool choice:
+Suppose `payments` runs in development, staging, and production. The environments share a Deployment, Service, labels, ports, and probes, while replicas, resources, image tags, and hostnames vary.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What problem do Helm and Kustomize both solve?**
 2. **Who owns the reusable contract in each workflow?**
@@ -46,8 +48,6 @@ Seven questions turn that distinction into a tool choice:
 
 ## What problem do Helm and Kustomize both solve?
 <!-- section-summary: Both tools represent shared Kubernetes structure and controlled variation, then produce the complete objects required by the API server. -->
-
-Suppose `payments` runs in development, staging, and production. The environments share a Deployment, Service, labels, ports, and probes, while replicas, resources, image tags, and hostnames vary.
 
 ### Compare the same production decision in both models
 
@@ -377,7 +377,7 @@ vendor Helm chart → owns package version and supported upstream values
 Kustomize overlay → owns a small organization-specific resource delta
 ```
 
-It becomes sprawl when both layers compete to change the same fields, followed by scripts and delivery-time substitutions. The test is whether a reviewer can trace any final field back to one owned decision without mentally executing several overlapping languages.
+Both layers competing to change the same fields create sprawl, followed by scripts and delivery-time substitutions. The test is whether a reviewer can trace any final field back to one owned decision without mentally executing several overlapping languages.
 
 ## Which questions lead to a reasonable choice?
 <!-- section-summary: Choose from the reusable thing, variation owner, distribution need, lifecycle owner, and acceptable distance between source intent and rendered state. -->

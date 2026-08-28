@@ -12,34 +12,49 @@ aliases:
 
 ## Table of Contents
 
-1. [The Runner as a Control Node](#the-runner-as-a-control-node)
-2. [Pin the Runtime](#pin-the-runtime)
-3. [Handle Inventory and Targets Deliberately](#handle-inventory-and-targets-deliberately)
-4. [Manage Credentials and Host Keys](#manage-credentials-and-host-keys)
-5. [Build the Pipeline Gates](#build-the-pipeline-gates)
-6. [Keep Logs Useful and Safe](#keep-logs-useful-and-safe)
-7. [Roll Out from CI](#roll-out-from-ci)
-8. [Failure Reading and Recovery](#failure-reading-and-recovery)
-9. [Putting It All Together](#putting-it-all-together)
-10. [References](#references)
-
-## The Runner as a Control Node
-<!-- section-summary: A CI runner can run Ansible like any other control node, so it needs the same attention to tools, credentials, network access, and logs. -->
+1. [Why Is the Runner a Temporary Control Node?](#why-is-the-runner-a-temporary-control-node)
+2. [How Do You Make the Runtime Reproducible?](#how-do-you-make-the-runtime-reproducible)
+3. [How Should CI Bound Inventory and Targets?](#how-should-ci-bound-inventory-and-targets)
+4. [How Should CI Handle Credentials and Host Trust?](#how-should-ci-handle-credentials-and-host-trust)
+5. [Which Gates Should a Pipeline Enforce?](#which-gates-should-a-pipeline-enforce)
+6. [How Do You Keep CI Logs Safe and Useful?](#how-do-you-keep-ci-logs-safe-and-useful)
+7. [How Should CI Roll Out and Recover?](#how-should-ci-roll-out-and-recover)
+8. [What Makes CI an Authorization System?](#what-makes-ci-an-authorization-system)
+9. [Check Your Answers](#check-your-answers)
 
 Running Ansible in CI means the pipeline runner acts as the control node. It checks out the repository, installs Ansible and collections, reads inventory, decrypts Vault content when allowed, connects to managed hosts, and stores the job output. That is powerful because deployments run as repeatable jobs instead of private terminal sessions.
-
 
 ![CI Runner Control Node](/content-assets/articles/article-infrastructure-as-code-ansible-in-ci/ci-runner-control-node.png)
 
 *The CI runner map shows the pipeline acting as the Ansible control node, with a pinned image, bounded inventory, credentials, and managed hosts.*
 
-The orders platform is a good example. A pull request changes an Nginx template and a systemd override. CI should run linting and syntax checks before merge. After approval, a deployment job should preview one production host, apply the canary, and then roll through the rest of `orders_web` in controlled batches.
+The application platform is a good example. A pull request changes an Nginx template and a systemd override. CI should run linting and syntax checks before merge. After approval, a deployment job should preview one production host, apply the canary, and then roll through the rest of `application_web` in controlled batches.
 
 The runner has to be treated like production infrastructure. Its Ansible version, Python version, collection versions, SSH configuration, Vault password source, network access, and host key data all affect the result. A job that works only because one runner image has an old collection cached is a deployment risk.
 
+Keep these questions in view as you work through the lesson:
+
+1. **Why Is the Runner a Temporary Control Node?**
+2. **How Do You Make the Runtime Reproducible?**
+3. **How Should CI Bound Inventory and Targets?**
+4. **How Should CI Handle Credentials and Host Trust?**
+5. **Which Gates Should a Pipeline Enforce?**
+6. **How Do You Keep CI Logs Safe and Useful?**
+7. **How Should CI Roll Out and Recover?**
+8. **What Makes CI an Authorization System?**
+
+## Why Is the Runner a Temporary Control Node?
+<!-- section-summary: A CI runner can run Ansible like any other control node, so it needs the same attention to tools, credentials, network access, and logs. -->
+
 CI gives the team a clean place to encode the process. The pipeline can show which inventory it used, which limit it selected, which playbook ran, who approved the apply job, and which commit produced the deployment. That evidence is much stronger than a message saying someone ran a playbook from a laptop.
 
-## Pin the Runtime
+The runner is temporary, but its authority is real. For the life of the job it may hold production SSH access, Vault passwords, cloud tokens, inventory, and mutable playbook code. Treat its workspace, image, network, and logs as one short-lived production control plane.
+
+CI and CD are different trust boundaries. Pull-request CI should usually parse, lint, test, and preview with little or no production mutation authority. A protected deployment job can receive stronger credentials only after merge, environment approval, or policy checks. Do not give every untrusted branch the ability to decrypt production data merely because the same pipeline file contains a deploy stage.
+
+The pipeline is also an authorization machine. It combines four decisions: which revision may run, who may approve it, which credentials become available, and which inventory targets are allowed. A weakness in any one can redirect otherwise valid Ansible automation.
+
+## How Do You Make the Runtime Reproducible?
 <!-- section-summary: CI should use pinned Ansible, collections, Python dependencies, and execution environments so automation behavior stays consistent between runs. -->
 
 Start by pinning the runtime. At minimum, pin `ansible-core`, `ansible-lint`, Python dependencies, and Ansible collections. A playbook can change behavior when a module changes, a collection releases a new version, or a Python library dependency updates.
@@ -70,7 +85,7 @@ collections:
 For larger teams, an **execution environment** is often a better long-term shape. An execution environment is a container image that packages Ansible, collections, Python dependencies, and system packages needed by automation. The CI job runs Ansible inside that image, so the control node has a reproducible runtime.
 
 ```yaml
-name: orders-ansible-ee
+name: application-ansible-ee
 dependencies:
   galaxy: requirements.yml
   python: requirements.txt
@@ -79,15 +94,21 @@ dependencies:
 
 This pattern lines up with Red Hat Ansible Automation Platform as well. Automation Platform uses execution environments to run jobs with defined automation dependencies. Even when a team uses a plain CI system rather than Automation Platform, the same idea applies: define the runner environment instead of inheriting it by accident.
 
-## Handle Inventory and Targets Deliberately
+Test with the same runtime you deploy. A lint job on one Ansible core version and an apply job on another can disagree about module arguments, collection resolution, Python support, or result fields. Build one reviewed execution image, identify it immutably, and promote that image through validation and deployment.
+
+Pin system tools too. SSH clients, cloud CLIs, `git`, parsers, and native libraries can affect local or delegated tasks even when Python requirements are exact. An execution environment makes these dependencies visible through its build definition.
+
+Deployment jobs should operate on immutable revisions. Resolve the commit or signed artifact at approval time and execute that exact checkout. Do not pull a moving branch after approval or reinstall unconstrained dependencies that make the effective automation differ from the preview.
+
+## How Should CI Bound Inventory and Targets?
 <!-- section-summary: CI deployment jobs should make the inventory, playbook, and limit visible before any production change happens. -->
 
-Target selection deserves its own gate. A production job should show the inventory, playbook, and limit before the apply step. If the job is about to touch `inventories/prod` and the whole `orders_web` group, everyone approving the job should see that clearly.
+Target selection deserves its own gate. A production job should show the inventory, playbook, and limit before the apply step. If the job is about to touch `inventories/prod` and the whole `application_web` group, everyone approving the job should see that clearly.
 
 Start with a visible inventory graph:
 
 ```bash
-ansible-inventory -i inventories/prod --graph orders_web
+ansible-inventory -i inventories/prod --graph application_web
 ```
 
 Then run a preview against the selected limit:
@@ -95,14 +116,14 @@ Then run a preview against the selected limit:
 ```bash
 ansible-playbook \
   -i inventories/prod \
-  orders.yml \
+  application.yml \
   --limit "$ANSIBLE_LIMIT" \
   --check \
   --diff \
   --vault-id prod@"$VAULT_PASS_FILE"
 ```
 
-Make `ANSIBLE_LIMIT` an explicit job input. For the first production run, require a single host such as `orders-web-01`. For later batch runs, allow a reviewed group expression such as `orders_web:!orders-web-01`. The job log should record the exact string.
+Make `ANSIBLE_LIMIT` an explicit job input. For the first production run, require a single host such as `application-web-01`. For later batch runs, allow a reviewed group expression such as `application_web:!application-web-01`. The job log should record the exact string.
 
 An assertion inside the playbook can enforce the same rule from the Ansible side:
 
@@ -117,7 +138,13 @@ An assertion inside the playbook can enforce the same rule from the Ansible side
 
 That guardrail protects against a misconfigured pipeline variable. It also helps local operators, because the playbook carries the production rule instead of relying only on CI configuration.
 
-## Manage Credentials and Host Keys
+Inventory determines the blast radius available to the job. A credential scoped to production plus a broadly loaded inventory can turn a pattern mistake into a large mutation. Keep environment inventories distinct, make the source explicit, and let the deploy job access only the environment it is authorized to change.
+
+Dynamic inventory does not remove scope control. A cloud plugin can provide current membership and still return the wrong account, region, tag, or lifecycle state. Display the graph and effective host list at the start of every deploy and require a limit for the canary.
+
+Make the release visible alongside the target. Record the immutable commit, application version, execution image, inventory source, playbook, limit, and runtime overrides. Approval without this tuple authorizes an ambiguous deployment rather than a specific change.
+
+## How Should CI Handle Credentials and Host Trust?
 <!-- section-summary: CI needs scoped credentials, temporary secret files, strict file permissions, and intentional SSH host key verification. -->
 
 CI usually needs several credentials: SSH private keys, Vault passwords, become passwords, cloud tokens, API credentials, or automation platform tokens. Store those values in the CI secret store or an external secret manager. Write them to temporary files only when tools require files, restrict permissions, and delete them when the job exits.
@@ -155,7 +182,15 @@ export ANSIBLE_SSH_COMMON_ARGS="-o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -
 
 When a host key mismatch appears, stop and investigate. It can mean a rebuilt host, stale DNS, stale inventory, or a security problem. Updating `known_hosts` should be a reviewed infrastructure action, not a panic line added to make the pipeline green.
 
-## Build the Pipeline Gates
+SSH authentication and SSH trust are separate. The private key proves the runner may log in as an account. The known-hosts check proves the server is the intended target. Disabling the second control can send powerful credentials and tasks to the wrong system.
+
+Credentials should be temporary capabilities. Prefer OIDC or workload identity for cloud access, short-lived certificates where supported, environment-scoped controller credentials, and temporary files removed on exit. Limit each credential to the inventory, environment, actions, and time window the job needs.
+
+Ansible Vault solves only encrypted content storage. It does not secure the SSH key, cloud token, runner workspace, logs, rendered files, or malicious code with access to the Vault password. CI secret storage and playbook output boundaries remain necessary.
+
+Never expose production secrets to pull requests from untrusted forks or branches. Protected environment rules and separate deployment workflows should prevent code that has not passed review from receiving or exfiltrating the credentials it would later use.
+
+## Which Gates Should a Pipeline Enforce?
 <!-- section-summary: A strong pipeline separates static checks, preview, approval, canary apply, and full rollout instead of hiding everything in one deploy button. -->
 
 A reliable CI deployment pipeline is staged. Each stage answers a different question. Static checks ask whether the content is well-formed. Preview asks what one target would change. Approval asks whether a human accepts the evidence. Apply asks Ansible to make the change. Verification asks whether the service is healthy after the change.
@@ -165,7 +200,7 @@ A reliable CI deployment pipeline is staged. Each stage answers a different ques
 
 *The gate map shows lint, syntax-check, check plus diff, approval, limited apply, and log scrubbing before production changes widen.*
 
-Here is a generic CI shape for the orders platform:
+Here is a generic CI shape for the application platform:
 
 ```yaml
 stages:
@@ -178,25 +213,25 @@ validate:
   stage: validate
   script:
     - ansible-lint .
-    - ansible-playbook -i inventories/prod orders.yml --syntax-check --vault-id prod@"$VAULT_PASS_FILE"
+    - ansible-playbook -i inventories/prod application.yml --syntax-check --vault-id prod@"$VAULT_PASS_FILE"
 
-preview_orders:
+preview_application:
   stage: preview
   script:
-    - ansible-inventory -i inventories/prod --graph orders_web
-    - ansible-playbook -i inventories/prod orders.yml --limit "$ANSIBLE_LIMIT" --check --diff --vault-id prod@"$VAULT_PASS_FILE"
+    - ansible-inventory -i inventories/prod --graph application_web
+    - ansible-playbook -i inventories/prod application.yml --limit "$ANSIBLE_LIMIT" --check --diff --vault-id prod@"$VAULT_PASS_FILE"
 
 deploy_canary:
   stage: deploy_canary
   when: manual
   script:
-    - ansible-playbook -i inventories/prod orders.yml --limit orders-web-01 --vault-id prod@"$VAULT_PASS_FILE"
+    - ansible-playbook -i inventories/prod application.yml --limit application-web-01 --vault-id prod@"$VAULT_PASS_FILE"
 
 deploy_remaining:
   stage: deploy_remaining
   when: manual
   script:
-    - ansible-playbook -i inventories/prod orders.yml --limit 'orders_web:!orders-web-01' --vault-id prod@"$VAULT_PASS_FILE"
+    - ansible-playbook -i inventories/prod application.yml --limit 'application_web:!application-web-01' --vault-id prod@"$VAULT_PASS_FILE"
 ```
 
 The exact syntax changes across CI systems, but the gates are the important part. Validation runs on every pull request. Preview records evidence. Manual approval sits between preview and apply. Canary apply proves one host. Remaining rollout uses the playbook's `serial` and health checks.
@@ -209,23 +244,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: ansible-playbook -i inventories/prod orders.yml --limit orders-web-01 --check --diff --vault-id prod@"$VAULT_PASS_FILE"
+      - run: ansible-playbook -i inventories/prod application.yml --limit application-web-01 --check --diff --vault-id prod@"$VAULT_PASS_FILE"
 
   deploy-canary:
     needs: preview
     environment: production
-    concurrency: orders-production
+    concurrency: application-production
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: ansible-playbook -i inventories/prod orders.yml --limit orders-web-01 --vault-id prod@"$VAULT_PASS_FILE"
+      - run: ansible-playbook -i inventories/prod application.yml --limit application-web-01 --vault-id prod@"$VAULT_PASS_FILE"
 ```
 
-The `environment: production` line can connect the job to protected environment approval and environment-scoped secrets. The `concurrency` line prevents two production orders deployments from running at the same time. If the job also needs cloud credentials, OIDC-based short-lived credentials are usually safer than long-lived cloud keys stored as repository secrets.
+The `environment: production` line can connect the job to protected environment approval and environment-scoped secrets. The `concurrency` line prevents two production application deployments from running at the same time. If the job also needs cloud credentials, OIDC-based short-lived credentials are usually safer than long-lived cloud keys stored as repository secrets.
 
 The CI vendor is secondary here. Ansible needs the same careful controls every time: pinned runtime, explicit target, secret setup, preview, approval, apply, concurrency control, and verification.
 
-## Keep Logs Useful and Safe
+The pipeline should be a ladder of increasingly strong evidence. Static validation is cheap and low authority. Inventory inspection adds live context. Check mode predicts supported changes. Disposable integration tests perform real mutation away from production. Approval then authorizes a canary, and health evidence authorizes expansion.
+
+A non-mutating pull-request stage can install the pinned runtime, lint, syntax-check, list tasks, validate role interfaces, test templates, and run fixture-based or disposable scenarios. Keep production credentials absent from this stage even if the repository contains vaulted ciphertext.
+
+Real integration tests fill the gap check mode cannot. Commands, handlers, package managers, service restarts, external APIs, and registered-result branches may behave differently during prediction. Execute representative roles against a disposable container or VM using the same execution image as deployment.
+
+Network topology is part of CI design. A hosted public runner may not reach private hosts or internal APIs. A self-hosted runner may reach production and therefore require stronger isolation, patching, egress control, and job authorization. The network path should be deliberate rather than repaired with broad firewall openings.
+
+Use concurrency controls so two releases cannot mutate the same environment at once. Pipeline concurrency prevents competing jobs, while Ansible `serial` and `throttle` bound hosts and shared tasks inside one job. They solve different collision layers.
+
+## How Do You Keep CI Logs Safe and Useful?
 <!-- section-summary: CI logs should show target choices, changed tasks, safe diffs, and health evidence while keeping secrets out of command output and artifacts. -->
 
 Logs are part of the deployment record. They should show the commit, inventory, limit, playbook, check output, safe diffs, changed task summary, and health checks. That information helps reviewers and incident responders understand what happened.
@@ -238,7 +283,11 @@ Artifacts need the same review. Saving the full workspace after a failed job can
 
 For secret-bearing failures, prefer a short safe error message plus a link to rerun instructions. The person debugging the issue can rerun with the right access in a controlled environment. The shared CI log needs to stay free of production secret values.
 
-## Roll Out from CI
+Test logs with a distinctive fake secret on both success and failure paths, and scan every retained artifact and callback output. Also assert that safe target, task, diff, and health evidence remains visible; universal masking can make a deployment impossible to operate.
+
+Avoid shell tracing around credential setup and commands that interpolate secrets. Masking in the CI UI is a fallback, not permission to echo values. A transformed, encoded, or multiline secret may evade simple redaction.
+
+## How Should CI Roll Out and Recover?
 <!-- section-summary: CI rollouts should use the same canary, serial, health check, and rollback controls as a careful human operator. -->
 
 Once the pipeline is ready, the deployment should still look like a normal safe Ansible rollout. CI is the control node, and the playbook should keep using `--limit`, `serial`, health checks, delegated load balancer operations, and clear failure thresholds.
@@ -248,8 +297,8 @@ For the first production apply:
 ```bash
 ansible-playbook \
   -i inventories/prod \
-  orders.yml \
-  --limit orders-web-01 \
+  application.yml \
+  --limit application-web-01 \
   --vault-id prod@"$VAULT_PASS_FILE"
 ```
 
@@ -258,24 +307,24 @@ For the remaining hosts:
 ```bash
 ansible-playbook \
   -i inventories/prod \
-  orders.yml \
-  --limit 'orders_web:!orders-web-01' \
+  application.yml \
+  --limit 'application_web:!application-web-01' \
   --vault-id prod@"$VAULT_PASS_FILE"
 ```
 
 The playbook should own the host-by-host safety:
 
 ```yaml
-- name: Roll orders web from CI
-  hosts: orders_web
+- name: Roll application web from CI
+  hosts: application_web
   become: true
   serial: 2
   any_errors_fatal: true
   tasks:
-    - name: Render orders Nginx site
+    - name: Render application Nginx site
       ansible.builtin.template:
-        src: orders-nginx.conf.j2
-        dest: /etc/nginx/conf.d/orders.conf
+        src: application-nginx.conf.j2
+        dest: /etc/nginx/conf.d/application.conf
       notify: Reload nginx
 
     - name: Validate Nginx config
@@ -288,7 +337,7 @@ The playbook should own the host-by-host safety:
     - name: Flush reload before health check
       ansible.builtin.meta: flush_handlers
 
-    - name: Check orders health
+    - name: Check application health
       ansible.builtin.uri:
         url: "http://127.0.0.1:8080/health"
         status_code: 200
@@ -304,12 +353,16 @@ The playbook should own the host-by-host safety:
 
 A healthy CI pattern treats "the job exited 0" as only one signal. A job can succeed while an app is unhealthy if the playbook lacks verification. Put the verification into the playbook so local runs, CI runs, and automation platform runs all share the same safety logic.
 
-## Failure Reading and Recovery
+The CI runner is a capacity boundary. Forks, local template work, collection installs, delegated API calls, network sockets, and log volume all consume runner resources. A starved runner can time out or lose connections in ways that resemble host failures. Size and monitor it for the chosen host and fork count.
+
+Production rollout should retain normal Ansible boundaries even after approval. One authorized job should not imply all hosts at once. Require a canary, apply serial batches, validate services, stop on shared failure evidence, and keep recovery commands limited to affected hosts.
+
+### How should CI failures and recovery be read?
 <!-- section-summary: CI failure handling should identify whether the problem is the runner, credentials, inventory, playbook preview, remote host, or service health. -->
 
 When an Ansible CI job fails, first locate the boundary. A failure during dependency installation points at the runner image or package indexes. A Vault decryption error points at secret setup or the wrong Vault ID. An SSH unreachable error points at network access, host keys, inventory, or the deploy key. A task failure after connection usually points at the remote host or playbook logic.
 
-Keep recovery commands narrow. If the canary failed, rerun or roll back the canary before touching the rest of the group. If the remaining rollout failed on `orders-web-04`, use `--limit orders-web-04` or the failed batch while you investigate. CI makes reruns easy, so the pipeline needs guardrails that keep reruns scoped.
+Keep recovery commands narrow. If the canary failed, rerun or roll back the canary before touching the rest of the group. If the remaining rollout failed on `application-web-04`, use `--limit application-web-04` or the failed batch while you investigate. CI makes reruns easy, so the pipeline needs guardrails that keep reruns scoped.
 
 For config rollback, revert the change and rerun against the affected target:
 
@@ -318,8 +371,8 @@ git revert <change-commit>
 
 ansible-playbook \
   -i inventories/prod \
-  orders.yml \
-  --limit orders-web-04 \
+  application.yml \
+  --limit application-web-04 \
   --vault-id prod@"$VAULT_PASS_FILE"
 ```
 
@@ -327,10 +380,10 @@ For credential exposure, treat the CI log or artifact as part of the incident. R
 
 For host key mismatches, avoid automatically deleting known-host entries. Check whether the host was rebuilt, whether DNS points somewhere unexpected, and whether inventory has the right address. After the infrastructure state is confirmed, update the managed `known_hosts` source through review.
 
-## Putting It All Together
+## What Makes CI an Authorization System?
 <!-- section-summary: A production-ready Ansible CI pipeline uses a pinned control node, scoped secrets, host key verification, preview, approval, canary apply, and serial rollout. -->
 
-The complete orders CI story is straightforward when each part has a job. The runtime is pinned through requirements or an execution environment. Secrets come from the CI secret store and live only in temporary files during the job. SSH host keys are verified through a managed `known_hosts` file. Validation and preview run before approval. Apply starts with one host, then the playbook rolls the rest in batches.
+The complete application CI story is straightforward when each part has a job. The runtime is pinned through requirements or an execution environment. Secrets come from the CI secret store and live only in temporary files during the job. SSH host keys are verified through a managed `known_hosts` file. Validation and preview run before approval. Apply starts with one host, then the playbook rolls the rest in batches.
 
 
 ![CI Summary](/content-assets/articles/article-infrastructure-as-code-ansible-in-ci/ci-summary.png)
@@ -351,12 +404,50 @@ export VAULT_PASS_FILE="$RUNNER_TEMP/ansible-secrets/prod-vault-pass"
 export ANSIBLE_SSH_COMMON_ARGS="-o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes"
 
 ansible-lint .
-ansible-playbook -i inventories/prod orders.yml --syntax-check --vault-id prod@"$VAULT_PASS_FILE"
-ansible-playbook -i inventories/prod orders.yml --limit orders-web-01 --check --diff --vault-id prod@"$VAULT_PASS_FILE"
-ansible-playbook -i inventories/prod orders.yml --limit orders-web-01 --vault-id prod@"$VAULT_PASS_FILE"
+ansible-playbook -i inventories/prod application.yml --syntax-check --vault-id prod@"$VAULT_PASS_FILE"
+ansible-playbook -i inventories/prod application.yml --limit application-web-01 --check --diff --vault-id prod@"$VAULT_PASS_FILE"
+ansible-playbook -i inventories/prod application.yml --limit application-web-01 --vault-id prod@"$VAULT_PASS_FILE"
 ```
 
 The deployment record now tells a clear story. It shows the commit, the pinned runtime, the target inventory, the canary limit, the preview, the approval, and the real apply. If something fails, the team knows whether to inspect the runner, credentials, target selection, remote host, or service health.
+
+The complete model is that CI authorizes a specific immutable automation revision, running in a specific runtime, with specific temporary capabilities, against a visible target set, through a staged evidence and approval path. The runner is not merely a place to execute shell commands; it is the control point that binds code, identity, scope, and audit.
+
+Record the effective toolchain before trusting a job. `ansible --version` identifies the core version, configuration file, collection paths, Python runtime, and module search path seen by the temporary control node. Before any mutation, run `ansible-playbook ... --list-hosts` against the bound inventory and limit. This proves that the reviewed play resolves to the intended production hosts instead of merely proving that the YAML parses.
+
+## Check Your Answers
+
+:::expand[Why Is the Runner a Temporary Control Node?]{kind="recap"}
+The runner loads code, inventory, credentials, network paths, and logs for one job. Its short lifetime does not reduce the production authority it temporarily holds.
+:::
+
+:::expand[How Do You Make the Runtime Reproducible?]{kind="recap"}
+Pin Ansible, collections, Python, system tools, and execution images. Validate and deploy the same immutable revision with the same reviewed runtime.
+:::
+
+:::expand[How Should CI Bound Inventory and Targets?]{kind="recap"}
+Separate environments, show the graph and host list, require explicit limits, and record the exact release and target tuple before mutation.
+:::
+
+:::expand[How Should CI Handle Credentials and Host Trust?]{kind="recap"}
+Use temporary scoped capabilities, keep secrets away from untrusted code, verify server host keys, and remember Vault covers only one stored-secret boundary.
+:::
+
+:::expand[Which Gates Should a Pipeline Enforce?]{kind="recap"}
+Build evidence through lint, syntax, task and inventory inspection, preview, disposable integration, approval, canary, health, and bounded rollout.
+:::
+
+:::expand[How Do You Keep CI Logs Safe and Useful?]{kind="recap"}
+Expose commit, target, safe diffs, task status, and health while censoring credentials and secret files. Test both non-disclosure and usable observability.
+:::
+
+:::expand[How Should CI Roll Out and Recover?]{kind="recap"}
+Use canaries, serial batches, stop rules, service verification, and narrow reruns. Diagnose runner, credential, inventory, host, and application boundaries separately.
+:::
+
+:::expand[What Makes CI an Authorization System?]{kind="recap"}
+CI decides which code, approver, credentials, runtime, inventory, and scope may combine. Protect that binding as the central production automation authority.
+:::
 
 That is the main shift when Ansible moves into CI. The pipeline acts as the repeatable control node and the written deployment process for the team. The command matters, and the gates around the command matter just as much.
 

@@ -37,7 +37,7 @@ Not:
 
 That extra ReplicaSet layer is what makes rolling updates, rollback history, and multiple application versions possible. A Deployment manages one or more ReplicaSets over time. Each ReplicaSet directly manages the Pods created from one Pod-template revision. The Pod article explained how one Pod turns into running containers on a node; this article adds the two controller layers that preserve a population and change it over time.
 
-The explanation keeps returning to eight questions:
+Keep these questions in view as you work through the lesson:
 
 1. **How does a ReplicaSet keep one Pod population at the desired size?**
 2. **Why does a Deployment sit above ReplicaSets?**
@@ -821,7 +821,7 @@ The three levels exist because each one preserves a different property:
 | ReplicaSet | Keep N copies of one exact Pod-template revision alive | How many of this revision? |
 | Deployment | Move the application safely between Pod-template revisions | Which revision should win, and how should capacity move? |
 
-Once those invariants are clear, a rolling update becomes a visible controller operation: scale the old ReplicaSet down while scaling the new ReplicaSet up, using readiness and rollout limits to decide when each change is safe.
+Once those invariants are clear, a rolling update is visible as a controller operation: scale the old ReplicaSet down while scaling the new ReplicaSet up, using readiness and rollout limits to decide when each change is safe.
 
 ## Check Your Answers
 <!-- section-summary: Revisit replica maintenance, controller hierarchy, membership and ownership, failure boundaries, template revisions, selector safety, status, and the complete lifecycle. -->

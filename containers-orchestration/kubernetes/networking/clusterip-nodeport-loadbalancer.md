@@ -35,7 +35,7 @@ The three types form progressively wider levels of exposure:
 
 Kubernetes commonly implements these as nested layers. NodePort builds on ClusterIP. LoadBalancer commonly builds on NodePort, although modern load-balancer implementations can route directly to Pods or another cluster data path.
 
-This gives the article seven questions:
+Keep these questions in view as you work through the lesson:
 
 1. **Why does the caller's location matter?**
 2. **What does ClusterIP make reachable?**

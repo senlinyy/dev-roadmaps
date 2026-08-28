@@ -23,22 +23,8 @@ aliases:
 6. [How Should Large Objects Be Uploaded?](#how-should-large-objects-be-uploaded)
 7. [How Do S3 Events and Batch Operations Differ?](#how-do-s3-events-and-batch-operations-differ)
 8. [What Should You Review Before Production?](#what-should-you-review-before-production)
-9. [Check Your Understanding](#check-your-understanding)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-The sections below answer these questions in order:
-
-1. **What Is the S3 Object Model?**
-2. **How Does S3 Differ from a File or Database Record?**
-3. **How Should an Application Combine S3 and a Database?**
-4. **How Do Presigned Uploads Work?**
-5. **How Do Versioning and Delete Markers Work?**
-6. **How Should Large Objects Be Uploaded?**
-7. **How Do S3 Events and Batch Operations Differ?**
-8. **What Should You Review Before Production?**
-
-## What Is the S3 Object Model?
-<!-- section-summary: S3 maps a bucket, key, and optional version ID to a complete object containing bytes and descriptive information. -->
 
 At its core, **Amazon S3** solves a simple problem: give some bytes a durable name, store them remotely, and retrieve them later at enormous scale.
 
@@ -66,7 +52,21 @@ object
 
 For example, bucket `my-app-files` and key `users/42/avatar.jpg` identify JPEG bytes plus their object information. The bucket is the high-level administrative boundary. The key is the name inside that bucket. Together with an optional version ID, they identify a particular object value.
 
-This model is more useful than calling S3 a remote disk because its natural operations are object operations:
+Keep these questions in view as you work through the lesson:
+
+1. **What Is the S3 Object Model?**
+2. **How Does S3 Differ from a File or Database Record?**
+3. **How Should an Application Combine S3 and a Database?**
+4. **How Do Presigned Uploads Work?**
+5. **How Do Versioning and Delete Markers Work?**
+6. **How Should Large Objects Be Uploaded?**
+7. **How Do S3 Events and Batch Operations Differ?**
+8. **What Should You Review Before Production?**
+
+## What Is the S3 Object Model?
+<!-- section-summary: S3 maps a bucket, key, and optional version ID to a complete object containing bytes and descriptive information. -->
+
+S3's bucket-and-key model is more useful than calling S3 a remote disk because its natural operations are object operations:
 
 ```text
 PUT    bucket + key + complete bytes
@@ -422,7 +422,7 @@ Use this operating checklist:
 - **Application truth:** Do not use bucket listing as a relational application database when business metadata and workflow state need queries or transactions.
 - **Bulk changes:** Prefer Inventory and Batch Operations when managed bulk processing fits instead of building a fragile one-off loop.
 
-S3 becomes easier to reason about when reduced to one model:
+Reduce S3 to one model before reasoning about it:
 
 ```text
 (bucket, key, version?) → object bytes and metadata
@@ -439,7 +439,7 @@ databases store structured truth surrounding the objects
 
 *A bucket is a production data boundary whose access, retention, recovery, and workflow behavior should be designed together.*
 
-## Check Your Understanding
+## Check Your Answers
 
 :::expand[What Is the S3 Object Model?]{kind="recap"}
 S3 maps a bucket, key, and optional version ID to a complete object containing bytes and descriptive information.

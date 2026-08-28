@@ -38,7 +38,7 @@ Ground truth does not mean source design is irrelevant. Two authoring systems ca
 The shortest correct trace should also survive routine package upgrades and environment changes without requiring special knowledge from its original author.
 That durability is part of the abstraction's value, not an optional documentation exercise.
 
-Seven questions keep that cost visible:
+Keep these questions in view as you work through the lesson:
 
 1. **What is template sprawl, and why does it slow review?**
 2. **Which choices belong in a package interface?**
@@ -212,7 +212,7 @@ helpers = repeated domain concepts
 
 ### Make every Helm lookup explainable
 
-Helm can receive defaults from the chart and overrides from parent charts, user-supplied values files, and command-line values. That flexibility is useful when every value still names a clear consumer decision. It becomes expensive when the same decision can enter through several aliases or be transformed by generic helpers before use.
+Helm can receive defaults from the chart and overrides from parent charts, user-supplied values files, and command-line values. That flexibility is useful when every value still names a clear consumer decision. Several aliases for the same decision make that flexibility expensive or be transformed by generic helpers before use.
 
 For `autoscaling.enabled`, a reader should be able to follow one simple route:
 
@@ -277,7 +277,7 @@ A nearly complete Deployment patch cannot be summarized so easily. Some fields r
 Patch size is therefore a diagnostic, not an arbitrary style limit. A large real difference can justify a large patch. A large patch for a tiny conceptual difference reveals that representation complexity is hiding the intent. Refactor the base or package boundary until the environment-specific source once again reads like the difference it represents.
 
 ## When does an escape hatch deserve support?
-<!-- section-summary: An extension point becomes a compatibility contract as soon as consumers depend on it, so expose it only when the long-term support cost is justified. -->
+<!-- section-summary: Consumer dependence turns an extension point into a compatibility contract, so expose it only when the long-term support cost is justified. -->
 
 Fields such as `extraEnv`, `extraVolumes`, `extraVolumeMounts`, `podAnnotations`, `extraContainers`, and `extraObjects` can solve immediate needs. Together they can turn a focused package into a set of ways around the package.
 

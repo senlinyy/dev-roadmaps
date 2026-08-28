@@ -25,13 +25,14 @@ aliases:
 6. [How Does API Gateway Reach a Private Backend?](#how-does-api-gateway-reach-a-private-backend)
 7. [How Do You Follow a Request from Client to EventBridge?](#how-do-you-follow-a-request-from-client-to-eventbridge)
 8. [How Do You Choose an API Gateway Design?](#how-do-you-choose-an-api-gateway-design)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 A client can begin with a simple request such as `POST https://my-server.example.com/orders`. As the application grows, that endpoint has to answer more than where the server is. It must identify and authorize callers, route different operations, protect backends from excess traffic, expose new versions without breaking old clients, log requests, and sometimes invoke something that is not an HTTP server at all.
 
 Amazon API Gateway addresses that boundary. It accepts HTTP or WebSocket traffic, applies API policies, selects a backend capability, invokes it, and returns or delivers the result. AWS often describes it as a front door; a more precise first-principles definition is: **API Gateway is a managed boundary between callers and backend capabilities.**
 
-The sections below answer these questions in order:
+Keep these questions in view as you work through the lesson:
 
 1. **Why Do Applications Need an API Boundary?**
 2. **How Does One Request Move Through API Gateway?**
@@ -887,6 +888,8 @@ Seven sentences capture the core model:
 5. Caller authorization and gateway-to-backend authorization are separate relationships.
 6. HTTP API is streamlined, REST API adds richer API management, and WebSocket API supports persistent bidirectional communication.
 7. API Gateway can invoke Lambda, public or private HTTP services, and supported AWS services, including asynchronous handoffs.
+
+## Check Your Answers
 
 :::expand[Why Do Applications Need an API Boundary?]{kind="recap"}
 API Gateway keeps the external contract stable while routing to changing backends and applying shared security and operational policies.

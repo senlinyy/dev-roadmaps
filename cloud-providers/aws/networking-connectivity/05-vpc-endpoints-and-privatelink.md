@@ -30,7 +30,15 @@ A private workload often needs a service such as S3, DynamoDB, Secrets Manager, 
 
 VPC endpoints and AWS PrivateLink answer different versions of that problem.
 
-The sections below answer these questions in order:
+Every service connection involves at least three mechanisms:
+
+1. **DNS** turns a service name into an address.
+2. **Routing** sends packets toward that address.
+3. **Authorization** decides whether the application may perform the requested operation.
+
+These mechanisms are independent. An application can resolve `secretsmanager.eu-west-1.amazonaws.com` to a private endpoint address and establish TCP `443`, yet receive `AccessDenied` because its role cannot read the secret. The IAM policy can be perfect while broken DNS prevents any packet from reaching the service.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What Problem Does a VPC Endpoint Solve?**
 2. **How Does a Gateway Endpoint Work?**
@@ -43,14 +51,6 @@ The sections below answer these questions in order:
 
 ## What Problem Does a VPC Endpoint Solve?
 <!-- section-summary: A VPC endpoint replaces broad generic egress for a supported dependency with a private, service-specific path. -->
-
-Every service connection involves at least three mechanisms:
-
-1. **DNS** turns a service name into an address.
-2. **Routing** sends packets toward that address.
-3. **Authorization** decides whether the application may perform the requested operation.
-
-These mechanisms are independent. An application can resolve `secretsmanager.eu-west-1.amazonaws.com` to a private endpoint address and establish TCP `443`, yet receive `AccessDenied` because its role cannot read the secret. The IAM policy can be perfect while broken DNS prevents any packet from reaching the service.
 
 ```text
 Application requests a secret
@@ -433,7 +433,7 @@ None of these terms alone proves IAM authorization or application security.
 
 Gateway endpoints for S3 and DynamoDB have no additional endpoint charge in the raw source's documented model. Interface endpoints have hourly provisioning and data-processing charges. The natural same-VPC starting point for S3 or DynamoDB is therefore often a gateway endpoint.
 
-An interface endpoint becomes useful when the requirement needs a private IP, hybrid or connected-network reachability, or specific PrivateLink behavior. Cost is only one input; the network path must still fit the users of the service.
+An interface endpoint is useful for a requirement that needs a private IP, hybrid or connected-network reachability, or specific PrivateLink behavior. Cost is only one input; the network path must still fit the users of the service.
 
 Interface endpoint ENIs consume subnet addresses. AWS lets you select one subnet per Availability Zone for an endpoint. A production design can place endpoint ENIs in multiple zones:
 

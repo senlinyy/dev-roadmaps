@@ -20,22 +20,8 @@ aliases:
 6. [How Should Tasks Receive Secrets and Send Logs?](#how-should-tasks-receive-secrets-and-send-logs)
 7. [How Does an ECS Rolling Deployment Work?](#how-does-an-ecs-rolling-deployment-work)
 8. [How Should You Think About ECS as a Whole?](#how-should-you-think-about-ecs-as-a-whole)
-9. [Check Your Understanding](#check-your-understanding)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-The sections below answer these questions in order:
-
-1. **What Problem Do ECS and Fargate Solve?**
-2. **How Do Task Definition Revisions Become Running Tasks?**
-3. **How Does an ECS Service Maintain Desired State?**
-4. **How Does a Fargate Task Join the Network?**
-5. **How Do Load Balancers and Health Checks Work with ECS?**
-6. **How Should Tasks Receive Secrets and Send Logs?**
-7. **How Does an ECS Rolling Deployment Work?**
-8. **How Should You Think About ECS as a Whole?**
-
-## What Problem Do ECS and Fargate Solve?
-<!-- section-summary: ECS coordinates desired container workloads, while Fargate supplies managed compute on which ECS can run them. -->
 
 Suppose you have a small HTTP API with `GET /users` and `GET /health`. Source code alone cannot become a reliable internet service. Something must package its runtime and dependencies, store that package, allocate CPU and memory, start copies, connect them to a network, keep the requested number alive, route traffic only to healthy copies, provide credentials and configuration, collect logs, and replace the old version during a release.
 
@@ -57,6 +43,20 @@ AWS divides these responsibilities into several objects:
 | Supply sensitive startup values | Secrets Manager or Parameter Store |
 | Preserve standard output and error | CloudWatch Logs |
 | Replace versions safely | ECS deployment system |
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Problem Do ECS and Fargate Solve?**
+2. **How Do Task Definition Revisions Become Running Tasks?**
+3. **How Does an ECS Service Maintain Desired State?**
+4. **How Does a Fargate Task Join the Network?**
+5. **How Do Load Balancers and Health Checks Work with ECS?**
+6. **How Should Tasks Receive Secrets and Send Logs?**
+7. **How Does an ECS Rolling Deployment Work?**
+8. **How Should You Think About ECS as a Whole?**
+
+## What Problem Do ECS and Fargate Solve?
+<!-- section-summary: ECS coordinates desired container workloads, while Fargate supplies managed compute on which ECS can run them. -->
 
 The first distinction to learn is:
 
@@ -607,7 +607,7 @@ When a service deployment fails, ask which contract reality could not satisfy. W
 
 Reasoning from the first failed contract turns ECS from a wall of product settings into a distributed control system that converts versioned container artifacts into reliable running services.
 
-## Check Your Understanding
+## Check Your Answers
 
 :::expand[What Problem Do ECS and Fargate Solve?]{kind="recap"}
 ECS coordinates desired container workloads, while Fargate supplies managed compute on which ECS can run them.
@@ -622,7 +622,7 @@ The image packages software, the task definition describes its runtime, a task e
 :::expand[How Do Task Definition Revisions Become Running Tasks?]{kind="recap"}
 Registering stores a numbered task definition revision, and running it creates a task as one execution of that revision.
 
-An image is a stored artifact containing software. It becomes a running container only when a runtime allocates resources and starts it, just as an executable file becomes useful when the operating system creates a process.
+An image is a stored artifact containing software. A runtime allocates resources and starts the image as a running container, just as the operating system creates a process from an executable file.
 
 Registration stores a numbered runtime-contract revision in ECS. Running or scheduling that definition instantiates it as a task. Registration alone changes no running application.
 :::

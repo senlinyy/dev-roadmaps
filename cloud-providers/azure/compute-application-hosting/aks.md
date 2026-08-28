@@ -12,36 +12,40 @@ aliases:
 
 ## Table of Contents
 
-1. [What Is AKS](#what-is-aks)
-2. [The AKS Shape](#the-aks-shape)
-3. [Cluster Modes](#cluster-modes)
-4. [Control Plane And Nodes](#control-plane-and-nodes)
-5. [Pods And Deployments](#pods-and-deployments)
-6. [Services](#services)
-7. [Ingress And Gateway Traffic](#ingress-and-gateway-traffic)
-8. [Node Pools](#node-pools)
-9. [Scaling](#scaling)
-10. [Workload Identity](#workload-identity)
-11. [Networking Choices](#networking-choices)
-12. [Operating AKS In Production](#operating-aks-in-production)
-13. [When AKS Fits](#when-aks-fits)
-14. [Putting It All Together](#putting-it-all-together)
-15. [Official References](#official-references)
-
-## What Is AKS
-<!-- section-summary: AKS gives your team Kubernetes on Azure, with Azure running the control plane while your workloads still use Kubernetes objects. -->
+1. [What Is AKS and How Is the Cluster Structured?](#what-is-aks-and-how-is-the-cluster-structured)
+2. [What Do the Control Plane and Nodes Do?](#what-do-the-control-plane-and-nodes-do)
+3. [How Do Pods, Deployments, and Services Run Applications?](#how-do-pods-deployments-and-services-run-applications)
+4. [How Does Ingress Reach Workloads?](#how-does-ingress-reach-workloads)
+5. [How Do Node Pools and Scaling Work?](#how-do-node-pools-and-scaling-work)
+6. [How Do Identity and Networking Protect Connectivity?](#how-do-identity-and-networking-protect-connectivity)
+7. [What Must Teams Operate in Production?](#what-must-teams-operate-in-production)
+8. [When Is AKS the Right Fit?](#when-is-aks-the-right-fit)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 **Azure Kubernetes Service**, usually shortened to **AKS**, is Azure's managed Kubernetes service. Kubernetes is a platform for running containers across many machines, keeping the desired number of application copies alive, restarting failed containers, connecting services through stable names, and rolling out new versions through declarative objects.
-
-If you know Amazon EKS, AKS fills the same managed Kubernetes job in Azure. Node pools are the everyday Azure place to think about worker capacity, similar to managed node groups, while the surrounding Azure pieces include Microsoft Entra integration, Azure networking, Azure Monitor, and managed identities.
 
 Think about a small commerce team. At first, the team has one container called `orders-api`, and Azure Container Apps runs it just fine. A few months later, the system has `orders-api`, `inventory-api`, `payments-worker`, `receipt-worker`, a background fraud check, a private admin API, and a platform team that wants the same deployment pattern across every service. The team also wants service discovery, internal routing, custom traffic rules, workload identity, separate worker capacity, and Kubernetes tools like Helm, KEDA, and policy controllers. That is the point where AKS is a real platform choice because the team now wants Kubernetes as the shared operating layer.
 
 AKS gives you a Kubernetes cluster, but Azure owns the most painful control plane work. Azure creates and operates the Kubernetes API server, scheduler, controller manager, cloud controller manager, and backing state store. Your team still owns the application shape inside the cluster: container images, manifests, namespaces, node pool design, resource requests, network exposure, identity, monitoring, upgrades, and rollout safety.
 
-This article follows one application through the AKS story. First we name the cluster pieces. Then we walk through the request path from a customer reaching the app to a pod answering the request. After that, we talk about node pools, scaling, identity, networking, and the practical question that matters most for beginners: when is AKS worth the operational responsibility?
+Keep these questions in view as you work through the lesson:
 
-## The AKS Shape
+1. **What Is AKS and How Is the Cluster Structured?**
+2. **What Do the Control Plane and Nodes Do?**
+3. **How Do Pods, Deployments, and Services Run Applications?**
+4. **How Does Ingress Reach Workloads?**
+5. **How Do Node Pools and Scaling Work?**
+6. **How Do Identity and Networking Protect Connectivity?**
+7. **What Must Teams Operate in Production?**
+8. **When Is AKS the Right Fit?**
+
+## What Is AKS and How Is the Cluster Structured?
+<!-- section-summary: AKS gives your team Kubernetes on Azure, with Azure running the control plane while your workloads still use Kubernetes objects. -->
+
+The application can now be followed through the complete AKS path. First we name the cluster pieces. Then we walk through the request path from a customer reaching the app to a pod answering the request. After that, we talk about node pools, scaling, identity, networking, and the practical question that matters most for beginners: when is AKS worth the operational responsibility?
+
+### The AKS Shape
 <!-- section-summary: The main AKS objects fit together as one path from desired state to running containers and customer traffic. -->
 
 An AKS cluster has a few core pieces that show up again and again. The **control plane** stores the desired state and makes scheduling decisions. **Nodes** provide the virtual machines where containers run. **Pods** wrap running containers. **Deployments** keep the right number of pod copies alive. **Services** give changing pods a stable network name. **Ingress** or **Gateway API** resources route HTTP traffic from outside the cluster to the right service.
@@ -68,7 +72,7 @@ The important detail is that Kubernetes separates **what you want** from **where
 
 The rest of the article expands this table in the same order a production request follows. We start with the cluster mode because that decides how much Azure manages for you, then we move into the objects that your application actually uses.
 
-## Cluster Modes
+### Cluster Modes
 <!-- section-summary: AKS has Automatic and Standard modes, and the mode changes how much node management, scaling, security, monitoring, and upgrades Azure handles. -->
 
 AKS currently has two broad cluster modes: **AKS Automatic** and **AKS Standard**. Both modes run Kubernetes and both use the same basic objects, but the operating agreement is different. Automatic gives you a managed starting point with more defaults already configured. Standard gives platform teams deeper control over node pools, networking, scaling, security settings, and upgrade choices.
@@ -89,7 +93,7 @@ The beginner trap is treating the mode as a personality quiz. The real question 
 
 That mode decision gives us the next boundary to understand. In every AKS cluster, Azure manages the control plane, and application capacity runs on nodes.
 
-## Control Plane And Nodes
+## What Do the Control Plane and Nodes Do?
 <!-- section-summary: The control plane is the Azure-managed Kubernetes API layer, while nodes are Azure VMs that run your pods. -->
 
 The **control plane** is the management side of Kubernetes. It includes the API server that receives requests, the scheduler that decides where new pods should run, controllers that reconcile desired state, and the backing store that records cluster state. In AKS, Azure operates those control plane components for you, which removes a large amount of raw Kubernetes administration from your team.
@@ -121,7 +125,7 @@ In a healthy production cluster, that command should show ready nodes across the
 
 This control-plane-and-node split is the main ownership boundary in AKS. Azure keeps the Kubernetes management layer alive. Your team designs the worker capacity, applies manifests, watches upgrades, and makes sure the workloads ask for resources in a way the cluster can actually satisfy.
 
-## Pods And Deployments
+## How Do Pods, Deployments, and Services Run Applications?
 <!-- section-summary: Pods are running workload units, and Deployments keep the desired number of pod replicas alive through changes and failures. -->
 
 A **pod** is the smallest unit Kubernetes schedules. Most beginner examples use one container per pod, and that is a good default for normal application services. A pod can also include helper containers that share the same network namespace and local volumes. Kubernetes schedules pods as the unit you describe in YAML, and application containers run inside those pods.
@@ -168,7 +172,7 @@ Resource requests deserve special attention in AKS because nodes have **allocata
 
 Pods and Deployments create running application copies, but pod IPs change all the time. A rollout replaces pods. A node drain moves pods. A crash creates a new pod name and a new pod IP. The next piece solves that unstable addressing problem.
 
-## Services
+### Services
 <!-- section-summary: Services give changing pods a stable network identity so other workloads and traffic layers have something reliable to call. -->
 
 A **Kubernetes Service** is a stable network front door for a group of pods. It selects pods by label and gives callers a consistent virtual IP and DNS name. The selected pods can change every minute, and the service name can stay the same.
@@ -199,7 +203,7 @@ The common beginner bug is a selector mismatch. The deployment labels pods as `a
 
 Services solve stable internal addressing. Customer traffic still needs an HTTP entry layer that understands hostnames, paths, TLS, and routing rules. That is where ingress and gateway traffic come in.
 
-## Ingress And Gateway Traffic
+## How Does Ingress Reach Workloads?
 <!-- section-summary: Ingress and Gateway API resources route HTTP traffic to services, while a controller or managed add-on performs the actual traffic handling. -->
 
 An **Ingress** is a Kubernetes object for HTTP and HTTPS routing. It says things like, "requests for `shop.example.com/orders` should go to the `orders-api` service." The Ingress object is only the rule. An **ingress controller** is the running software that watches those rules and configures load balancing, TLS, and HTTP routing behavior.
@@ -250,7 +254,7 @@ Layer 4 and layer 7 traffic solve different problems. A `LoadBalancer` service i
 
 Traffic routing is only half of the production story. Those pods still need somewhere to run, and the shape of that worker capacity affects cost, reliability, scheduling, and blast radius.
 
-## Node Pools
+## How Do Node Pools and Scaling Work?
 <!-- section-summary: Node pools group similar worker VMs so system pods, application pods, special hardware, and cost-sensitive work can run on the right capacity. -->
 
 A **node pool** is a group of AKS nodes with the same basic configuration. In AKS Standard, node pools usually map to Azure Virtual Machine Scale Sets. A pool has a VM size, OS type, Kubernetes version, scaling settings, labels, taints, and upgrade behavior. Kubernetes sees the nodes; Azure manages the underlying VM group.
@@ -284,7 +288,7 @@ api     User  Standard_D4s_v5  3      3         12        Succeeded
 
 The output should match the capacity lane the team intended: user mode, the expected VM size, and an autoscaler range that protects both availability and cost. A pool with the wrong VM size can leave pods pending even while the autoscaler adds more nodes.
 
-Node pools become useful when workloads have different needs. A payment API may need steady reserved capacity and zone spreading. A batch import worker may tolerate interruption and fit spot nodes. A machine learning job may need GPU nodes. An ingress controller may deserve its own pool so customer traffic has a capacity lane apart from noisy background jobs.
+Use node pools to separate workloads with different needs. A payment API may need steady reserved capacity and zone spreading. A batch import worker may tolerate interruption and fit spot nodes. A machine learning job may need GPU nodes. An ingress controller may deserve its own pool so customer traffic has a capacity lane apart from noisy background jobs.
 
 Kubernetes gives you scheduling tools to express these boundaries. **Labels** describe nodes, **taints** repel pods that lack a matching toleration, and **node selectors** or affinity rules attract pods to the right place. For example, the platform team can taint the `worker-spot` pool and allow only retry-safe jobs to tolerate that taint. This keeps the checkout API away from interruptible capacity.
 
@@ -292,7 +296,7 @@ Node pools connect directly to resource requests. If a pod requests `4Gi` of mem
 
 Node pool design is both an infrastructure concern and an application contract. Application teams and platform teams need a shared agreement: what does this workload request, what failure class does it belong to, how fast should it scale, and which pool is allowed to host it?
 
-## Scaling
+### Scaling
 <!-- section-summary: AKS scaling has separate layers for pod replicas, node capacity, event-driven workloads, and right-sized resource requests. -->
 
 AKS scaling has two different jobs that often get mixed together. **Horizontal Pod Autoscaler**, or **HPA**, changes the number of pod replicas for a workload. **Cluster autoscaler** changes the number of nodes in a node pool when pods cannot be scheduled because the pool lacks enough capacity.
@@ -329,14 +333,13 @@ Scaling has a timing story. Pod scale-out can be fast if images are already cach
 
 Scaling also has a cost story. A cluster that keeps too many large nodes idle wastes money. A cluster that keeps too little headroom creates slow scale-outs during traffic spikes. AKS gives you the mechanisms, but your workload behavior decides the right balance.
 
-## Workload Identity
+## How Do Identity and Networking Protect Connectivity?
 <!-- section-summary: Workload identity lets pods access Azure resources through Microsoft Entra without storing long-lived cloud secrets inside Kubernetes. -->
 
 Applications inside AKS often need to call other Azure services. `orders-api` may read secrets from Key Vault, write receipts to Blob Storage, or publish messages to Service Bus. The unsafe old habit is putting a client secret in a Kubernetes Secret and mounting it into the pod. The safer AKS pattern is **Microsoft Entra Workload ID**.
 
 Workload identity lets a Kubernetes service account map to a Microsoft Entra application or managed identity. The AKS cluster acts as an OpenID Connect issuer. Microsoft Entra validates the projected service account token and exchanges it for a Microsoft Entra token that the workload can use with Azure SDKs. The pod receives temporary identity-based access, and long-lived Azure secrets stay out of YAML.
 
-AWS readers can anchor this to the same goal as IRSA or EKS Pod Identity: a pod receives cloud access through a Kubernetes service account and short-lived credentials instead of a stored key. In AKS, the trust path goes through Microsoft Entra and Azure RBAC or service-specific data-plane permissions.
 
 ```yaml
 apiVersion: v1
@@ -375,7 +378,7 @@ Identity connects naturally to networking because both decide which doors a pod 
 
 *A pod needs both sides of the story: an identity that Azure trusts and a network path that can physically reach the target service.*
 
-## Networking Choices
+### Networking Choices
 <!-- section-summary: AKS networking decides how pods get IP addresses, how traffic leaves the cluster, and how private Azure resources connect to workloads. -->
 
 AKS networking answers a very practical question: what IP addresses do pods use, and how does traffic move between pods, nodes, Azure services, and outside clients? This matters early because network choices affect VNet address planning, private endpoint access, service exposure, cluster scale, and future migration work.
@@ -392,7 +395,7 @@ Private access to Azure resources adds another layer. If `orders-api` calls Azur
 
 By now the cluster can run pods, route requests, scale workers, use identities, and reach networks. The remaining question is how a team operates all of this without turning AKS into a mystery during an incident.
 
-## Operating AKS In Production
+## What Must Teams Operate in Production?
 <!-- section-summary: Production AKS work is mostly evidence work: health probes, events, logs, metrics, upgrades, policy, and repeatable rollout habits. -->
 
 Production AKS work is less about memorizing every Kubernetes object and more about building a reliable evidence trail. When checkout fails, the team needs to answer a chain of questions. Did the ingress receive the request? Did it route to the right service? Does the service have endpoints? Are the pods ready? Did a pod crash? Did the node have memory pressure? Did a network policy, DNS record, identity permission, or private endpoint block the call?
@@ -429,7 +432,7 @@ Policy and access controls close the loop. Azure RBAC and Microsoft Entra can co
 
 All of this sounds like a lot because AKS is a real platform. That is why the final design question matters so much: does the workload need Kubernetes enough to justify the operating surface?
 
-## When AKS Fits
+## When Is AKS the Right Fit?
 <!-- section-summary: AKS fits when the team needs Kubernetes as the shared operating contract, and smaller Azure services fit when the workload only needs a simple managed runtime. -->
 
 AKS fits best when Kubernetes itself is part of the requirement. A team may need many services with shared deployment patterns, custom traffic routing, internal service discovery, network policies, controllers, operators, Helm charts, Kubernetes-native observability, service mesh features, multiple node pools, GPU jobs, Windows containers, or a platform team building one contract for many application teams.
@@ -449,7 +452,7 @@ For an application that only needs a managed runtime, a smaller Azure service of
 
 The cleanest AKS decision is a sentence the team can defend in a design review: "We need Kubernetes because these services share Kubernetes-native deployment, routing, scaling, policy, and capacity patterns." If the only reason is "the artifact is a container," a smaller container runtime can keep the team moving with less platform work.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: A real AKS deployment connects every concept: manifests define the app, services stabilize traffic, ingress routes users, node pools provide capacity, and identity grants Azure access. -->
 
 Let's replay the commerce deployment from start to finish. The build pipeline pushes `orders-api:1.8.3` to Azure Container Registry. The release pipeline applies a Deployment that asks for three replicas, a Service that gives those pods a stable name, and an Ingress that routes `shop.example.com/orders` to that service. Kubernetes stores that desired state in the AKS control plane.
@@ -466,7 +469,44 @@ That is AKS in one connected story. Azure manages the Kubernetes control plane. 
 
 *A production AKS service connects the same five jobs again and again: run the app, route traffic, scale capacity, secure access, and operate with evidence.*
 
-## Official References
+
+---
+
+## Check Your Answers
+
+:::expand[What Is AKS and How Is the Cluster Structured?]{kind="recap"}
+AKS gives your team Kubernetes on Azure, with Azure running the control plane while your workloads still use Kubernetes objects. The main AKS objects fit together as one path from desired state to running containers and customer traffic. AKS has Automatic and Standard modes, and the mode changes how much node management, scaling, security, monitoring, and upgrades Azure handles.
+:::
+
+:::expand[What Do the Control Plane and Nodes Do?]{kind="recap"}
+The control plane is the Azure-managed Kubernetes API layer, while nodes are Azure VMs that run your pods.
+:::
+
+:::expand[How Do Pods, Deployments, and Services Run Applications?]{kind="recap"}
+Pods are running workload units, and Deployments keep the desired number of pod replicas alive through changes and failures. Services give changing pods a stable network identity so other workloads and traffic layers have something reliable to call.
+:::
+
+:::expand[How Does Ingress Reach Workloads?]{kind="recap"}
+Ingress and Gateway API resources route HTTP traffic to services, while a controller or managed add-on performs the actual traffic handling.
+:::
+
+:::expand[How Do Node Pools and Scaling Work?]{kind="recap"}
+Node pools group similar worker VMs so system pods, application pods, special hardware, and cost-sensitive work can run on the right capacity. AKS scaling has separate layers for pod replicas, node capacity, event-driven workloads, and right-sized resource requests.
+:::
+
+:::expand[How Do Identity and Networking Protect Connectivity?]{kind="recap"}
+Workload identity lets pods access Azure resources through Microsoft Entra without storing long-lived cloud secrets inside Kubernetes. AKS networking decides how pods get IP addresses, how traffic leaves the cluster, and how private Azure resources connect to workloads.
+:::
+
+:::expand[What Must Teams Operate in Production?]{kind="recap"}
+Production AKS work is mostly evidence work: health probes, events, logs, metrics, upgrades, policy, and repeatable rollout habits.
+:::
+
+:::expand[When Is AKS the Right Fit?]{kind="recap"}
+AKS fits when the team needs Kubernetes as the shared operating contract, and smaller Azure services fit when the workload only needs a simple managed runtime. A real AKS deployment connects every concept: manifests define the app, services stabilize traffic, ingress routes users, node pools provide capacity, and identity grants Azure access.
+:::
+
+## References
 
 - [What is Azure Kubernetes Service (AKS)?](https://learn.microsoft.com/en-us/azure/aks/what-is-aks)
 - [Core concepts for Azure Kubernetes Service](https://learn.microsoft.com/en-us/azure/aks/core-aks-concepts)

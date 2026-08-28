@@ -17,12 +17,16 @@ id: article-cloud-providers-aws-observability-cloudtrail-config-what-changed
 6. [How Do Rules, Aggregators, Conformance Packs, and Remediation Help?](#how-do-rules-aggregators-conformance-packs-and-remediation-help)
 7. [How Do You Investigate an Open Security Group?](#how-do-you-investigate-an-open-security-group)
 8. [How Do CloudTrail and Config Work Together?](#how-do-cloudtrail-and-config-work-together)
-9. [What Should You Remember?](#what-should-you-remember)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
 "What changed?" contains several questions: what was different, when did it become different, which operation caused the transition, which AWS identity performed it, and whether the resulting state was acceptable. CloudTrail records the action side. AWS Config records the state side.
 
-The sections below answer these questions in order:
+Go back to the checkout system from the previous article. CloudWatch alarms fire because `orders-api` is returning HTTP 500 errors, the `inventory-worker` pods in EKS are logging database connection failures, and the `receipt-renderer` Lambda function still looks healthy. The first incident question is operational: which workload is failing?
+
+After ten minutes, the team finds the symptom. The EKS worker has no network path to the database. The next question is a change question: **what changed?** Someone may have edited a security group, replaced a route table, changed a secret, rotated a role, updated an ECS task definition, modified a Lambda environment variable, or deployed a Kubernetes change that points to the wrong endpoint.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What Change Questions Come After an Alarm?**
 2. **What Does CloudTrail Record About an API Call?**
@@ -35,10 +39,6 @@ The sections below answer these questions in order:
 
 ## What Change Questions Come After an Alarm?
 <!-- section-summary: CloudWatch shows symptoms, while CloudTrail and AWS Config explain the AWS change behind those symptoms. -->
-
-Go back to the checkout system from the previous article. CloudWatch alarms fire because `orders-api` is returning HTTP 500 errors, the `inventory-worker` pods in EKS are logging database connection failures, and the `receipt-renderer` Lambda function still looks healthy. The first incident question is operational: which workload is failing?
-
-After ten minutes, the team finds the symptom. The EKS worker has no network path to the database. The next question is a change question: **what changed?** Someone may have edited a security group, replaced a route table, changed a secret, rotated a role, updated an ECS task definition, modified a Lambda environment variable, or deployed a Kubernetes change that points to the wrong endpoint.
 
 CloudWatch gives the workload evidence. **AWS CloudTrail** and **AWS Config** give the change evidence:
 
@@ -582,7 +582,7 @@ The practical algorithm is: observe the symptom, locate the implicated resource,
 
 The last piece is discipline. CloudTrail and Config help most when teams turn them on deliberately, protect the records, and practice using them before a serious incident. A normal deployment review gives the team a much calmer place to learn these queries than a security incident with executives asking for a timeline.
 
-## What Should You Remember?
+## Check Your Answers
 <!-- section-summary: CloudTrail records actor and API activity, while AWS Config records resource state, relationships, compliance, and the path back to a desired configuration. -->
 
 Think of AWS infrastructure as a movie. CloudTrail is the script of actions; Config is the sequence of state frames. CloudTrail alone can show that someone called an API without proving the resulting state. Config alone can show that a resource changed without fully attributing the action. Together they reconstruct actor, operation, state transition, compliance consequence, and remediation.

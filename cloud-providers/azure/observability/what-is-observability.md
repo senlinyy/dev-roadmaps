@@ -12,20 +12,16 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem After Deployment](#the-problem-after-deployment)
-2. [What Is Observability](#what-is-observability)
-3. [Azure Monitor as the Evidence Hub](#azure-monitor-as-the-evidence-hub)
-4. [The Four Signals](#the-four-signals)
-5. [How Telemetry Reaches Azure Monitor](#how-telemetry-reaches-azure-monitor)
-6. [Correlation Across One Request](#correlation-across-one-request)
-7. [Dashboards, Alerts, and Response](#dashboards-alerts-and-response)
-8. [A Practical First Setup](#a-practical-first-setup)
-9. [Operating Habits That Keep Evidence Useful](#operating-habits-that-keep-evidence-useful)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
-
-## The Problem After Deployment
-<!-- section-summary: After an app leaves your laptop, Azure resources only tell part of the story, so the app needs to emit evidence about real user work. -->
+1. [Why Is Deployment Not Enough?](#why-is-deployment-not-enough)
+2. [What Is Observability?](#what-is-observability)
+3. [How Does Azure Monitor Collect Evidence?](#how-does-azure-monitor-collect-evidence)
+4. [What Do Logs, Metrics, Traces, and Events Explain?](#what-do-logs-metrics-traces-and-events-explain)
+5. [How Does Telemetry Reach Azure Monitor?](#how-does-telemetry-reach-azure-monitor)
+6. [How Does Correlation Follow One Request?](#how-does-correlation-follow-one-request)
+7. [How Do Dashboards and Alerts Support Response?](#how-do-dashboards-and-alerts-support-response)
+8. [How Do You Build and Maintain a Practical Setup?](#how-do-you-build-and-maintain-a-practical-setup)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 When you run an app on your laptop, debugging feels direct. You can look at the terminal, add a print statement, open the local database, restart the process, and watch the next request with your own eyes. Production Azure feels very different because the app might run on App Service, Container Apps, Azure Functions, AKS, or virtual machines, and each runtime hides a lot of the machine-level details on purpose.
 
@@ -33,9 +29,23 @@ The article will use one running example the whole way through. A small commerce
 
 One afternoon, support says that some customers can pay but never receive a receipt. The Azure portal still shows the App Service as running. CPU looks normal, memory looks normal, and the database has stayed online. Those resource facts matter, while the real production question remains open: what happened to the checkout request that failed?
 
-That question introduces the main pieces in this article. **Telemetry** is the evidence a system emits while it runs. **Logs** describe events, **metrics** measure numbers over time, **traces** follow one request across services, and **alerts** turn important changes into notifications or automation. **Observability** is the practice of designing the app and the Azure resources so those signals can answer real questions during an incident.
+Keep these questions in view as you work through the lesson:
 
-## What Is Observability
+1. **Why Is Deployment Not Enough?**
+2. **What Is Observability?**
+3. **How Does Azure Monitor Collect Evidence?**
+4. **What Do Logs, Metrics, Traces, and Events Explain?**
+5. **How Does Telemetry Reach Azure Monitor?**
+6. **How Does Correlation Follow One Request?**
+7. **How Do Dashboards and Alerts Support Response?**
+8. **How Do You Build and Maintain a Practical Setup?**
+
+## Why Is Deployment Not Enough?
+<!-- section-summary: After an app leaves your laptop, Azure resources only tell part of the story, so the app needs to emit evidence about real user work. -->
+
+The customer-impact question introduces the main pieces in this article. **Telemetry** is the evidence a system emits while it runs. **Logs** describe events, **metrics** measure numbers over time, **traces** follow one request across services, and **alerts** turn important changes into notifications or automation. **Observability** is the practice of designing the app and the Azure resources so those signals can answer real questions during an incident.
+
+## What Is Observability?
 <!-- section-summary: Observability means a production system leaves enough connected evidence for engineers to explain a failure from the outside. -->
 
 **Observability** means your system emits enough useful evidence that engineers can understand its behavior from the outside. In Azure, that evidence usually flows through Azure Monitor, Log Analytics workspaces, Application Insights, metrics, dashboards, alert rules, and action groups. The tool names come later; the important idea is the evidence.
@@ -45,6 +55,10 @@ For the checkout example, a useful observability setup can show that `POST /chec
 Older server monitoring usually focused on machine health: CPU, memory, disk, process uptime, and network reachability. Those checks still matter because a saturated database or exhausted worker pool can break a service. Modern cloud systems also need workflow evidence because a resource can stay online while a user transaction fails because of identity, networking, bad configuration, slow dependencies, or application code.
 
 A helpful beginner rule is to separate **resource health** from **workflow health**. Resource health asks whether the hosting layer can run. Workflow health asks whether users can complete the thing they came to do. The `orders-api` needs both because a healthy App Service instance still leaves checkout, invoice upload, and warehouse handoff unproven.
+
+This also separates **monitoring** from **observability**. Monitoring checks known conditions: Is the process running? Is CPU above a threshold? Did request latency cross the alert limit? Observability supports investigation when the team did not predict the exact failure in advance. It gives engineers enough external evidence to infer an internal state, such as discovering that only receipt uploads from one release fail after a managed-identity change.
+
+Observability is therefore an inference problem. The team cannot inspect every instruction executing inside every distributed component. It observes outputs—telemetry—and uses those outputs to reduce the possible causes. Good evidence does not merely say that the system is abnormal; it progressively narrows the search space until an engineer can test a concrete explanation.
 
 Here is a small structured log from the checkout failure. The exact logging library can vary, but the shape of the event is the important part. The example below uses stable fields that can travel into Application Insights or a Log Analytics workspace:
 
@@ -65,12 +79,19 @@ Here is a small structured log from the checkout failure. The exact logging libr
 
 This log gives the team searchable fields instead of one flat sentence. The `operationId` connects this event to other telemetry from the same checkout attempt. The `dependency`, `target`, and `resultCode` fields point the investigation toward Blob Storage access instead of sending the team through unrelated database and CPU charts.
 
-## Azure Monitor as the Evidence Hub
+## How Does Azure Monitor Collect Evidence?
 <!-- section-summary: Azure Monitor is the shared Azure service that collects, stores, queries, visualizes, and alerts on operational telemetry. -->
 
 **Azure Monitor** is Microsoft's observability service for Azure and hybrid environments. It collects and analyzes telemetry from applications, Azure resources, infrastructure, and other sources. It also provides the experiences that engineers use during incidents: metrics explorer, Log Analytics, Application Insights views, workbooks, dashboards, and alerts.
 
-If you come from AWS, think of Azure Monitor as the broad operating space where several AWS habits meet: CloudWatch-style metrics and alerts, log investigation, and application tracing. The names differ, but the working question is familiar: can the team move from a user symptom to connected evidence?
+Azure Monitor is not the original source of every fact. Application code creates request, dependency, exception, and business-event evidence. Azure resources create platform metrics, activity records, and service logs. Virtual machines may need an agent for guest operating-system evidence. Diagnostic settings, data collection rules, and application instrumentation move selected signals into Azure Monitor. If a source never emits an event or no route collects it, opening a workspace cannot reconstruct that missing history later.
+
+This gives telemetry a layered path: the user experiences an outcome, application and dependency code emit operation evidence, the runtime and Azure resources emit platform evidence, collection rules route it, stores retain it, and queries or alerts turn it into an answer. A gap at any layer weakens the final investigation.
+
+Observability therefore starts before deployment. Engineers decide which operations need names, which boundaries need spans, which state transitions deserve structured logs, which user outcomes become metrics, and which identifiers travel across queues and HTTP calls while they design the code. Waiting for the first outage usually produces hurried prose logs with no correlation and no clear owner.
+
+A release-readiness test should generate one successful workflow and one controlled failure, then prove that the request, dependencies, exception, logs, metrics, version marker, and resource evidence can be found. This tests the evidence path the same way a smoke test checks the application path.
+
 
 For our `orders-api`, Azure Monitor is the place where different evidence streams meet. App Service can emit platform metrics such as request count and response status. Azure SQL can emit database metrics and resource logs. Blob Storage can emit resource logs for blob operations. Application Insights can collect request, dependency, exception, trace, and custom event telemetry from the application code.
 
@@ -94,7 +115,7 @@ The names can feel crowded at first, so the simple map below keeps the first pas
 
 Knowing the map helps because the rest of the module goes deeper one layer at a time. The next question is what the signals actually look like when the system emits them.
 
-## The Four Signals
+## What Do Logs, Metrics, Traces, and Events Explain?
 <!-- section-summary: Logs, metrics, traces, and alerts answer different production questions, so strong observability uses all four together. -->
 
 **Logs** are timestamped event records. A log usually describes one thing that happened: a user signed in, an upload failed, a database connection timed out, a feature flag changed, or a background job retried. Logs work best when they use structured fields because fields make them searchable in KQL.
@@ -113,7 +134,16 @@ Distributed traces matter because modern apps split one user action across many 
 
 These four signals work together during the incident. The alert tells the team that checkout failures crossed the paging threshold. The metric chart shows when the failure started and how widespread it is. The trace shows which dependency failed inside one request. The logs show the exact storage error, identity name, resource ID, and code path.
 
-## How Telemetry Reaches Azure Monitor
+A useful first metric set is the **four golden signals**:
+
+- **Latency** measures how long successful and failed operations take. Separate the two so fast failures do not make the service look healthy.
+- **Traffic** measures demand, such as requests per second, queue arrivals, or checkout attempts.
+- **Errors** measure unsuccessful work by result code, exception family, or business outcome.
+- **Saturation** measures how close a constrained resource is to its limit, such as worker usage, connection pool pressure, queue age, CPU, or transaction-log throughput.
+
+The signals interact. Rising traffic can increase saturation, saturation can increase latency, and timeouts can then increase errors. Starting from the user-visible latency or error symptom and moving toward traffic and saturation usually produces a clearer incident path than staring at machine charts without a workflow question.
+
+## How Does Telemetry Reach Azure Monitor?
 <!-- section-summary: Azure collects some platform data automatically, while detailed resource logs and application telemetry need routing and instrumentation choices. -->
 
 After you understand the four signals, the next natural question is where they come from. Azure resources emit some telemetry automatically, but the useful production story usually needs a few explicit choices. Those choices decide whether evidence reaches a workspace, which fields appear, how long data stays available, and whether the team can query it during an incident.
@@ -144,7 +174,7 @@ useAzureMonitor({
 
 That small code path only opens the application telemetry pipeline so requests, dependencies, exceptions, traces, and metrics can flow into Application Insights. The team still needs useful names, useful custom properties, and careful filtering so telemetry explains production behavior without collecting secrets or noisy low-value events.
 
-## Correlation Across One Request
+## How Does Correlation Follow One Request?
 <!-- section-summary: Correlation gives separate telemetry rows the same operation identity, which lets engineers rebuild one customer journey. -->
 
 Now the telemetry is flowing, but a new problem appears. A busy production system can emit millions of records. One checkout attempt may create an App Service request record, several application traces, a SQL dependency record, a Blob Storage dependency record, one exception record, and resource logs from the storage account.
@@ -190,7 +220,7 @@ This result gives the team a chronological view of one failed checkout. The API 
 
 Correlation also helps across teams. The application engineer can show the storage engineer the operation ID, time range, target storage account, and result code. The storage engineer can query resource logs around the same time and resource. That shared evidence makes the conversation concrete.
 
-## Dashboards, Alerts, and Response
+## How Do Dashboards and Alerts Support Response?
 <!-- section-summary: Dashboards show the current shape of the system, while alerts decide when telemetry requires human or automated action. -->
 
 After the team can investigate one request, they need a way to notice broad changes quickly. **Dashboards** and **workbooks** give teams shared views of important metrics, logs, and trends. A checkout dashboard might show request volume, failure rate, p95 latency, SQL latency, Blob Storage errors, Service Bus queue depth, and recent deployment markers.
@@ -205,7 +235,7 @@ Good alerting is based on user impact. A page for every short CPU spike trains t
 
 This connects back to the four signals. Metrics make fast alert conditions. Logs make precise alert conditions. Traces explain the request path after someone opens the incident. Dashboards keep the team oriented while they decide whether to roll back, change a role assignment, scale out, or fix code.
 
-## A Practical First Setup
+## How Do You Build and Maintain a Practical Setup?
 <!-- section-summary: A useful first observability setup covers application telemetry, resource routing, business metrics, and a small number of high-signal alerts. -->
 
 A beginner Azure observability setup needs a focused first set of signals instead of every possible signal on day one. It needs enough evidence for the first serious incident. For the `orders-api`, that means the team can answer four questions: are customers succeeding, which dependency failed, what changed recently, and who needs to respond?
@@ -231,7 +261,7 @@ Here is a compact starter checklist. It keeps the first setup focused on evidenc
 
 This setup gives the team a good first production loop. An alert says checkout is failing, the dashboard shows the blast radius, the trace shows where one request broke, logs show the exact error, and resource logs confirm what the Azure dependency saw.
 
-## Operating Habits That Keep Evidence Useful
+### Operating Habits That Keep Evidence Useful
 <!-- section-summary: Observability stays useful when teams define user-facing indicators, attach release context, test the evidence path, and write incident notes from telemetry. -->
 
 After the first setup exists, the team needs a few habits that keep the evidence trustworthy. A **service-level indicator**, usually shortened to **SLI**, is a measurement of something users care about. For the checkout system, good SLIs include checkout success rate, p95 checkout latency, receipt upload success rate, and Service Bus message age. These numbers connect observability to the user workflow instead of leaving the team with only CPU, memory, and replica charts.
@@ -242,7 +272,27 @@ Teams should test observability as part of release readiness. In staging, run a 
 
 The last habit is writing incident notes from telemetry. A useful note includes the time window, affected route, operation ID, app role, release version, failing dependency, resource ID, alert name, dashboard link, and the first KQL query that proved the issue. It leaves out secrets, tokens, full customer records, and raw payloads. That note helps the next engineer continue the investigation without starting from screenshots or memory.
 
-## Putting It All Together
+Telemetry also needs a cost and quality budget. High-cardinality dimensions—values such as raw user IDs, request URLs with unique identifiers, or unbounded payload fields—can create huge numbers of time series and expensive log volume. Sampling can retain a representative portion of high-volume trace data, but the team must preserve failures and enough correlation context to investigate them. Retention should match operational and regulatory needs instead of keeping every debug event forever.
+
+Clocks need to stay synchronized because a distributed timeline depends on timestamps from different components. Failures should be recorded at the right abstraction level: the storage SDK can record a `403`, while the application also records that receipt generation failed for the checkout operation. Logs should explain meaningful state transitions rather than dumping every internal variable. These choices make the evidence smaller and more useful at the same time.
+
+Two operating measurements summarize the benefit. **Mean time to detect** tracks how quickly the team notices a real problem. **Mean time to repair** tracks how quickly it restores the service after detection. High-signal alerts reduce detection time; correlated, well-structured evidence reduces repair time. Collecting more data is useful only when it improves that operating loop.
+
+A compact troubleshooting flow keeps the inference process practical:
+
+1. Start with the user-visible symptom and identify the affected service and time window.
+2. Check latency, traffic, errors, and saturation to measure scope and timing.
+3. Select one failed request and follow its trace or operation ID.
+4. Use dependency spans and structured logs to identify the first failing boundary.
+5. Compare resource metrics and resource logs for that dependency.
+6. Add deployment markers, configuration changes, and identity changes to the same timeline.
+7. Test the smallest explanation that accounts for the evidence, then verify recovery with the user workflow.
+
+This order prevents a common mistake: beginning with the machine that happens to have the most visible chart. A CPU spike may be a cause, a consequence, or unrelated background work. The failed checkout and its connected evidence decide where the investigation moves.
+
+The deepest distinction is between **telemetry data** and **operational answers**. A workspace containing billions of rows is not automatically observable. The team needs stable fields, correlation, appropriate retention, useful queries, and response ownership so those rows can answer "which users are affected, where did the request fail, what changed, and did the repair work?" Observability design is complete only when the evidence supports those decisions.
+
+### Putting It All Together
 <!-- section-summary: Azure observability connects application behavior, resource behavior, and response paths into one production feedback loop. -->
 
 Observability in Azure comes from a simple production reality: after deployment, the team needs evidence from outside the running process. Azure Monitor provides the shared platform for that evidence, and the rest of the names describe where each signal comes from and how engineers use it.
@@ -255,13 +305,47 @@ For the `orders-api`, that means the team can move from "customers miss receipts
 
 *A first observability setup gives the team a loop: collect application evidence, route resource logs, track workflow health, and send alerts to the right response path.*
 
-## What's Next
+### What's Next
 
 Now that the basic Azure observability shape is clear, the next article goes deeper into logs and workspaces. We will look at diagnostic settings, Log Analytics workspace design, KQL, retention, and the way Azure resource logs become searchable production evidence.
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[Why Is Deployment Not Enough?]{kind="recap"}
+After an app leaves your laptop, Azure resources only tell part of the story, so the app needs to emit evidence about real user work.
+:::
+
+:::expand[What Is Observability?]{kind="recap"}
+Observability means a production system leaves enough connected evidence for engineers to explain a failure from the outside.
+:::
+
+:::expand[How Does Azure Monitor Collect Evidence?]{kind="recap"}
+Azure Monitor is the shared Azure service that collects, stores, queries, visualizes, and alerts on operational telemetry.
+:::
+
+:::expand[What Do Logs, Metrics, Traces, and Events Explain?]{kind="recap"}
+Logs, metrics, traces, and alerts answer different production questions, so strong observability uses all four together.
+:::
+
+:::expand[How Does Telemetry Reach Azure Monitor?]{kind="recap"}
+Azure collects some platform data automatically, while detailed resource logs and application telemetry need routing and instrumentation choices.
+:::
+
+:::expand[How Does Correlation Follow One Request?]{kind="recap"}
+Correlation gives separate telemetry rows the same operation identity, which lets engineers rebuild one customer journey.
+:::
+
+:::expand[How Do Dashboards and Alerts Support Response?]{kind="recap"}
+Dashboards show the current shape of the system, while alerts decide when telemetry requires human or automated action.
+:::
+
+:::expand[How Do You Build and Maintain a Practical Setup?]{kind="recap"}
+A useful first observability setup covers application telemetry, resource routing, business metrics, and a small number of high-signal alerts. Observability stays useful when teams define user-facing indicators, attach release context, test the evidence path, and write incident notes from telemetry. Azure observability connects application behavior, resource behavior, and response paths into one production feedback loop.
+:::
+
+## References
 
 - [Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/overview)
 - [Azure Monitor data platform](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/data-platform)

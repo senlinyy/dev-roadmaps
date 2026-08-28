@@ -37,7 +37,11 @@ aliases:
 
 An IAM policy answers an important question: what may this principal request? In a growing AWS environment, however, that is only one part of the security problem. Teams also need to prevent certain actions even when an account administrator makes a bad permission change. They need to understand how authority crosses account boundaries. Finally, they need evidence for deciding whether the access they granted still matches what people and workloads actually require.
 
-The sections below answer these questions in order:
+That distinction is the foundation for organizing guardrails, cross-account access, and evidence.
+
+A **guardrail** changes the range of requests that AWS can authorize. It expresses a limit such as, "ordinary principals in production must not disable central audit logging." Service control policies, resource control policies, permissions boundaries, resource restrictions, and session restrictions can all act as guardrails in different parts of the authorization system.
+
+Keep these questions in view as you work through the lesson:
 
 1. **How Are Guardrails Different From Access Evidence?**
 2. **How Does the Account Map Show Where Authority Can Travel?**
@@ -50,10 +54,6 @@ The sections below answer these questions in order:
 
 ## How Are Guardrails Different From Access Evidence?
 <!-- section-summary: Guardrails affect authorization, while access evidence describes configured, reachable, attempted, or used access. -->
-
-The first distinction is the foundation for everything else in this article.
-
-A **guardrail** changes the range of requests that AWS can authorize. It expresses a limit such as, "ordinary principals in production must not disable central audit logging." Service control policies, resource control policies, permissions boundaries, resource restrictions, and session restrictions can all act as guardrails in different parts of the authorization system.
 
 **Access evidence** describes that system or activity around it. CloudTrail can show that a principal made a request. IAM Access Analyzer can show that a policy creates an access path. Last-accessed information can show that an identity attempted to use a service or supported action during the tracking period. A credential report can show which IAM users have passwords or access keys. These sources normally do not change whether the next request is allowed.
 
@@ -560,7 +560,7 @@ The three questions intersect:
 CAN ∩ DID ∩ SHOULD
 ```
 
-The **should** question is primary. A permission can be used regularly and still be illegitimate. A permission can be unused and still be required for tested disaster recovery. Technical evidence becomes meaningful only when compared with an explicit requirement.
+The **should** question is primary. A permission can be used regularly and still be illegitimate. A permission can be unused and still be required for tested disaster recovery. Technical evidence has meaning only in comparison with an explicit requirement.
 
 Consider `FinanceReportingRole` with these effective grants:
 

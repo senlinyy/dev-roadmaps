@@ -23,22 +23,8 @@ aliases:
 6. [How Do EBS, EFS, and FSx Permissions Differ?](#how-do-ebs-efs-and-fsx-permissions-differ)
 7. [How Do Backup and Replication Differ?](#how-do-backup-and-replication-differ)
 8. [Which Common Mistakes Should You Avoid?](#which-common-mistakes-should-you-avoid)
-9. [Check Your Understanding](#check-your-understanding)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-The sections below answer these questions in order:
-
-1. **Which Storage Interface Does the Application Need?**
-2. **How Do EBS Placement and Attachment Work?**
-3. **How Should You Size and Back Up EBS?**
-4. **How Do EFS Networking and Permissions Work?**
-5. **How Should You Think About EFS Performance and Cost?**
-6. **How Do EBS, EFS, and FSx Permissions Differ?**
-7. **How Do Backup and Replication Differ?**
-8. **Which Common Mistakes Should You Avoid?**
-
-## Which Storage Interface Does the Application Need?
-<!-- section-summary: Start with whether software expects raw blocks, files and directories, or objects accessed through an API. -->
 
 RAM is fast and volatile. When a machine reboots or fails, database pages, application files, and user data must survive somewhere persistent. “Persistent storage,” however, is not one interface.
 
@@ -67,6 +53,20 @@ application naturally PUTs and GETs whole objects
        ↓
 S3 object API
 ```
+
+Keep these questions in view as you work through the lesson:
+
+1. **Which Storage Interface Does the Application Need?**
+2. **How Do EBS Placement and Attachment Work?**
+3. **How Should You Size and Back Up EBS?**
+4. **How Do EFS Networking and Permissions Work?**
+5. **How Should You Think About EFS Performance and Cost?**
+6. **How Do EBS, EFS, and FSx Permissions Differ?**
+7. **How Do Backup and Replication Differ?**
+8. **Which Common Mistakes Should You Avoid?**
+
+## Which Storage Interface Does the Application Need?
+<!-- section-summary: Start with whether software expects raw blocks, files and directories, or objects accessed through an API. -->
 
 An old application calling `open("/shared/config/settings.json")` expects filesystem semantics. Replacing that call with `s3.get_object()` changes the application and raises questions about partial writes, rename behavior, locking, permissions, concurrency, and metadata. That rewrite can be worthwhile, but it is not merely a storage configuration change.
 
@@ -460,7 +460,7 @@ Choose among blocks, generic shared files, and specialist filesystem semantics. 
 
 *The correct service follows from who owns the filesystem and which clients, protocols, performance pattern, and recovery behavior it must support.*
 
-## Check Your Understanding
+## Check Your Answers
 
 :::expand[Which Storage Interface Does the Application Need?]{kind="recap"}
 Start with whether software expects raw blocks, files and directories, or objects accessed through an API.

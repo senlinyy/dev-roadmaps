@@ -1,7 +1,7 @@
 ---
 title: "Module Contracts: Inputs and Outputs"
 description: "Variable types, validation rules, and structured outputs give Terraform modules a clear, safe contract with callers."
-overview: "A reliable module contract has inputs callers set, validation that catches mistakes early, careful handling for sensitive values, and outputs that expose only the values other code needs. This article shows the module side and the caller side together."
+overview: "Inputs and outputs form a typed boundary around a Terraform module. This article builds the full contract of a reusable private-bucket module, including defaults, object types, validation, sensitive and ephemeral values, output promises, graph edges, and composition."
 tags: ["modules", "variables", "outputs", "validation", "terraform"]
 order: 2
 id: article-iac-terraform-modules-inputs-outputs
@@ -12,555 +12,702 @@ aliases:
 
 ## Table of Contents
 
-1. [The Module Contract Between Caller and Module](#the-module-contract-between-caller-and-module)
-2. [Declaring Input Variables](#declaring-input-variables)
-3. [Using Types to Describe Shape](#using-types-to-describe-shape)
-4. [Adding Validation Rules](#adding-validation-rules)
-5. [Handling Sensitive Values](#handling-sensitive-values)
-6. [Declaring Outputs](#declaring-outputs)
-7. [Wiring Outputs Into Other Modules](#wiring-outputs-into-other-modules)
-8. [Outputs and State](#outputs-and-state)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [Why Does a Module Need a Contract?](#why-does-a-module-need-a-contract)
+2. [How Do Inputs Define Caller Decisions?](#how-do-inputs-define-caller-decisions)
+3. [How Do Types and Validation Strengthen Inputs?](#how-do-types-and-validation-strengthen-inputs)
+4. [How Do Sensitive and Ephemeral Values Differ?](#how-do-sensitive-and-ephemeral-values-differ)
+5. [How Do Outputs Define Module Promises?](#how-do-outputs-define-module-promises)
+6. [How Do Outputs Connect Module Graphs?](#how-do-outputs-connect-module-graphs)
+7. [How Does a Complete Module Contract Work?](#how-does-a-complete-module-contract-work)
+8. [How Do You Design a Contract That Stays Useful?](#how-do-you-design-a-contract-that-stays-useful)
+9. [Check Your Answers](#check-your-answers)
 
-## The Module Contract Between Caller and Module
-<!-- section-summary: Inputs and outputs form the contract that lets callers use a module without depending on its internal resource layout. -->
+Reusable code needs a way for the outside world to communicate with it without depending on its internal resources. Terraform creates that boundary with variables for values entering a module and outputs for values leaving it.
 
-The private bucket module solved the copy-paste problem. Now the team has a new question: how do callers know which values they should provide and which values they can safely use afterward?
+Consider a reusable private S3 bucket module:
 
-That public edge is the **module contract**. Inputs are the values callers pass in. Outputs are the values the module returns. The internal resources can change over time, but the contract should change slowly and intentionally because other Terraform code depends on it.
+```text
+modules/
+└── private-bucket/
+    ├── main.tf
+    ├── variables.tf
+    └── outputs.tf
+```
 
-For the next example, the Orders team builds a load balancer module. The caller should provide the VPC, subnets, domain name, tags, and health check choices. The module should return the DNS name and target group ARN. Listener rules, target groups, access logs, and security settings can stay inside.
-
-This split lets both sides work. The service root can wire the module without reading every internal resource. The module author can improve internals while keeping the same inputs and outputs.
-
-In production, this contract is what other teams depend on. A renamed input can break every caller. A removed output can break another module that consumes it. Additive changes usually roll out in smaller steps, while removals and type changes need release notes, versioning, and a migration path.
-
-## Declaring Input Variables
-<!-- section-summary: Input variables name the values callers can provide and let Terraform check those values before provider APIs run. -->
-
-An **input variable** is one value the caller can pass into a module. The variable block gives it a name, type, description, and optional default.
-
-The first load balancer inputs are required because the module cannot safely guess them. The caller must choose the VPC, subnets, DNS name, and environment.
+Its implementation can contain:
 
 ```hcl
-variable "vpc_id" {
+resource "aws_s3_bucket" "this" {
+  bucket = var.bucket_name
+}
+
+resource "aws_s3_bucket_public_access_block" "this" {
+  bucket = aws_s3_bucket.this.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+```
+
+A caller needs only a module call:
+
+```hcl
+module "logs" {
+  source = "../../modules/private-bucket"
+
+  bucket_name = "myapp-prod-logs"
+}
+```
+
+The responsibilities differ. The caller decides that it wants a bucket with that name. The module decides that “private bucket” means an S3 bucket plus all four public-access protections and any other policy kept inside the abstraction.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Does a Module Need a Contract?**
+2. **How Do Inputs Define Caller Decisions?**
+3. **How Do Types and Validation Strengthen Inputs?**
+4. **How Do Sensitive and Ephemeral Values Differ?**
+5. **How Do Outputs Define Module Promises?**
+6. **How Do Outputs Connect Module Graphs?**
+7. **How Does a Complete Module Contract Work?**
+8. **How Do You Design a Contract That Stays Useful?**
+
+## Why Does a Module Need a Contract?
+<!-- section-summary: A module contract separates caller decisions from internal implementation through explicit values going in and promised values coming out. -->
+
+The caller should not depend directly on internal names such as `aws_s3_bucket.this`. It should know the supported interface:
+
+```text
+inputs  → bucket_name, environment, tags
+module  → resources, locals, data, expressions
+outputs → bucket_id, bucket_arn
+```
+
+Inputs answer what the caller may or must decide. Outputs answer what results the module promises callers may consume. Internal resources can change while a stable contract continues to work.
+
+This boundary also sets change expectations. Renaming a required input can break every caller. Removing an output can break downstream references. Adding an optional input with a safe default is usually easier to adopt. The contract therefore behaves like an API even though the module is declarative infrastructure code.
+
+The function analogy can help if its limit stays visible. A private-bucket interface resembles `create_private_bucket(name, environment, tags) → { id, arn }`. Yet Terraform is not invoking a procedure that returns after doing work. The input and output expressions connect a persistent subtree into the overall desired-state graph. Values can be unknown during planning, and the resulting resources remain managed in state.
+
+The boundary is directional and explicit:
+
+```text
+caller expressions
+       ↓
+variable blocks, types, defaults, validation
+       ↓
+module resources, locals, and expressions
+       ↓
+output values, types, sensitivity, preconditions
+       ↓
+parent expressions
+```
+
+This visibility is the source of reuse. A caller sees the promise rather than copying internals. A module author can reason about which external decisions enter and which stable capabilities leave.
+
+## How Do Inputs Define Caller Decisions?
+<!-- section-summary: Variables make selected choices part of the public interface, and defaults distinguish required decisions from optional policy choices. -->
+
+A literal bucket name inside the child prevents reuse:
+
+```hcl
+resource "aws_s3_bucket" "this" {
+  bucket = "myapp-prod-logs"
+}
+```
+
+Move the decision to the public interface:
+
+```hcl
+variable "bucket_name" {
   type        = string
-  description = "ID of the VPC where the load balancer runs."
+  description = "Name of the S3 bucket."
+}
+
+resource "aws_s3_bucket" "this" {
+  bucket = var.bucket_name
+}
+```
+
+The variable does not mainly mean “prompt a human.” At a module boundary, it means the caller is allowed and required to provide this value without modifying the child source. The value flows from the module argument to `var.bucket_name` and then to the resource argument.
+
+A variable with no `default` is required:
+
+```hcl
+module "logs" {
+  source = "../../modules/private-bucket"
+
+  bucket_name = "myapp-prod-logs"
+}
+```
+
+A default makes an input optional:
+
+```hcl
+variable "enable_versioning" {
+  type        = bool
+  description = "Whether object versioning should be enabled."
+  default     = true
+}
+```
+
+Callers can omit the argument and receive `true`, or override it explicitly. A default is an API and policy decision. Use one when the module has a sensible normal choice. Omit it when every caller should choose deliberately.
+
+Required and optional do not mean important and unimportant. A required bucket name is unique to the deployment, so no shared default is safe. An optional versioning flag can have a strong default that represents the module's normal policy. The design question is whether omission has one reasonable meaning, not whether the setting matters.
+
+An explicit `null` is also different from omission and from an ordinary default. `null` represents absence and may cause the receiving argument to behave as though no value were supplied. If the contract wants to support absence, name and type that behavior deliberately instead of relying on callers to guess whether an empty string, empty collection, or `null` is appropriate.
+
+Not every internal argument should become an input. A module named `private-bucket` should normally enforce all four public-access settings rather than offer four booleans that let callers reconstruct or weaken the mechanism. Expose decisions that belong to the caller; keep the module's invariants inside.
+
+Inputs live in module-specific namespaces. If a root has `var.environment` and a child declares its own variable with the same name, the child does not receive it automatically. The root must wire the values:
+
+```hcl
+module "logs" {
+  source = "../../modules/private-bucket"
+
+  bucket_name = "myapp-prod-logs"
+  environment = var.environment
+}
+```
+
+The right side is the root variable. The left side assigns the child's input, which becomes `var.environment` only inside that child. Explicit wiring keeps the boundary understandable.
+
+The same explicitness prevents accidental global configuration. A child cannot silently read every root variable simply because names match. That makes modules reusable in roots that choose their values from literals, other variables, locals, data sources, resource attributes, or another child's outputs.
+
+## How Do Types and Validation Strengthen Inputs?
+<!-- section-summary: Types define value shape, while validation defines which values of that shape satisfy the module's own rules. -->
+
+Types are part of the contract. These variables communicate different shapes:
+
+```hcl
+variable "environment" {
+  type = string
+}
+
+variable "replica_count" {
+  type = number
+}
+
+variable "enable_versioning" {
+  type = bool
 }
 
 variable "subnet_ids" {
-  type        = list(string)
-  description = "Subnet IDs for the load balancer, usually one per availability zone."
+  type = list(string)
 }
 
-variable "domain_name" {
-  type        = string
-  description = "Public DNS name for the application, for example orders.example.com."
-}
-
-variable "environment" {
-  type        = string
-  description = "Deployment environment for tags, names, and policy checks."
-}
-```
-
-Optional inputs come next. Tags can default to an empty map. Access logs default to enabled because logs are a production-safe baseline.
-
-```hcl
 variable "tags" {
-  type        = map(string)
-  description = "Extra tags applied to resources created by this module."
-  default     = {}
-}
-
-variable "enable_access_logs" {
-  type        = bool
-  description = "Whether the module writes load balancer access logs."
-  default     = true
+  type = map(string)
 }
 ```
 
-Inside the module, resources consume those values through `var.<name>` references:
+Terraform also supports sets, tuples, objects, and other structural types. The implementation can reason about `list(string)` as a sequence of strings instead of defending against every possible value shape. Terraform may perform reasonable conversions, but rejects values it cannot convert to the constraint.
+
+Related settings can form an object:
 
 ```hcl
-resource "aws_lb" "this" {
-  name               = "orders-${var.environment}"
-  load_balancer_type = "application"
-  subnets            = var.subnet_ids
-
-  tags = merge(
-    var.tags,
-    {
-      service     = "orders"
-      environment = var.environment
-    }
-  )
+variable "bucket_config" {
+  type = object({
+    environment       = string
+    owner             = string
+    enable_versioning = optional(bool, true)
+    tags              = optional(map(string), {})
+  })
 }
 ```
 
-The caller then passes values with matching argument names:
+The caller supplies the required fields and may omit the optional ones:
 
 ```hcl
-module "load_balancer" {
-  source = "../../modules/load-balancer"
-
-  vpc_id      = module.network.vpc_id
-  subnet_ids  = module.network.public_subnet_ids
-  domain_name = "orders.example.com"
+bucket_config = {
   environment = "prod"
+  owner       = "platform"
+}
+```
+
+The object documents that these values form one conceptual configuration. Optional attributes help the contract evolve without forcing every caller to repeat defaults.
+
+A fully specified caller can still override both optional attributes:
+
+```hcl
+bucket_config = {
+  environment       = "prod"
+  owner             = "platform"
+  enable_versioning = false
 
   tags = {
-    owner       = "platform"
-    cost_center = "orders"
+    Application = "payments"
+    ManagedBy   = "terraform"
   }
 }
 ```
 
-The `default` on `enable_access_logs` makes that input optional. The default is enabled because access logs are a production-safe baseline. A test environment with a clear reason to skip logs can still set it explicitly.
+Inside the module, each field has a known path and shape: `var.bucket_config.environment`, `var.bucket_config.owner`, `var.bucket_config.enable_versioning`, and `var.bucket_config.tags`. This removes whole categories of defensive conversion from the implementation.
 
-Defaults should express a safe normal case. If a value must be chosen deliberately, leave out the default so Terraform asks the caller for it. For example, `vpc_id` and `subnet_ids` should be required because the module cannot safely guess where to place a load balancer.
+Avoid `any` unless the module genuinely cannot describe a stable shape. `type = any` delegates most structure checking to later expressions and resources, producing a weaker interface and less useful errors.
 
-## Using Types to Describe Shape
-<!-- section-summary: Terraform types describe the shape of module inputs, from simple strings to structured objects that keep related settings together. -->
-
-Terraform types give callers early feedback. A `string` accepts one string. A `number` accepts a number. A `bool` accepts true or false. Collections such as `list(string)` and `map(string)` hold multiple values.
-
-Tags are a good map example:
-
-```hcl
-variable "tags" {
-  type        = map(string)
-  description = "Tags applied to resources created by this module."
-  default     = {}
-}
-```
-
-Health check settings belong in an object because the values move as one group:
-
-```hcl
-variable "health_check" {
-  type = object({
-    path                = string
-    interval_seconds    = number
-    healthy_threshold   = number
-    unhealthy_threshold = number
-  })
-
-  default = {
-    path                = "/health"
-    interval_seconds    = 30
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-  }
-
-  description = "HTTP health check settings for the application target group."
-}
-```
-
-This object keeps the module call readable:
-
-```hcl
-module "load_balancer" {
-  source = "../../modules/load-balancer"
-
-  vpc_id      = module.network.vpc_id
-  subnet_ids  = module.network.public_subnet_ids
-  domain_name = "orders.example.com"
-  environment = "prod"
-
-  health_check = {
-    path                = "/ready"
-    interval_seconds    = 15
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-  }
-}
-```
-
-Inside the module, the target group can consume the object one field at a time:
-
-```hcl
-resource "aws_lb_target_group" "app" {
-  name     = "orders-${var.environment}"
-  port     = 8080
-  protocol = "HTTP"
-  vpc_id   = var.vpc_id
-
-  health_check {
-    path                = var.health_check.path
-    interval            = var.health_check.interval_seconds
-    healthy_threshold   = var.health_check.healthy_threshold
-    unhealthy_threshold = var.health_check.unhealthy_threshold
-  }
-}
-```
-
-The `any` type gives Terraform little to check in normal shared modules, so callers get less helpful errors. Explicit types give the interface a readable contract and lower the risk of accidental breaking changes.
-
-Object types work well for fields reviewed together. A health check object keeps path, interval, and thresholds in one visible block. A loose set of unrelated variables can make module calls longer and can hide that several values must change as a group.
-
-## Adding Validation Rules
-<!-- section-summary: Validation rules check both input shape and operational meaning before provider APIs run. -->
-
-Types answer whether a value has the right shape. **Validation rules** answer whether the value is allowed for this module.
+Types are therefore executable constraints, not comments. A documented expectation can drift from implementation, while a type participates in evaluation. When a caller supplies a number where `list(string)` is required, Terraform rejects or converts the value according to its type rules before provider logic receives an incoherent shape.
 
 ![Validation Sensitive Flow](/content-assets/articles/article-iac-terraform-modules-inputs-outputs/validation-sensitive-flow.png)
 
-*The validation and sensitivity flow shows where Terraform can reject bad input and where secret handling still needs state protection.*
-
-The load balancer module can allow only known environments:
+Type and validation answer different questions. `type = string` accepts `"dev"`, `"prod"`, and `"potato"` because all are strings. A validation rule narrows the accepted values:
 
 ```hcl
 variable "environment" {
   type        = string
-  description = "Deployment environment for this load balancer."
+  description = "Deployment environment."
 
   validation {
     condition     = contains(["dev", "staging", "prod"], var.environment)
-    error_message = "Environment must be one of: dev, staging, prod."
+    error_message = "Environment must be dev, staging, or prod."
   }
 }
 ```
 
-The module can also protect production logging:
+Another numeric rule can enforce a module invariant:
 
 ```hcl
-variable "enable_access_logs" {
-  type        = bool
-  description = "Whether the module writes load balancer access logs."
-  default     = true
+variable "replica_count" {
+  type        = number
+  description = "Number of application replicas."
 
   validation {
-    condition     = var.environment != "prod" || var.enable_access_logs
-    error_message = "Production load balancers must keep access logs enabled."
+    condition     = var.replica_count >= 1 && var.replica_count <= 10
+    error_message = "replica_count must be between 1 and 10."
   }
 }
 ```
 
-That second validation compares two variables: `environment` and `enable_access_logs`. Cross-variable validation is available in Terraform 1.9 and later. If a shared module must support older Terraform 1.x projects, keep validation inside one object variable or move the rule to a resource precondition, a test, or policy check. The module should say its required Terraform version so callers do not copy a validation pattern their runtime cannot evaluate.
+The type says “number”; validation says which numbers this module supports. Rejecting invalid input at the contract boundary gives the caller a clear fix before the value travels through resources, provider logic, and a remote API.
 
-Error messages should tell the caller what to fix. A message like "invalid value" sends people into the module internals. A message that names the rule helps them correct the module call.
+Write error messages as repair instructions. “Invalid value” forces the caller to inspect module internals. “replica_count must be between 1 and 10” names the supported range immediately. Validation belongs where the module owns the invariant; provider-specific facts that cannot be known yet may require a resource precondition, test, or policy check instead.
 
-A caller mistake can now fail before provider APIs run:
+Validation expressions can depend on values that are known at different phases. Literal caller settings are often known during planning, while an input produced by another resource may remain unknown until apply. Terraform evaluates the rule when the required information is available; this is declarative graph evaluation, not a procedural `if` executed in source order.
 
-```hcl
-module "load_balancer" {
-  source = "../../modules/load-balancer"
+This timing affects what belongs at the input boundary. A rule about the string `environment` or the numeric range of `replica_count` can usually be evaluated early. A claim about a remote object that a provider has not created or refreshed may not be decidable yet. Do not force every invariant into a variable validation merely because it is the first validation feature you learned. Put the check at the earliest layer that actually has the necessary information.
 
-  vpc_id             = module.network.vpc_id
-  subnet_ids         = module.network.public_subnet_ids
-  domain_name        = "orders.example.com"
-  environment        = "prod"
-  enable_access_logs = false
-}
-```
+Good constraints make invalid states harder to express while preserving legitimate callers. A tightly specified object can show related settings and defaults clearly; an overly permissive `any` postpones errors; an overly narrow type can prevent valid evolution. Treat the type as part of the API and review changes to it with the same care as renaming the variable.
 
-The validation output points at the module call and repeats the rule:
+## How Do Sensitive and Ephemeral Values Differ?
+<!-- section-summary: Sensitive controls routine presentation, while ephemeral controls persistence; both properties are separate from backend and runtime secret design. -->
 
-```console
-Error: Invalid value for variable
-
-  on main.tf line 12, in module "load_balancer":
-  12:   enable_access_logs = false
-
-Production load balancers must keep access logs enabled.
-```
-
-That is the kind of failure a team wants in CI. The caller can fix one argument in the root module instead of discovering the issue from an AWS API error or a later security review.
-
-Validation works well for environment names, CIDR ranges, allowed sizes, naming patterns, and required production controls. Provider facts that are known only after apply belong in provider arguments, resource preconditions, tests, or policy checks.
-
-Validation should stay close to the caller's mistake. If the module accepts `domain_name`, the domain-shape rule belongs there. If the module accepts `desired_capacity`, the supported range rule belongs there. A fast Terraform validation error gives the caller a clear repair path before several resources have already been planned.
-
-## Handling Sensitive Values
-<!-- section-summary: Sensitive values hide routine display, while state access still needs protection because Terraform may store the underlying data. -->
-
-A **sensitive variable** hides its value from normal plan and apply output:
+A sensitive variable tells Terraform to redact the value from normal CLI and UI presentation:
 
 ```hcl
 variable "database_password" {
   type        = string
-  sensitive   = true
   description = "Password used by the application database user."
+  sensitive   = true
 }
 ```
 
-This helps with terminal output and CI logs. State still needs protection because a provider may store a password as it flows into a resource argument for future comparison.
+Expressions derived from that input generally carry sensitivity too, so concatenating it does not casually reveal the secret in a plan. Redaction reduces accidental exposure in terminals and CI logs.
 
-Production modules are usually safer with secret references or provider-managed secrets. For example, `database_secret_arn` lets the application identity read the secret at runtime. If a raw secret must pass through Terraform during bootstrap, the run should stay small, the backend should have tight access control, and outputs should not print the value.
+Sensitivity does **not** promise that the value is absent from state. If Terraform needs the value in resource arguments or outputs, ordinary sensitive data may still be persisted. Protect state access, storage, versions, plan artifacts, and any automation that can retrieve values. The backend is a security boundary.
 
-The caller can look up a secret record without reading the secret value:
-
-```hcl
-data "aws_secretsmanager_secret" "orders_database" {
-  name = "/prod/orders/database-url"
-}
-
-module "compute" {
-  source = "../../modules/compute"
-
-  image               = var.orders_image
-  database_secret_arn = data.aws_secretsmanager_secret.orders_database.arn
-}
-```
-
-Inside the compute module, the task definition can pass that ARN to the runtime platform:
+Ephemeral answers a different question. A modern Terraform child input can be available during the operation while being omitted from plan and state artifacts:
 
 ```hcl
-variable "database_secret_arn" {
-  type        = string
-  description = "Secrets Manager ARN containing the database URL."
-}
-
-variable "image" {
-  type        = string
-  description = "Container image used by the Orders API task."
-}
-
-resource "aws_ecs_task_definition" "orders" {
-  family = "orders-api"
-
-  container_definitions = jsonencode([
-    {
-      name  = "orders"
-      image = var.image
-      secrets = [
-        {
-          name      = "DATABASE_URL"
-          valueFrom = var.database_secret_arn
-        }
-      ]
-    }
-  ])
-}
-```
-
-In that design, Terraform wires the reference and the running task reads the secret through its own identity. The Terraform state contains the ARN, not the secret string.
-
-Current Terraform also supports **ephemeral input variables** and provider **write-only arguments** for specific secret workflows. Ephemeral input variables are available in Terraform 1.10 and later. An ephemeral input variable is available during the current operation, while Terraform omits it from plan and state artifacts. Write-only arguments require Terraform 1.11 or later and a resource argument that the provider marks as write-only. A provider write-only argument accepts a value during the operation and then avoids storing that value in Terraform artifacts for provider-supported write-only fields.
-
-For example, a temporary database password can pass into a provider-supported write-only argument:
-
-```hcl
-variable "database_password" {
+variable "session_token" {
   type      = string
   sensitive = true
   ephemeral = true
 }
+```
 
-resource "aws_db_instance" "example" {
-  identifier          = "example-db"
-  instance_class      = "db.t4g.micro"
-  allocated_storage   = 20
-  engine              = "postgres"
-  username            = "app"
-  password_wo         = var.database_password
-  password_wo_version = 1
+The distinction is:
+
+| Property | Normal display | Persisted where ordinarily relevant |
+|---|---|---|
+| Ordinary | Visible | Yes |
+| `sensitive = true` | Redacted | Can be |
+| `ephemeral = true` | Persistence is the main concern | No |
+| Sensitive and ephemeral | Redacted | No |
+
+Ephemeral variables and child-module outputs are intended for contexts that can work without retaining the value. A root output cannot simply become ephemeral because root outputs are persistent results of the run. Provider write-only arguments are another mechanism for supported fields that accept a value for an operation without returning it into Terraform artifacts.
+
+These features have context rules because Terraform normally depends on persisted values for future comparison. An ephemeral value can flow only through expressions and arguments that do not require it to be stored. If a value is needed later to detect drift, an ephemeral route may not be valid. The contract must match the lifecycle of the information, not only its secrecy.
+
+Use the correct mental questions: sensitive asks whether humans should normally see the value; ephemeral asks whether Terraform should persist it. Neither makes a poor secret-distribution architecture automatically safe. Long-lived credentials often belong in a dedicated secret manager and should be fetched by the runtime identity instead of flowing as raw strings through Terraform.
+
+Sensitive outputs use the same display rule:
+
+```hcl
+output "database_password" {
+  value     = some_resource.example.password
+  sensitive = true
 }
 ```
 
-This is useful for bootstrap paths where the provider supports write-only arguments. Long-lived application secrets usually belong in secret managers with runtime identity because that gives teams a cleaner operating boundary.
+The parent can still consume the value, but ordinary output is redacted. If the value reaches a root output or persistent resource argument, state protection remains necessary. An ephemeral child output can carry a temporary value across a module boundary only into another compatible ephemeral context.
 
-A module that must accept a secret reference should name it as a reference. `database_secret_arn` tells the caller to pass an ARN. `database_password` tells the caller to pass the secret value. That naming choice guides safer usage before anyone reads the module internals.
+Sensitivity also propagates. An output or local expression derived from a sensitive password generally becomes sensitive so routine rendering does not reveal it indirectly. Controlled tooling and users with state access can still retrieve persisted values, which is why redaction must never be confused with encryption, authorization, or non-persistence.
 
-## Declaring Outputs
-<!-- section-summary: Outputs expose selected values from a module so callers can wire resources together without depending on internals. -->
+## How Do Outputs Define Module Promises?
+<!-- section-summary: Outputs expose selected, typed results to the parent while keeping internal resource structure out of the public contract. -->
 
-An **output** is one value the module intentionally returns. Outputs are the supported public exit points of a child module.
-
-The load balancer module might expose only these values:
+Outputs solve the opposite side of communication. The child knows `aws_s3_bucket.this.arn`, but callers should not reach into that internal resource path. The child publishes a stable name:
 
 ```hcl
-output "load_balancer_dns_name" {
+output "bucket_arn" {
+  type        = string
+  description = "ARN of the bucket."
+  value       = aws_s3_bucket.this.arn
+}
+```
+
+The parent reads `module.logs.bucket_arn`. The public name can survive an internal resource rename or refactor as long as the output keeps the same meaning. Outputs are therefore module return values and compatibility promises, not merely lines printed after apply.
+
+Current output blocks can state a type constraint. Descriptions explain semantic meaning. Sensitivity marks values that should be redacted. Preconditions can verify that the implementation is about to return something satisfying the promise:
+
+```hcl
+output "service_endpoint" {
+  type        = string
+  description = "HTTPS endpoint of the service."
   value       = aws_lb.this.dns_name
-  description = "DNS name assigned to the load balancer."
-}
 
-output "target_group_arn" {
-  value       = aws_lb_target_group.app.arn
-  description = "ARN of the target group that receives application traffic."
+  precondition {
+    condition     = aws_lb.this.load_balancer_type == "application"
+    error_message = "The service endpoint requires an application load balancer."
+  }
 }
 ```
 
-The module can keep listener details, security group rules, and internal log bucket attributes private. Too many outputs create accidental public API. Callers start depending on details the module author may want to refactor later.
+Input validation asks whether the caller provided an acceptable value. An output precondition asks whether the implementation produced a valid promise. These checks protect the two sides of the contract.
 
-For shared modules, each output needs a clear consumer. A load balancer DNS name, target group ARN, and security group ID often have real downstream use. Internal listener rule priorities or generated names usually belong inside the module unless another root module or operator needs them.
+That symmetry helps locate failures. If a caller passes `environment = "potato"`, reject it at the input. If the module promises an application-load-balancer endpoint but its internal resource is the wrong load balancer type, fail the output precondition before publishing the result. The contract should explain whether responsibility lies with the caller's decision or the module's implementation.
 
-The caller consumes the output through `module.<name>.<output>`:
+Do not publish every internal ID just because it is available. An output invites callers to depend on it. `bucket_arn`, `bucket_id`, an endpoint, or a deliberately supported security group ID can represent useful capabilities. An internal helper resource ID often exposes anatomy that the module author should remain free to change.
+
+Child and root outputs have different immediate audiences. A child output makes a value available to its parent as `module.<name>.<output>`. The parent may consume it internally, pass it to another child, or choose to re-export it as a root output:
 
 ```hcl
-resource "aws_route53_record" "orders" {
-  zone_id = data.aws_route53_zone.primary.zone_id
-  name    = "orders.example.com"
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.load_balancer.load_balancer_dns_name]
+output "logs_bucket_arn" {
+  value = module.logs.bucket_arn
 }
 ```
 
-That root resource does not need to know which internal `aws_lb` name the module uses. It only depends on the output contract.
+Ordinary root outputs are stored in state and can be read later with `terraform output` or by other authorized automation. Publishing a child output does not automatically mean it must become a human-facing root output.
 
-Outputs can also be sensitive:
+After apply, operators can inspect root outputs:
+
+```bash
+terraform output logs_bucket_arn
+terraform output -raw logs_bucket_arn
+terraform output -json
+```
+
+The first form is human-oriented, `-raw` emits a plain scalar for controlled scripts, and JSON includes structured value, type, and sensitivity metadata. Automation should avoid parsing the display table. These commands read persisted root output results from state, reinforcing why output design and backend access are linked.
+
+A child output exists primarily for graph composition. The root decides whether that value should cross another boundary into an operator-facing or cross-configuration interface. Keeping those decisions separate avoids turning every internal child capability into permanent state API.
+
+## How Do Outputs Connect Module Graphs?
+<!-- section-summary: Passing one module's output into another module's input carries both a value and a dependency edge through the root composition layer. -->
+
+Suppose an application module needs the logs bucket ARN. The root wires the producer to the consumer:
 
 ```hcl
-output "database_connection_string" {
-  value       = "postgres://${aws_db_instance.main.address}:${aws_db_instance.main.port}/${aws_db_instance.main.db_name}"
-  sensitive   = true
-  description = "Database endpoint string for application configuration."
+module "logs" {
+  source = "../../modules/private-bucket"
+
+  bucket_name = "myapp-prod-logs"
+  environment = "prod"
+}
+
+module "application" {
+  source = "../../modules/application"
+
+  log_bucket_arn = module.logs.bucket_arn
 }
 ```
 
-Sensitive outputs are still available to Terraform expressions. Terraform hides routine display, while backend access remains the real security boundary.
+Inside the application child:
 
-## Wiring Outputs Into Other Modules
-<!-- section-summary: The root module wires outputs from one child module into inputs on another child module, which keeps the children independent. -->
+```hcl
+variable "log_bucket_arn" {
+  type        = string
+  description = "ARN of the bucket used for application logs."
+}
+```
 
-The root module is the wiring layer. It can pass output from one module into input on another module:
+The flow is:
+
+```text
+bucket resource
+    ↓
+child output bucket_arn
+    ↓
+module.logs.bucket_arn
+    ↓
+application input log_bucket_arn
+    ↓
+application resources
+```
 
 ![Output Chain State Map](/content-assets/articles/article-iac-terraform-modules-inputs-outputs/output-chain-state-map.png)
 
-*The output chain shows how one module publishes values that another module can consume through the root wiring.*
+This is not only data transfer. The reference creates a graph edge, so Terraform understands that the producer must supply the value before dependent application operations can use it. The ARN may be unknown until apply, yet the dependency is already known during planning.
+
+Passing the output is safer than reconstructing the ARN from a duplicated bucket name. One module owns the value, publishes it once, and every consumer follows the authoritative expression. Rebuilt strings create two places that claim knowledge of the same identity and can drift.
+
+For example, this is fragile:
 
 ```hcl
-module "network" {
-  source = "../../modules/network"
-
-  environment = var.environment
-  cidr_block  = var.cidr_block
+module "logs" {
+  bucket_name = "myapp-prod-logs"
 }
 
-module "database" {
-  source = "../../modules/database"
-
-  subnet_ids              = module.network.private_subnet_ids
-  database_name           = "orders"
-  backup_retention_days   = 14
-  deletion_protection     = true
-}
-
-module "load_balancer" {
-  source = "../../modules/load-balancer"
-
-  vpc_id      = module.network.vpc_id
-  subnet_ids  = module.network.public_subnet_ids
-  domain_name = var.domain_name
-}
-
-module "compute" {
-  source = "../../modules/compute"
-
-  subnet_ids        = module.network.private_subnet_ids
-  target_group_arn  = module.load_balancer.target_group_arn
-  database_endpoint = module.database.endpoint
+module "application" {
+  log_bucket_arn = "arn:aws:s3:::myapp-prod-logs"
 }
 ```
 
-The database module has to publish the value before the root can pass it along. Inside `modules/database/outputs.tf`, the contract can make the endpoint explicit:
+Both calls encode knowledge of the same bucket independently. Replacing the literal with `module.logs.bucket_arn` makes the producer authoritative and preserves the dependency edge automatically.
+
+The root is the natural wiring layer because it knows the overall architecture. The bucket module does not need to know which application consumes it. The application accepts any compatible ARN and does not need to know whether it came from a new bucket, an imported one, or another source. Explicit inputs and outputs keep the children independently understandable.
+
+Inputs can therefore be expressions representing values that do not exist yet. A network module may publish subnet IDs that are known only after creation. Passing `module.network.private_subnet_ids` into an application child says “use whatever IDs this graph node produces,” not “call a function with a literal list right now.”
+
+The plan can show the receiving value as `(known after apply)` while still ordering the graph correctly. This is where the function analogy stops being literal: a Terraform contract can carry a future value and its dependency relationship before the provider has created the object that will supply it.
+
+Remember that variables and outputs are not shared globals. The root explicitly assigns each child input. The child explicitly publishes each output. The parent reads it through the module instance namespace. That regular syntax makes every cross-boundary connection visible.
+
+## How Does a Complete Module Contract Work?
+<!-- section-summary: A complete contract combines required and optional inputs, precise types, semantic validation, hidden implementation, and a small typed output surface. -->
+
+The private-bucket module can now state its complete input contract in `variables.tf`:
 
 ```hcl
-output "endpoint" {
-  value       = aws_db_instance.orders.endpoint
-  description = "Database endpoint, including host and port, used by application modules."
+variable "bucket_name" {
+  type        = string
+  description = "Globally unique name for the S3 bucket."
+
+  validation {
+    condition     = length(var.bucket_name) >= 3
+    error_message = "bucket_name must contain at least three characters."
+  }
+}
+
+variable "environment" {
+  type        = string
+  description = "Deployment environment."
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "environment must be dev, staging, or prod."
+  }
+}
+
+variable "tags" {
+  type        = map(string)
+  description = "Additional tags to apply to the bucket."
+  default     = {}
+}
+
+variable "enable_versioning" {
+  type        = bool
+  description = "Whether object versioning should be enabled."
+  default     = true
 }
 ```
 
-Now `module.database.endpoint` has a clear source. Terraform resolves it as the output named `endpoint` from the child module call named `database`.
+A reader can infer the interface without reading the resources. The bucket name and environment are required and validated. Tags and versioning are optional with defaults. The implementation can normalize tags and enforce privacy:
 
-The network module can publish subnet IDs without knowing which modules consume them. The load balancer module can receive a VPC ID without knowing where it came from. The root shows the full service assembly in one place.
-
-Terraform reads those references and builds a dependency graph. The load balancer waits for network outputs. The compute module waits for the target group ARN and database endpoint. The references provide the ordering.
-
-This wiring belongs in the root because the root knows the service architecture. The network module publishes private subnet IDs. The compute module accepts subnet IDs. The root passes outputs into inputs so the dependencies stay visible in one place.
-
-## Outputs and State
-<!-- section-summary: Terraform evaluates outputs during planning and stores root output values in state after apply. -->
-
-Terraform evaluates outputs during the plan. If a value comes from a resource that is still pending, the plan can show `(known after apply)`. After apply, root outputs are stored in state and shown at the end of the run.
-
-Operators often read useful root outputs later:
-
-```bash
-terraform output orders_url
-```
-
-The named output is usually a quoted value:
-
-```console
-"https://orders.example.com"
-```
-
-This command reads the named root output from state. Automation often uses `terraform output -raw orders_url` for the plain string. Automation can use `terraform output -json` without a name for all root outputs with type and sensitivity metadata.
-
-The root can re-export a child module value:
+Each declaration carries a different part of the promise. The name is a required string with a minimum length. The environment is a required string with a closed allowed set. Tags are a map whose omission becomes an empty map. Versioning is a boolean whose omission becomes `true`. “Required,” “optional,” “shape,” and “acceptable value” are separate properties rather than one vague notion of configuration.
 
 ```hcl
-output "orders_url" {
-  value       = "https://${module.load_balancer.load_balancer_dns_name}"
-  description = "HTTPS endpoint for the Orders service."
+locals {
+  common_tags = merge(
+    {
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    },
+    var.tags
+  )
+}
+
+resource "aws_s3_bucket" "this" {
+  bucket = var.bucket_name
+  tags   = local.common_tags
+}
+
+resource "aws_s3_bucket_public_access_block" "this" {
+  bucket = aws_s3_bucket.this.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 ```
 
-The best root outputs stay useful for humans and automation. A short list of service URLs, bucket names, or dashboard links helps operators. A huge list of internal attributes makes state noisier and exposes more information than callers need.
+`local.common_tags` and the two resource addresses remain internal. Outputs publish only supported results:
 
-Verification is simple after apply:
+The implementation may contain more resources and use `var.enable_versioning` to control its versioning behavior, but callers do not need internal local names or resource addresses. That hidden portion can grow as long as the public semantics remain compatible and any state-address refactors are handled safely.
 
-```bash
-terraform output
-terraform output -json
-terraform state show module.load_balancer.aws_lb.this
+```hcl
+output "bucket_id" {
+  type        = string
+  description = "ID of the created bucket."
+  value       = aws_s3_bucket.this.id
+}
+
+output "bucket_arn" {
+  type        = string
+  description = "ARN of the created bucket."
+  value       = aws_s3_bucket.this.arn
+}
 ```
 
-`terraform output` lists all root outputs by name. `terraform output -json` returns a JSON object where each output has `sensitive`, `type`, and `value` fields. `terraform state show module.load_balancer.aws_lb.this` shows recorded attributes for the load balancer instance; useful fields include DNS name, ARN, scheme, subnets, and security groups. Scripts should use the JSON output instead of the human table output because formatting can change and sensitive values require explicit handling.
+Production calls the module with its decisions:
 
-For a normal output, the JSON form can look like this:
+```hcl
+module "logs" {
+  source = "../../modules/private-bucket"
 
-```console
-{
-  "orders_url": {
-    "sensitive": false,
-    "type": "string",
-    "value": "https://orders.example.com"
+  bucket_name = "myapp-prod-logs"
+  environment = "prod"
+
+  tags = {
+    Application = "payments"
+    Team        = "platform"
   }
 }
 ```
 
-For a sensitive output, Terraform marks the metadata while controlled tooling can still retrieve the value with state access:
+The default already enables versioning, so the caller need not repeat it. The parent can consume `module.logs.bucket_id` and `module.logs.bucket_arn` through the declared output contract.
 
-```console
-{
-  "database_connection_string": {
-    "sensitive": true,
-    "type": "string",
-    "value": "postgres://app:example-password@orders-db.example.com:5432/orders"
-  }
+The entire boundary is:
+
+```text
+INPUT
+├── bucket_name       string, required and validated
+├── environment       string, required and validated
+├── tags              map(string), default {}
+└── enable_versioning bool, default true
+
+INTERNAL
+├── locals
+├── bucket
+├── public-access settings
+└── other implementation details
+
+OUTPUT
+├── bucket_id         string
+└── bucket_arn        string
+```
+
+Terraform can evaluate unknown values through this boundary. It can also store ordinary root output results in state and later expose them through `terraform output`. Machine consumers should use `terraform output -json` or `-raw` as appropriate rather than parse human-oriented display. Sensitivity metadata affects normal presentation, but anyone authorized to retrieve the underlying state still belongs inside the security boundary.
+
+The contract can be read as a typed interface:
+
+```text
+private_bucket(
+  bucket_name: string,
+  environment: string,
+  tags: map(string) = {},
+  enable_versioning: bool = true
+) → {
+  bucket_id: string,
+  bucket_arn: string
 }
 ```
 
-That is why sensitive outputs should stay rare. The flag reduces accidental display in normal human output, while backend permissions and CLI access decide who can read the stored value through machine-readable output.
+This notation is only a reasoning aid. Terraform adds persistent nodes to a graph, and the returned values can themselves remain unknown until providers complete work. Still, the interface makes valid caller behavior and promised results visible in one compact view.
 
-## Putting It All Together
-<!-- section-summary: A strong module contract keeps caller choices explicit, catches bad inputs early, and returns only stable values. -->
+## How Do You Design a Contract That Stays Useful?
+<!-- section-summary: Durable contracts expose intent and stable capabilities, keep invariants internal, minimize coupling, and distinguish API boundaries from state boundaries. -->
 
-The Orders load balancer module now has a usable contract. Inputs describe the VPC, subnets, domain name, environment, tags, and health check settings. Validation catches unsafe or unsupported choices before provider APIs run. Sensitive values are redacted in routine output, while the team still protects state.
+Contract design determines coupling. If a network module exposes a VPC ID and private subnet IDs, consumers depend on a deliberate network interface. If it exposes dozens of internal route, association, and helper resource IDs, callers become coupled to its anatomy even though the files live in separate directories.
 
-Outputs expose only the values other code needs: DNS name, target group ARN, and maybe a security group ID if another module needs it. The root wires modules together, so each child module stays focused.
+Coupling grows in both directions. A child with dozens of pass-through inputs knows too little policy and forces every caller to understand its mechanics. A child with dozens of outputs allows consumers to reach deeply into those mechanics. A useful abstraction keeps the smallest interface that still expresses legitimate variation and composition.
+
+The same principle applies to inputs. A weak private-bucket call asks callers to configure every S3 access flag, encryption mechanism, and internal control. A stronger call asks for a bucket name, environment, and legitimate policy choices while the module guarantees privacy and standard behavior. Caller intent stays outside; implementation mechanism stays inside.
 
 ![Module Contract Shape](/content-assets/articles/article-iac-terraform-modules-inputs-outputs/module-contract-shape.png)
 
-*The contract shape summarizes the final boundary: callers pass inputs in, module internals stay private, and stable outputs come back out.*
+Use precise types so both humans and Terraform understand shape. Use defaults only for safe ordinary policy. Use validation for values that have the right type but violate a module invariant. Use sensitivity to reduce routine display and ephemeral values only where non-persistence is required and supported. Use output preconditions when the module must verify a returned promise.
 
-## What's Next
+Publish outputs with known consumers and durable meaning. Each output becomes an API surface other code may rely on. Do not expose an implementation detail merely because it is convenient today. The more internals callers can observe, the harder the module is to refactor safely.
 
-The next article covers module versioning: Registry versions, Git refs, `terraform init -upgrade`, and the review workflow for shared module changes.
+Keep module and state boundaries separate. Inputs and outputs encapsulate a configuration component, but all child resources can still share the root's state and lifecycle. Root outputs are persisted operational results; child outputs primarily communicate with the parent. An API boundary does not create an independent backend.
 
----
+Keep several other pairs separate as well:
 
-**References**
+```text
+variable → what callers may provide
+output → what callers may consume
 
-- [Terraform: Input variables](https://developer.hashicorp.com/terraform/language/values/variables) - Documents variable blocks, types, defaults, validation, sensitive, and ephemeral options.
-- [Terraform: Output values](https://developer.hashicorp.com/terraform/language/values/outputs) - Documents root and child module outputs, sensitive outputs, and output behavior.
-- [Terraform: Type constraints](https://developer.hashicorp.com/terraform/language/expressions/type-constraints) - Documents primitive, collection, structural, and dynamic types.
-- [Terraform: Manage sensitive data](https://developer.hashicorp.com/terraform/language/manage-sensitive-data) - Explains sensitive values, ephemeral values, write-only arguments, plans, and state.
-- [Terraform: Module block](https://developer.hashicorp.com/terraform/language/block/module) - Documents how root modules call child modules and pass input arguments.
-- [AWS provider: aws_db_instance](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance) - Documents the RDS instance attributes used by database module outputs.
+type → what shape a value has
+validation → which values of that shape are allowed
+
+default → value used when the caller omits an optional input
+null → explicit absence
+
+sensitive → redact routine presentation
+ephemeral → omit supported values from persistence
+```
+
+These distinctions prevent misleading contracts. A sensitive default is still a default. An optional object field still has a type. An output can be sensitive yet persisted. An ephemeral child output is still namespaced and explicitly wired.
+
+The deepest model is a typed data boundary. Caller expressions enter through variables, pass type, default, validation, sensitivity, and persistence rules, and feed internal graph nodes. Output expressions leave through types, sensitivity, and preconditions. When a parent routes one child output into another child input, the boundary also carries a Terraform dependency edge.
+
+A module is defined less by the number of resources inside it than by the promise at its edge. Inputs say which decisions callers may make. Validation says which configurations the module accepts. Implementation handles the mechanism. Outputs say which results callers may safely depend on. A clear promise is what makes the module reusable.
+
+Review a contract from the caller's perspective. Can someone tell which inputs are required, what each value means, which defaults will apply, and what error explains a rejected value? Can they see which outputs are stable and whether any are sensitive? Then review it from the maintainer's perspective. Can the implementation change without breaking callers, and are policy invariants kept inside rather than delegated to every root? A contract that answers both sets of questions is easier to adopt and safer to evolve.
+
+Finally, examine every cross-module value as architecture. The producer should publish it deliberately, the consumer should accept only the shape and meaning it needs, and the root should make the connection visible. This avoids shared globals, duplicated identities, and hidden ordering. A small set of well-named contracts turns several namespaced subtrees into one understandable infrastructure graph without erasing responsibility at their boundaries.
+
+Contract changes should therefore be released deliberately. Adding a compatible optional input can preserve existing callers. Changing an input type, removing a default, renaming an output, or changing an output's meaning can require caller migrations. An internal resource refactor may leave the public contract unchanged while still requiring state-address moves. Interface compatibility and state compatibility are two reviews, and a mature module owner performs both before describing a release as safe.
+
+The final practical test is simple: a caller should understand the module's choices and promises without reading its resources, while a maintainer should understand exactly which guarantees cannot change casually. That shared understanding is the contract's real long-term value and safety.
+
+Treat contract evolution as a caller migration. Adding an optional input with a stable default can be compatible; renaming a required input, changing a type, or removing an output can break every root module at validation or plan time. Use validation and precise types to reject unsafe values early, and expose outputs that represent stable capability results rather than raw implementation details. Test both ordinary callers and deliberately invalid inputs so the module communicates errors at the boundary before provider operations begin.
+
+An output crosses a configuration boundary, but it does not create a separate storage boundary. Root output values can be recorded in state, including values derived from child modules. Marking an output sensitive controls ordinary display; it does not remove the value from state. Design the contract to expose identifiers and connection facts that callers need while keeping secret payloads in the system that owns them.
+
+## Check Your Answers
+
+:::expand[Why Does a Module Need a Contract?]{kind="recap"}
+The contract lets callers provide decisions and consume results without depending on internal resource names. It gives the module an API that can remain stable while implementation changes.
+:::
+
+:::expand[How Do Inputs Define Caller Decisions?]{kind="recap"}
+Variables identify choices that legitimately belong to the caller. No default means the choice is required; a default supplies an optional safe policy value.
+:::
+
+:::expand[How Do Types and Validation Strengthen Inputs?]{kind="recap"}
+Types describe value shape, while validation rejects unacceptable values of that shape. Precise constraints move useful errors to the module boundary.
+:::
+
+:::expand[How Do Sensitive and Ephemeral Values Differ?]{kind="recap"}
+Sensitive values are redacted from normal presentation but may persist. Ephemeral values are omitted from plan and state in supported contexts; state security still matters.
+:::
+
+:::expand[How Do Outputs Define Module Promises?]{kind="recap"}
+Outputs publish selected typed results to the parent, hide internal structure, and may carry sensitivity or preconditions. Each output is a compatibility promise.
+:::
+
+:::expand[How Do Outputs Connect Module Graphs?]{kind="recap"}
+Passing a child output into another child input transfers an authoritative value and creates a graph dependency, even when the final value is unknown until apply.
+:::
+
+:::expand[How Does a Complete Module Contract Work?]{kind="recap"}
+Required and optional inputs enter a private-bucket implementation, validations protect invariants, internal resources stay hidden, and bucket ID and ARN leave as supported outputs.
+:::
+
+:::expand[How Do You Design a Contract That Stays Useful?]{kind="recap"}
+Expose intent, stable capabilities, and legitimate choices. Keep policy invariants and mechanism inside, minimize coupling, and remember that a module API is not a state boundary.
+:::
+
+### References
+
+- [Input variables](https://developer.hashicorp.com/terraform/language/values/variables)
+- [`variable` block reference](https://developer.hashicorp.com/terraform/language/block/variable)
+- [Types and values](https://developer.hashicorp.com/terraform/language/expressions/types)
+- [Optional object attributes](https://developer.hashicorp.com/terraform/tutorials/modules/module-object-attributes)
+- [Output values](https://developer.hashicorp.com/terraform/language/values/outputs)
+- [`output` block reference](https://developer.hashicorp.com/terraform/language/block/output)
+- [Manage sensitive data](https://developer.hashicorp.com/terraform/language/manage-sensitive-data)

@@ -23,18 +23,7 @@ The simplest mental model for Kubernetes environment variables is this:
 
 > A container starts a process with a snapshot of named strings. Kubernetes constructs that snapshot before the process starts.
 
-That model connects `env`, `envFrom`, ConfigMaps, Secrets, the Downward API, expansion, updates, and validation through seven questions:
-
-1. **What is an environment variable in Kubernetes?**
-2. **Where can a container's values come from?**
-3. **How do env and envFrom resolve overlaps?**
-4. **How does variable expansion work?**
-5. **How can a container learn its Pod identity?**
-6. **What happens when a source value changes?**
-7. **How does an application validate the startup contract?**
-
-## What is an environment variable in Kubernetes?
-<!-- section-summary: Kubernetes resolves named strings before container startup, and the process keeps that startup snapshot. -->
+That model connects `env`, `envFrom`, ConfigMaps, Secrets, the Downward API, expansion, updates, and validation in one operating model.
 
 Begin below Kubernetes, at the operating-system process boundary. A **process** is a running instance of a program, and its **environment** is a collection of named values supplied when it starts:
 
@@ -46,7 +35,20 @@ DATABASE_HOST=postgres.default.svc
 
 An **environment variable** is one `NAME=value` entry in that collection. Every value is a string. The operating system does not know that `PORT="8080"` should become an integer or that `DEBUG="false"` should become a Boolean; application code must interpret those characters.
 
-The environment belongs to the process. Kubernetes objects provide source data, and the **kubelet**, the Kubernetes agent on the Pod's node, resolves that data before starting the container process:
+The environment belongs to the process. Kubernetes objects provide source data, and the **kubelet**, the Kubernetes agent on the Pod's node, resolves that data before starting the container process.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What is an environment variable in Kubernetes?**
+2. **Where can a container's values come from?**
+3. **How do env and envFrom resolve overlaps?**
+4. **How does variable expansion work?**
+5. **How can a container learn its Pod identity?**
+6. **What happens when a source value changes?**
+7. **How does an application validate the startup contract?**
+
+## What is an environment variable in Kubernetes?
+<!-- section-summary: Kubernetes resolves named strings before container startup, and the process keeps that startup snapshot. -->
 
 ```mermaid
 flowchart TD
@@ -235,7 +237,7 @@ Suppose the image contains `LOG_LEVEL=error`. The first `envFrom` ConfigMap sets
 
 That worked example gives a practical debugging order. Inspect the explicit `env` list first because it has the strongest precedence, then the later `envFrom` sources in reverse order, then earlier sources, and finally image defaults. Reading only the first place where the name appears can produce the wrong answer.
 
-Layering is useful when it expresses ownership—image defaults, environment defaults, then one explicit exception. It becomes harmful when several sources redefine the same names without a clear reason, because the final startup contract becomes difficult to review.
+Layering is useful when it expresses ownership—image defaults, environment defaults, then one explicit exception. Several sources redefining the same names without a clear reason make layering harmful, because the final startup contract becomes difficult to review.
 
 After Kubernetes selects the values and resolves overlaps, it can compose a later value from names already available.
 

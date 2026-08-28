@@ -21,7 +21,17 @@ id: article-containers-orchestration-kubernetes-configuration-storage-configmaps
 
 The easiest way to understand a Kubernetes ConfigMap is to begin one level below Kubernetes: with the inputs a running program needs. Code, ordinary configuration, confidential configuration, and runtime state each have different jobs and lifecycles. A ConfigMap exists to keep one of those inputs—ordinary configuration—independent of the container image.
 
-The article develops that model through seven questions:
+A **container image** is the packaged application: its code, libraries, and the files placed in the image during the build. Kubernetes starts that image inside a **Pod**, its basic unit for running one or more containers, and the application then runs as a process. That running process usually needs inputs that do not belong permanently inside the image.
+
+A useful first model is:
+
+```text
+running application = code + configuration + secrets + runtime state
+```
+
+The distinction matters because a ConfigMap should hold only the ordinary configuration in this model.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What problem does a ConfigMap solve?**
 2. **What values can a ConfigMap hold?**
@@ -33,16 +43,6 @@ The article develops that model through seven questions:
 
 ## What problem does a ConfigMap solve?
 <!-- section-summary: A ConfigMap separates ordinary configuration from application code so the same container image can run with different settings. -->
-
-A **container image** is the packaged application: its code, libraries, and the files placed in the image during the build. Kubernetes starts that image inside a **Pod**, its basic unit for running one or more containers, and the application then runs as a process. That running process usually needs inputs that do not belong permanently inside the image.
-
-A useful first model is:
-
-```text
-running application = code + configuration + secrets + runtime state
-```
-
-Each part means something different:
 
 - **code** contains application behavior, such as the instruction to connect to `DATABASE_HOST`;
 - **configuration** supplies ordinary settings such as `DATABASE_HOST=db.prod.svc`, `LOG_LEVEL=info`, or `FEATURE_X=true`;
@@ -197,7 +197,7 @@ PORT=8080
 
 Environment variables work well for applications that already expect individual settings in their startup environment. Applications that expect configuration files can receive the same ConfigMap through a volume instead.
 
-The individual and whole-map forms also create different configuration contracts. With `configMapKeyRef`, the Pod template names each required input and can rename it inside the container. A reviewer can see that this process depends specifically on `LOG_LEVEL` from one object. With `envFrom`, every suitable key becomes part of the process environment automatically, which is compact when the ConfigMap is intentionally designed as that application's complete environment.
+The individual and whole-map forms also create different configuration contracts. With `configMapKeyRef`, the Pod template names each required input and can rename it inside the container. A reviewer can see that this process depends specifically on `LOG_LEVEL` from one object. With `envFrom`, Kubernetes adds every suitable key to the process environment automatically. This is compact for a ConfigMap intentionally designed as the application's complete environment.
 
 That convenience also increases coupling. Adding another suitable key to a ConfigMap used through `envFrom` changes the startup environment of every new Pod that imports the whole object. Individual mappings expose more YAML but keep each dependency explicit. The delivery choice therefore describes both how much configuration enters the process and who owns the interface between the ConfigMap and the application.
 

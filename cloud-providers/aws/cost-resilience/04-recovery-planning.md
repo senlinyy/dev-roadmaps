@@ -21,17 +21,27 @@ aliases:
 5. [What Can Break the Recovery Chain?](#what-can-break-the-recovery-chain)
 6. [How Do Runbooks and Drills Prove Recovery?](#how-do-runbooks-and-drills-prove-recovery)
 7. [How Do Recovery Tiers Control Cost?](#how-do-recovery-tiers-control-cost)
-8. [What Should You Remember?](#what-should-you-remember)
+8. [Check Your Answers](#check-your-answers)
 9. [References](#references)
-
-## What Problem Does Recovery Planning Solve?
-<!-- section-summary: Recovery planning starts with the uncomfortable question of how the service returns after real loss. -->
 
 The right-sizing review protected recovery settings instead of trimming them blindly. Now the team has to prove those settings actually help. Someone deletes the wrong table, a migration corrupts important rows, or a Region-level problem makes the service unreachable. The team has backups enabled, which is good. The harder question arrives after that: what exactly can we restore, how long will it take, and how much data can the business lose?
 
 **Recovery planning** turns backup settings into an operating plan. It names the failure scenarios, the restore targets, the people involved, the commands or console steps, and the verification checks after recovery.
 
 It answers two business questions: how quickly must an acceptable service return, and how much recent state may be missing when it returns? The purpose is not to prevent every possible failure. Hardware, software, people, credentials, dependencies, and entire cloud locations can fail. A resilient system limits the damage and returns to a defined operating state predictably.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Problem Does Recovery Planning Solve?**
+2. **How Do RTO and RPO Define Recovery?**
+3. **How Do Backups and Replication Protect Different Failures?**
+4. **Which Recovery Strategy Fits the Workload?**
+5. **What Can Break the Recovery Chain?**
+6. **How Do Runbooks and Drills Prove Recovery?**
+7. **How Do Recovery Tiers Control Cost?**
+
+## What Problem Does Recovery Planning Solve?
+<!-- section-summary: Recovery planning starts with the uncomfortable question of how the service returns after real loss. -->
 
 The decision is economic as well as technical. A recovery design trades its ongoing cost against the expected loss from failures. Failure loss includes downtime, missing data, customer impact, contractual penalties, incident work, and reputational damage. The cheapest infrastructure is not economical if recovery takes longer than the business can survive; the fastest technically possible recovery is not rational when its cost far exceeds the avoided loss.
 
@@ -47,16 +57,6 @@ The first recovery decision table can be small:
 | Bad migration corrupts rows | Restore before migration, replay or reconcile later writes | Which writes after the restore point need recovery? | App logs, order events, payment records |
 | One Availability Zone has issues | RDS Multi-AZ failover and ECS tasks in healthy AZs | Is local failover enough? | Health checks, RDS event, ALB target health |
 | Serious regional outage | Backup and restore, pilot light, warm standby, or active-active | Which Region and strategy match the RTO? | Cross-Region backups, IaC, DNS, dependency readiness |
-
-The sections below answer these questions in order:
-
-1. **What Problem Does Recovery Planning Solve?**
-2. **How Do RTO and RPO Define Recovery?**
-3. **How Do Backups and Replication Protect Different Failures?**
-4. **Which Recovery Strategy Fits the Workload?**
-5. **What Can Break the Recovery Chain?**
-6. **How Do Runbooks and Drills Prove Recovery?**
-7. **How Do Recovery Tiers Control Cost?**
 
 ## How Do RTO and RPO Define Recovery?
 <!-- section-summary: RTO defines the acceptable outage time, while RPO defines the acceptable amount of data loss. -->
@@ -425,7 +425,7 @@ A first-principles design process therefore starts with what must survive and wh
 
 For an online store with a 30-minute RTO and five-minute RPO, continuous replication to a standby plus immutable backups addresses two distinct risks. Replication helps when the primary Region disappears; backups help when corruption has already reached the replica. If a quarterly drill records four minutes for database promotion, seven for scaling, three for traffic change, eight for validation, and five for the human decision, total recovery is 27 minutes. If replication lag peaks at two minutes, the drill provides measured evidence for both objectives.
 
-## What Should You Remember?
+## Check Your Answers
 
 :::expand[What Problem Does Recovery Planning Solve?]{kind="recap"}
 Recovery planning starts with the uncomfortable question of how the service returns after real loss.

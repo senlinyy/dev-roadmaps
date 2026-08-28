@@ -24,23 +24,10 @@ aliases:
 6. [How Do SNS, SQS, and EventBridge Differ?](#how-do-sns-sqs-and-eventbridge-differ)
 7. [How Do You Build a Complete SNS Fanout Path?](#how-do-you-build-a-complete-sns-fanout-path)
 8. [How Do You Design with SNS?](#how-do-you-design-with-sns)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Amazon Simple Notification Service does not execute application business logic. It lets independently deployed parts of a system communicate without the publisher directly knowing every receiver. Its core question is: **One thing happened; how do I tell many interested systems efficiently?**
-
-The sections below answer these questions in order:
-
-1. **Why Does One Event Need a Fanout Service?**
-2. **What Are Publishers, Topics, Subscriptions, and Endpoints?**
-3. **How Do Subscription Filters Choose Messages?**
-4. **What Does an SQS Subscriber Actually Receive?**
-5. **How Do SNS Retries and Dead-Letter Queues Work?**
-6. **How Do SNS, SQS, and EventBridge Differ?**
-7. **How Do You Build a Complete SNS Fanout Path?**
-8. **How Do You Design with SNS?**
-
-## Why Does One Event Need a Fanout Service?
-<!-- section-summary: SNS removes the producer's need to know, call, retry, and reconfigure every system that cares about one publication. -->
 
 Imagine a learning platform in which publishing a lesson must notify email, analytics, and search indexing:
 
@@ -53,7 +40,21 @@ Lesson service
 
 The first implementation can save the lesson and call all three services. It appears simple, but the producer now knows that each consumer exists. Six months later, recommendations, audit, mobile push, and a data warehouse may also need the same fact. Every addition requires producer code or configuration changes.
 
-This is the **fanout problem**. One fact—`Lesson 123 was published`—must become several independent deliveries. Without an intermediary, the lesson service must:
+This is the **fanout problem**. One fact—`Lesson 123 was published`—must produce several independent deliveries. An intermediary lets the lesson service publish once without owning every consumer's delivery path.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Does One Event Need a Fanout Service?**
+2. **What Are Publishers, Topics, Subscriptions, and Endpoints?**
+3. **How Do Subscription Filters Choose Messages?**
+4. **What Does an SQS Subscriber Actually Receive?**
+5. **How Do SNS Retries and Dead-Letter Queues Work?**
+6. **How Do SNS, SQS, and EventBridge Differ?**
+7. **How Do You Build a Complete SNS Fanout Path?**
+8. **How Do You Design with SNS?**
+
+## Why Does One Event Need a Fanout Service?
+<!-- section-summary: SNS removes the producer's need to know, call, retry, and reconfigure every system that cares about one publication. -->
 
 - Know every consumer and its location
 - Speak each consumer's delivery mechanism
@@ -662,6 +663,8 @@ Announcement          = message
 ```
 
 The first-principles definition is: **SNS lets a producer announce something once while independently configured subscriptions decide whether, where, and how they receive a copy.** Topics, filters, raw delivery, retries, delivery DLQs, and SQS fanout are the machinery supporting that separation.
+
+## Check Your Answers
 
 :::expand[Why Does One Event Need a Fanout Service?]{kind="recap"}
 SNS removes the producer's need to know, call, retry, and reconfigure every system that cares about one publication.

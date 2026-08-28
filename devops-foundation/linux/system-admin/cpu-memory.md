@@ -9,19 +9,16 @@ id: article-devops-foundation-linux-system-admin-cpu-memory
 
 ## Table of Contents
 
-1. [CPU and Memory Triage](#cpu-and-memory-triage)
-2. [How Linux Accounts for CPU Time](#how-linux-accounts-for-cpu-time)
-3. [Load Average and Runnable Work](#load-average-and-runnable-work)
-4. [Memory: Used, Free, and Available](#memory-used-free-and-available)
-5. [Page Cache, Buffers, and Slab](#page-cache-buffers-and-slab)
-6. [Swap and Memory Pressure](#swap-and-memory-pressure)
-7. [`vmstat` as the First Triage Tool](#vmstat-as-the-first-triage-tool)
-8. [Per-Process Memory and the OOM Killer](#per-process-memory-and-the-oom-killer)
-9. [A Practical CPU and Memory Runbook](#a-practical-cpu-and-memory-runbook)
+1. [What Does a CPU and Memory Investigation Measure?](#what-does-a-cpu-and-memory-investigation-measure)
+2. [How Does Linux Account for CPU Time?](#how-does-linux-account-for-cpu-time)
+3. [What Does Load Average Count?](#what-does-load-average-count)
+4. [How Should You Read Free and Available Memory?](#how-should-you-read-free-and-available-memory)
+5. [Why Does Linux Use RAM for Cache and Kernel Data?](#why-does-linux-use-ram-for-cache-and-kernel-data)
+6. [When Do Swap and Memory Pressure Become Problems?](#when-do-swap-and-memory-pressure-become-problems)
+7. [How Does vmstat Connect CPU, Memory, and I/O?](#how-does-vmstat-connect-cpu-memory-and-io)
+8. [Which Processes Use Resources and How Do You Respond?](#which-processes-use-resources-and-how-do-you-respond)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-## CPU and Memory Triage
-<!-- section-summary: CPU and memory checks separate busy CPU, memory pressure, swap activity, and waiting on I/O. -->
 
 A CPU and memory investigation often starts with a messy report: the web page is slow, SSH takes longer than usual, and a deploy command times out halfway through. The temptation is to restart the service first. A calmer first move is to ask what the server is waiting for.
 
@@ -29,11 +26,25 @@ CPU pressure means the machine has more work ready to run than its CPUs can clea
 
 The first-pass tools are intentionally ordinary: `uptime`, `top`, `nproc`, `free`, `vmstat`, `ps`, `journalctl`, and files under `/proc`. Use them in a steady order. Confirm whether the host has a backlog, compare that backlog with CPU count, check whether memory is truly available after Linux cache is counted, look for swap movement, then connect the pressure to a process or a kernel event.
 
+Keep these questions in view as you work through the lesson:
+
+1. **What Does a CPU and Memory Investigation Measure?**
+2. **How Does Linux Account for CPU Time?**
+3. **What Does Load Average Count?**
+4. **How Should You Read Free and Available Memory?**
+5. **Why Does Linux Use RAM for Cache and Kernel Data?**
+6. **When Do Swap and Memory Pressure Become Problems?**
+7. **How Does `vmstat` Connect CPU, Memory, and I/O?**
+8. **Which Processes Use Resources and How Do You Respond?**
+
+## What Does a CPU and Memory Investigation Measure?
+<!-- section-summary: CPU and memory checks separate busy CPU, memory pressure, swap activity, and waiting on I/O. -->
+
 ![CPU and memory triage runbook infographic showing top, load versus cores, free available memory, vmstat pressure, process memory, and OOM logs](/content-assets/articles/article-devops-foundation-linux-system-admin-cpu-memory/cpu-memory-triage-runbook.png)
 
 _The image gives the CPU and memory investigation a concrete order from broad signals to the noisy process._
 
-## How Linux Accounts for CPU Time
+## How Does Linux Account for CPU Time?
 <!-- section-summary: CPU time is split into categories such as user, system, idle, wait, steal, and interrupt handling. -->
 
 A familiar CPU incident starts with one vague number on a graph: CPU is high. That number says the CPUs spent a lot of the sample doing work, yet it does not say whose work it was. Before blaming the application, ask Linux how it divided the time.
@@ -83,7 +94,7 @@ Here `app` is using almost two full CPU cores because `%CPU` can add work across
 
 The next decision comes from the largest CPU bucket. High `us` with one application at the top points to code, queries, compression, encryption, or a traffic spike. High `sy` points toward kernel-heavy work such as networking, filesystem churn, or too many short-lived processes. High `wa` moves the investigation toward disk or network storage. High `st` on a VM is a cloud capacity signal, so compare it with provider metrics or move the workload to a less contested host class.
 
-## Load Average and Runnable Work
+## What Does Load Average Count?
 <!-- section-summary: Load average counts tasks running or waiting to run, and on Linux it also includes uninterruptible I/O waits. -->
 
 A server can feel stuck even when one CPU graph does not explain it. SSH accepts your login, then every command pauses. Health checks time out. The shell prompt returns slowly. In that situation, check whether Linux has a backlog of work.
@@ -134,7 +145,7 @@ ps -eo state,pid,user,cmd | awk '$1 ~ /D/ {print}'
 
 The next decision is to split the queue. If `r` in `vmstat` is high and CPU idle is low, reduce CPU work, throttle a job, or add CPU capacity. If `D`, `b`, or `wa` is high, switch to disk and storage checks. If swap is moving at the same time, treat the load as a memory-pressure symptom.
 
-## Memory: Used, Free, and Available
+## How Should You Read Free and Available Memory?
 <!-- section-summary: `free` shows total memory, used memory, reclaimable cache, and the more useful available estimate. -->
 
 The first time `free -h` shows only `260Mi` free on a 4 GiB VM, it can look like the server is almost out of memory. Linux is usually doing something useful there: it keeps recently used files in RAM so later reads can skip the disk. The scary column is not always the most useful column.
@@ -170,7 +181,7 @@ ps -eo pid,user,%mem,rss,vsz,cmd --sort=-rss | head
 
 If the same service grows from `250MiB` RSS to `1.8GiB` RSS over a few hours with similar traffic, investigate memory growth in the application. If the largest process is a maintenance job, the service may be affected by host pressure caused by that job.
 
-## Page Cache, Buffers, and Slab
+## Why Does Linux Use RAM for Cache and Kernel Data?
 <!-- section-summary: Linux uses memory for filesystem cache and kernel data structures, and much of it can be reclaimed under pressure. -->
 
 A common memory scare happens after `free -h` shows a tiny `free` value while the service still responds normally. A better question is whether Linux can give enough of that memory back to applications during pressure.
@@ -207,7 +218,7 @@ Avoid clearing caches as a routine fix. Dropping caches can make a graph look be
 
 In production, high cache with healthy `MemAvailable` is usually good. High `SUnreclaim` that keeps growing, low `MemAvailable`, and rising latency deserve a deeper look because kernel memory can squeeze applications too. The next decision is to compare memory over time: stable cache is normal, falling availability with growing application RSS or unreclaimable slab needs investigation.
 
-## Swap and Memory Pressure
+## When Do Swap and Memory Pressure Become Problems?
 <!-- section-summary: Swap can absorb temporary pressure, but active swapping during requests usually means the VM lacks enough RAM for the workload. -->
 
 A memory-pressure incident often feels strange: CPU has some idle room, the service has not crashed, yet requests crawl. Disk I/O rises because Linux is moving memory pages between RAM and swap. The first trap is to look at one `Swap: used` number and decide the machine is either doomed or fine.
@@ -246,7 +257,7 @@ The practical next decision is about current movement as well as allocation. A n
 
 _The image shows how memory pressure appears before the machine reaches an out-of-memory event._
 
-## `vmstat` as the First Triage Tool
+## How Does `vmstat` Connect CPU, Memory, and I/O?
 <!-- section-summary: `vmstat 5` gives a compact five-second view of runnable tasks, memory, swap, I/O, interrupts, context switches, and CPU categories. -->
 
 A slow server often gives overlapping clues. Load is high, memory looks tight, and users report timeouts. If you check one command at a time with long gaps between commands, the samples may describe different moments.
@@ -287,7 +298,7 @@ The first data line can include averages since boot, so the later lines are usua
 
 The next decision is the branch: high `r` plus low `id` means CPU, high `b` plus high `wa` means I/O, nonzero `si` and `so` means memory pressure, and high `st` means the VM lost CPU time to the host. Then pick the article or runbook that matches that branch.
 
-## Per-Process Memory and the OOM Killer
+## Which Processes Use Resources and How Do You Respond?
 <!-- section-summary: Per-process RSS and kernel OOM logs reveal which process consumed memory and whether Linux killed one to recover. -->
 
 A service can vanish in the middle of traffic with no application stack trace. The restart counter increments, users see a short outage, and the app log ends without a graceful shutdown message. When the application cannot explain its own death, check whether the kernel killed it to recover memory.
@@ -342,7 +353,7 @@ grep -E 'Name|State|VmRSS|VmSize|Threads' "/proc/${pid}/status"
 
 The next decision is evidence before action. If the killed process is the main service and RSS had been climbing, capture logs and memory graphs before restarting repeatedly. If the killed process is a backup, export, or build job, move it out of peak traffic, add a systemd memory guardrail, or run it on a separate worker host.
 
-## A Practical CPU and Memory Runbook
+### How Does a Practical CPU and Memory Runbook Work?
 <!-- section-summary: A repeatable runbook confirms the symptom, then checks load, CPU categories, memory availability, swap activity, and process ownership. -->
 
 A realistic CPU and memory incident might arrive as a page that says the checkout endpoint has been slow for fifteen minutes. The service is still up, so collect enough evidence before restarting anything. The runbook has a simple rhythm: confirm the user-facing symptom, check whether the host is overloaded, then connect the pressure to a process or kernel event.
@@ -378,6 +389,204 @@ Each command narrows the story:
 Treat the output as one timeline. High CPU with the service at the top points to application work. High load with high I/O wait points to storage. Low available memory plus active swap points to memory pressure. OOM messages explain sudden restarts. A maintenance job near the top may be competing with production traffic.
 
 The immediate action should match the evidence. You might roll back a release, restart a leaking service, stop a runaway report job, increase VM size, add swap as a temporary safety net, or move background work elsewhere. The habit to keep is simple: measure first, then choose the fix that matches the pressure.
+
+### How Do CPU Capacity, Queues, and Time Series Fit Together?
+
+CPU capacity is the number of processor time slices available during an interval. On a four-CPU machine, four CPU-bound threads can run at once; a fifth runnable thread waits for a turn. `nproc` gives the CPU count visible to the current environment, which may differ from the physical host when a container or cgroup limits the workload.
+
+One process can therefore report more than `100%` CPU. Many Linux tools use one logical CPU as `100%`, so a multithreaded process doing work on two logical CPUs can appear near `200%`. Always compare process CPU with the visible CPU count and the sampling convention of the tool.
+
+Load average is not a CPU percentage. It is a smoothed count of tasks that are runnable plus certain tasks in uninterruptible sleep, commonly blocked on I/O. The three values cover roughly one, five, and fifteen minutes. A load of `8` can mean heavy contention on a two-CPU VM, comfortable parallel work on a thirty-two-CPU server, or blocked storage work on a mostly idle CPU. The number becomes useful only beside CPU count, CPU categories, and task states.
+
+Three patterns illustrate the distinction:
+
+- High load, low idle CPU, many runnable tasks, and high user time indicate CPU contention.
+- High load, substantial idle CPU, blocked tasks, and high I/O wait indicate work stalled below the CPU.
+- Low load with one slow request may indicate a local lock, dependency delay, or tail-latency problem that a machine average hides.
+
+Queueing becomes nonlinear near saturation. At low utilization, new work usually gets a CPU quickly. Near full capacity, a small increase in arrivals can create a much longer runnable queue because there is little spare service time to drain bursts. This is why a host that looks acceptable at an average of `70%` can still have painful latency during short peaks. Inspect time series, percentiles, and repeated samples instead of trusting one average.
+
+Context switches are part of the cost. The scheduler saves one task's state and restores another's so multiple processes and threads can share CPUs. Context switching is necessary, but an excessive runnable population can spend more time switching, invalidating caches, and coordinating than doing useful work. Adding threads beyond the available parallel work can reduce throughput instead of increasing it.
+
+`nice` changes relative scheduling preference among contending ordinary tasks. It does not create CPU capacity or impose a precise percentage limit. A nice value matters little while CPUs are idle; task contention is what makes it relevant. Use cgroup or systemd CPU controls when a workload needs an explicit share or quota, and validate the user-facing effect rather than assuming a nicer number solved saturation.
+
+Virtual machines add steal time. `st` means the guest had runnable work but the hypervisor scheduled something else on the physical CPU. High steal can make the guest appear busy and slow even when no guest process explains all of the missing capacity. That result points toward host contention, VM sizing, or the provider layer rather than an application-only fix.
+
+### How Do Virtual Memory and Physical RAM Differ?
+
+Every process operates in a virtual address space. An address visible to the process is translated by the kernel and hardware into a physical page, a shared page, a file-backed page, a swapped page, or no committed physical page yet. `VIRT` or `VSZ` describes the virtual address range and is not a direct statement of RAM consumed.
+
+Resident set size, or RSS, counts pages from the process that are currently in physical memory. RSS is more useful than virtual size, but shared pages can be counted in the RSS of several processes. Summing RSS across a server may therefore double-count shared libraries and shared mappings. Proportional set size, or PSS, divides shared pages across the processes using them and can give a fairer workload total.
+
+Inspect one process in more detail:
+
+```bash
+pid=$(systemctl show app.service -p MainPID --value)
+grep -E 'Rss|Pss|Private|Shared|Anonymous|Swap' "/proc/$pid/smaps_rollup"
+
+# Example output:
+# Rss:              512840 kB
+# Pss:              470220 kB
+# Shared_Clean:      68240 kB
+# Private_Dirty:    420100 kB
+# Anonymous:        418900 kB
+# Swap:              16384 kB
+```
+
+File-backed pages come from executables, libraries, or mapped files. Clean copies can often be discarded and read again from the file. Anonymous pages hold heaps, stacks, and other data without a file copy; reclaim normally requires swap or process termination. Dirty file-backed pages must be written before their memory can be reused. These differences explain why two equal RSS values can produce different reclaim behavior.
+
+Memory allocation can also be optimistic. A runtime may reserve a large virtual region before touching every page. Linux can accept an allocation and provide physical pages later, when the process actually writes. Severe pressure can therefore appear after the earlier allocation call looked successful. Diagnose resident growth and pressure over time, not only the application's reported reservation.
+
+Page faults are the mechanism that connects an address to a usable page. A minor fault resolves without reading storage, perhaps by mapping an existing cached page or allocating a fresh zero-filled page. A major fault requires storage I/O and can add much more latency. Fault counts are not automatically errors; the rate, type, and workload effect decide whether they are normal demand paging or evidence of a working set that no longer fits.
+
+On large multiprocessor systems, non-uniform memory access adds location. A CPU reaches nearby memory faster than memory attached to another NUMA node. A machine can have free RAM in total while one node is under pressure or a workload frequently crosses nodes. NUMA tools become relevant after the ordinary system-to-process investigation shows a placement-sensitive problem; they should not replace the basic model on a small VM.
+
+### What Do Reclaim, Working Set, and Dirty Pages Explain?
+
+The working set is the memory a workload actively needs over the time window that matters. A process can reserve gigabytes yet touch only a stable fraction. Conversely, many individually modest processes can create machine pressure when their combined active pages, kernel data, and cache exceed available RAM.
+
+Linux reclaims memory by finding pages it can reuse. Clean file-backed cache is comparatively cheap to discard. Dirty file-backed pages must be written to storage. Anonymous pages may move to swap when swap exists. Kernel slab objects have their own reclaim behavior. The `available` estimate in `free` considers memory the kernel expects it can provide without swapping aggressively; it is more informative than `free`, but it remains an estimate rather than a guarantee.
+
+Page cache is a performance feature. A read can be served from RAM after the data was cached, and writes can be combined before storage writeback. Dropping caches makes the `free` number larger by deliberately throwing away useful cached data, often causing slower future reads. It is normally a diagnostic experiment only under a controlled test, not a routine cure for memory pressure.
+
+Buffers describe kernel bookkeeping and block-I/O-related data in traditional reports, while slab holds caches of kernel objects such as dentries and inodes. Slab growth can reflect legitimate filesystem or network activity, reclaimable caches, or an abnormal kernel-side consumer. `/proc/meminfo` separates fields such as `Slab`, `SReclaimable`, `SUnreclaim`, `Cached`, `Dirty`, and `Writeback` so the investigation can move beyond the single `buff/cache` summary.
+
+Dirty pages create a CPU-memory-storage connection. An application can write quickly into RAM until writeback must push those pages to storage. If the device cannot keep up, dirty data accumulates, reclaim becomes harder, and the kernel can throttle writers. A “memory” slowdown may therefore be storage latency appearing through reclaim and writeback.
+
+Pressure stall information measures time during which tasks cannot make progress because CPU, memory, or I/O resources are contended. Inspect it directly when available:
+
+```bash
+cat /proc/pressure/cpu
+cat /proc/pressure/memory
+cat /proc/pressure/io
+
+# Example output:
+# some avg10=12.40 avg60=6.21 avg300=2.10 total=91827364
+# full avg10=1.02 avg60=0.41 avg300=0.12 total=1827364
+```
+
+Utilization describes occupancy; PSI describes lost progress. Two systems can show the same memory utilization while one reclaims clean cache smoothly and the other repeatedly stalls all useful work. CPU pressure can be high even before a CPU graph is pinned if runnable tasks spend meaningful time waiting. Monitor both occupancy and pain.
+
+### When Is Swap Healthy and When Is It Thrashing?
+
+Swap is storage used as a backing place for memory pages. Some swap consumption is not proof of a current problem. Linux may have moved cold anonymous pages out earlier and left them there while active work fits comfortably in RAM. `free` tells you capacity; `vmstat` `si` and `so` show current movement.
+
+Thrashing occurs when the active working set does not fit and the machine repeatedly exchanges needed pages between RAM and storage. Symptoms include sustained swap-in and swap-out, major faults, I/O pressure, low useful CPU progress, and severe latency. The dangerous condition is activity and stalled work, not a nonzero “swap used” number.
+
+`swappiness` influences reclaim preference; it is not a percentage of RAM at which swapping begins. Disabling swap removes one recovery option and can turn pressure into an earlier OOM kill. Enabling a small swap area can provide time to observe and recover from a transient spike, but it cannot make an undersized machine fast. Capacity, working-set reduction, process isolation, and application behavior are the long-term levers.
+
+If reclaim cannot free enough pages, the kernel invokes the out-of-memory killer to recover the machine. Selection considers more than the largest resident process; memory use, adjustment scores, protection, and the scope of the OOM event influence the choice. Read kernel evidence instead of guessing:
+
+```bash
+journalctl -k --since '2 hours ago' --no-pager |
+  grep -Ei 'out of memory|oom-kill|killed process'
+cat /proc/1842/oom_score
+cat /proc/1842/oom_score_adj
+```
+
+A cgroup or systemd `MemoryMax=` limit can cause a workload-scoped OOM even when the machine still has RAM. This is intentional isolation: one service reaches its boundary rather than consuming the whole host. Check both the unit's resource configuration and the kernel log. Repeatedly raising a limit without understanding growth can simply move the failure to the machine level.
+
+### How Do You Distinguish a Leak from Legitimate Growth?
+
+One memory snapshot cannot prove a leak. A service may warm caches, load a larger dataset, accept more connections, or temporarily buffer a batch. A leak is an allocation pattern that retains memory no longer needed, so the evidence is a rising baseline across comparable workload cycles and time.
+
+A healthy cache-like pattern may climb during warm-up, level off, and sometimes fall under reclaim. Suspicious growth continues after traffic returns to normal, repeats after each workload cycle, and approaches a limit or OOM. Correlate RSS, PSS, anonymous memory, request volume, queue depth, process count, and release time. Runtime heap tools can then connect system evidence to objects or allocation paths.
+
+Process count matters. A deployment that starts fifty workers instead of five may multiply ordinary per-process overhead until the host is pressured even though no single process looks enormous. Rank memory and count workload members separately. Threads also reserve stacks and add scheduler work; unbounded thread growth can hurt both resources.
+
+### How Do the Main Diagnostic Branches Differ?
+
+Start at the machine, move to the workload, then inspect the process. That order avoids profiling one visible process while the real cause is VM steal, storage wait, or the combined footprint of many workers.
+
+For CPU constraint, confirm low idle time, high user or system time, a runnable queue relative to CPU count, and CPU pressure. Rank processes, connect the owner to traffic or scheduled work, then profile the responsible code or move competing work. Scaling capacity can relieve the incident, but it does not explain an unexpected regression.
+
+For memory constraint, confirm low available memory, reclaim or swap activity, memory PSI, major faults, or an OOM event. Rank resident consumers, inspect workload totals and cgroup limits, then distinguish stable working set from growth. Stop or limit expendable work before repeatedly restarting the primary service.
+
+For high load without CPU saturation, inspect blocked tasks, I/O wait, device latency, network storage, and process states. A task in uninterruptible sleep cannot be made faster by adding CPU. The disk and I/O investigation owns that branch.
+
+For a machine that looks healthy while users report latency, narrow the time window. Inspect the dependency path, application queues, locks, network calls, garbage-collection pauses, and tail latency. Machine-wide averages can hide one stalled endpoint.
+
+The compact CPU model is capacity, runnable demand, and time spent. The compact memory model is working set, reclaimable pages, and pressure. They interact: reclaim and faults consume CPU, swap and dirty writeback wait on storage, and excessive concurrency creates both scheduling and memory overhead. Measure the interaction before assigning the incident to one graph.
+
+### Which Raw Kernel Counters Support the Summary Tools?
+
+`top`, `free`, `vmstat`, and `ps` summarize kernel counters. When a column needs explanation, inspect the underlying interfaces. `/proc/stat` contains cumulative CPU accounting by category, so two samples separated by an interval produce the percentages shown by monitoring tools. `/proc/loadavg` exposes load values plus runnable and total task counts. `/proc/meminfo` breaks memory into available, cached, anonymous, slab, dirty, writeback, page-table, swap, and many other categories.
+
+```bash
+head -5 /proc/stat
+cat /proc/loadavg
+grep -E 'MemAvailable|Cached|AnonPages|Slab|SReclaimable|Dirty|Writeback|Swap' /proc/meminfo
+```
+
+Cumulative counters require a difference over time. One raw CPU total since boot does not describe the current minute. This also explains the first line of some `vmstat` versions: it can represent averages since boot, while following lines represent the requested sample interval. Diagnose with the repeated lines.
+
+`vmstat 5` can be read as a dependency map. `r` is work ready for CPU, `b` is tasks blocked in uninterruptible sleep, `si` and `so` are swap movement, `bi` and `bo` are block input and output, `in` is interrupts, `cs` is context switches, and the CPU columns divide time. Interpret simultaneous movement: high `r` with low idle means CPU queueing; high `b`, I/O traffic, and wait points toward storage; swap movement with poor progress indicates memory pressure.
+
+`mpstat -P ALL 5` adds per-CPU distribution. One CPU can saturate because a single-threaded workload, interrupt affinity, or process affinity pins work while other CPUs stay idle. Machine-average CPU then looks moderate even though the constrained execution path has no spare capacity. Confirm whether the workload can parallelize before adding threads or CPUs.
+
+### How Should Capacity Changes Be Evaluated?
+
+Adding CPU raises service capacity only for work that can use it. A single serialized lock, one event-loop thread, or an external dependency can remain the bottleneck. Adding RAM helps when the useful working set or cache can use it and reduces harmful reclaim; it does not correct an unbounded leak. Adding swap increases backing capacity and recovery time but remains far slower than RAM for active pages.
+
+Compare a capacity change with a matched workload and the same user-facing measures. CPU utilization may fall after doubling cores while latency remains unchanged because storage owns the delay. RSS may stay constant after adding RAM while page-cache hit rate improves. The operational outcome, queue, and pressure counters decide whether the change addressed the constraint.
+
+Near saturation, protect headroom. Background compression, backups, report generation, and builds can be correct work that competes with latency-sensitive traffic. Schedule them outside peaks, place them in separate workers, or apply workload resource policy. The purpose is not to make every graph low; it is to ensure important work can make progress within its latency target.
+
+### What Evidence Should You Preserve Before Intervention?
+
+Record the host, time window, CPU count, load, repeated `vmstat`, memory summary, pressure files, top CPU and RSS processes, service restart history, and kernel OOM evidence. If a process is growing, preserve a short time series rather than only the last value. If VM steal is high, preserve the guest evidence and provider or host metrics for the same interval.
+
+A restart resets process counters and memory shape. It may be the right availability action, but capture enough evidence first to distinguish a leak, traffic spike, oversized batch, worker-count change, cgroup limit, and machine-wide pressure. Repeated restarts without a hypothesis can hide the growth curve while users continue to experience the same cycle.
+
+After intervention, rerun the exact probes. Confirm the request latency, runnable and blocked counts, swap movement, available memory, pressure, process ownership, and service logs. “The command succeeded” is not the same as “the resource bottleneck cleared.”
+
+Monitoring should preserve both occupancy and pain. CPU percentage and memory used describe how much of a resource appears occupied. Runnable delay, memory PSI, swap movement, major faults, OOM events, and request latency describe whether work is losing progress. Alerting only on occupancy creates false alarms for healthy cache and misses short queues that harm tail latency.
+
+Use baselines by workload and time. A nightly report can make high CPU expected while still competing incorrectly with traffic. A language runtime can hold a stable large heap without leaking. Compare the incident with the same service, release, traffic band, worker count, and scheduled-work window. Then make the causal claim falsifiable: if the report job owns contention, pausing or isolating it should reduce runnable pressure and latency while other conditions remain comparable.
+
+The sentence to remember is that CPU trouble is demand waiting for execution capacity, while memory trouble is an active working set forcing costly reclaim or failure. Percentages are clues; queues, movement, stalls, and workload ownership reveal the mechanism.
+
+One final example combines the model. A four-CPU VM shows load `10`, user CPU near `90%`, `r=9`, no swap movement, and one report process at `350%`. That is runnable demand competing for CPU, not a memory incident. The immediate choices are to stop or isolate the report and preserve service headroom; the permanent choices involve scheduling, resource control, parallel efficiency, and capacity. If the same load appears with idle CPU, `b=8`, high `wa`, and device latency, the queue is blocked below the CPU and belongs to storage diagnosis. If CPU is moderate but `si` and `so` remain active, memory PSI rises, and requests fault from disk, the working set is forcing reclaim. The load number did not change meaning by itself; the surrounding evidence identified which work could not progress.
+
+Use that comparison when reading dashboards. A resource graph is a measurement, not a cause. Ask which tasks are queued, which pages are moving, which component owns them, and whether user work improved after the selected action.
+
+Keep CPU and memory samples on the same clock as application latency and deployment events. Without a shared time window, a top process observed after the incident may be blamed for pressure it did not create. Evidence supports a causal claim only if the resource mechanism, workload, and user effect overlap.
+
+Repeat measurements after traffic returns to baseline. A transient spike and a sustained capacity gap can produce the same peak while requiring different changes. Duration, recurrence, and recovery show whether the system drained its queue or remained close to saturation.
+
+## Check Your Answers
+
+:::expand[What Does a CPU and Memory Investigation Measure?]{kind="recap"}
+Begin with machine capacity, queues, progress, available memory, reclaim, and workload ownership rather than one busy process.
+:::
+
+:::expand[How Does Linux Account for CPU Time?]{kind="recap"}
+CPU accounting separates user work, kernel work, idle time, I/O wait, interrupts, and VM steal across a sample.
+:::
+
+:::expand[What Does Load Average Count?]{kind="recap"}
+Load is a smoothed task count that includes runnable work and some blocked work, so compare it with CPUs and states.
+:::
+
+:::expand[How Should You Read Free and Available Memory?]{kind="recap"}
+Available memory estimates reclaimable room; virtual size, RSS, PSS, shared pages, and working set answer different questions.
+:::
+
+:::expand[Why Does Linux Use RAM for Cache and Kernel Data?]{kind="recap"}
+Cache accelerates files, slab holds kernel objects, and dirty pages connect RAM pressure to storage writeback.
+:::
+
+:::expand[When Do Swap and Memory Pressure Become Problems?]{kind="recap"}
+Swap capacity is not the failure; repeated page movement, stalls, major faults, and OOM evidence reveal real pressure.
+:::
+
+:::expand[How Does `vmstat` Connect CPU, Memory, and I/O?]{kind="recap"}
+Repeated samples connect runnable and blocked tasks, swap traffic, device traffic, and CPU time in one view.
+:::
+
+:::expand[Which Processes Use Resources and How Do You Respond?]{kind="recap"}
+Move from system to workload to process, preserve time-series evidence, and choose the action that matches the constrained branch.
+:::
 
 ![CPU and memory summary infographic showing CPU buckets, load versus cores, available memory, page cache, swap traffic, and OOM clues](/content-assets/articles/article-devops-foundation-linux-system-admin-cpu-memory/cpu-memory-summary.png)
 

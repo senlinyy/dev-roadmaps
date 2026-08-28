@@ -29,13 +29,27 @@ aliases:
 6. [How Do You Choose Rollback, Pause, or Fix Forward?](#how-do-you-choose-rollback-pause-or-fix-forward)
 7. [How Does Runtime Operations Form a Feedback Loop?](#how-does-runtime-operations-form-a-feedback-loop)
 8. [What Is the Complete Verification Model?](#what-is-the-complete-verification-model)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 A deployment system can copy an image, start containers, update a Lambda function, and report `SUCCESS` while customers receive errors. Successful control-plane work proves that AWS created or activated what was requested. It does not prove that the resulting system is correct, fast, stable, or valuable.
 
 Before a deployment, production is in some known state `S0`. The change moves it toward `S1`, but `S1` is initially an assumption rather than a proven healthy state.
 
-The sections below answer these questions in order:
+Verification therefore observes both the changed version and the customer-visible result over a deliberate time window.
+
+Suppose a pipeline deploys API version 42 and reports:
+
+```text
+Image pushed       success
+Task definition    success
+ECS deployment     success
+Containers running success
+```
+
+This proves the infrastructure could deploy v42. It does not prove that users can sign in, orders persist, payments succeed, latency remains acceptable, background work drains, memory remains stable, or database permission is correct.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Is Deployment Success Not Runtime Success?**
 2. **How Long Should the Watch Window Last?**
@@ -48,17 +62,6 @@ The sections below answer these questions in order:
 
 ## Why Is Deployment Success Not Runtime Success?
 <!-- section-summary: The deployment plane proves requested infrastructure state, while the runtime plane proves availability, correctness, latency, capacity, dependencies, data integrity, and business behavior. -->
-
-Suppose a pipeline deploys API version 42 and reports:
-
-```text
-Image pushed       success
-Task definition    success
-ECS deployment     success
-Containers running success
-```
-
-This proves the infrastructure could deploy v42. It does not prove that users can sign in, orders persist, payments succeed, latency remains acceptable, background work drains, memory remains stable, or database permission is correct.
 
 Separate two planes:
 
@@ -526,6 +529,8 @@ deploy -> production changed -> uncertainty
 ```
 
 The deployment is finished only when there is enough evidence that production has returned to a known, acceptable operating state. That one idea explains watch windows, deployment markers, smoke tests, user journeys, metrics, logs, traces, ECS and Lambda runtime checks, rollback design, secondary-damage inspection, and observation after corrective action.
+
+## Check Your Answers
 
 :::expand[Why Is Deployment Success Not Runtime Success?]{kind="recap"}
 The deployment plane proves requested infrastructure state, while the runtime plane proves availability, correctness, latency, capacity, dependencies, data integrity, and business behavior.

@@ -9,19 +9,16 @@ id: article-devops-foundation-networking-nginx-reverse-proxy
 
 ## Table of Contents
 
-1. [Web Server, App Server, and Reverse Proxy](#web-server-app-server-and-reverse-proxy)
-2. [Nginx in a Browser Request](#nginx-in-a-browser-request)
-3. [Installing Nginx and Finding the Config](#installing-nginx-and-finding-the-config)
-4. [Server Blocks and Location Blocks](#server-blocks-and-location-blocks)
-5. [Serving Static Files](#serving-static-files)
-6. [Reverse Proxying to the App](#reverse-proxying-to-the-app)
-7. [TLS Termination with Let's Encrypt](#tls-termination-with-lets-encrypt)
-8. [Load Balancing and Health Behavior](#load-balancing-and-health-behavior)
-9. [Nginx Failure Modes](#nginx-failure-modes)
+1. [How Do a Web Server, App Server, and Reverse Proxy Differ?](#how-do-a-web-server-app-server-and-reverse-proxy-differ)
+2. [Where Does Nginx Sit in a Browser Request?](#where-does-nginx-sit-in-a-browser-request)
+3. [How Do You Install Nginx and Find Its Effective Configuration?](#how-do-you-install-nginx-and-find-its-effective-configuration)
+4. [How Do Server and Location Blocks Select a Request?](#how-do-server-and-location-blocks-select-a-request)
+5. [How Does Nginx Reverse Proxy to an Application?](#how-does-nginx-reverse-proxy-to-an-application)
+6. [How Does Nginx Terminate TLS and Renew Certificates?](#how-does-nginx-terminate-tls-and-renew-certificates)
+7. [How Does Nginx Balance Traffic and Handle Upstream Health?](#how-does-nginx-balance-traffic-and-handle-upstream-health)
+8. [How Do You Diagnose Nginx and Upstream Failures?](#how-do-you-diagnose-nginx-and-upstream-failures)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-## Web Server, App Server, and Reverse Proxy
-<!-- section-summary: A web server handles public HTTP infrastructure work, while the app server focuses on application logic. -->
 
 The first deployment often feels straightforward: start the app, bind it to a public port, open the firewall, and point the browser at it. A Node, Django, Rails, FastAPI, Go, or Java process can answer HTTP directly for a small test. Then real web traffic adds chores that have little to do with product code. TLS certificates need renewal. Static files need caching. Slow clients can tie up app workers. Redirects, access logs, compression, and large uploads all land inside the app runtime.
 
@@ -31,7 +28,21 @@ The **app server** stays focused on product behavior. It talks to databases, che
 
 A **reverse proxy** is the web server role where Nginx sits in front of one or more app servers and forwards client requests inward. The client talks to `app.example.com`. Nginx receives that public request and sends it to an internal app address such as `http://127.0.0.1:3000`.
 
-This separation is useful because public web traffic includes a lot of repeatable infrastructure work. Nginx can handle TLS certificates, HTTP redirects, static assets, access logs, buffering, and slow clients with a small, stable config. The app server can spend its time on routes, database calls, authentication, and business behavior.
+Keep these questions in view as you work through the lesson:
+
+1. **How Do a Web Server, App Server, and Reverse Proxy Differ?**
+2. **Where Does Nginx Sit in a Browser Request?**
+3. **How Do You Install Nginx and Find Its Effective Configuration?**
+4. **How Do Server and Location Blocks Select a Request?**
+5. **How Does Nginx Reverse Proxy to an Application?**
+6. **How Does Nginx Terminate TLS and Renew Certificates?**
+7. **How Does Nginx Balance Traffic and Handle Upstream Health?**
+8. **How Do You Diagnose Nginx and Upstream Failures?**
+
+## How Do a Web Server, App Server, and Reverse Proxy Differ?
+<!-- section-summary: A web server handles public HTTP infrastructure work, while the app server focuses on application logic. -->
+
+Separating web infrastructure from application logic is useful because public traffic includes a lot of repeatable infrastructure work. Nginx can handle TLS certificates, HTTP redirects, static assets, access logs, buffering, and slow clients with a small, stable config. The app server can spend its time on routes, database calls, authentication, and business behavior.
 
 On a single server, the layout often looks like this:
 
@@ -51,7 +62,7 @@ Nginx also has a useful architecture for this job. It runs a master process and 
 
 The production symptom usually points at the side that needs attention. If static files return `403`, inspect Nginx paths and file permissions. If `/api/health` returns `502`, inspect the app process and `proxy_pass`. If login redirects loop, inspect forwarded headers and app trust-proxy settings. From there, the path moves one step at a time: public listener, site selection, static files, proxying, TLS, load balancing, and debugging.
 
-## Nginx in a Browser Request
+## Where Does Nginx Sit in a Browser Request?
 <!-- section-summary: Nginx receives the request after DNS, routing, firewall policy, and TLS have brought the browser to the server. -->
 
 A browser request reaches Nginx only after several network checks have already happened. The browser resolved `app.example.com`, routed to the right IP, passed firewall rules, and completed TLS on port `443`. Nginx receives the request after those steps and decides which site or upstream should handle it.
@@ -90,7 +101,7 @@ The local app answers, but the public path returns `502` from Nginx. That points
 
 _The image shows Nginx as the public front door that routes static files, application requests, and TLS work._
 
-## Installing Nginx and Finding the Config
+## How Do You Install Nginx and Find Its Effective Configuration?
 <!-- section-summary: Nginx installs as a system service with predictable config and log paths on common Linux distributions. -->
 
 Before writing a proxy config, make sure Nginx can run as a normal Linux service. This setup step saves time later. If the package is missing, the service is stopped, or the config path is different from the guide you copied, every later debug step gets noisy.
@@ -171,7 +182,7 @@ A syntax test protects the running service from a typo. If `nginx -t` fails, lea
 
 After a successful reload, verify from both sides. `curl http://localhost` proves the local listener works. `curl -I https://app.example.com` proves DNS, firewall rules, TLS, and the public server block work together. If the local check passes and the public check fails, the problem sits earlier in the network path or in TLS/server-name selection.
 
-## Server Blocks and Location Blocks
+## How Do Server and Location Blocks Select a Request?
 <!-- section-summary: A server block selects the hostname and port, while location blocks choose behavior for specific URL paths. -->
 
 Once Nginx is running, give it a map. Two requests can land on the same Nginx process and need different handling. `https://app.example.com/api/users` should go to the app. `https://app.example.com/assets/main.js` should come from disk. If the same machine also hosts `admin.example.com`, that hostname may need a completely different site config.
@@ -224,7 +235,7 @@ This routing happens after TLS and HTTP parsing. If `curl -I https://app.example
 
 _The image shows how Nginx configuration nesting decides which directives apply to a request._
 
-## Serving Static Files
+### How Does Nginx Serve Static Files Directly?
 <!-- section-summary: Static file serving lets Nginx return built assets directly without sending every request to the app process. -->
 
 Now give Nginx an easy job before asking it to proxy anything. A frontend build can contain thousands of files that do not need application logic on every request: HTML, CSS, JavaScript bundles, images, fonts, and downloadable assets. Sending all of that through the app process wastes CPU and memory that the app could use for dynamic work. Nginx can return those files directly from disk and leave the app process focused on API requests, auth decisions, background state, and database-backed pages.
@@ -280,7 +291,7 @@ The permissions are doing practical work:
 
 If Nginx cannot read files, users see `403 Forbidden` even though the files are present. The error log will usually say `permission denied`. Separate missing files from unreadable files: `404` usually points at the path, while `403` usually points at permissions or directory execute bits.
 
-## Reverse Proxying to the App
+## How Does Nginx Reverse Proxy to an Application?
 <!-- section-summary: proxy_pass forwards requests to an internal app while headers preserve the original client and scheme. -->
 
 After static files work, put the app behind Nginx. The browser reaches `app.example.com` on port `80` or `443`. The app listens only on `127.0.0.1:3000`, so outside clients cannot bypass Nginx and hit the app port directly. The firewall lesson is the same here: expose the web server, keep the app port private.
@@ -398,7 +409,7 @@ After writing a proxy block, test from Nginx's point of view and from the public
 
 _The image shows why one trailing slash can change the path Nginx sends to the upstream app._
 
-## TLS Termination with Let's Encrypt
+## How Does Nginx Terminate TLS and Renew Certificates?
 <!-- section-summary: TLS termination lets Nginx handle public HTTPS while the app receives internal HTTP. -->
 
 After the proxy works over HTTP, the public site still needs HTTPS. Nginx is the right place to handle the certificate because it already owns the public listener and hostname selection. The app can keep speaking simple internal HTTP on loopback while browsers get encrypted HTTPS on the public side.
@@ -492,7 +503,7 @@ sudo certbot renew --dry-run
 
 The first output lists the installed certificate and expiration date. The dry run proves renewal can complete before the certificate is close to expiration. External monitoring should still watch the public certificate date because local automation can fail silently. Alert early enough to renew, reload Nginx, and test the certificate from outside the server.
 
-## Load Balancing and Health Behavior
+## How Does Nginx Balance Traffic and Handle Upstream Health?
 <!-- section-summary: Nginx can send requests to multiple app backends and temporarily avoid backends that fail. -->
 
 Once one app process works, the next production step is often multiple app processes. Several processes give the service more capacity and make restarts less disruptive, but Nginx needs one shared name for that group so the public route can stay stable. The **upstream** block creates that backend group.
@@ -589,7 +600,7 @@ That output moves the debug work away from the load balancer feature list and to
 
 _The image shows how upstream selection and failure behavior affect real user requests._
 
-## Nginx Failure Modes
+## How Do You Diagnose Nginx and Upstream Failures?
 <!-- section-summary: Nginx failures usually show up as syntax errors, port conflicts, upstream 502 or 504 responses, missing proxy headers, buffering, or WebSocket upgrade problems. -->
 
 Nginx failure reports usually sound simple: "the site is down," "`/api` gives `502`," or "WebSockets reconnect forever." The fix gets faster if you gather evidence in the same order each time. First check whether the configuration parses. Then confirm the service can bind to its ports. After that, use access logs, error logs, and upstream status to separate client problems, proxy problems, and application problems.
@@ -752,6 +763,40 @@ Those commands walk the final part of your path:
 - Public `curl -I` checks the user-facing hostname.
 
 If they all pass, your browser request has crossed DNS, routing, firewalls, TLS, Nginx, and reached the app path successfully.
+
+## Check Your Answers
+
+:::expand[How Do a Web Server, App Server, and Reverse Proxy Differ?]{kind="recap"}
+A web server serves files and HTTP, an app server runs application logic, and a reverse proxy creates a controlled client-facing boundary.
+:::
+
+:::expand[Where Does Nginx Sit in a Browser Request?]{kind="recap"}
+Nginx owns a listening socket, selected TLS and HTTP policy, and a separate upstream connection when it proxies.
+:::
+
+:::expand[How Do You Install Nginx and Find Its Effective Configuration?]{kind="recap"}
+Confirm package, process, sockets, included files, effective configuration, syntax, service state, and logs before changing behavior.
+:::
+
+:::expand[How Do Server and Location Blocks Select a Request?]{kind="recap"}
+The listening address and hostname select a server context, then URI matching selects the location that handles the request.
+:::
+
+:::expand[How Does Nginx Reverse Proxy to an Application?]{kind="recap"}
+Nginx accepts one client connection and creates another upstream connection while deliberately setting trusted forwarding context.
+:::
+
+:::expand[How Does Nginx Terminate TLS and Renew Certificates?]{kind="recap"}
+Termination places certificate and private-key responsibility at Nginx; automated renewal still needs validation and reload evidence.
+:::
+
+:::expand[How Does Nginx Balance Traffic and Handle Upstream Health?]{kind="recap"}
+Algorithms distribute requests, while health checks, failure thresholds, retries, buffering, and timeouts define behavior under trouble.
+:::
+
+:::expand[How Do You Diagnose Nginx and Upstream Failures?]{kind="recap"}
+Test effective config, listener, TLS identity, access and error logs, upstream route, process socket, permissions, timing, and application response.
+:::
 
 ![Nginx reverse proxy summary infographic showing install, config, static files, proxy headers, TLS, load balancing, and failure checks](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/nginx-reverse-proxy-summary.png)
 

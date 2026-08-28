@@ -21,7 +21,17 @@ id: article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-m
 
 Kubernetes gives Pods connectivity, Services stable names, EndpointSlices changing backends, and NetworkPolicy controls mainly at IP, port, and protocol boundaries. A service mesh adds shared rules for how selected service-to-service communication should behave.
 
-Seven questions define that additional layer:
+For `checkout → payments`, connectivity answers only whether one workload can reach the other. Production communication also asks:
+
+- is the caller really `checkout` and is it authorized?
+- is the connection encrypted with mutual authentication?
+- which version and endpoint should receive the request?
+- what timeout and retry policy applies?
+- what latency, error, and trace evidence should be recorded?
+
+Applications can implement TLS, identity, retries, load balancing, circuit breaking, metrics, tracing, rate limits, and traffic splitting themselves. Across Java, Go, Python, Rust, Node.js, and .NET services, compatible libraries and upgrades become a repeated organizational problem.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What problem does a service mesh solve for several communicating services?**
 2. **What does the data plane do to one request?**
@@ -33,16 +43,6 @@ Seven questions define that additional layer:
 
 ## What problem does a service mesh solve for several communicating services?
 <!-- section-summary: A mesh moves repeated communication mechanics from many application libraries into a programmable infrastructure layer close to workloads. -->
-
-For `checkout → payments`, connectivity answers only whether one workload can reach the other. Production communication also asks:
-
-- is the caller really `checkout` and is it authorized?
-- is the connection encrypted with mutual authentication?
-- which version and endpoint should receive the request?
-- what timeout and retry policy applies?
-- what latency, error, and trace evidence should be recorded?
-
-Applications can implement TLS, identity, retries, load balancing, circuit breaking, metrics, tracing, rate limits, and traffic splitting themselves. Across Java, Go, Python, Rust, Node.js, and .NET services, compatible libraries and upgrades become a repeated organizational problem.
 
 ### The repeated work begins inside otherwise simple application calls
 

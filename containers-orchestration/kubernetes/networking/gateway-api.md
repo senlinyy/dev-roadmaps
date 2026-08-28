@@ -25,13 +25,19 @@ A platform team operates a shared cluster entrance, while an application team ow
 
 **Gateway API separates the infrastructure, listener, route, and backend decisions into cooperating Kubernetes resources.** A controller turns those resources into a working proxy or load balancer.
 
-This article follows one request:
+Follow one request through that ownership model:
 
 ```text
 GET https://payments.example.com/api
 ```
 
-That request gives us seven practical questions. Each one follows from a decision that the platform team or an application team must make:
+The request can work only after the platform and application teams make their separate decisions and connect them through compatible resources.
+
+Start with the user. Their browser or API client knows one URL and expects the request to reach the payments API securely. Kubernetes namespaces, proxy vendors, and today's ready Pod remain internal implementation details.
+
+Someone still has to make several different decisions. The infrastructure provider chooses the technology that can handle traffic. The platform operator installs a real HTTPS entrance and supplies its certificate. The payments developer decides that `/api` belongs to the payments Service. These decisions are related, but they have different owners and different risks.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What is Gateway API in plain terms?**
 2. **Why can Ingress become awkward for several teams?**
@@ -43,10 +49,6 @@ That request gives us seven practical questions. Each one follows from a decisio
 
 ## What is Gateway API in plain terms?
 <!-- section-summary: Gateway API gives infrastructure teams and application teams separate Kubernetes resources for one shared traffic path. -->
-
-Start with the user. Their browser or API client knows one URL and expects the request to reach the payments API securely. Kubernetes namespaces, proxy vendors, and today's ready Pod remain internal implementation details.
-
-Someone still has to make several different decisions. The infrastructure provider chooses the technology that can handle traffic. The platform operator installs a real HTTPS entrance and supplies its certificate. The payments developer decides that `/api` belongs to the payments Service. These decisions are related, but they have different owners and different risks.
 
 Gateway API represents those decisions with cooperating resources:
 
@@ -74,7 +76,6 @@ data plane          -> proxy or load balancer that handles requests
 Creating an HTTPRoute changes the first layer. The controller must observe it, accept its relationships, and program the second layer's result into the third. Only then can a client request exercise the route. This is why successful `kubectl apply` is necessary evidence but never end-to-end proof.
 
 For `GET /api` with `Host: payments.example.com`, the live data path is concrete. The client connects to the Gateway address, the listener accepts the protocol, an attached HTTPRoute matches the hostname and path, its `backendRefs` choose `payments-service:8080`, and the Service selects a ready Pod. Gateway API organizes the edge decisions; the Service still performs stable backend discovery inside the cluster.
-
 
 ## Why can Ingress become awkward for several teams?
 <!-- section-summary: Ingress remains useful for simple HTTP routes, while Gateway API adds portable models for separate listener owners, route owners, and richer routing decisions. -->
@@ -200,7 +201,7 @@ For `http://payments.example.com/health`, the request passes four decisions in o
 3. its backend reference selects `payments-service` on Service port `8080`;
 4. the Service data plane chooses one ready payments Pod.
 
-Most Gateway API YAML becomes easier to read when three references are traced explicitly:
+Trace three references explicitly to read most Gateway API YAML:
 
 | Reference | Meaning |
 |---|---|

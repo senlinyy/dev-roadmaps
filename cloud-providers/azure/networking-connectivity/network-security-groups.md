@@ -12,22 +12,16 @@ aliases:
 
 ## Table of Contents
 
-1. [The Packet Story](#the-packet-story)
-2. [What an NSG Controls](#what-an-nsg-controls)
-3. [Where NSGs Attach](#where-nsgs-attach)
-4. [Rule Shape](#rule-shape)
-5. [Priority and First Match](#priority-and-first-match)
-6. [Default Rules](#default-rules)
-7. [Stateful Flows](#stateful-flows)
-8. [Application Security Groups](#application-security-groups)
-9. [Service Tags and Augmented Rules](#service-tags-and-augmented-rules)
-10. [Outbound Rules](#outbound-rules)
-11. [Effective Rules and IP Flow Verify](#effective-rules-and-ip-flow-verify)
-12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
-
-## The Packet Story
-<!-- section-summary: This article follows one Orders API network path so packet rules, subnet boundaries, NIC checks, ASGs, service tags, outbound traffic, and troubleshooting evidence stay connected. -->
+1. [What Does an NSG Control?](#what-does-an-nsg-control)
+2. [Where Can You Attach an NSG?](#where-can-you-attach-an-nsg)
+3. [What Makes Up an NSG Rule?](#what-makes-up-an-nsg-rule)
+4. [How Do Priority, First Match, and Default Rules Work?](#how-do-priority-first-match-and-default-rules-work)
+5. [Why Are NSGs Stateful?](#why-are-nsgs-stateful)
+6. [How Do ASGs, Service Tags, and Augmented Rules Simplify Policies?](#how-do-asgs-service-tags-and-augmented-rules-simplify-policies)
+7. [How Should Outbound Rules Be Designed?](#how-should-outbound-rules-be-designed)
+8. [How Do You Verify Effective Network Access?](#how-do-you-verify-effective-network-access)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 In the previous Azure networking article, the Orders team placed `orders-api-prod` inside `vnet-devpolaris-prod`. The VNet gave the workload a private address space, and subnets gave different parts of the system their own areas: `snet-public-entry`, `snet-orders-api`, `snet-private-endpoints`, and `AzureFirewallSubnet`.
 
@@ -35,9 +29,21 @@ That placement gives packets a possible path. It still leaves an important secur
 
 A **Network Security Group**, usually shortened to **NSG**, answers that packet permission question. An NSG is Azure's basic stateful packet filtering firewall for resources in a virtual network. It uses rules to allow or deny inbound and outbound traffic based on the packet's source, destination, port, protocol, and direction.
 
-If you know AWS, an NSG sits between the habits of security groups and network ACLs. It is stateful like a security group, but it uses ordered allow and deny rules and can attach at subnet or network-interface level, so always check the association point and rule priority during troubleshooting.
-
 Here is the path we will keep using through the article. Users reach the public entry layer first, the entry layer forwards approved HTTPS traffic to the Orders API, and the API calls the database through a private endpoint. The NSGs sit on subnet and network interface boundaries so each new flow has to match the rule list before it reaches the workload.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Does an NSG Control?**
+2. **Where Can You Attach an NSG?**
+3. **What Makes Up an NSG Rule?**
+4. **How Do Priority, First Match, and Default Rules Work?**
+5. **Why Are NSGs Stateful?**
+6. **How Do ASGs, Service Tags, and Augmented Rules Simplify Policies?**
+7. **How Should Outbound Rules Be Designed?**
+8. **How Do You Verify Effective Network Access?**
+
+## What Does an NSG Control?
+<!-- section-summary: This article follows one Orders API network path so packet rules, subnet boundaries, NIC checks, ASGs, service tags, outbound traffic, and troubleshooting evidence stay connected. -->
 
 ![Azure NSG packet path through public entry, Orders API, and SQL private endpoint](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/nsg-packet-path.png)
 
@@ -45,7 +51,7 @@ Here is the path we will keep using through the article. Users reach the public 
 
 This article builds the whole chain in plain steps. First we define what an NSG can see, then where you attach one, then how a rule is shaped, then how Azure chooses a winning rule. After that, we use default rules, stateful flows, application security groups, service tags, outbound rules, and effective security evidence to make the production design readable.
 
-## What an NSG Controls
+### What an NSG Controls
 <!-- section-summary: An NSG controls network flows by matching packet details, while identity, HTTP routing, TLS, and app authorization belong to other controls. -->
 
 A **packet** is a small unit of network data moving from one address to another. A **flow** is the conversation those packets belong to, such as a TCP connection from Application Gateway to `orders-api-prod` on port `443`. When people say an NSG allows traffic, they usually mean the NSG allows a new flow that matches a rule.
@@ -65,9 +71,11 @@ For the Orders API, an inbound flow from Application Gateway to the API has a fe
 
 That is the level where NSGs work. They decide whether a TCP flow to port `443`, a SQL flow to port `1433`, or an SSH flow to port `22` can pass. For user identity, Microsoft Entra ID and application authorization handle the signed-in person. For HTTP paths like `/orders/123`, Application Gateway, Front Door, WAF, or the application handles the request details.
 
+An NSG allow does not make an application listen. If Azure permits TCP `443` but the process is stopped, bound to another port, or listening only on the wrong interface, the connection still fails. Network troubleshooting must prove both the permitted packet path and the destination listener; changing an NSG cannot repair application startup or port configuration.
+
 This separation helps during production debugging. If `orders-api-prod` returns `403 Forbidden`, the network probably delivered the request and the application rejected it. If the browser hangs until timeout, or a database connection never opens, the team should check routing, DNS, private endpoints, NSG rules, and firewall paths before spending hours inside application code.
 
-## Where NSGs Attach
+## Where Can You Attach an NSG?
 <!-- section-summary: An NSG can attach to a subnet, a network interface, or both, and the attachment point decides which resources share the same packet rules. -->
 
 An **NSG attachment** is the place where Azure applies the rule list. You can attach an NSG to a **subnet**, which means the rules apply to resources in that subnet. You can also attach an NSG to a **network interface**, usually called a **NIC**, which means the rules apply to traffic through that specific interface.
@@ -84,7 +92,7 @@ When both subnet and NIC NSGs exist, Azure evaluates both. For inbound traffic, 
 
 This dual-check behavior explains a very common support ticket. The subnet NSG allows port `443`, but a NIC NSG still blocks it. The developer sees one allow rule and keeps looking in the wrong place, while Azure sees two rule lists and requires both of them to allow the flow.
 
-## Rule Shape
+## What Makes Up an NSG Rule?
 <!-- section-summary: An NSG rule is a packet match record with source, destination, ports, protocol, direction, action, and priority. -->
 
 An **NSG rule** is one packet match record. It says which source can reach which destination, over which protocol and port, in which direction, and whether Azure should allow or deny that matching traffic. The rule also has a priority number, which decides when Azure checks it.
@@ -154,7 +162,7 @@ Example output:
 
 Healthy output proves the rule is narrow and points at the application role. A suspicious result would use source `*`, destination `*`, or a priority that sits below a broad deny rule.
 
-## Priority and First Match
+## How Do Priority, First Match, and Default Rules Work?
 <!-- section-summary: Azure checks custom NSG rules from lower priority number to higher priority number, and the first matching rule wins. -->
 
 **Priority** is the ordering number on an NSG rule. Custom NSG rule priorities use numbers from `100` through `4096`, and lower numbers run first. Azure requires each rule priority to be unique within the same direction, so two inbound rules in one NSG cannot both use priority `100`.
@@ -178,7 +186,7 @@ A rule table like this reads like a production review. First, the expected entry
 
 The danger shows up when a broad rule comes too early. A rule named `deny-all-inbound` at priority `100` blocks the HTTPS allow at priority `200`, because Azure reaches the deny first. A rule named `allow-any-inbound` at priority `100` creates the opposite problem, because later denies never run for matching traffic.
 
-## Default Rules
+### Default Rules
 <!-- section-summary: Every NSG includes default rules that allow VNet traffic and outbound internet traffic, then deny unmatched traffic at the end. -->
 
 Every NSG starts with **default security rules**. These rules sit at very high priority numbers, so your custom rules run before them. You cannot delete the default rules, but you can override them with custom rules that have higher priority, which means lower priority numbers.
@@ -240,7 +248,7 @@ Example output:
 
 This output is healthy only when the expected allow rules above it already cover gateway, health probe, admin, and monitoring paths. A broad deny with no matching allows creates clean-looking security and broken traffic.
 
-## Stateful Flows
+## Why Are NSGs Stateful?
 <!-- section-summary: NSGs keep flow records, so response traffic for an allowed connection can return without a matching reverse rule. -->
 
 **Stateful filtering** means Azure remembers an allowed connection as a flow record. When `orders-api-prod` starts an outbound HTTPS connection to a package repository, the NSG can allow the response packets back because they belong to the same connection. The team writes the rule for the side that starts the connection, then Azure handles the matching return packets through the flow record.
@@ -251,12 +259,11 @@ Stateful behavior matters during rule changes. If an engineer removes the SSH al
 
 This detail can make incident response feel confusing. Someone changes a rule and tests from an already open terminal, then concludes the rule did nothing. A better test uses a new connection after the rule change, because NSG updates affect new flows while existing flow records can continue until the connection ends or times out.
 
-## Application Security Groups
+## How Do ASGs, Service Tags, and Augmented Rules Simplify Policies?
 <!-- section-summary: Application security groups let NSG rules target workload roles instead of fragile private IP lists. -->
 
 An **Application Security Group**, usually shortened to **ASG**, is a named group of network interfaces that represent an application role. Instead of writing an NSG rule from `10.30.2.20` to `10.30.3.40`, the team can write a rule from `asg-orders-api` to `asg-orders-worker`. The rule then follows the role as VM instances scale, move, or receive new private IP addresses.
 
-This name can confuse AWS readers because an Azure ASG is neither an AWS Auto Scaling group nor an AWS security group. In Azure, the ASG is a role label for network interfaces that you reference inside NSG rules; the NSG still owns the allow and deny decision.
 
 This helps the Orders team because production IPs change more often than intent. The API might move from one VM scale set instance to another, or a worker tier might add capacity during a release. The rule should keep saying "orders API can reach orders worker on the approved port" while humans stay out of routine IP address edits.
 
@@ -304,7 +311,7 @@ Example output:
 ]
 ```
 
-## Service Tags and Augmented Rules
+### Service Tags and Augmented Rules
 <!-- section-summary: Service tags represent Azure-managed address groups, and augmented rules reduce repeated rules for ports and address ranges. -->
 
 A **service tag** is an Azure-managed name for a group of IP address prefixes. Microsoft updates the underlying prefixes for the service, while your rule keeps the stable tag name. This helps when a rule needs to describe Azure platform ranges or common service groups and the team wants to avoid copying changing IP lists into the NSG.
@@ -325,7 +332,7 @@ An **augmented security rule** lets one NSG rule include multiple ports or multi
 
 Service tags and augmented rules make NSGs easier to maintain when the rule meaning stays clear. They can also hide too much reach behind one friendly name. A good review explains why a tag or multi-port rule fits the path and treats a shorter rule table as only part of the evidence.
 
-## Outbound Rules
+## How Should Outbound Rules Be Designed?
 <!-- section-summary: Outbound NSG rules decide which destinations a workload may start connections to, but routing and NAT still decide the actual network path. -->
 
 An **outbound rule** controls flows that a workload starts toward another destination. In the Orders system, outbound traffic includes the API calling Azure SQL through a private endpoint, sending telemetry to Azure Monitor, downloading packages during a controlled deployment, or calling an external payment provider. Each of those flows has a different risk level.
@@ -345,7 +352,7 @@ The database rule shows why NSGs and private connectivity work together. The pri
 
 This is also where network and application teams need to talk to each other. A developer may only know that the API calls `https://payments.example.com`. The platform team needs the destination IP ranges, expected ports, DNS behavior, TLS requirements, NAT source IP, and monitoring evidence. Turning that call into an outbound rule forces the production dependency to become visible.
 
-## Effective Rules and IP Flow Verify
+## How Do You Verify Effective Network Access?
 <!-- section-summary: Effective security rules and IP flow verify show what Azure actually applies, which matters more than one rule file during troubleshooting. -->
 
 **Effective security rules** are the combined rules Azure applies to a network interface after it includes subnet NSGs, NIC NSGs, default rules, and security admin rules from Azure Virtual Network Manager when those exist. This view matters because production traffic follows the final set Azure evaluated, even when one individual file or portal page tells only part of the story.
@@ -412,7 +419,7 @@ These tools change the troubleshooting conversation. Instead of saying "the NSG 
 
 Security admin rules add one more production detail. Large organizations can use Azure Virtual Network Manager to push global security admin rules across virtual networks. Those rules evaluate before NSG rules, so an organization-level deny can block a packet before the local NSG ever gets a chance to allow it.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: A production NSG design starts with workload paths, turns them into specific rules, closes broad defaults, and verifies the effective result from Azure. -->
 
 Now the Orders network has a clearer shape. The VNet gives the private address space. Subnets separate public entry, API compute, private endpoints, and shared network services. NSGs turn that placement into packet permission rules, so a route existing inside the VNet no longer means every workload can freely talk to every other workload.
@@ -427,7 +434,7 @@ ASGs keep the rule table tied to workload roles instead of individual private IP
 
 The main operational habit is to review packets as complete flows. A useful NSG review names the source, destination, protocol, destination port, direction, priority, and reason. A useful incident check asks whether the packet matched the intended allow, hit a custom deny, fell through to a default rule, or got stopped by another control before the NSG.
 
-## What's Next
+### What's Next
 
 Network security groups give private workloads packet-level boundaries, but users still need a public way to reach the system. That public entry path has its own concerns: DNS, TLS, health probes, WAF policy, Layer 4 load balancing, Layer 7 routing, and global edge behavior.
 
@@ -435,7 +442,41 @@ The next article follows Azure public entry points. We will connect Front Door, 
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[What Does an NSG Control?]{kind="recap"}
+This article follows one Orders API network path so packet rules, subnet boundaries, NIC checks, ASGs, service tags, outbound traffic, and troubleshooting evidence stay connected. An NSG controls network flows by matching packet details, while identity, HTTP routing, TLS, and app authorization belong to other controls.
+:::
+
+:::expand[Where Can You Attach an NSG?]{kind="recap"}
+An NSG can attach to a subnet, a network interface, or both, and the attachment point decides which resources share the same packet rules.
+:::
+
+:::expand[What Makes Up an NSG Rule?]{kind="recap"}
+An NSG rule is a packet match record with source, destination, ports, protocol, direction, action, and priority.
+:::
+
+:::expand[How Do Priority, First Match, and Default Rules Work?]{kind="recap"}
+Azure checks custom NSG rules from lower priority number to higher priority number, and the first matching rule wins. Every NSG includes default rules that allow VNet traffic and outbound internet traffic, then deny unmatched traffic at the end.
+:::
+
+:::expand[Why Are NSGs Stateful?]{kind="recap"}
+NSGs keep flow records, so response traffic for an allowed connection can return without a matching reverse rule.
+:::
+
+:::expand[How Do ASGs, Service Tags, and Augmented Rules Simplify Policies?]{kind="recap"}
+Application security groups let NSG rules target workload roles instead of fragile private IP lists. Service tags represent Azure-managed address groups, and augmented rules reduce repeated rules for ports and address ranges.
+:::
+
+:::expand[How Should Outbound Rules Be Designed?]{kind="recap"}
+Outbound NSG rules decide which destinations a workload may start connections to, but routing and NAT still decide the actual network path.
+:::
+
+:::expand[How Do You Verify Effective Network Access?]{kind="recap"}
+Effective security rules and IP flow verify show what Azure actually applies, which matters more than one rule file during troubleshooting. A production NSG design starts with workload paths, turns them into specific rules, closes broad defaults, and verifies the effective result from Azure.
+:::
+
+## References
 
 - [Azure network security groups overview](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview) - Documents NSG rule properties, priority order, default rules, stateful flow behavior, service tags, ASGs, and security admin rule precedence.
 - [How network security groups filter network traffic](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-group-how-it-works) - Explains subnet and NIC NSG evaluation order for inbound and outbound traffic.

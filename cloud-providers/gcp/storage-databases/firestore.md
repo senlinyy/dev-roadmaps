@@ -1,7 +1,7 @@
 ---
 title: "Firestore"
 description: "Use Firestore for app-shaped documents by designing documents, collections, paths, queries, indexes, transactions, batches, security rules, IAM, backups, and operating checks."
-overview: "Firestore stores application documents in collections and supports planned queries, indexes, transactions, security rules, and IAM. The guide follows collaborative drafts and support cases from data shape to production checks."
+overview: "Firestore stores application documents in collections and supports planned queries, indexes, transactions, Security Rules, and IAM. The guide follows project and task documents from data shape through queries, authorization, recovery, and expiration."
 tags: ["gcp", "firestore", "documents", "nosql"]
 order: 4
 id: article-cloud-providers-gcp-storage-databases-firestore-document-data-models
@@ -13,384 +13,414 @@ aliases:
 
 ## Table of Contents
 
-1. [Why App-Shaped Documents Fit Firestore](#why-app-shaped-documents-fit-firestore)
-2. [Documents](#documents)
-3. [Collections and Paths](#collections-and-paths)
-4. [Queries](#queries)
-5. [Indexes](#indexes)
-6. [Transactions and Batches](#transactions-and-batches)
-7. [Security Rules and IAM](#security-rules-and-iam)
-8. [Backups, PITR, and TTL](#backups-pitr-and-ttl)
-9. [A Practical Baseline](#a-practical-baseline)
-10. [Putting It Together](#putting-it-together)
-11. [References](#references)
+1. [Why Does Application State Fit Documents and Collections?](#why-does-application-state-fit-documents-and-collections)
+2. [How Should Nested Fields and Subcollections Divide Data?](#how-should-nested-fields-and-subcollections-divide-data)
+3. [Why Do Queries, Duplication, and Indexes Need One Design?](#why-do-queries-duplication-and-indexes-need-one-design)
+4. [When Should You Use Transactions or Batched Writes?](#when-should-you-use-transactions-or-batched-writes)
+5. [How Do Security Rules and IAM Protect Different Callers?](#how-do-security-rules-and-iam-protect-different-callers)
+6. [What Does Serverless and Real-Time Mean for the Application?](#what-does-serverless-and-real-time-mean-for-the-application)
+7. [How Do Backups, PITR, and TTL Treat Time Differently?](#how-do-backups-pitr-and-ttl-treat-time-differently)
+8. [How Does a Practical Firestore Model Fit Together?](#how-does-a-practical-firestore-model-fit-together)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Why App-Shaped Documents Fit Firestore
-<!-- section-summary: Firestore fits data that the app naturally reads as documents by path or by planned indexed query. -->
+Imagine a task-management application. A project screen needs a name, owner, status, priority, budget, creation time, and settings. The application probably already represents this state as one object and performs operations such as load project, display project, edit project, and save project.
 
-Some application data feels close to a JSON object. A user edits a collaborative profile draft. A support agent opens a case note. A shopper saves a cart draft before checkout. The app wants one record that contains fields, nested values, timestamps, and workflow state.
+A **document database** follows that intuition. Firestore is Google Cloud's fully managed serverless document database. Its basic units are collections and documents rather than tables and rows. Google manages the underlying serving infrastructure, replication, and scale while Firestore supplies strongly consistent queries and ACID transactions.
 
-**Firestore** is Google Cloud's document database. It stores documents in collections, lets apps read documents by path, and supports indexed queries over known fields. It works well for clear access patterns: open this draft, list the current user's drafts, find open support cases by priority, or update a small set of related documents.
+A **document** is a self-contained record made of named fields and values:
 
-Think of a Firestore document as one application-shaped record with a path. A profile draft can hold a display name, headline, sections, status, avatar object name, and last editor. The app can open that draft directly by path and render one screen without assembling many relational rows.
+```text
+project: launch-website
 
-That convenience needs a plan. Firestore works best after you know the paths and queries the product needs. If the team only says "we may query anything later," the design will drift into expensive indexes, awkward migrations, and security rules that are hard to reason about. A good Firestore model starts from the screens, workflows, owners, and query shapes.
-
-Firestore should be designed from the app's reads and writes. A document can look friendly on day one, yet large collections still need planned paths, queries, indexes, transactions, security rules, and recovery settings.
-
-![Firestore collection document path](/content-assets/articles/article-cloud-providers-gcp-storage-databases-firestore-document-data-models/collection-document-path.png)
-*Firestore design defines documents, collections, and paths before it moves into queries and indexes.*
-
-## Documents
-<!-- section-summary: A document is one named record with fields that the app can read, update, and protect. -->
-
-A **document** is one named record with fields. If your app already passes around a JSON-like object, a Firestore document often feels familiar: it has keys, values, nested maps, arrays, timestamps, and a stable path. The path is important because Firestore can read a document directly by that path without searching a whole collection.
-
-Picture a draft profile editor. The user changes the headline, uploads an avatar, marks some sections complete, and returns later. The app does not need a row for every optional profile section on day one. It needs one document that can hold the draft state in a shape close to the screen.
-
-Documents can hold strings, numbers, booleans, timestamps, arrays, maps, references, and other supported Firestore value types. A document has an ID, and the full path identifies where it lives. The path is part of the design, not just a storage address. Security rules, queries, ownership checks, and support tooling all depend on that path.
-
-A collaborative profile draft could look like this:
-
-```json
-{
-  "ownerUserId": "user_391",
-  "displayName": "Maya Chen",
-  "headline": "Field operations lead",
-  "avatarObjectName": "profile-photos/user_391/avatar/current.jpg",
-  "sections": {
-    "bio": "draft",
-    "certifications": "complete",
-    "availability": "draft"
-  },
-  "lastEditorUserId": "user_882",
-  "updatedAt": "2026-07-04T10:25:00Z"
-}
+name       = "Launch website"
+ownerId    = "alice"
+status     = "active"
+priority   = "high"
+budget     = 10000
+archived   = false
+createdAt  = timestamp
 ```
 
-This shape is convenient because the profile editor can load one document and render the draft. The same convenience needs limits. Very large documents, frequently changing arrays, and hidden relationship rules can make the design hard to operate. If the data needs joins, strict multi-table relationships, or a financial transaction boundary, a relational database is usually a better fit.
+Values can include primitives, arrays, maps, timestamps, geographic points, references, and other supported types. Nested maps let the record hold a small settings object; arrays can hold a bounded list of tags. The key design idea is that the document should normally match something the application reads or updates as a unit.
 
-Use this beginner checklist for a document:
+Keep these questions in view as you work through the lesson:
 
-- The app usually reads the whole document for one screen or workflow.
-- The document has a clear owner, such as one user, one case, or one draft.
-- The fields can change over time without breaking every query.
-- The document will not grow without a practical limit.
-- The access rule can be expressed from the path and fields.
+1. **Why Does Application State Fit Documents and Collections?**
+2. **How Should Nested Fields and Subcollections Divide Data?**
+3. **Why Do Queries, Duplication, and Indexes Need One Design?**
+4. **When Should You Use Transactions or Batched Writes?**
+5. **How Do Security Rules and IAM Protect Different Callers?**
+6. **What Does Serverless and Real-Time Mean for the Application?**
+7. **How Do Backups, PITR, and TTL Treat Time Differently?**
+8. **How Does a Practical Firestore Model Fit Together?**
 
-That checklist keeps Firestore from turning into a random JSON dumping ground. A good document has a job, an owner, and a path the team can explain.
+## Why Does Application State Fit Documents and Collections?
+<!-- section-summary: Firestore stores self-contained application records as documents addressed through alternating collection and document paths. -->
 
-## Collections and Paths
-<!-- section-summary: Collections group documents, and paths tell the app exactly where a document lives. -->
+Firestore documents live inside **collections**, which give them addresses:
 
-A **collection** is a group of documents. A **path** alternates collection IDs and document IDs. The path is part of the data model because it controls how the app addresses records.
-
-The path is the first design decision users and rules will feel. A top-level collection such as `profileDrafts` makes it easy to query all drafts across users. A nested path such as `users/user_391/profileDrafts/current` makes ownership obvious and can make user-based security rules easier to read. Both are valid, but they optimize for different access patterns.
-
-Two possible profile draft paths are:
-
-- `profileDrafts/draft_user_391_current`
-- `users/user_391/profileDrafts/current`
-
-The first path puts all drafts in one top-level collection. The second path nests drafts under each user. Both can work. The right choice depends on the queries your app needs, the security rules you want to write, and the ownership boundary your team wants to make obvious.
-
-A support case example might use:
-
-- `supportCases/case_20260704_009`
-- `supportCases/case_20260704_009/messages/msg_001`
-
-That path says a support case is the parent record, and messages are child documents under that case. The app can load the case, then page through messages in the subcollection.
-
-A practical path review should ask:
-
-- Does the path make ownership obvious?
-- Does the app usually read one document directly by path or query many documents by collection?
-- Can security rules express the intended owner or team boundary?
-- Will support tooling understand the path during an incident?
-
-Answer those questions before the collection grows. Moving millions of documents to a new path later is much harder than choosing a clear path early.
-
-## Queries
-<!-- section-summary: A Firestore query should match a real screen, workflow, or backend job before the collection grows. -->
-
-A **query** asks Firestore for documents that match filters and ordering. Queries should come from real product screens and backend jobs. If the support dashboard needs open high-priority cases assigned to one team, design that query deliberately.
-
-Firestore is not a place to ask every possible question later by scanning everything. It is strongest after the team knows the access pattern. That means a query should sound like a product sentence: "show the billing team's open cases, newest first" or "load the current user's draft profile." Those sentences drive fields, indexes, limits, and security rules.
-
-Example query shape in application terms:
-
-- Collection: `supportCases`
-- Filter: `status == "OPEN"`
-- Filter: `assignedTeamId == "team_billing"`
-- Order: `updatedAt desc`
-- Limit: `50`
-
-This query is useful because it maps to a screen. The support team opens a queue, sees the most recently updated open billing cases, and handles the first page. Firestore works best for indexed slices like this rather than broad scans.
-
-The limit matters too. A screen that shows 50 cases should ask for 50 cases, not every open case in the company. Pagination, ordering, and stable filters keep the query predictable as the collection grows.
-
-For AWS readers, Firestore may feel close to DynamoDB because both push you to model access patterns early. The modeling details differ. DynamoDB centers tables, partition keys, sort keys, and secondary indexes. Firestore centers document paths, collections, query filters, ordering, and composite indexes.
-
-## Indexes
-<!-- section-summary: An index is production configuration that makes a planned query possible and predictable. -->
-
-An **index** is a data structure Firestore uses to answer queries efficiently. The everyday version is the index at the back of a book. Without an index, you might scan page after page to find every mention of one topic. With an index, you jump to the relevant pages quickly. Firestore indexes play that role for documents.
-
-Simple single-field queries often have automatic index support. More complex queries, especially those combining filters and ordering, may need a **composite index**. A composite index is an index over more than one field, arranged to match a specific query pattern.
-
-For the support queue, the app does not ask a vague question like "find interesting cases." It asks a precise product question: show open billing cases assigned to this team, newest first. That query combines `assignedTeamId`, `status`, and `updatedAt`. Firestore needs an index that matches that shape so the query has a predictable path.
-
-Treat indexes as configuration. Review them like code, deploy them before the release that needs them, and watch query errors during rollout. A missing composite index often shows up as a clear error with a link or command to create the required index.
-
-An index definition for the support queue could look like:
-
-```json
-{
-  "indexes": [
-    {
-      "collectionGroup": "supportCases",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "assignedTeamId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "status",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "updatedAt",
-          "order": "DESCENDING"
-        }
-      ]
-    }
-  ]
-}
+```text
+users
+├── alice
+├── bob
+└── charlie
 ```
 
-Important details in this config:
+The full path `/users/alice` alternates collection then document. Paths can continue through subcollections:
 
-- `collectionGroup` names the collection the query uses.
-- Equality filters such as team and status appear before the ordered timestamp.
-- The index belongs in deployment review because the app screen depends on it.
+```text
+/projects/launch-website/tasks/task-123
 
-Indexes also have a cost side. Every extra index has to be maintained as writes happen. A support case update may need to update the document and the indexes connected to that collection. That is fine for indexes that support real screens and jobs. It is wasteful for indexes created from guesses that no one uses.
+projects         collection
+launch-website   document
+tasks            subcollection
+task-123         document
+```
 
-The useful review path is simple:
+![Collection document path](/content-assets/articles/article-cloud-providers-gcp-storage-databases-firestore-document-data-models/collection-document-path.png)
+*Firestore paths alternate collections and documents, so each document has an explicit application context.*
 
-1. Name the screen or job.
-2. Write the query shape in plain language.
-3. Add the index required for that query.
-4. Deploy the index before the code path depends on it.
-5. Remove unused indexes after query history proves they are dead.
+SQL could represent a simple user row with the same fields. The difference becomes clearer with nested application state. A user's preferences can sit inside `/users/alice` if the application normally needs them whenever it loads the user. Firestore pulls the design toward access patterns: structure data around what the application reads together, rather than decomposing every object immediately into normalized tables.
+
+### Use the document as a retrieval boundary
+
+A useful document contains state that changes and travels together. A project name, owner, status, and small settings map can form one boundary because the project screen normally needs all of them. That does not mean every fact related to the project belongs in the same document. A million comments are related conceptually but have an independent lifecycle and query pattern.
+
+Document references and ID fields can express relationships for application code, but they do not create database-enforced foreign keys. The team decides what happens when a referenced user is deleted, whether historical documents keep a copied display name, and how missing references are repaired.
+
+The path also carries meaning. `/projects/p1/tasks/t1` makes task `t1` a child in project `p1`'s namespace. The task document can still repeat `projectId = p1` when a required query benefits from that field. Path hierarchy and document fields are tools for access, not competing claims about a single mathematically pure model.
+
+## How Should Nested Fields and Subcollections Divide Data?
+<!-- section-summary: Small bounded state can live inside one document, while independently growing or queried records should become separate documents. -->
+
+A project can contain thousands of tasks. Placing every task inside one project document creates a container that grows without bound and must be repeatedly read and updated. A subcollection lets each task remain independently addressable:
+
+```text
+/projects/launch-website
+    name: "Launch website"
+    ownerId: "alice"
+
+/projects/launch-website/tasks/configure-dns
+    title: "Configure DNS"
+    completed: false
+    assigneeId: "bob"
+```
+
+Firestore is designed around large collections of relatively small documents. The choice between a nested field and a subcollection follows two questions: can this data grow independently, and does the application need to query it independently?
+
+Small bounded configuration such as an address, preferences, or settings can fit as nested data when it is usually read with the parent. Unbounded sets such as messages, comments, transactions, tasks, or notifications usually deserve their own documents. Otherwise every new child changes and enlarges the parent.
+
+Firestore reads are deliberately shallow. Reading `/projects/launch-website` returns that document; it does not recursively fetch tasks, comments, attachments, and activity. Recursive loading could turn one project read into tens of thousands of task reads and hundreds of thousands of comments. The application instead explicitly asks for the project and then queries the subset of child data it needs, such as incomplete tasks ordered by priority with a limit.
+
+This predictability is part of the data model. A path expresses context but does not imply eager recursive retrieval. Teams should avoid assuming that a parent document contains or automatically returns its subcollections.
+
+Firestore also does not treat an `ownerId` field as a SQL foreign key. If `/projects/project1` contains `ownerId = "alice"`, the database does not automatically join it with `/users/alice` or reject it when the referenced user is absent. The application can read the project and then the user, or duplicate selected owner fields in the project when the UI needs them together.
+
+That leads to the next design concern: reads, duplication, and indexes must be decided together rather than after the collection already contains millions of documents.
+
+### Avoid turning the parent into an unbounded payload
+
+An array of three fixed notification preferences may be reasonable inside a user document. An array of every notification the user has ever received grows without a clear bound, makes the parent expensive to rewrite, and cannot be independently paged in the same way as a collection. The data deserves separate documents even though the UI calls both things “user data.”
+
+Shallow reads then become an advantage. Opening the user does not accidentally download years of notifications. The application requests a limited ordered page from `/notifications`, and each document can carry the user ID and expiry needed by that query and TTL policy.
+
+## Why Do Queries, Duplication, and Indexes Need One Design?
+<!-- section-summary: Firestore data models are designed from concrete reads backward because denormalization and indexes determine both read simplicity and write cost. -->
+
+Without SQL JOINs, duplicating a small piece of display data can make a common read much simpler. A recent-post page may need one hundred posts plus each author's display name and avatar. A normalized model reads posts and then resolves authors. A denormalized post can embed the author's ID, name, and avatar URL so one document read contains the display state.
+
+Duplication moves cost rather than eliminating it. If Alice changes her display name, the team must decide whether existing posts retain the historical name, update lazily, or receive a fan-out change. There is no universal answer. The useful Firestore question is which fields the application needs to read together and which synchronization consequence it is prepared to own.
+
+Queries then select documents through fields. A task query might ask:
+
+```text
+assigneeId = "alice"
+status     = "open"
+order by dueAt
+```
+
+Searching one hundred million tasks by checking each document would be a full scan. An **index** keeps an auxiliary structure that maps field values to matching documents. Firestore Standard edition is index-driven: queries require suitable indexes rather than silently falling back to arbitrary collection scans.
+
+Firestore creates many single-field indexes automatically. A query combining assignee, status, and due date may need a **composite index** whose ordered fields resemble the query:
+
+```text
+assignee | status | dueAt
+---------+--------+-----------
+alice    | open   | 2026-08-24
+alice    | open   | 2026-08-25
+alice    | open   | 2026-09-01
+```
+
+The matching records form a contiguous region of that index. When a required Standard-edition index is missing, Firestore commonly reports the needed composite index so the team can create it.
 
 ![Firestore index query pipeline](/content-assets/articles/article-cloud-providers-gcp-storage-databases-firestore-document-data-models/index-query-pipeline.png)
-*The app query, index definition, and screen behavior should describe the same access pattern.*
+*A query uses its supporting index to find matching document keys before fetching the result documents.*
 
-## Transactions and Batches
-<!-- section-summary: Transactions coordinate reads and writes with conflict checks, while batches group writes that do not need read-based decisions. -->
+Indexes make reads fast by adding work to writes. Changing a task can require updates to document storage, several single-field indexes, and multiple composite indexes. They also consume storage. Indexing every possible field combination therefore has a cost.
 
-A **transaction** lets the app read documents and write updates with conflict checks. It fits work such as claiming a support case only if it is still open, or moving a shopping cart draft into a submitted state only if the draft version matches what the user reviewed.
+This is why Firestore design starts with concrete screens and operations:
 
-A **batched write** groups multiple writes that should commit together but do not need transaction reads. It fits work such as writing an audit document and updating a draft status after the app has already made the decision.
+- The home page needs twenty newest public posts.
+- A profile needs fifty newest posts by one user.
+- Moderation needs unreviewed posts ordered by report count.
+- “My tasks” needs open tasks for one assignee ordered by due date.
 
-The difference is the decision step. A transaction is useful if the app must read current state before deciding what to write. A batch is useful if the decision is already made and the app only needs several writes to commit together. Mixing those up can create race conditions that look fine in local testing and fail under real users.
+Those reads influence collection layout, duplicated fields, separate documents, single-field exemptions, composite indexes, and Security Rules. Data model, query model, index model, and authorization model are one design problem.
 
-For support case claiming, two agents might click "claim" seconds apart. The backend needs to load the current case, confirm it is still open, and write the claim only if that loaded state is still valid. That is transaction work. For writing an audit record after the claim succeeds, a batch can group the status update and audit document because the claim decision has already been made.
+### Account for the write side of denormalization
 
-For a support case claim, the backend might use transaction logic like:
+If a post embeds Alice's display name, an update policy must say whether old posts are historical snapshots or current-profile projections. Historical snapshots intentionally do not change. Current projections may require an application job to update many posts. A mixed or undocumented policy produces confusing UI and unpredictable write volume.
 
-1. Read `supportCases/case_20260704_009`.
-2. Confirm `status` is `OPEN` and `assignedAgentId` is empty.
-3. Set `assignedAgentId` to `agent_771`.
-4. Set `status` to `IN_PROGRESS`.
-5. Add `claimedAt`.
+Every copied field should therefore have an owner and synchronization rule. The read benefit may be substantial, but it is purchased with more writes, more index updates, and the possibility that copies temporarily disagree. Firestore makes this trade-off available; it does not choose it for the application.
 
-Important details in this flow:
+Composite indexes also encode a query contract. Removing a field or changing sort order can make an existing index unnecessary, while adding another filter can require a new index. Index review belongs with feature review because the feature's actual reads determine the database work.
 
-- The read happens inside the transaction so Firestore can detect conflicting updates.
-- The backend should make the claim idempotent for retries.
-- The UI should handle a clean "already claimed" response because another agent may act first.
+## When Should You Use Transactions or Batched Writes?
+<!-- section-summary: Transactions protect read-decide-write logic, while batched writes atomically apply a predetermined set of changes. -->
 
-## Security Rules and IAM
-<!-- section-summary: Security rules protect direct client access, while IAM controls server and operator access to Firestore resources. -->
+A write to one document is atomic: readers do not observe a half-written document whose name changed while its priority did not. Applications often need one logical operation to affect several documents.
 
-**Security Rules** are Firestore's policy layer for direct client access from web and mobile apps. They answer questions such as: can this signed-in user read this draft, update this field, or list this collection? Rules should match the path design and the app's ownership model.
+Suppose `/events/conference` says five seats remain. Alice and Bob can both read five, each create a booking, and each write four. Two bookings exist while the counter fell once. This is a lost update.
 
-For backend services, **IAM** controls access at Google Cloud resource boundaries. A Cloud Run service account may need Firestore access to manage support cases. A human analyst may need read-only access to a dataset exported from Firestore rather than direct production write access.
+A **transaction** groups reads and writes that depend on current state:
 
-A small rules sketch for user-owned profile drafts might look like:
-
-```firestore
-match /users/{userId}/profileDrafts/{draftId} {
-  allow read: if request.auth != null
-    && request.auth.uid == userId;
-
-  allow create, update: if request.auth != null
-    && request.auth.uid == userId
-    && request.resource.data.keys().hasOnly([
-      "ownerUserId",
-      "displayName",
-      "headline",
-      "avatarObjectName",
-      "sections",
-      "status",
-      "updatedAt",
-      "expiresAt"
-    ])
-    && request.resource.data.ownerUserId == userId
-    && request.resource.data.status in ["DRAFT", "SUBMITTED"];
-}
+```text
+read event
+if remainingSeats > 0:
+    update event counter
+    create booking
 ```
 
-Important details in this rule:
+If another client changes a document read by the transaction before it completes, Firestore can retry against newer state. The transaction is atomic: all operations succeed or none is applied.
 
-- The path includes `{userId}`, so the rule can compare it to the signed-in user.
-- `hasOnly` prevents a client from adding surprise fields such as `role`, `billingApproved`, or `adminNote`.
-- The `ownerUserId` check keeps the document owner aligned with the path owner.
-- The status check shows the idea of validating state, although real workflows may need stricter transition rules.
-- The rule protects direct client access; server code also needs IAM review.
+A **batched write** solves a different problem. Sometimes the application already knows it must create notification A, create notification B, update a project, and delete an invitation. No calculation depends on first reading current values; the requirement is only that all predetermined writes succeed together or none does.
 
-Rules should be tested with both allowed and denied examples. A valid write by `user_391` to `/users/user_391/profileDrafts/current` should pass. A write by the same user that adds `role: "admin"` should fail. A write by `user_882` to `user_391`'s path should fail. Those denied tests are just as important as the successful test because they prove the rule protects the boundary you meant to create.
+The distinction is:
 
-## Backups, PITR, and TTL
-<!-- section-summary: Firestore recovery and cleanup need explicit choices for backups, point-in-time recovery, exports, and TTL policies. -->
-
-Firestore data still needs recovery planning. A bug can overwrite profile drafts, a support automation can update the wrong cases, and a cleanup job can delete records too aggressively. **Backups** give the team a consistent database copy at a point in time. **Point-in-time recovery**, often called **PITR**, lets the team inspect or clone data from a specific timestamp inside the retained window.
-
-Match the incident to the control before enabling anything:
-
-| Incident | Control | Practical evidence |
+| Mechanism | Contents | Typical reason |
 |---|---|---|
-| A profile editor release overwrites `headline` on active drafts | PITR clone or PITR export at the timestamp before the release | Restored sample drafts show the old `headline`, `updatedAt`, and owner fields |
-| A support automation deletes case messages for the wrong team | Scheduled backup restored to a separate database | Case count and message samples match the pre-incident report |
-| Temporary profile drafts pile up after users abandon onboarding | TTL policy on an `expiresAt` timestamp field | TTL policy status exists, and old drafts disappear from the cleanup collection over time |
-| A developer changes rules or indexes incorrectly | Backup plus redeployed rules and indexes | Data restore is validated separately from rules and index deployment |
+| Transaction | Reads plus dependent writes | Current state determines the changes; conflicts may require retry |
+| Batched write | Writes only | A known set of creates, updates, or deletes must be atomic |
 
-Use TTL for cleanup. Use backups and PITR for recovery. TTL removes stale documents after their timestamp says they are expired. Backups and PITR preserve earlier data states so the team can inspect or restore after a bad write or delete.
+Transactions give Firestore atomicity and concurrency control, but they do not turn it into a relational database. Firestore does not automatically add foreign keys, JOINs, normalized schemas, or parent-child constraints. A project can still contain `ownerId = "does-not-exist"` unless the application architecture validates that invariant.
 
-A temporary profile draft can carry an expiration timestamp:
+Transaction boundaries should follow application meaning. If completing a task also increments a project's completed-task count, one transaction can read both records, verify the task is not already completed, update its status, and update the counter. If conflicting data changes, the operation retries. The team still owns the rule that those documents must change together.
 
-```json
-{
-  "ownerUserId": "user_391",
-  "displayName": "Maya Chen",
-  "status": "DRAFT",
-  "updatedAt": "2026-07-04T10:25:00Z",
-  "expiresAt": "2027-01-01T00:00:00Z"
-}
+## How Do Security Rules and IAM Protect Different Callers?
+<!-- section-summary: Untrusted mobile and web clients use Firebase Authentication plus Security Rules, while trusted server SDKs use cloud identity and IAM. -->
+
+Firestore supports an architecture in which a mobile or web client talks directly to the database. That removes a custom API server from some application paths, but it makes database-side authorization essential. JavaScript or mobile code running on a user's device is untrusted: a user can inspect it, modify requests, call APIs manually, or build another client.
+
+For those callers, Firebase Authentication establishes identity and **Firestore Security Rules** decide whether an operation is allowed. Authentication answers “who are you?” Rules answer “what may that identity read or write?”
+
+A rule can conceptually allow access to `/users/{userId}` only when the authenticated user's ID equals `userId`. It can also validate proposed data, for example requiring priority to stay between one and five or preventing a caller from changing `ownerId`.
+
+Security Rules are not query filters. If Alice may read only projects where `ownerId = "alice"`, she cannot request every project and expect Firestore to remove Bob's results afterward. Firestore checks whether the query itself can return only authorized documents. Queries are allowed or denied as a whole, so the client query may need an explicit owner condition that matches the rule.
+
+This all-or-nothing behavior reinforces the combined design:
+
+```text
+document fields
+    ↓
+query constraints
+    ↓
+supporting indexes
+    ↓
+Security Rules that can prove the result is allowed
 ```
 
-Important details in this document:
+Suppose a rule permits Alice to read project documents whose `ownerId` equals her authenticated UID. A query for every project has a possible result containing Bob's document, so Firestore rejects it rather than fetching everything and removing Bob's rows. A query constrained to Alice's owner ID can match the rule's guarantee. The same owner field may therefore participate in data modeling, a query, an index, and authorization.
 
-- `expiresAt` should be stored as a Firestore timestamp value.
-- The app owns the business rule that chooses the timestamp, such as 180 days after the last draft edit.
-- TTL deletion can lag after the timestamp passes, so product behavior should tolerate expired drafts during the cleanup delay.
+Rules can also compare existing and proposed data. An owner may edit a project's title while a rule refuses any update that changes `ownerId`. This protects the boundary at the database even when a modified client sends a request the official UI never creates.
 
-Enable TTL for every `profileDrafts` collection group that uses that field:
+Trusted server applications use a different boundary. A Cloud Run API using a Firestore server SDK bypasses Firestore Security Rules. The server authenticates with Google Cloud credentials and receives access through IAM. Therefore:
 
-```bash
-gcloud firestore fields ttls update expiresAt \
-  --project=profile-prod \
-  --collection-group=profileDrafts \
-  --enable-ttl
+```text
+mobile or browser
+→ Firebase Authentication + Security Rules
+
+trusted backend
+→ Google Cloud workload identity + IAM
 ```
 
-Example output:
+The backend must enforce end-user business permissions itself before acting with its broader service identity. Server trust is not a reason to give every workload unrestricted database access; use least-privilege IAM and separate service identities.
 
-```yaml
-name: projects/profile-prod/databases/(default)/collectionGroups/profileDrafts/fields/expiresAt
-ttlConfig:
-  state: CREATING
+Rules should be tested rather than treated as one-time configuration. Firebase's emulator can exercise allowed and denied reads, queries, and writes before deployment.
+
+## What Does Serverless and Real-Time Mean for the Application?
+<!-- section-summary: Firestore removes database-server capacity management and can stream changing query results, while the team still owns data and query design. -->
+
+Cloud SQL exposes a recognizable server instance with CPU, RAM, storage, and connections. Firestore is **serverless**: applications use a managed database without pre-provisioning ordinary database compute capacity or manually configuring normal-operation sharding.
+
+The application thinks in documents, queries, reads, writes, and indexes rather than sizing a single database machine and its connection pool. Documents and indexes are served through Google-managed distributed infrastructure. This eliminates a category of database-server operations, but it does not eliminate architecture.
+
+The team still decides document boundaries, collection paths, embedded versus referenced data, duplication, composite indexes, transaction scope, Security Rules, IAM, recovery, and expiration semantics. Serverless shifts effort from infrastructure-capacity decisions toward access-pattern decisions.
+
+Firestore also supports **real-time listeners**. A client can subscribe to a document or query result and receive changes, which fits chat, collaborative state, dashboards, and notifications. The flow is:
+
+```text
+document or query changes
+        ↓
+Firestore listener
+        ↓
+UI state updates
 ```
 
-This output proves the TTL policy operation started for the collection group and field. A follow-up list command should show the policy after the operation finishes:
+The client ecosystem also supports offline-oriented application patterns. These capabilities can replace custom polling and some synchronization code, but they do not change the underlying authorization and query requirements. A listener still needs an allowed query and supporting indexes.
 
-```bash
-gcloud firestore fields ttls list \
-  --project=profile-prod \
-  --collection-group=profileDrafts
+Firestore's scaling centre differs from a traditional SQL server, but scaling does not make every data model efficient. Large documents repeatedly rewritten, unnecessary indexes, overly broad listeners, and poor query boundaries can still create cost or performance problems. Managed infrastructure makes the model easier to operate; it does not repair a model that ignores how the application reads and writes data.
+
+### Real-time delivery follows the query boundary
+
+A listener on one project document receives that document's changes, not an automatic recursive stream of every task and comment below it. A query listener receives changes to the result set described by its filters and ordering. The client may therefore maintain separate listeners for the project and its current open tasks.
+
+This explicit shape keeps synchronization bounded. It also means an authorization or index mistake can prevent the listener from starting just as it would prevent a one-time query. Real-time behavior is another consumer of the same data, query, index, and Rule contract.
+
+Offline support does not remove conflict reasoning either. Clients can reconnect after local activity, and the application still needs appropriate update operations or transactions for state that must not lose concurrent changes. The managed client experience sits above the same document consistency model.
+
+## How Do Backups, PITR, and TTL Treat Time Differently?
+<!-- section-summary: Backups and PITR preserve unwanted history for recovery, while TTL intentionally removes disposable documents after an expiry. -->
+
+A highly available, replicated database can preserve a developer's accidental deletion perfectly. Historical recovery is still necessary when current state becomes wrong.
+
+Firestore scheduled backups capture a consistent database copy at a point in time, including data and index configuration. Current schedules can run daily or weekly, and retention can extend to fourteen weeks. A backup answers: can the team restore an older database copy?
+
+**Point-in-time recovery**, or PITR, handles recent mistakes with finer granularity. When enabled, Firestore can retain document versions for up to seven days and provide historical reads at minute-level granularity within the window. If corruption starts at 10:42 and is found at 10:47, PITR can target state shortly before the bad deployment rather than using yesterday's backup.
+
+Backups and PITR complement each other:
+
+```text
+scheduled backups
+→ coarser restore points retained longer
+
+PITR
+→ fine-grained recent historical state
 ```
 
-Recovery needs a different check. A PITR drill should clone the database to a separate target at a known timestamp, then validate real documents from the incident story:
+**Time to live**, or TTL, points in the opposite temporal direction. A session document can include `expiresAt`; after that time, Firestore eventually removes it automatically. TTL fits temporary sessions, old telemetry, ephemeral events, cache-like records, and verification data that should disappear.
 
-```bash
-gcloud firestore databases clone \
-  --source-database='projects/profile-prod/databases/(default)' \
-  --snapshot-time='2026-07-04T14:10:00Z' \
-  --destination-database='profile-restore-20260704'
+TTL is lifecycle cleanup, not precise scheduling. Expired documents become eligible for asynchronous deletion; documents with the same timestamp are not guaranteed to disappear at exactly the same instant or in one transaction. An application must not treat noon expiry as proof that every document is gone at 12:00:00.
+
+| Mechanism | Question |
+|---|---|
+| Backup | “Can I restore an older database copy?” |
+| PITR | “What did the database look like shortly before the mistake?” |
+| TTL | “When may this disposable document be cleaned up?” |
+
+TTL intentionally removes data. Backups and PITR protect against unwanted change and deletion. The same dataset can need both: temporary notifications may expire by TTL while the broader database remains covered by recovery controls.
+
+## How Does a Practical Firestore Model Fit Together?
+<!-- section-summary: A useful model starts from application reads, separates growing records, aligns indexes and authorization, and deliberately owns duplication and recovery. -->
+
+Consider a project-management application:
+
+```text
+/users/{userId}
+/projects/{projectId}
+/projects/{projectId}/tasks/{taskId}
+/projects/{projectId}/comments/{commentId}
+/notifications/{notificationId}
 ```
 
-Important details in this command:
+The project document can contain name, owner ID, member IDs, status, and creation time. Each task can contain title, assignee ID, status, priority, and due date. A notification can contain user ID, event type, project and task IDs, creation time, and expiration time.
 
-- `--snapshot-time` should come from deploy records, audit logs, or incident notes.
-- `profile-restore-20260704` is a separate database for validation.
-- The validation should compare document counts, a few known document paths, and the fields that were damaged.
+Fields such as user ID, project ID, and task ID may appear in several documents intentionally. They let queries retrieve the application state without joins.
 
-For scheduled backups, list the available backups and restore one to a separate database during a drill:
+When Bob opens “My open tasks,” the authenticated client asks for tasks where `assigneeId = bob` and `status = open`, ordered by `dueAt`. A suitable index locates the documents. Security Rules determine whether the query can return only allowed data. The UI renders the result and may keep a real-time listener open so a task completed elsewhere disappears from the list.
 
-```bash
-gcloud firestore backups list \
-  --project=profile-prod \
-  --location=nam5
-```
+When Bob completes a task, the application may need to mark the task complete and increment the project's completed-task counter. One transaction reads both documents, verifies the task is not already complete, updates it, and adjusts the project. A concurrent change causes a retry rather than an unchecked overwrite.
 
-The useful evidence is the backup resource name, the backup timestamp, the restore operation status, and application-level checks against restored documents. A backup or PITR drill only counts after the team can show which documents were recovered and how the app would use them.
+The team and service responsibilities remain distinct:
 
-## A Practical Baseline
-<!-- section-summary: A practical Firestore baseline verifies database identity, index configuration, rules, recovery settings, and one real access path. -->
+| Firestore largely handles | Team still designs |
+|---|---|
+| Database servers and serving scale | Documents, collections, and paths |
+| Replication and storage infrastructure | Embedded versus referenced state |
+| Index serving machinery | Composite indexes and exemptions |
+| Atomic transaction mechanism | Business transaction boundaries |
+| Real-time synchronization plumbing | Listener and application behavior |
+| Backup, PITR, and TTL machinery | Recovery and expiration policies |
+| Rule enforcement mechanism | Security Rules and IAM policy |
 
-After the data model and access pattern are clear, create or verify the Firestore database:
+A practical baseline keeps documents reasonably self-contained, moves growing queryable sets into separate documents, designs important queries before schema growth, duplicates small fields only when the read benefit justifies synchronization work, and creates only useful indexes. Transactions protect read-decide-write operations; batches protect predetermined atomic writes. Mobile and web callers use Authentication and Rules; trusted servers use IAM. Recovery matches the value of data, while TTL is reserved for data that is genuinely disposable.
 
-The baseline is not only a checklist for launch. It proves that the document design, query design, access design, and recovery design all point at the same app behavior. A Firestore app can feel easy during a demo because one document read works. Production needs the surrounding controls before many users and many documents arrive.
+### Review one feature from screen to recovery
 
-Use the support-case example. The baseline should prove that the support queue query has its index, the rules or backend IAM prevent cross-team access, TTL does not delete active cases, backups or PITR cover bad automation, and logs can show a failed read or denied write without exposing case text.
+For “My open tasks,” write down the screen's filters and sort first. Confirm that each task document carries assignee, status, and due time; that the composite index matches the query; and that the Security Rule can prove the authenticated user is allowed to see every possible result. Decide whether the listener is needed or a one-time read is enough.
 
-```bash
-gcloud firestore databases describe \
-  --database="(default)" \
-  --project=profile-prod \
-  --format="yaml(name,locationId,type,deleteProtectionState,pointInTimeRecoveryEnablement)"
-```
+For completion, state the transaction boundary between the task and project counter. Test two clients completing the same task so the retry path does not double-increment. For server-side maintenance, give the backend a workload identity and IAM role appropriate to its job rather than relying on client Rules.
 
-Important details in this command:
+Finally, decide how an accidental bulk change is recovered. PITR can cover a recent minute-level target, while scheduled backups can retain coarser history longer. If task notifications expire through TTL, verify that they are genuinely disposable and that asynchronous cleanup is acceptable. The feature is complete only when its normal reads, concurrent writes, authorization, and history all have explicit answers.
 
-- `--database="(default)"` should match the database ID your app config uses.
-- `locationId` confirms the database location.
-- `deleteProtectionState` and PITR settings show whether recovery guardrails are enabled.
+Cloud SQL and Firestore pull design in different directions. Cloud SQL centres normalized rows, keys, joins, database-enforced relationships, explicit server instances, and pooled connections. Firestore centres documents, collection paths, planned indexed reads, deliberate denormalization, serverless serving, and first-class direct client access. Both support indexes and transactions, but those shared features do not erase their different data models.
 
-Deploy indexes and rules through your normal release path. A simplified Firebase CLI flow might use:
+The complete chain begins with application objects, stores them as documents, gives them collection paths, separates large child sets, designs queries, supplies indexes, coordinates multi-document changes, protects untrusted clients with Rules, protects trusted services with IAM, lets Google scale the infrastructure, and finally preserves or expires history with backups, PITR, and TTL.
 
-```bash
-firebase deploy --only firestore:indexes,firestore:rules --project profile-prod
-```
+### Use one decision record for each collection
 
-Important details in this command:
+For a new collection, record the document's application unit, expected size and growth, parent path, and whether child data belongs in nested fields or separate documents. List the exact queries, their filters and ordering, and the single-field or composite indexes they require.
 
-- Indexes and rules should be reviewed with the app change that needs them.
-- Staging should run the same deployment shape before production.
-- After deployment, test one real read, one allowed write, and one denied write.
+Then record duplication. Each copied owner name, project ID, or display field needs a reason and an update policy. State whether it is a historical snapshot or a current projection so future developers do not invent conflicting synchronization behavior.
 
-## Putting It Together
-<!-- section-summary: Firestore is strongest with document shape, path design, query planning, indexes, rules, and recovery designed together. -->
+Next record write correctness. Single-document updates are atomic by default. Multi-document read-decide-write behavior needs a transaction; a known all-or-nothing write set can use a batch. References that would be foreign keys in SQL need an explicit application invariant because Firestore does not enforce them automatically.
 
-Firestore fits app-shaped records such as profile drafts, support cases, shopping cart drafts, and workflow state. The order matters: define documents, collections, and paths first; design real queries next; create indexes for those queries; use transactions or batches for coordinated writes; then protect access with rules and IAM.
+Finally, record both trust paths. Mobile and web access needs Authentication, query-compatible Security Rules, and emulator tests for allowed and denied operations. Server access needs workload identity, least-privilege IAM, and application-level user authorization. Scheduled backups and PITR need restore procedures; TTL fields need truly disposable data and tolerance for asynchronous deletion.
 
-The safest Firestore designs feel simple because the app's screens, paths, queries, indexes, and permissions all describe the same workflow.
+This record keeps “serverless” from becoming “designless.” Google supplies and scales the serving machinery, while the team retains a reviewable contract for document boundaries, queries, indexes, concurrency, authorization, and history.
 
-![Firestore summary](/content-assets/articles/article-cloud-providers-gcp-storage-databases-firestore-document-data-models/firestore-summary.png)
-*A production Firestore design connects paths, queries, indexes, writes, rules, and recovery settings.*
+Revisit the record when a screen or query changes. Adding a sort field can require a new composite index; broadening a query can make a Security Rule unable to prove access; embedding more children can turn a bounded document into an unbounded one. These are connected effects, not independent configuration chores.
+
+The final comparison with Cloud SQL should stay operational. Choose Firestore because the application works naturally with documents, planned indexed reads, real-time listeners, and its trust model. Choose a relational system when database-enforced relationships, joins, and normalized transactional records dominate. The presence of transactions in both systems does not make their native units of thought the same.
+
+The time controls deserve the same boundary. Backups retain consistent database copies and index configuration on daily or weekly schedules, PITR retains recent document history at minute granularity, and TTL asynchronously removes documents after an expiry field. A notification can be intentionally disposable while the project and task database still requires historical recovery. Enabling TTL without that classification can turn lifecycle automation into data loss; enabling backups without a restore procedure can turn successful jobs into false confidence.
+
+## Check Your Answers
+
+:::expand[Why Does Application State Fit Documents and Collections?]{kind="recap"}
+Firestore stores self-contained application records as documents, and alternating collection/document paths give those records an address and context.
+:::
+
+:::expand[How Should Nested Fields and Subcollections Divide Data?]{kind="recap"}
+Keep small bounded state inside a document when it is read together. Move independently growing or queried sets into separate documents and subcollections.
+:::
+
+:::expand[Why Do Queries, Duplication, and Indexes Need One Design?]{kind="recap"}
+Without joins, duplicated fields can simplify reads but create synchronization work. Concrete queries determine document fields, collection layout, and supporting indexes.
+:::
+
+:::expand[When Should You Use Transactions or Batched Writes?]{kind="recap"}
+Use a transaction when writes depend on current reads and may retry after conflicts. Use a batch when a predetermined set of writes must succeed atomically.
+:::
+
+:::expand[How Do Security Rules and IAM Protect Different Callers?]{kind="recap"}
+Untrusted mobile and web clients use Firebase Authentication and Security Rules. Trusted server SDKs bypass Rules and use Google Cloud identity plus IAM.
+:::
+
+:::expand[What Does Serverless and Real-Time Mean for the Application?]{kind="recap"}
+Google manages database serving capacity and can stream changing results. The team still owns document, query, index, authorization, and listener design.
+:::
+
+:::expand[How Do Backups, PITR, and TTL Treat Time Differently?]{kind="recap"}
+Backups keep coarser historical copies, PITR exposes fine-grained recent state, and TTL asynchronously deletes intentionally disposable documents after expiry.
+:::
+
+:::expand[How Does a Practical Firestore Model Fit Together?]{kind="recap"}
+Start from screens and reads, separate growing records, align queries with indexes and Rules, use atomic writes deliberately, and choose recovery and expiration policies explicitly.
+:::
 
 ## References
 
-- [Firestore data model](https://cloud.google.com/firestore/docs/data-model) - Documents collections, documents, paths, and supported field values.
-- [Firestore queries](https://cloud.google.com/firestore/docs/query-data/queries) - Documents query filters, ordering, limits, and access patterns.
-- [Firestore indexes](https://cloud.google.com/firestore/docs/query-data/indexing) - Documents single-field and composite index behavior.
-- [Firestore transactions and batched writes](https://cloud.google.com/firestore/docs/manage-data/transactions) - Documents transactional reads and writes plus batched writes.
-- [Firestore Security Rules](https://cloud.google.com/firestore/docs/security/get-started) - Documents direct client access rules for Firestore.
-- [Firestore IAM](https://cloud.google.com/firestore/docs/security/iam) - Documents IAM roles and permissions for Firestore resources.
-- [Firestore backup and restore](https://cloud.google.com/firestore/native/docs/backups) - Documents scheduled backups and restore behavior.
-- [Firestore point-in-time recovery](https://cloud.google.com/firestore/native/docs/pitr) - Documents PITR behavior and recovery windows.
-- [Work with Firestore point-in-time recovery](https://docs.cloud.google.com/firestore/native/docs/use-pitr) - Documents PITR clone and restore operations.
-- [Firestore TTL policies](https://cloud.google.com/firestore/native/docs/ttl) - Documents TTL cleanup using timestamp fields.
+- [Firestore overview](https://docs.cloud.google.com/firestore/native/docs/overview)
+- [Firestore data model](https://docs.cloud.google.com/firestore/native/docs/data-model)
+- [Firestore queries](https://firebase.google.com/docs/firestore/query-data/queries)
+- [Firestore indexes](https://docs.cloud.google.com/firestore/native/docs/standard-index-overview)
+- [Transactions and batched writes](https://docs.cloud.google.com/firestore/native/docs/manage-data/transactions)
+- [Firestore Security](https://firebase.google.com/docs/firestore/security/overview)
+- [Security Rules fields](https://firebase.google.com/docs/firestore/security/rules-fields)
+- [Security Rules conditions](https://firebase.google.com/docs/firestore/security/rules-conditions)
+- [Firestore backups](https://cloud.google.com/firestore/docs/backups)
+- [Firestore PITR](https://docs.cloud.google.com/firestore/native/docs/pitr)
+- [Firestore disaster recovery](https://docs.cloud.google.com/firestore/native/docs/disaster-recovery)
+- [Firestore TTL](https://docs.cloud.google.com/firestore/native/docs/ttl)
+- [Test Security Rules](https://firebase.google.com/docs/firestore/security/test-rules-emulator)

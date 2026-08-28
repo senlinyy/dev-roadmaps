@@ -22,7 +22,19 @@ id: article-containers-orchestration-kubernetes-operations-metrics-and-autoscali
 
 A HorizontalPodAutoscaler, or HPA, is a feedback controller. Work arrives, Pods process it, a metrics pipeline measures pressure, and the HPA changes the target workload's desired replica count. The important question is not merely whether a metric is high. It is whether adding healthy Pods should make that metric fall.
 
-Seven questions build that model:
+Before following the metric, name the parts of the control system. The application is the **plant** doing the work. Incoming traffic is a **disturbance**. The metrics pipeline is the **sensor**. The HPA is the **controller**, the target is its **set point**, and replica count is the **actuator**. New Pods change capacity, which should change the next measurement.
+
+```text
+incoming work -> Pods -> measured pressure -> HPA
+                    ^                         |
+                    |---- desired replicas --|
+```
+
+This is a loop, not a one-time threshold alert. The HPA repeatedly observes the result of its earlier replica decisions and makes another recommendation.
+
+For CPU and memory, measurements travel from the node's collection path through the metrics API before an autoscaler can make a scaling decision.
+
+Keep these questions in view as you work through the lesson:
 
 1. **How does a CPU measurement travel from a container to the HPA controller?**
 2. **How does the HPA turn a metric value into a replica recommendation?**
@@ -36,18 +48,6 @@ Seven questions build that model:
 <!-- section-summary: Kubelets measure container usage, Metrics Server exposes resource metrics through metrics.k8s.io, and the HPA reads that API as its sensor. -->
 
 ### Autoscaling is a delayed feedback loop
-
-Before following the metric, name the parts of the control system. The application is the **plant** doing the work. Incoming traffic is a **disturbance**. The metrics pipeline is the **sensor**. The HPA is the **controller**, the target is its **set point**, and replica count is the **actuator**. New Pods change capacity, which should change the next measurement.
-
-```text
-incoming work -> Pods -> measured pressure -> HPA
-                    ^                         |
-                    |---- desired replicas --|
-```
-
-This is a loop, not a one-time threshold alert. The HPA repeatedly observes the result of its earlier replica decisions and makes another recommendation.
-
-For CPU and memory, the path is:
 
 ```mermaid
 flowchart TD

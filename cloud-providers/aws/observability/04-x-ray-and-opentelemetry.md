@@ -30,12 +30,16 @@ aliases:
 6. [How Do Traces Connect to Logs?](#how-do-traces-connect-to-logs)
 7. [How Do You Migrate Existing X-Ray SDK Code?](#how-do-you-migrate-existing-x-ray-sdk-code)
 8. [How Does the Complete Tracing System Fit Together?](#how-does-the-complete-tracing-system-fit-together)
-9. [What Should You Remember?](#what-should-you-remember)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
 A single process has a call stack. A distributed system does not. Distributed tracing reconstructs that missing relationship by giving one business operation a trace identity and recording each timed piece of work as a span. OpenTelemetry creates and transports that evidence; X-Ray and CloudWatch store, connect, and visualize it.
 
-The sections below answer these questions in order:
+The checkout alarm is still fresh. In the previous article, the team found JSON logs for failed payment requests and learned how to query them in CloudWatch Logs Insights. That answered the first question: which service wrote the error and what did it say?
+
+Now the incident channel asks a larger question. A customer request hit the Application Load Balancer, reached the checkout API, called a pricing service, wrote to DynamoDB, sent a message to SQS, triggered a Lambda fraud-check function, and waited on an external payment provider. Every piece has its own logs, but the customer experienced one slow checkout.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Do Distributed Requests Need Tracing?**
 2. **What Does X-Ray Show?**
@@ -48,10 +52,6 @@ The sections below answer these questions in order:
 
 ## Why Do Distributed Requests Need Tracing?
 <!-- section-summary: Logs show what each service wrote, while tracing follows one request across every service that helped serve it. -->
-
-The checkout alarm is still fresh. In the previous article, the team found JSON logs for failed payment requests and learned how to query them in CloudWatch Logs Insights. That answered the first question: which service wrote the error and what did it say?
-
-Now the incident channel asks a larger question. A customer request hit the Application Load Balancer, reached the checkout API, called a pricing service, wrote to DynamoDB, sent a message to SQS, triggered a Lambda fraud-check function, and waited on an external payment provider. Every piece has its own logs, but the customer experienced one slow checkout.
 
 **Distributed tracing** connects those pieces. A trace follows one request as it moves through services and records timed units of work along the way. Instead of opening five log groups and trying to line up timestamps by hand, the team can see the request path, the slow dependency, the service that returned an error, and the logs attached to the trace.
 
@@ -427,7 +427,7 @@ This is the end state the observability section has been building toward. Metric
 *The summary connects the tracing controls that matter during incidents: enough sampled traces, trace-linked logs, and a clear trace map for the failing checkout path.*
 
 
-## What Should You Remember?
+## Check Your Answers
 <!-- section-summary: Tracing reconstructs distributed causality by creating spans, propagating context, transporting telemetry, and connecting sampled traces to logs and metrics. -->
 
 Keep the layers separate:

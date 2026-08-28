@@ -19,19 +19,6 @@ id: article-containers-orchestration-kubernetes-configuration-storage-backup-and
 8. [Check Your Answers](#check-your-answers)
 9. [References](#references)
 
-The explanation follows 7 practical questions:
-
-1. **Why does recovery begin by locating state?**
-2. **What do etcd snapshots, Git, and cluster backups recover?**
-3. **How can persistent data be copied consistently?**
-4. **Which Secrets, artifacts, and external services extend the recovery boundary?**
-5. **How do RPO, RTO, and failure scope shape the design?**
-6. **Why must a restore drill rebuild and validate the whole application?**
-7. **How does the five-step model turn an inventory into a recovery plan?**
-
-## Why does recovery begin by locating state?
-<!-- section-summary: A recovery plan starts by finding every piece of state, its authoritative home, and the mechanism that can recreate it. -->
-
 The easiest way to understand Kubernetes backup is to ask a more fundamental question: if the entire system disappeared, what information would be required to recreate the application correctly?
 
 That question leads to the central principle:
@@ -68,6 +55,19 @@ TLS certificate   → Kubernetes, a certificate manager, or an external CA
 User uploads      → object storage
 ```
 
+Keep these questions in view as you work through the lesson:
+
+1. **Why does recovery begin by locating state?**
+2. **What do etcd snapshots, Git, and cluster backups recover?**
+3. **How can persistent data be copied consistently?**
+4. **Which Secrets, artifacts, and external services extend the recovery boundary?**
+5. **How do RPO, RTO, and failure scope shape the design?**
+6. **Why must a restore drill rebuild and validate the whole application?**
+7. **How does the five-step model turn an inventory into a recovery plan?**
+
+## Why does recovery begin by locating state?
+<!-- section-summary: A recovery plan starts by finding every piece of state, its authoritative home, and the mechanism that can recreate it. -->
+
 Follow one request through that system. A customer opens the site through DNS and a load balancer. The frontend image supplies the executable code, a Deployment describes how to run it, a Secret supplies the database credential, PostgreSQL returns the customer record from its disk, and object storage returns an uploaded receipt. Losing any one of those pieces can break the request even when every other backup is healthy.
 
 This is why “rebuild” and “restore” are related but different operations. Git and infrastructure code can often **rebuild** replaceable structure: a cluster, Namespace, Deployment, or DNS record. A database backup or object-store replica **restores** information that cannot be derived from those declarations. The recovery plan needs both paths and must know where they meet.
@@ -96,15 +96,6 @@ A state map can look like this:
 A **KMS** is a key management system, and an **HSM** is a hardware security module. Both can hold cryptographic keys required to interpret encrypted backups. Losing the key can make a perfectly copied backup unusable.
 
 The complete recovery design should answer:
-
-- What state exists?
-- Where does each piece actually live?
-- Which copy is authoritative?
-- How will it be backed up?
-- How frequently is it protected?
-- In what order must the pieces be restored?
-- Which credentials or encryption keys are required?
-- How will the team prove the restore works?
 
 If any answer is missing, the recovery design probably has a gap.
 

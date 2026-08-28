@@ -23,9 +23,6 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## Which Question Does Each AWS Boundary Answer?
-<!-- section-summary: Accounts, Regions, Availability Zones, VPCs, and subnets are separate coordinates that answer ownership, geography, failure, network, and placement questions. -->
-
 AWS infrastructure is often drawn as a tree: accounts contain Regions, Regions contain Availability Zones, and Availability Zones contain networks and resources. The picture is useful, but treating every term as another folder hides the engineering reason each boundary exists.
 
 The boundaries answer different questions:
@@ -48,6 +45,20 @@ Which Availability Zone-specific part of that network is it attached to?
 ```
 
 An application also needs answers to several independent design questions. Who may create or control it? Who receives the bill? Where in the world should it run? What happens if part of that location fails? Which network carries its traffic? How does it communicate with systems owned by other teams? AWS uses different boundaries because one boundary cannot answer all of those questions well.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Which Question Does Each AWS Boundary Answer?**
+2. **What Does an AWS Account Own and Control?**
+3. **How Does a Region Choose the Workload's Location?**
+4. **Why Does a Workload Use More Than One Availability Zone?**
+5. **How Do VPCs and Subnets Place Resources on a Network?**
+6. **How Do Global, Regional, and Zonal Scopes Differ?**
+7. **How Do Separate Accounts Share Access and Services?**
+8. **What Should You Check Before Changing a Resource?**
+
+## Which Question Does Each AWS Boundary Answer?
+<!-- section-summary: Accounts, Regions, Availability Zones, VPCs, and subnets are separate coordinates that answer ownership, geography, failure, network, and placement questions. -->
 
 A simplified organization can be pictured like this:
 
@@ -75,17 +86,6 @@ AWS Organization
 ```
 
 The drawing must be read carefully. The production account does not physically sit inside one Region. The same account can own resources in `eu-west-2`, `eu-west-1`, `us-east-1`, and other Regions at the same time. The account supplies the ownership coordinate; the Region supplies the geographic coordinate.
-
-The sections below answer these questions in order:
-
-1. **Which Question Does Each AWS Boundary Answer?**
-2. **What Does an AWS Account Own and Control?**
-3. **How Does a Region Choose the Workload's Location?**
-4. **Why Does a Workload Use More Than One Availability Zone?**
-5. **How Do VPCs and Subnets Place Resources on a Network?**
-6. **How Do Global, Regional, and Zonal Scopes Differ?**
-7. **How Do Separate Accounts Share Access and Services?**
-8. **What Should You Check Before Changing a Resource?**
 
 Together, these boundaries control **blast radius**: the amount of the organization or workload that one mistake, credential problem, network change, or infrastructure failure can affect.
 

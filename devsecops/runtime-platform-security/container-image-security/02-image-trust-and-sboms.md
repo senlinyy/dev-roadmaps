@@ -22,402 +22,397 @@ aliases:
 
 ## Table of Contents
 
-1. [What Is Inside This Image?](#what-is-inside-this-image)
-2. [What Image Scanning Checks](#what-image-scanning-checks)
-3. [Layers and Package Visibility](#layers-and-package-visibility)
-4. [What an SBOM Records](#what-an-sbom-records)
-5. [CycloneDX and SPDX in Practice](#cyclonedx-and-spdx-in-practice)
-6. [Base-Image Drift Creates New Work](#base-image-drift-creates-new-work)
-7. [Triage Uses Severity, Reachability, and Ownership](#triage-uses-severity-reachability-and-ownership)
-8. [Signing and Attestations Connect Evidence to Trust](#signing-and-attestations-connect-evidence-to-trust)
-9. [CI Publishes the Evidence](#ci-publishes-the-evidence)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
-12. [References](#references)
+1. [Why Must Image Trust Begin with Exact Artifact Identity?](#why-must-image-trust-begin-with-exact-artifact-identity)
+2. [How Do SBOMs Describe What an Image Contains?](#how-do-sboms-describe-what-an-image-contains)
+3. [Why Can Scanning the Same Image Produce New Results?](#why-can-scanning-the-same-image-produce-new-results)
+4. [How Do Base Images Make Vulnerability Work Continuous?](#how-do-base-images-make-vulnerability-work-continuous)
+5. [How Do Reachability and Ownership Turn Findings into Decisions?](#how-do-reachability-and-ownership-turn-findings-into-decisions)
+6. [What Do Signatures and Attestations Actually Prove?](#what-do-signatures-and-attestations-actually-prove)
+7. [How Should CI Build and Publish the Evidence Bundle?](#how-should-ci-build-and-publish-the-evidence-bundle)
+8. [What Does an End-to-end Image Trust Chain Look Like?](#what-does-an-end-to-end-image-trust-chain-look-like)
+9. [Check Your Answers](#check-your-answers)
 
-## What Is Inside This Image?
-<!-- section-summary: Image trust starts by naming the exact digest and answering what software the image contains. -->
+An image is an executable supply-chain artifact. Before asking whether it is safe to deploy, the team needs to identify exactly which artifact it is discussing. A familiar name such as `payments-api:1.7` is helpful to people, but it does not by itself prove that two observers received the same bytes.
 
-In the previous article, the team made the `payments-api` shipping box smaller. They used a trusted base image, kept build tools out of the runtime stage, ran as a non-root user, and prepared the image for a read-only filesystem.
+A tag is a registry label. The label can point to an image manifest today and, unless registry policy prevents it, a different manifest tomorrow. That makes this statement ambiguous:
 
-Now the team asks the next plain question: **what is inside this exact image?** That question sounds simple, but production images have layers. A Node.js API image can contain Debian packages from the base image, npm packages from `package-lock.json`, compiled JavaScript, CA certificates, startup metadata, and sometimes files the team did not expect.
-
-A **digest** gives the team the exact image object, such as `ghcr.io/devpolaris/payments-api@sha256:...`. A **scan report** compares discovered packages with known vulnerability data. An **SBOM**, short for Software Bill of Materials, records the package inventory. A **signature** and **attestation** connect the digest and evidence back to the trusted CI workflow.
-
-Here is the small release record we will grow through the article:
-
-```yaml
-service: payments-api
-image: ghcr.io/devpolaris/payments-api
-digest: sha256:2c1a9f7b6d4e8b0c7a91e4d2f6c3b8a5d4e7f90123456789abcdef0123456789
-source_commit: 4f8c2a19d5be
+```text
+we scanned payments-api:latest
 ```
 
-The `image` field names the repository. The `digest` field names the exact image content. The `source_commit` field connects the image back to the code review and build. Every later piece of evidence should point back to this same digest.
+Which value of `latest` was scanned? Did production pull before or after the tag moved? Did the incident responder retrieve the same object?
 
-The table below shows the evidence chain before we zoom into each part:
+A digest is content-derived identity, commonly written as:
 
-| Release question | Evidence the team should keep |
-|---|---|
-| Which exact image did CI build? | The immutable image digest, such as `ghcr.io/devpolaris/payments-api@sha256:...` |
-| What software is inside that image? | A **Software Bill of Materials**, usually shortened to **SBOM** |
-| Which known vulnerabilities affect those packages? | An image scan report from a tool such as Trivy, Docker Scout, or Grype |
-| Who built and approved this image? | A signature, provenance attestation, and CI identity claims |
-| Which findings were accepted, fixed, or deferred? | A triage record with severity, reachability, owner, and due date |
-
-This is the same image journey from a few angles. The digest tells us which image object we are discussing. The SBOM tells us what ingredients sit inside it. The scan report compares those ingredients with vulnerability databases. The signature and attestations connect the evidence back to the trusted CI pipeline. The triage record explains the human decision when a scanner finds something.
-
-![Release evidence chain infographic showing a payments-api digest connected to SBOM, scan report, signature, triage record, CI build, and deploy policy](/content-assets/articles/article-devsecops-container-image-security-image-scanning/release-evidence-chain.png)
-
-*The release evidence chain keeps every trust decision attached to one digest, so later scanners, reviewers, and deployment policies all talk about the same artifact.*
-
-The first step is scanning, because scanning gives the team the first concrete list of packages and vulnerabilities for the digest.
-
-## What Image Scanning Checks
-<!-- section-summary: Image scanning inspects a built container image and compares discovered packages with vulnerability databases. -->
-
-**Image scanning** is an automated inspection of a built container image. A scanner pulls the image layers, rebuilds the final filesystem view, discovers packages, and compares those packages with vulnerability databases. In plain English, it asks, "Which known risky libraries and operating system packages did we ship in this exact image?"
-
-For `payments-api`, the team should scan the pushed image by digest after CI builds it. A **digest** is a content address for the image manifest, usually a SHA-256 value. A tag such as `:main` or `:prod` is a friendly pointer that teams can move, so scan reports and deployment evidence should name the digest.
-
-```bash
-IMAGE="ghcr.io/devpolaris/payments-api@sha256:2c1a9f7b6d4e8b0c7a91e4d2f6c3b8a5d4e7f90123456789abcdef0123456789"
-
-trivy image \
-  --severity HIGH,CRITICAL \
-  --ignore-unfixed \
-  "$IMAGE"
+```text
+payments-api@sha256:a724...
 ```
 
-This command asks Trivy to scan one immutable image digest and show high or critical vulnerabilities with known fixes. The `--ignore-unfixed` flag helps teams focus on findings that have a patch path, which is useful for release gates. Many teams also save the full JSON or SARIF output so the result can be attached to the build:
+If any covered content changes, the digest changes. Two different image manifests do not intentionally share the same cryptographic digest. That property gives the trust system a stable subject.
 
-```bash
-mkdir -p evidence
-
-trivy image \
-  --format json \
-  --output evidence/trivy-payments-api.json \
-  "$IMAGE"
+```text
+tag:      human-friendly movable label
+digest:   exact content identity
 ```
 
-The scan usually reports package name, installed version, vulnerability ID, severity, fixed version, and the package type. A finding might say that `openssl` from the Debian base image has a critical CVE and a fixed version exists. Another finding might say that an npm package copied with the Node application has a high severity vulnerability in a transitive dependency.
+Keep these questions in view as you work through the lesson:
 
-The fix path changes by package source. Operating system package findings usually come from the base image. Application package findings usually come from the repository lockfile. To make those decisions well, the team needs to understand layers and package visibility.
+1. **Why Must Image Trust Begin with Exact Artifact Identity?**
+2. **How Do SBOMs Describe What an Image Contains?**
+3. **Why Can Scanning the Same Image Produce New Results?**
+4. **How Do Base Images Make Vulnerability Work Continuous?**
+5. **How Do Reachability and Ownership Turn Findings into Decisions?**
+6. **What Do Signatures and Attestations Actually Prove?**
+7. **How Should CI Build and Publish the Evidence Bundle?**
+8. **What Does an End-to-end Image Trust Chain Look Like?**
 
-## Layers and Package Visibility
-<!-- section-summary: Layer and package visibility tells teams where a vulnerable component entered the image and which owner can fix it. -->
+## Why Must Image Trust Begin with Exact Artifact Identity?
+<!-- section-summary: A tag is a movable name, while an image digest identifies exact content and gives SBOMs, scans, signatures, attestations, deployments, and incidents one common subject. -->
 
-A container image is built from **layers**. The OCI Image Specification describes an image manifest that points to a config object and an ordered set of layers. Each layer represents filesystem changes from build steps, and the container runtime combines those layers into the filesystem the process sees.
+The digest connects otherwise separate evidence:
 
-You can think about a Dockerfile as a trail of build decisions. The `FROM` line brings in base-image packages. A package manager command adds operating system tools. A language install step adds application dependencies. A `COPY` instruction brings in the compiled application or source files.
-
-Here is a small version of the `payments-api` runtime image. It shows where base packages, npm dependencies, and application files enter the final container.
-
-```dockerfile
-FROM node:22-bookworm-slim
-
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
-
-COPY dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
+```text
+sha256:ABC
+  + inventory of components
+  + vulnerability result
+  + build provenance
+  + signature
+  + policy decision
+  + deployment record
 ```
 
-A scanner gets useful visibility from two places. It reads operating system package databases such as Debian's `dpkg` status files, Alpine's `apk` database, or RPM metadata. It also reads application dependency metadata such as `package-lock.json`, `pnpm-lock.yaml`, `poetry.lock`, `go.mod`, `Cargo.lock`, and language-specific package metadata inside the final image.
+Without that connection, a valid report may describe the wrong artifact. A software bill of materials for one build, a signature over another, and a deployment of a third do not combine into trust merely because each uses the same tag.
 
-This visibility turns a vague warning into an actionable fix. If `libssl3` came from `node:22-bookworm-slim`, the platform or container owner needs a refreshed base image and a rebuild. If `express` or a transitive npm package came from `package-lock.json`, the application team needs a dependency update and a new lockfile commit.
+Start with the artifact itself. Record the registry, repository, platform or architecture when relevant, manifest digest, creation evidence, and release name. The digest should be captured from the pushed registry object rather than assumed from a local tag, because registries and multi-platform manifests can affect which identity consumers resolve.
 
-Tools can show package inventory in a simple table before the team even talks about vulnerabilities. This output also helps the team spot packages that were accidentally left in the final runtime image.
+Exact identity does not mean the artifact is good. Malware can also have a stable digest. Identity answers “which bytes?” Trust requires decisions about origin, contents, known weaknesses, policy, and context. The digest makes those decisions attach to the correct object.
 
-```bash
-syft packages "$IMAGE" -o table
-```
+Identity must also be handled consistently across tools. One scanner may report the digest of a platform-specific manifest, while another tool records the digest of a multi-platform image index. Both can be valid identities for different objects. Preserve the relationship and ensure policy verifies the object the runtime will actually pull for its architecture. A copied artifact in another registry should likewise retain evidence that names the intended subject instead of relying on a similar repository path.
 
-That table gives engineers a quick way to answer, "Is the package actually in the runtime image?" Multi-stage builds often install build tools in a builder stage and leave them out of the final stage. A clean final image gives scanners fewer runtime packages to report and gives humans fewer findings to triage.
+This prevents an easy reasoning error: “the release tag was signed, therefore anything now found at that tag is signed.” Verification must resolve the current artifact and validate evidence over its digest. If the tag moves, the new target needs its own inventory, scan, provenance, and approval.
 
-Scanning tells us what is risky today. The next need is an inventory that survives beyond today's vulnerability database.
+## How Do SBOMs Describe What an Image Contains?
+<!-- section-summary: An SBOM is structured component inventory, and image layers plus multiple packaging systems mean source and final-image SBOMs provide complementary rather than interchangeable views. -->
 
-## What an SBOM Records
-<!-- section-summary: An SBOM is a machine-readable inventory of the software components inside an artifact. -->
+An SBOM, or software bill of materials, is structured inventory. It records components associated with an artifact: names, versions, package types, identifiers, suppliers, licenses, dependency relationships, hashes, and sometimes the image or file in which each component was observed.
 
-A **Software Bill of Materials**, or **SBOM**, is a machine-readable inventory of software components inside an artifact. For a container image, an SBOM usually lists operating system packages, language packages, versions, package identifiers, relationships, and sometimes license or supplier data. It is the release inventory for the exact image digest.
-
-The simple reason teams keep SBOMs is response speed. Imagine a serious OpenSSL issue gets announced next month. The team can query the SBOM catalog for `openssl`, affected versions, and the image digests that contain them. That is much faster than pulling every production image and rediscovering the same packages from scratch.
-
-For `payments-api`, CI can generate an SBOM immediately after the image is pushed. The commands below produce CycloneDX and SPDX JSON for the same immutable image digest.
-
-```bash
-mkdir -p evidence
-
-syft packages "$IMAGE" \
-  -o cyclonedx-json=evidence/payments-api.cdx.json
-
-syft packages "$IMAGE" \
-  -o spdx-json=evidence/payments-api.spdx.json
-```
-
-The two output files describe the same image inventory in two common standards. A simplified component record from a CycloneDX-style SBOM might look like this. This snippet keeps only enough fields to show the package names, versions, and package identifiers:
+Conceptually, an entry can look like:
 
 ```json
 {
-  "bomFormat": "CycloneDX",
-  "specVersion": "1.6",
+  "component": "example-library",
+  "version": "4.2.0",
+  "type": "library",
+  "foundIn": "payments-api@sha256:ABC"
+}
+```
+
+An SBOM is not inherently a vulnerability report. It says what the evidence generator believes is present. A scanner can later combine that inventory with vulnerability intelligence. Keeping those concepts separate is important because inventory is tied mostly to artifact contents, while vulnerability knowledge changes over time.
+
+Container images make inventory less obvious than a flat application directory. Images contain layers from the base, package-installation steps, copied files, and application output. The final merged filesystem can hide a file removed by a later layer even though bytes remain in history. Multiple platforms under one image index can also have different packages.
+
+Package visibility depends on how software was installed. An operating-system package manager leaves a database with names and versions. A language package manager may leave manifests or metadata. A statically linked binary can include library code without a separate package directory. A manually copied executable might have no package-manager record at all. One scanner can therefore see something another misses.
+
+This creates two useful inventory views:
+
+- A **source or build SBOM** describes declared application dependencies and the graph resolved during the build.
+- A **final-image SBOM** describes components observable in the artifact that will run, including inherited operating-system packages and copied runtime files.
+
+Neither view always contains the other. A source SBOM may list build dependencies that never ship and preserve dependency relationships unavailable from final files. An image SBOM can reveal the base operating system and accidentally copied software missing from source declarations. Publishing both with clear subjects gives responders more complete evidence.
+
+CycloneDX and SPDX are common structured formats. CycloneDX is often used for component and dependency information in security workflows. SPDX supports detailed software-package, file, relationship, and licensing descriptions. The important control is not choosing a fashionable acronym; it is producing a valid, machine-readable document that identifies its subject and can be retained and queried.
+
+A small conceptual document needs at least enough identity to avoid becoming an orphan:
+
+```json
+{
+  "artifact": {
+    "name": "payments-api",
+    "digest": "sha256:ABC"
+  },
   "components": [
-    {
-      "type": "library",
-      "name": "express",
-      "version": "4.18.3",
-      "purl": "pkg:npm/express@4.18.3"
-    },
-    {
-      "type": "library",
-      "name": "openssl",
-      "version": "3.0.14-1~deb12u2",
-      "purl": "pkg:deb/debian/openssl@3.0.14-1~deb12u2?distro=debian-12"
-    }
+    {"name": "runtime-package", "version": "1.2.3"},
+    {"name": "application-library", "version": "4.5.6"}
   ]
 }
 ```
 
-The **Package URL**, usually written as **purl**, gives tools a consistent way to identify a package across ecosystems. `pkg:npm/express@4.18.3` means an npm package named `express` at that exact version. `pkg:deb/debian/openssl@...` means a Debian package, which helps scanners and inventory systems avoid confusing packages that share a name across ecosystems.
+Real formats include richer identifiers and relationships. What matters first is that a later question about `sha256:ABC` can locate the inventory produced for `sha256:ABC`, not whichever image a tag currently names.
 
-An SBOM also helps compliance and operations teams. Security can search for vulnerable components, legal teams can review licenses, and platform teams can compare two releases. The file should travel with the image digest because an SBOM without the digest leaves everyone guessing which artifact the inventory describes.
+Inventory quality has several dimensions. **Completeness** asks whether relevant components were discovered. **Accuracy** asks whether their identities and versions are correct. **Relationship quality** asks whether parent, dependency, and containment links are useful. **Subject binding** asks whether the document unmistakably describes the intended digest. **Generation evidence** asks which tool and method produced it. A syntactically valid SBOM can still be weak on any of these dimensions.
 
-Once the team knows what an SBOM records, the next question is which SBOM format they should publish. The format choice depends on the systems that need to read the SBOM: scanners, registries, customer portals, and internal review tools.
+An SBOM also does not prove its own truth. A document generated from a source manifest can faithfully list declared packages while missing a binary copied into the final image. A final-image scanner can observe a library without knowing why the build selected it. Sign or attest the document and its relationship to the artifact, but remember that a signature proves issuer and integrity, not inventory completeness. Compare independent views where the risk justifies it.
 
-## CycloneDX and SPDX in Practice
-<!-- section-summary: CycloneDX and SPDX are the two common SBOM standards teams use to exchange image inventory data. -->
+Licenses and supplier fields can support other governance questions, but their presence should not distract from the security purpose here: quickly connect a component disclosure to exact artifacts and owners. Preserve enough identifiers—such as package ecosystem, version, and standardized package coordinates—to avoid confusing unrelated components with similar names.
 
-**CycloneDX** is an SBOM standard designed for software supply chain risk. It represents components, services, dependencies, vulnerabilities, and related metadata. Many security tools support CycloneDX because it fits vulnerability management workflows well.
+## Why Can Scanning the Same Image Produce New Results?
+<!-- section-summary: Vulnerability scanning joins artifact inventory to changing intelligence, so an unchanged digest can receive different findings as databases, detection, and package understanding evolve. -->
 
-**SPDX** is another SBOM standard with strong roots in license and provenance tracking. SPDX is also an ISO standard, and many organizations use it when they need a widely recognized exchange format for component, license, and file-level metadata. In production, the right choice often depends on which format the consuming tools expect.
+Scanning is best understood as a join between two data sets:
 
-Here is a practical way to choose for the `payments-api` release. The team can publish both formats when different consumers need different evidence.
-
-| Consumer | Useful SBOM format | Why it helps |
-|---|---|---|
-| Vulnerability management platform | CycloneDX JSON | It maps cleanly to components, dependencies, vulnerabilities, and VEX-style status records |
-| Legal or open source review process | SPDX JSON | It has strong license metadata support and broad standards recognition |
-| Customer security questionnaire | CycloneDX or SPDX | Customers often accept either standard when it names the artifact digest and component versions |
-| Registry or developer tooling | Tool-dependent | Docker Scout, Syft, Trivy, and commercial scanners can read or generate common SBOM formats |
-
-**VEX**, short for Vulnerability Exploitability eXchange, is a way to record how a known vulnerability affects a specific product or artifact. For example, a scanner may report a vulnerable library in the image, while the team proves the vulnerable code path is unreachable in `payments-api`. A VEX record can say the image is under investigation, affected, fixed, or not affected, with a reason.
-
-That VEX decision should never be a casual note in a chat thread. It belongs with the release evidence, tied to the image digest, vulnerability ID, affected package, reviewer, and expiration date. If a future code change starts using the vulnerable feature, the old VEX decision needs another review.
-
-SBOM standards help the inventory travel between tools. The inventory still changes over time, because base images and vulnerability databases keep moving.
-
-## Base-Image Drift Creates New Work
-<!-- section-summary: Base-image drift means old releases keep receiving new vulnerability work as upstream packages and advisory data change. -->
-
-**Base-image drift** is the gap between the base image you built from and the current security state of that base image family. The `payments-api` Dockerfile might say `FROM node:22-bookworm-slim`, and that tag may point to a newer digest next week after Debian or Node image maintainers publish patches. The application source code stayed the same, while the safe rebuild target moved.
-
-There is also vulnerability knowledge drift. A package can sit inside yesterday's clean image and receive a new CVE tomorrow because researchers published new information. The bytes inside the image stayed the same, while the vulnerability database gained a new advisory.
-
-This is why mature teams schedule rebuilds even when the application code has no changes. A weekly or monthly rebuild pulls the current base image, rebuilds `payments-api`, regenerates the SBOM, reruns the scanner, and publishes a new digest. The rebuild gives the team a normal path to collect upstream operating system patches.
-
-```bash
-docker buildx build \
-  --pull \
-  --tag ghcr.io/devpolaris/payments-api:base-refresh-candidate \
-  --load \
-  .
-
-trivy image ghcr.io/devpolaris/payments-api:base-refresh-candidate
+```text
+component inventory for sha256:ABC
+              +
+current vulnerability intelligence
+              =
+findings at evaluation time
 ```
 
-The `--pull` flag asks the builder to fetch the current base image before building. This is useful for scheduled refresh pipelines because the team wants patched base layers even when the Dockerfile text stayed the same. After the candidate scan passes, CI should push the image, capture the new digest, generate new SBOMs, and sign the new digest.
+The image can remain byte-for-byte unchanged while the result changes. On Monday, a package may have no public advisory. On Thursday, researchers publish a vulnerability and the database maps it to the installed version. The digest remains `sha256:ABC`; current knowledge about that digest is different.
 
-Base-image findings usually follow a different ownership path from application dependency findings. The table below connects the package source to the team action and the evidence that should change.
+Scanner behavior also changes. Package detection improves, version matching is corrected, advisory feeds add or withdraw mappings, and severity or fix availability changes. A scan report therefore needs its evaluation time, tool or data identity, and artifact digest. “Passed scan” is not a permanent property of the image.
 
-| Finding source | Typical owner | Common fix | Evidence to update |
-|---|---|---|---|
-| Debian, Ubuntu, Alpine, or RHEL package from the base image | Platform or container owner | Pull patched base image and rebuild | Image digest, SBOM, scan report, base image digest |
-| Node, Python, Go, Java, Rust, or .NET dependency from the app | Application team | Update lockfile and commit dependency change | Commit SHA, SBOM, scan report, dependency changelog |
-| Package installed only for debugging or build convenience | Team that owns the Dockerfile | Remove package from runtime image or move it to a builder stage | Dockerfile diff, SBOM diff, scan report |
-| Package with no fixed version yet | Security and owning team together | Create an exception with scope, reachability notes, and review date | Triage record, issue link, compensating control |
+Layers complicate matching. A base package can be upgraded in a later layer, metadata can remain from an earlier version, or a removed file can persist in image history. Scanners vary in whether they analyze the final filesystem, layer history, package databases, file signatures, binaries, or source manifests. Their results should be investigated as observations, not treated as infallible descriptions.
 
-This is where scanning turns into triage. The scanner can show a list of findings, while the team still needs to decide what blocks a release, what can wait, and what evidence supports the decision.
+Package visibility is especially difficult for statically compiled applications, vendored libraries, extracted archives, and manually copied executables. Version strings can be absent or misleading. A package database can claim something that the application no longer uses. That is why build-time inventory, final-image analysis, and provenance complement one another.
 
-## Triage Uses Severity, Reachability, and Ownership
-<!-- section-summary: Vulnerability triage combines scanner severity with runtime reachability, fix ownership, and release risk. -->
+![Release evidence chain infographic showing a payments-api digest connected to SBOM, scan report, signature, triage record, CI build, and deploy policy](/content-assets/articles/article-devsecops-container-image-security-image-scanning/release-evidence-chain.png)
 
-**Triage** is the process of turning scan findings into decisions. A scanner gives the team vulnerability IDs and severities, but humans need to answer whether the vulnerable code can run in this service, whether a fix exists, who owns the package, and how much risk the release can carry.
+Rescanning has two distinct uses. Scan before release to stop a known unacceptable artifact from entering production. Rescan stored and deployed digests as intelligence changes so newly disclosed issues become work. Rebuilding the same source against a repaired base or dependency creates a new digest that needs its own evidence.
 
-**Severity** usually comes from advisory data, often using CVSS scores and vendor ratings such as low, medium, high, or critical. Severity is a strong first filter because a remote code execution issue deserves faster attention than a low-risk local denial-of-service issue. Severity still needs context from the image and application.
+An SBOM supports fast reevaluation because the team can search known inventories when a new library issue appears. It may still need a fresh artifact scan to confirm package detection and runtime composition. Inventory and scan outputs should be retained as evidence with their own versions rather than overwritten by the newest report.
 
-**Reachability** asks whether `payments-api` can actually execute the vulnerable code path. A vulnerable package may be present because the runtime needs it, present because a transitive dependency installed it, or present because a debug tool was accidentally left in the image. Reachability review uses application routes, runtime flags, package usage, network exposure, and sometimes runtime telemetry.
+The changing nature of findings is not scanner failure. It is a consequence of learning about fixed historical bytes over time. A mature workflow treats “artifact identity” as stable and “security knowledge” as time-sensitive.
 
-**Ownership** answers who can fix the finding. The platform team can refresh a base image. The application team can update `package-lock.json`. The security team can review an exception. The release manager can decide whether the risk fits the release window.
+This separation makes historical questions answerable. The release gate can preserve what the organization knew and decided at deployment time. A current rescan can show what it knows now. Overwriting the old report would lose the original decision context; relying only on the old report would ignore newly disclosed risk. Keep both, label their evaluation times, and connect both to the same digest.
 
-Here is a realistic triage table for one `payments-api` release. Notice how each row pairs the scanner finding with a concrete owner decision.
+When scanners disagree, compare their inputs before arguing about conclusions. Did they inspect the same manifest and platform? Did both have access to the same advisory data? Did one use the source lockfile while another inspected package databases? Did either exclude development packages or ignored paths? The difference may reveal a coverage gap that needs deliberate treatment.
 
-| Finding | Where it appears | Reachability question | Decision | Evidence |
-|---|---|---|---|---|
-| `CVE-2026-10001` in `openssl` | Debian package from `node:22-bookworm-slim` | Does the patched base image include a fixed OpenSSL package? | Rebuild from refreshed base image before production | New base digest, new image digest, passing scan |
-| `CVE-2026-10444` in `body-parser` | Transitive npm dependency in `package-lock.json` | Does `payments-api` parse request bodies through the affected code path? | Update npm dependency and run API tests | Lockfile commit, test result, new SBOM |
-| `CVE-2026-11120` in `curl` | Runtime image package installed for debugging | Does the production container need outbound curl at runtime? | Remove `curl` from the final image | Dockerfile diff, SBOM diff, reduced scan output |
-| `CVE-2026-11991` in `libxml2` | OS package with no fixed version yet | Does the service parse attacker-controlled XML? | Create time-limited exception after review | Triage record, owner, expiration date, compensating control |
+## How Do Base Images Make Vulnerability Work Continuous?
+<!-- section-summary: Applications inherit the base image's packages and history; digest pinning controls change, while regular reviewed rebuilds are still required to adopt repairs and replace vulnerable artifacts. -->
 
-The key habit is writing down the decision. A release gate that only says "scan failed" teaches the team very little. A release gate that stores package name, version, CVE, owner, fix path, reachability notes, and due date gives the team a useful security record.
+An application image inherits a large part of its software supply chain from the base. Even if the team adds only one binary, the final artifact may include a distribution, runtime, certificates, system libraries, and package metadata selected by another publisher.
 
-Many organizations also publish VEX records for important exceptions. If the team gives `payments-api` a `not_affected` VEX status because the vulnerable feature is unreachable, the VEX record should explain that reason and point to the evidence. This helps future reviewers separate accepted risk from forgotten risk.
+That inheritance creates base-image risk. A vulnerability in an operating-system library can affect every application image derived from the same digest. A compromised publisher or unexpected mutable tag can influence many builds. Inventory should therefore show which base was used and which packages it contributed.
+
+Base-image drift occurs when a mutable reference resolves differently at different build times:
+
+```dockerfile
+FROM company/python:3.14
+```
+
+The tag may receive repaired packages, which is useful, but it also means the same application revision can produce different bytes. Testing one build does not automatically transfer to a later rebuild.
+
+A digest-pinned reference controls that variation:
+
+```dockerfile
+FROM company/python:3.14@sha256:AAA
+```
+
+Now a change to the base is visible in source review. Pinning gives reproducibility and evidence continuity. It does not install future patches. The organization must monitor the pinned digest, select an updated trusted base, rebuild, retest, rescan, and release the new application digest.
+
+This is why pinning and updating are complementary. Floating silently is not a maintenance plan, and pinning forever is not a maintenance plan. The desired loop is controlled change:
+
+```text
+new base or advisory
+  -> identify affected application digests
+  -> review replacement base digest
+  -> rebuild once
+  -> test and scan final artifact
+  -> publish new SBOM and evidence
+  -> promote new digest
+```
+
+Base components also create ownership questions. The application team may own deployment, a platform team may select the approved base family, and the base publisher may provide package repairs. A finding needs a coordinator who can move work across those boundaries rather than remaining unassigned because “it came from the base.”
+
+Trust information ages at different speeds. The digest remains the identity of fixed content. An SBOM can remain a useful inventory record but may be corrected or regenerated. A signature remains cryptographically valid unless its key trust changes. Provenance describes a historical build. Vulnerability results become stale quickly as intelligence changes. Policy should account for these different clocks.
+
+The maintenance process should work across a fleet, not one image at a time. Index the relationship from base digest to child application digests and from application digest to deployed workload. When a base advisory arrives, responders can enumerate affected artifacts, prioritize public or privileged services, and trigger controlled rebuilds. Without those relationships, every team must rediscover whether it inherited the component.
+
+Rebuilding is necessary even when the vulnerable package is “only in the base.” Containers do not receive operating-system updates from a host package manager after publication. The repaired bytes must enter a new image, and the workload must move to that new digest. A successful rebuild that is never promoted leaves production exposure unchanged.
+
+## How Do Reachability and Ownership Turn Findings into Decisions?
+<!-- section-summary: A vulnerability record becomes actionable only after teams consider affected component, runtime reachability, exposure, fix options, owner, deadline, and any bounded exception or VEX statement. -->
+
+A scanner finding is evidence, not a complete risk decision. It normally says that a component and version are associated with a vulnerability record. It does not automatically prove that an attacker can reach the affected code in this workload or that exploitation would have the same impact in every environment.
+
+Severity is important but different from reachability. A critical vulnerability in an unused command-line tool may be less immediately exploitable than a lower-severity flaw on a public request path. Conversely, “we do not call that function” is weak assurance if untrusted input, dynamic loading, or future code paths can still reach it.
+
+A useful triage record asks:
+
+- Is the component actually present in the final image?
+- Which layer, file, or dependency brought it in?
+- Is the vulnerable function or behavior reachable?
+- Is the workload externally exposed or reachable from sensitive peers?
+- What privilege and data does the process hold?
+- Is a fixed package or base available?
+- Who owns the application, base, or dependency decision?
+- By when will the team rebuild, mitigate, or reassess?
+
+Ownership turns detection into work. A finding tied only to a registry repository can sit indefinitely. A finding linked to a service, production deployment, team, and escalation path has somewhere to go.
 
 ![Finding triage loop infographic showing a vulnerability finding moving through source, reachability, owner, fix or exception, and new digest decisions for payments-api](/content-assets/articles/article-devsecops-container-image-security-image-scanning/finding-triage-loop.png)
 
-*Triage turns scanner output into a decision loop: find the source, check reachability, assign an owner, and ship a new digest or a reviewed exception.*
+VEX, or vulnerability exploitability exchange, addresses a related question. It communicates a statement such as affected, not affected, fixed, or under investigation for a specific product and vulnerability, with reasoning. VEX does not replace the SBOM: inventory describes components, while VEX records an exploitability position.
 
-Now the team has scan reports, SBOMs, and triage decisions. The next question is how Kubernetes can trust that the image it pulls is the same image that produced that evidence.
+A “not affected” statement needs scope and evidence. It should identify the exact artifact or product version, vulnerability, justification, issuer, and time. Application changes, image rebuilds, or new exploitation knowledge can invalidate it. Treat it as versioned decision evidence rather than a permanent dismissal.
 
-## Signing and Attestations Connect Evidence to Trust
-<!-- section-summary: Signatures prove which identity approved a digest, and attestations attach claims such as SBOMs or provenance to that digest. -->
+The outcome can be a rebuild, configuration mitigation, runtime containment, exposure reduction, accepted bounded exception, or confirmation that the finding does not apply. Each outcome should retain the digest and owner. A rebuilt image is a new artifact, so the decision for `sha256:ABC` does not automatically transfer to `sha256:DEF` without checking their relationship.
 
-**Image signing** attaches a cryptographic signature to an image digest. The signature lets another system verify that a trusted identity approved that exact digest. For `payments-api`, the trusted identity should be the CI release workflow, and developer laptop signatures should stay out of the production release path.
+Risk decisions should be reversible and observable. If the team temporarily mitigates a reachable vulnerability by disabling a feature or blocking a route, record how monitoring proves that control remains active. If it accepts risk until a vendor fix, give the exception an expiry and named reviewer. If evidence later shows the vulnerable path is reachable, replace the earlier “not affected” assessment rather than leaving contradictory records.
 
-**Attestations** attach structured claims to an artifact. An SBOM attestation can say, "this SBOM describes this digest." A provenance attestation can say, "this digest came from this repository, this workflow, this commit, and this build command." SLSA provenance is a common format for that build history.
+The deployed environment can change reachability without changing the image. A service may become public, receive a new credential, join a more trusted network, or begin processing attacker-controlled documents. Runtime context should therefore be part of reevaluation. SBOM and digest identity supply stable artifact facts; service topology and data flow supply changing exposure facts.
 
-Cosign, from the Sigstore project, is a common tool for signing container images and attaching attestations. In a keyless flow, CI receives a short-lived OpenID Connect token from the CI platform. Cosign uses that identity to create a short-lived signing certificate, signs the digest, and stores verification material so other systems can check who signed the image.
+## What Do Signatures and Attestations Actually Prove?
+<!-- section-summary: A signature binds an approved identity to exact bytes, while an attestation signs a structured claim about those bytes; both require policy and trusted issuers to become meaningful. -->
 
-```bash
-cosign sign --yes "$IMAGE"
+An SBOM does not prove that it is accurate merely because it exists. A JSON document can claim to describe any image. The trust system needs a way to bind evidence to the exact artifact and identify who made the claim.
 
-cosign attest --yes \
-  --predicate evidence/payments-api.cdx.json \
-  --type cyclonedx \
-  "$IMAGE"
+A signature is a cryptographic statement over content identity. In plain language:
+
+```text
+the holder of this trusted signing identity approved sha256:ABC
 ```
 
-The first command signs the digest. The second command attaches the CycloneDX SBOM as an attestation to the same digest. Registry support and policy tooling vary by environment, so teams should test how their registry stores and exposes these attached artifacts before making them required for production.
+An attestation is a signed statement about the artifact. It has a subject and a predicate. Examples include:
 
-Verification should name the identity the team trusts. This example expects the image to be signed by the GitHub Actions release workflow on the protected `main` branch. A different CI platform would use different issuer and identity values:
-
-```bash
-cosign verify \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  --certificate-identity "https://github.com/devpolaris/payments-api/.github/workflows/release.yml@refs/heads/main" \
-  "$IMAGE"
+```text
+subject: sha256:ABC
+claim: built by protected workflow release.yml at source revision 123
 ```
 
-This is where signing connects to deployment trust. A Kubernetes admission policy can require a valid signature from the release workflow before it admits a workload. The cluster can also require digest-based image references so the policy checks the exact artifact that CI scanned, signed, and documented.
+or:
 
-The final piece is the CI pipeline itself. The pipeline should publish the evidence in a repeatable shape so each release follows the same security path.
-
-## CI Publishes the Evidence
-<!-- section-summary: CI should publish digest-bound evidence: scan reports, SBOMs, signatures, attestations, provenance, and triage decisions. -->
-
-The CI pipeline is the best place to create release evidence because it already has the source checkout, build logs, test results, registry credentials, and image digest. The pipeline should produce the same evidence every time so security review follows a repeatable checklist.
-
-For `payments-api`, a simple evidence bundle should include these items. Each item points back to the same image digest so reviewers can connect the files without guessing.
-
-| Evidence item | Example file or location | Why the team keeps it |
-|---|---|---|
-| Image digest | `image-ref.txt` | Names the exact artifact that deploys |
-| Vulnerability scan | `evidence/trivy-payments-api.json` | Records known findings at release time |
-| SBOM | `evidence/payments-api.cdx.json` and optionally SPDX JSON | Records package inventory for future searches |
-| Signature | Registry-attached Cosign signature | Proves the trusted CI workflow signed the digest |
-| Provenance | Registry-attached SLSA provenance attestation | Records repository, workflow, commit, and build information |
-| Triage record | `evidence/triage-summary.json` or an issue link | Explains accepted findings, owners, and review dates |
-
-Here is a compact GitHub Actions-style example that shows the release shape. The exact actions and registry login steps can change by organization, but the important idea is the same: build once, capture the digest, scan that digest, generate SBOMs for that digest, sign that digest, and upload the evidence.
-
-```yaml
-name: payments-api-release
-
-on:
-  push:
-    branches: [main]
-
-permissions:
-  contents: read
-  packages: write
-  id-token: write
-
-jobs:
-  image:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/build-push-action@v6
-        id: build
-        with:
-          context: .
-          push: true
-          pull: true
-          tags: ghcr.io/devpolaris/payments-api:${{ github.sha }}
-
-      - name: Capture image digest
-        run: |
-          mkdir -p evidence
-          echo "ghcr.io/devpolaris/payments-api@${{ steps.build.outputs.digest }}" > image-ref.txt
-          echo "IMAGE=$(cat image-ref.txt)" >> "$GITHUB_ENV"
-
-      - name: Scan image
-        run: |
-          trivy image --format json --output evidence/trivy-payments-api.json "$IMAGE"
-          trivy image --severity HIGH,CRITICAL --ignore-unfixed "$IMAGE"
-
-      - name: Generate SBOMs
-        run: |
-          syft packages "$IMAGE" -o cyclonedx-json=evidence/payments-api.cdx.json
-          syft packages "$IMAGE" -o spdx-json=evidence/payments-api.spdx.json
-
-      - name: Sign image and attach SBOM
-        run: |
-          cosign sign --yes "$IMAGE"
-          cosign attest --yes --predicate evidence/payments-api.cdx.json --type cyclonedx "$IMAGE"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: payments-api-release-evidence
-          path: |
-            image-ref.txt
-            evidence/
+```text
+subject: sha256:ABC
+claim: SBOM document D describes this artifact
 ```
 
-The `id-token: write` permission is needed for keyless signing because Cosign needs the CI platform to issue an OIDC identity token. The `packages: write` permission allows the workflow to push the image and registry-attached signature material. Teams should keep these permissions scoped to the release job and avoid giving every workflow broad package or identity permissions.
+The distinction is useful: a signature primarily answers who endorsed these bytes, while an attestation carries a particular verifiable sentence about them. Implementations may package these concepts together, but policy should still know which claim it is relying on.
 
-Some teams also publish provenance through the build system itself. Docker BuildKit and GitHub's artifact attestation features can generate provenance records, and SLSA gives a shared vocabulary for describing the build. The exact implementation can vary, while the evidence goal stays stable: a reviewer should be able to connect the digest back to source, workflow, dependency inventory, scan results, and signing identity.
+Neither proves that the software is secure. A trusted signer can approve vulnerable code. A compromised build can honestly attest that it ran. A malicious artifact can be signed by an untrusted key. Cryptography provides integrity and issuer identity under stated assumptions; security policy decides whether the issuer, workflow, claim, and context are acceptable.
 
-## Putting It All Together
-<!-- section-summary: Image trust combines inventory, vulnerability decisions, and cryptographic proof around one immutable digest. -->
+Trust is therefore a policy decision over evidence:
 
-Let's connect the pieces back to the `payments-api` release. CI builds a hardened image and pushes it to the private registry. The pipeline records the digest, scans the image, generates SBOMs, signs the digest, attaches attestations, and saves the evidence bundle.
+```text
+allow deployment when
+  digest is exact
+  AND signer is approved for this repository
+  AND provenance names an approved builder and source
+  AND required SBOM exists for the same digest
+  AND vulnerability decision meets environment policy
+```
 
-The scan tells the team which known vulnerabilities affect the packages in the image today. The SBOM lets the team search the image inventory later when new advisories appear. The triage record explains what the team fixed, accepted, or scheduled. The signature and attestations prove that the trusted release workflow created and approved the exact digest.
+Key or identity trust requires lifecycle controls. The verifier needs approved issuers, expected repository or workflow scope, time and transparency evidence where used, revocation or compromise response, and protection against one project signing another project's artifacts. “Signature valid” is only one condition.
 
-This gives Kubernetes a stronger deployment story. A cluster policy can require images from the private registry, referenced by digest, signed by the release workflow, and backed by required attestations. The runtime platform then pulls the artifact that matches the evidence without relying on a moving tag.
+Attestation freshness varies by claim. Build provenance is historical and should not change for fixed bytes. A vulnerability assessment is time-sensitive. An SBOM may be regenerated by a better tool, but the issuer and method should be clear. Policy should not treat every signed document as equally current or authoritative.
 
-The daily work also gets more practical. Base-image patches turn into scheduled rebuilds. Application dependency CVEs turn into lockfile updates. Debug packages left in the runtime image turn into Dockerfile cleanups. Exceptions turn into visible records with owners and review dates.
+## How Should CI Build and Publish the Evidence Bundle?
+<!-- section-summary: CI is where artifact and evidence are born, so it should build once, capture the pushed digest, generate subject-bound inventory and provenance, scan, sign, and promote that same digest. -->
+
+CI observes the source revision, dependency resolution, builder, commands, environment, test results, final image, and registry push. It is the natural place to create evidence, provided the workflow and runner are themselves protected.
+
+The strongest release pattern is build once and promote the same artifact. Do not rebuild source independently for staging and production. A second build can resolve a different base tag, dependency, external download, clock-dependent input, or compromised environment. Even when source is unchanged, the digest can differ.
+
+```text
+reviewed source
+  -> one controlled build
+  -> payments-api@sha256:ABC
+  -> tests and staging use sha256:ABC
+  -> production policy evaluates sha256:ABC
+  -> production runs sha256:ABC
+```
+
+After pushing, capture the registry's exact digest. Generate or attach the final-image SBOM to that subject. Preserve source/build inventory where useful. Scan the digest. Record provenance identifying source revision and builder. Sign the digest or produce the required approval attestation. Publish evidence next to the image in the registry or another content-addressed store.
+
+The registry then becomes more than an image warehouse. It can retain the artifact and related SBOM, signature, provenance, and scan or VEX evidence. Co-location is convenient, but exact subject identity is the essential link.
+
+CI should not merely upload files named after a tag. It should verify that every document names the same digest and that the digest has not changed between scan, sign, and push steps. If signing occurs before registry resolution, reconcile the local and remote subjects explicitly.
+
+The evidence bundle also needs access and retention controls. Builders require narrow push and attachment rights. Runtime consumers generally need pull and verification rights, not authority to replace evidence. Incident responders need historical access even after a release stops serving traffic.
+
+Policy at deployment should verify again. The artifact may have been valid at build time but later quarantined, its signer may no longer be trusted, required evidence may be absent, or a new vulnerability decision may block production. Checking only in CI leaves a gap between production and consumption.
+
+Evidence publication should fail clearly. If SBOM generation, provenance signing, or registry attachment fails, the workflow should not substitute an unlabeled empty document or promote only the image. The image and evidence are separate objects, so transaction-like behavior must come from pipeline and policy: publish the artifact into a non-production state, attach and verify the required claims, then make it eligible for promotion.
+
+Protect the identity that issues evidence. It should be available only to the approved workflow, for the expected repository and revision, and for a short build session. A developer's broad personal key or a long-lived secret on a shared runner weakens every downstream verification. The verifier should check issuer, subject, repository, workflow, and expected claims rather than accepting any valid organizational signature.
+
+## What Does an End-to-end Image Trust Chain Look Like?
+<!-- section-summary: Image trust is a continuing chain from source and base through one digest-bound build and evidence bundle to deployment verification, runtime inventory, rescanning, triage, and rebuild. -->
+
+Suppose Alice changes the payments API. The complete chain is:
+
+1. Source review identifies the intended change and dependency updates.
+2. The build resolves a reviewed base and locked application graph.
+3. A protected workflow builds one final image.
+4. The registry returns `sha256:ABC` for the pushed artifact.
+5. CI creates source and final-image inventory for that digest.
+6. The scanner evaluates current intelligence against its components.
+7. Provenance states which source and builder produced it.
+8. The approved identity signs or attests the digest and claims.
+9. Staging tests the same digest.
+10. Deployment policy verifies identity, provenance, inventory, and risk decision.
+11. Runtime inventory records which service and environment run `sha256:ABC`.
+12. Continuous rescanning creates new work when knowledge changes.
 
 ![Image trust summary infographic showing inventory, vulnerabilities, provenance, signature, evidence bundle, and deploy policy around a payments-api image](/content-assets/articles/article-devsecops-container-image-security-image-scanning/image-trust-summary.png)
 
-*Image trust is the whole evidence bundle together: inventory explains what is inside, scans explain current risk, and signatures connect the digest back to the release workflow.*
+After deployment, SBOMs become particularly valuable. When an advisory names a library, the organization can search inventories, find affected image digests, map those digests to deployments, and identify owners. That shortens the path from a global disclosure to concrete services.
 
-## What's Next
+Do not ask only “is the image vulnerable?” Ask a set of narrower questions:
 
-The next article moves from image evidence to registry control. Once the team has signed digests, SBOMs, and scan reports for `payments-api`, the registry is the release checkpoint that must protect those artifacts.
+- Which exact artifact is this?
+- What components does current evidence say it contains?
+- Which known vulnerabilities match those components now?
+- Which findings are reachable in this service and environment?
+- Who produced and approved the artifact?
+- Does provenance describe the expected source and builder?
+- Which signer or attester is trusted for this repository?
+- Where is this digest deployed, and who owns the response?
+- Is the evidence still fresh enough for the policy decision?
 
-We will look at private registry access, push and pull permissions, immutable tags, digest-based deploys, lifecycle rules, and how to stop a trusted tag from quietly pointing at a different image. That completes the path from hardened image, to signed evidence, to controlled registry release.
+The trust chain can fail at any link. An exact digest without inventory is identifiable but opaque. An SBOM without subject identity may describe something else. A scan without current data can miss a new issue. A signature without trusted scope is meaningless. Provenance without protected build controls can document a compromised process. CI approval without deployment verification can be bypassed by another artifact.
 
-## References
+The core model is:
 
-- [OCI Image Manifest Specification](https://github.com/opencontainers/image-spec/blob/main/manifest.md) - Defines the image manifest, config reference, and ordered layer references used by container images.
-- [Trivy container image scanning documentation](https://trivy.dev/latest/docs/target/container_image/) - Documents scanning container images and supported image targets.
-- [Syft SBOM getting started guide](https://oss.anchore.com/docs/guides/sbom/getting-started/) - Shows how Syft generates SBOMs from container images and directories.
-- [Docker Scout SBOM documentation](https://docs.docker.com/scout/how-tos/view-create-sboms/) - Explains viewing and creating SBOMs for container images with Docker tooling.
-- [CycloneDX specification overview](https://cyclonedx.org/specification/overview/) - Describes CycloneDX as a standard for SBOM and supply chain risk data.
-- [SPDX specifications](https://spdx.dev/use/specifications/) - Provides the official SPDX specification resources for SBOM exchange.
-- [Sigstore Cosign documentation](https://docs.sigstore.dev/cosign/) - Documents signing, verification, and container image workflows with Cosign.
-- [SLSA build provenance](https://slsa.dev/spec/v1.2/build-provenance) - Defines provenance fields for describing how an artifact was built.
-- [NIST Secure Software Development Framework SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final) - Gives secure software development practices, including maintaining provenance and protecting release integrity.
+```text
+artifact identity
+  + component inventory
+  + current vulnerability knowledge
+  + reachability and ownership decision
+  + build provenance
+  + trusted signature or attestation
+  + deployment policy
+  + runtime location and continuous review
+  = evidence-based image trust
+```
+
+Trust is not a one-time sticker placed on an image. The bytes stay fixed, while vulnerability intelligence, deployment location, owner, issuer trust, and policy can change. Preserve the historical evidence, reevaluate the current decision, and create a new digest when remediation changes the artifact.
+
+The operational view should be queryable in both directions. Starting from a vulnerability, responders find components, digests, deployments, environments, and owners. Starting from a deployment, operators find its digest, source, builder, SBOM, scan history, signer, exceptions, and replacement status. Starting from a compromised build identity, security staff find every digest and attestation it issued. These queries are why structured evidence and exact subjects matter more than a pile of human-readable reports.
+
+When a digest is replaced, keep its relationship to the successor. The old artifact may still appear in a dormant cluster, cached node, rollback record, or retained release. Marking a new digest approved does not make the old one disappear. Runtime inventory and registry retention should show where each remains and whether it is still eligible for deployment.
+
+## Check Your Answers
+
+:::expand[Why Must Image Trust Begin with Exact Artifact Identity?]{kind="recap"}
+Tags are human labels that may move, while a digest identifies exact content and gives every inventory, scan, claim, deployment, and incident record the same subject.
+:::
+
+:::expand[How Do SBOMs Describe What an Image Contains?]{kind="recap"}
+An SBOM is component inventory, and source/build plus final-image SBOMs provide complementary views across declared dependencies, inherited packages, layers, and copied files.
+:::
+
+:::expand[Why Can Scanning the Same Image Produce New Results?]{kind="recap"}
+Scanning joins stable artifact contents with changing vulnerability intelligence and detection logic, so an unchanged digest can receive new or corrected findings later.
+:::
+
+:::expand[How Do Base Images Make Vulnerability Work Continuous?]{kind="recap"}
+Applications inherit base components; digest pinning makes change explicit, while monitoring and regular reviewed rebuilds adopt fixes and produce new evidence-bound artifacts.
+:::
+
+:::expand[How Do Reachability and Ownership Turn Findings into Decisions?]{kind="recap"}
+Severity alone is incomplete: triage confirms presence, reachability, exposure, impact, fix, owner, deadline, and any narrowly supported VEX or exception decision.
+:::
+
+:::expand[What Do Signatures and Attestations Actually Prove?]{kind="recap"}
+A signature endorses exact bytes and an attestation signs a claim about them; policy must still validate the issuer, scope, workflow, evidence, and current context.
+:::
+
+:::expand[How Should CI Build and Publish the Evidence Bundle?]{kind="recap"}
+Protected CI should build once, capture the pushed digest, create and bind inventory, scans, provenance, and approval evidence to it, then promote that same artifact.
+:::
+
+:::expand[What Does an End-to-end Image Trust Chain Look Like?]{kind="recap"}
+The chain follows one digest from source and base through build evidence and deployment policy into runtime inventory, continuous rescanning, ownership, and repaired rebuilds.
+:::

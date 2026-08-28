@@ -31,10 +31,7 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## How Does IAM Decide Whether AWS Should Accept a Request?
-<!-- section-summary: IAM helps AWS evaluate the principal, action, resource, and request context before returning allow or deny. -->
-
-AWS Identity and Access Management, or **IAM**, controls who is authenticated and what that identity is authorized to do with AWS resources. The definition becomes clearer when you begin with one API request.
+AWS Identity and Access Management, or **IAM**, controls who is authenticated and what that identity is authorized to do with AWS resources. One API request makes the definition concrete.
 
 Imagine an account that contains an S3 bucket, an EC2 instance, a DynamoDB table, and a Lambda function. A caller sends this request:
 
@@ -68,6 +65,20 @@ Context:   company network, MFA present, 10:30
 
 The **principal** is the authenticated caller. The **action** is the AWS API operation. The **resource** is the AWS object the action targets. The **context** contains request facts that policies may test, such as the network path, authentication method, session attributes, or resource tags.
 
+Keep these questions in view as you work through the lesson:
+
+1. **How Does IAM Decide Whether AWS Should Accept a Request?**
+2. **How Are Identity, Credentials, and Permissions Different?**
+3. **Why Are Temporary Credentials Safer Than Long-Lived Keys?**
+4. **How Do IAM Roles Work?**
+5. **How Does IAM Identity Center Give People AWS Access?**
+6. **How Do IAM Policies Describe Access?**
+7. **How Do Least Privilege and MFA Reduce Risk?**
+8. **How Does the Complete IAM Model Fit Together?**
+
+## How Does IAM Decide Whether AWS Should Accept a Request?
+<!-- section-summary: IAM helps AWS evaluate the principal, action, resource, and request context before returning allow or deny. -->
+
 IAM and the applicable AWS policy mechanisms evaluate those facts and produce one of two results:
 
 ```text
@@ -81,17 +92,6 @@ DENY
 ```
 
 That request model is the foundation for the rest of IAM. Users, roles, permission sets, policies, MFA, STS, and organizational guardrails all contribute information to one or more parts of the decision.
-
-The sections below answer these questions in order:
-
-1. **How Does IAM Decide Whether AWS Should Accept a Request?**
-2. **How Are Identity, Credentials, and Permissions Different?**
-3. **Why Are Temporary Credentials Safer Than Long-Lived Keys?**
-4. **How Do IAM Roles Work?**
-5. **How Does IAM Identity Center Give People AWS Access?**
-6. **How Do IAM Policies Describe Access?**
-7. **How Do Least Privilege and MFA Reduce Risk?**
-8. **How Does the Complete IAM Model Fit Together?**
 
 ## How Are Identity, Credentials, and Permissions Different?
 <!-- section-summary: Authentication proves the caller's identity, authorization determines permitted actions, and credentials are the evidence used to authenticate. -->
@@ -214,7 +214,7 @@ trusted identity
 AWS API requests
 ```
 
-A credential valid for one hour becomes invalid when the session expires. A stolen temporary credential is still a security incident, but the time in which it can be used is bounded. Temporary sessions also reduce manual rotation work because AWS issues and expires the credentials as part of the access flow.
+Session expiry invalidates a credential that was issued for one hour. A stolen temporary credential is still a security incident, but the time in which it can be used is bounded. Temporary sessions also reduce manual rotation work because AWS issues and expires the credentials as part of the access flow.
 
 AWS recommends temporary credentials for both humans and workloads wherever the access pattern supports them. IAM roles are the primary identity mechanism that uses this temporary-credential model.
 

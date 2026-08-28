@@ -19,19 +19,6 @@ id: article-containers-orchestration-kubernetes-configuration-storage-storage-cl
 8. [Check Your Answers](#check-your-answers)
 9. [References](#references)
 
-The explanation follows 7 practical questions:
-
-1. **Why does Kubernetes need StorageClasses?**
-2. **How does a named profile separate application needs from platform choices?**
-3. **How does a claim select a class?**
-4. **How do provisioner, parameters, and lifecycle settings shape new volumes?**
-5. **When and where does Kubernetes create the volume?**
-6. **How does one storage request travel from a Pod to the backend?**
-7. **How should teams document and diagnose a storage profile?**
-
-## Why does Kubernetes need StorageClasses?
-<!-- section-summary: A StorageClass lets an application request a platform-defined kind of storage without naming the infrastructure that creates it. -->
-
 A database may know that it needs 100 GiB of durable storage that survives Pod restarts. It should not need to know whether the cluster uses AWS EBS, Google Persistent Disk, Azure Disk, Ceph, a SAN, or another storage system.
 
 The platform still has to decide how to supply that storage. Someone must choose properties such as SSD or HDD, encryption, replication, filesystem, deletion behavior, expansion support, and availability zone. Kubernetes separates the workload's request from those platform decisions by giving each object a distinct role:
@@ -43,6 +30,19 @@ The platform still has to decide how to supply that storage. Someone must choose
 | StorageClass | Provisioning policy | “This is what `fast` means in this cluster.” |
 | PersistentVolume (PV) | Concrete allocation | “Here is the actual volume.” |
 | CSI driver and backend | Storage machinery | “Create, attach, and mount the volume.” |
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why does Kubernetes need StorageClasses?**
+2. **How does a named profile separate application needs from platform choices?**
+3. **How does a claim select a class?**
+4. **How do provisioner, parameters, and lifecycle settings shape new volumes?**
+5. **When and where does Kubernetes create the volume?**
+6. **How does one storage request travel from a Pod to the backend?**
+7. **How should teams document and diagnose a storage profile?**
+
+## Why does Kubernetes need StorageClasses?
+<!-- section-summary: A StorageClass lets an application request a platform-defined kind of storage without naming the infrastructure that creates it. -->
 
 A **CSI driver** connects Kubernetes to a particular storage system. CSI stands for Container Storage Interface. Kubernetes works with the driver through a standard interface, while the driver translates those operations into calls the storage backend understands.
 
@@ -183,7 +183,7 @@ The three forms therefore express different intentions:
 | Field omitted | Accept the cluster default |
 | `storageClassName: ""` | Do not assign a class |
 
-The difference becomes especially important when a platform introduces or changes its default class. An explicit name remains explicit, an omitted field accepts default behavior, and an empty string stays classless.
+A platform introducing or changing its default class makes the difference especially important. An explicit name remains explicit, an omitted field accepts default behavior, and an empty string stays classless.
 
 Consider three otherwise identical claims created before a platform adds the `general` default. The explicit `fast` claim continues requesting `fast`. The omitted claim can be assigned `general` when the default appears. The claim with `storageClassName: ""` deliberately remains without a class so it can match classless static supply. One omitted line and one empty string therefore encode different provisioning contracts.
 
@@ -384,14 +384,14 @@ Pod → PVC → PV → CSI volumeHandle → actual storage
 
 The StorageClass is primarily involved in deciding how the PV is created. The PV then records what was actually allocated.
 
-The names form a sequence of joins. `claimName: db-data` joins the Pod to the PVC in its namespace. `storageClassName: fast` joins the claim to the named platform profile. The provisioner field joins that profile to the driver. The PV's `claimRef` records the winning claim, and `volumeHandle` joins the PV to the provider's real resource. Debugging becomes much more precise when each join is checked independently.
+The names form a sequence of joins. `claimName: db-data` joins the Pod to the PVC in its namespace. `storageClassName: fast` joins the claim to the named platform profile. The provisioner field joins that profile to the driver. The PV's `claimRef` records the winning claim, and `volumeHandle` joins the PV to the provider's real resource. Checking each join independently makes debugging much more precise.
 
 Capacity and requested access modes stay on the PVC, not the StorageClass. The claim answers “how much?”, “how will it be accessed?”, “filesystem or raw block?”, and “which profile?”. The class answers “which provisioner?”, “which provider parameters?”, “when should binding happen?”, “what happens after deletion?”, “can it expand?”, and “which mount options?”.
 
 A friendly class name does not override backend capability. A class called `shared`, for example, does not automatically guarantee `ReadWriteMany`. The storage technology and driver must actually support the requested access mode.
 
 ## How should teams document and diagnose a storage profile?
-<!-- section-summary: A class becomes a usable platform API when its contract is documented and failures are traced through claim, class, volume, Pod, and driver. -->
+<!-- section-summary: A class serves as a usable platform API if its contract is documented and failures are traced through claim, class, volume, Pod, and driver. -->
 
 StorageClass names are more useful when a platform treats them as contracts rather than unexplained YAML strings. A profile description might state:
 
@@ -458,7 +458,7 @@ A bound PVC means Kubernetes matched the claim to a PV. It does not prove that a
 
 Use that fact to avoid restarting the investigation at the wrong layer. A `Pending` claim directs attention to selection, defaulting, the provisioner, capacity, parameters, or an intentional consumer wait. A bound claim with an unschedulable Pod directs attention to placement and topology. A Pod stuck creating its container after binding directs attention toward attachment, the node-side CSI component, the filesystem, and mount options.
 
-For example, an unsupported `mountOptions` entry may not prevent the class from creating a backend disk or the PVC from binding. It becomes visible only when the node performs the mount. The earlier green states remain useful evidence: they show exactly how far the request travelled before it stopped.
+For example, an unsupported `mountOptions` entry may not prevent the class from creating a backend disk or the PVC from binding. The node mount is the first point at which the problem is visible. The earlier green states remain useful evidence: they show exactly how far the request travelled before it stopped.
 
 The shortest reliable model is therefore:
 

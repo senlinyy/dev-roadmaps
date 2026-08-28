@@ -12,29 +12,34 @@ aliases:
 
 ## Table of Contents
 
-1. [Azure Functions](#azure-functions)
-2. [The Work It Fits](#the-work-it-fits)
-3. [Events](#events)
-4. [Triggers](#triggers)
-5. [Invocations and Handlers](#invocations-and-handlers)
-6. [Function App](#function-app)
-7. [Bindings](#bindings)
-8. [Timeout and Retries](#timeout-and-retries)
-9. [Hosting Plans](#hosting-plans)
-10. [Identity, Secrets, and Storage](#identity-secrets-and-storage)
-11. [Monitoring and Operations](#monitoring-and-operations)
-12. [When A Service Is Simpler](#when-a-service-is-simpler)
-13. [Putting It All Together](#putting-it-all-together)
-14. [What's Next](#whats-next)
-
-## Azure Functions
-<!-- section-summary: Azure Functions runs small event-driven handlers while Azure manages the host process, scaling layer, and much of the runtime infrastructure. -->
+1. [What Work Fits Azure Functions?](#what-work-fits-azure-functions)
+2. [How Do Events, Triggers, and Invocations Work?](#how-do-events-triggers-and-invocations-work)
+3. [What Is a Function App?](#what-is-a-function-app)
+4. [How Do Bindings Connect Services?](#how-do-bindings-connect-services)
+5. [How Do Timeouts, Retries, and Idempotency Shape Behavior?](#how-do-timeouts-retries-and-idempotency-shape-behavior)
+6. [How Do Hosting Plans Affect Execution?](#how-do-hosting-plans-affect-execution)
+7. [How Should Identity, Secrets, and Storage Work?](#how-should-identity-secrets-and-storage-work)
+8. [How Do You Operate Functions and Decide When Another Service Is Simpler?](#how-do-you-operate-functions-and-decide-when-another-service-is-simpler)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Let's start with the full picture. The Orders application has a public API that receives checkout requests. That API writes the order into a database, confirms the purchase to the customer, and then publishes a small message that says a receipt needs to be sent. The receipt work can happen a few seconds later, away from the main checkout request. That small receipt worker is the kind of job Azure Functions was built to run.
 
 **Azure Functions** is Azure's serverless compute service for event-driven handlers. A function is a small piece of code that runs after something starts it. That starter can be an HTTP request, a queue message, a timer, a blob upload, a Service Bus message, an Event Grid event, or another supported trigger. Azure runs the host, starts workers, passes the event data into your handler, records the invocation, and scales the runtime according to the hosting plan.
 
-If you have used AWS Lambda, Azure Functions fills the same event-driven compute job. HTTP triggers feel similar to Lambda behind API Gateway or Function URLs, queue triggers map to the same pattern as SQS event sources, blob and Event Grid triggers match the S3 event and EventBridge style of thinking, and timer triggers fill the scheduled-event role.
+Keep these questions in view as you work through the lesson:
+
+1. **What Work Fits Azure Functions?**
+2. **How Do Events, Triggers, and Invocations Work?**
+3. **What Is a Function App?**
+4. **How Do Bindings Connect Services?**
+5. **How Do Timeouts, Retries, and Idempotency Shape Behavior?**
+6. **How Do Hosting Plans Affect Execution?**
+7. **How Should Identity, Secrets, and Storage Work?**
+8. **How Do You Operate Functions and Decide When Another Service Is Simpler?**
+
+## What Work Fits Azure Functions?
+<!-- section-summary: Azure Functions runs small event-driven handlers while Azure manages the host process, scaling layer, and much of the runtime infrastructure. -->
 
 **Serverless** means Azure operates the server layer that hosts the code. Your team still owns the handler code, dependencies, configuration, identity, storage choices, retry behavior, logging, and downstream limits. That split matters because many production incidents in Functions come from the parts the team still owns: a queue message that retries forever, a database that runs out of connections, an app setting that points to the wrong account, or a handler that takes too long for its plan.
 
@@ -55,7 +60,7 @@ Here are the basic words we will use through the article:
 
 So the first question is practical. What kind of work belongs in a function, and what kind of work belongs in a service that stays running?
 
-## The Work It Fits
+### The Work It Fits
 <!-- section-summary: Azure Functions fits bounded event work, especially background jobs, scheduled jobs, queue processors, webhooks, and file or stream reactions. -->
 
 **Event-shaped work** is work that has a clear starting signal, a small unit of processing, and a clean finish. The handler receives the input, performs one bounded job, writes evidence of what happened, and returns. In the Orders system, sending a receipt fits this shape. The checkout API can publish a receipt message after the order commits. The receipt handler can load the order, check whether the receipt has already been sent, call the email provider, and record the result.
@@ -66,7 +71,7 @@ Functions also helps teams keep slow side effects away from the user-facing path
 
 A useful first filter is the shape of the code. Functions fits jobs with a clear event, limited runtime, small local state, and repeatable retry behavior. A normal web service fits code with many routes, shared middleware, large in-memory caches, long-lived connections, and constant traffic. We will come back to that service boundary later. First, let's name the thing that starts the work: the event.
 
-## Events
+## How Do Events, Triggers, and Invocations Work?
 <!-- section-summary: An event is the input that explains why the function runs, and its payload carries enough stable information for safe retry and audit. -->
 
 An **event** is a signal that something happened or that some work is waiting. In Azure Functions, the event usually arrives through an Azure service or a web request. A queue message, a Service Bus message, a timer tick, a blob-created notification, and an HTTP request can all become event inputs for a function.
@@ -92,7 +97,7 @@ This is where event work feels different from ordinary request code. A user clic
 
 Once the event exists, Azure Functions needs a rule that connects that event source to your code. That rule is the trigger.
 
-## Triggers
+### Triggers
 <!-- section-summary: A trigger connects one event source to one function, and the trigger choice controls the input shape, scale signal, retry behavior, and failure path. -->
 
 A **trigger** is the configured connection that starts a function. Microsoft describes triggers as the thing that causes a function to run, and each function has exactly one trigger. The trigger also decides the input shape that the handler receives. A queue trigger passes a queue message. An HTTP trigger passes an HTTP request. A timer trigger passes schedule metadata.
@@ -118,7 +123,7 @@ That difference is why trigger boundaries matter. The checkout API can publish o
 
 The trigger starts the function. The actual run of the function has its own name: an invocation.
 
-## Invocations and Handlers
+### Invocations and Handlers
 <!-- section-summary: An invocation is one execution attempt, so handler code stays stateless, bounded, idempotent, and explicit about the side effect it owns. -->
 
 An **invocation** is one execution attempt of a function handler. If one receipt message starts the handler once, that is one invocation. If the handler throws and Azure retries the same message, the retry is another invocation. This matters for logs, billing, timeouts, metrics, and duplicate protection.
@@ -156,7 +161,7 @@ In real code, `orders`, `email`, and `receipts` are small client modules. The fu
 
 The handler lives inside an Azure resource that gives it settings, identity, deployment, and a host runtime. That resource is the function app.
 
-## Function App
+## What Is a Function App?
 <!-- section-summary: A function app is the Azure resource boundary for deployment, runtime settings, identity, hosting plan, app settings, and operational inspection. -->
 
 A **function app** is the Azure resource that hosts your functions. It is the management and deployment boundary. Functions in the same function app share important things: runtime stack, app settings, host configuration, deployment package, managed identity, networking configuration, and hosting plan. In practice, operators inspect the function app first when a production function behaves strangely.
@@ -211,7 +216,7 @@ Those commands answer ordinary but important questions. Is the app running? Whic
 
 Now that we have the function app boundary, we can talk about another Functions feature that often surprises people: bindings.
 
-## Bindings
+## How Do Bindings Connect Services?
 <!-- section-summary: Bindings connect function parameters and return values to external services, while SDK clients remain useful when code needs tighter error handling or explicit control. -->
 
 A **binding** is a declarative connection between a function and another resource. A trigger is a special input binding because it starts the function. Other input bindings can pass data into the handler. Output bindings can write data out after the handler runs. Microsoft documents this as a way to connect functions to services without hardcoding every client call in your handler.
@@ -232,7 +237,7 @@ There is also a practical error-handling choice. Output bindings are convenient,
 
 Bindings help connect the handler to the world around it. The next production question is what happens when that world is slow, unavailable, or sends the same work twice.
 
-## Timeout and Retries
+## How Do Timeouts, Retries, and Idempotency Shape Behavior?
 <!-- section-summary: Timeouts stop long executions, retries repeat failed work, and idempotency keeps repeated invocations from duplicating business side effects. -->
 
 A **timeout** is the maximum time a function execution can run before the host stops it. The exact default and maximum depend on the hosting plan. Microsoft documents a 5 minute default and 10 minute maximum for the legacy Consumption plan. Flex Consumption, Premium, Dedicated, and Container Apps hosting have different defaults and maximum behavior. HTTP-triggered functions also face an important response limit: Azure Load Balancer has a 230 second idle timeout for HTTP responses, so long HTTP work needs an async pattern even on plans that allow longer function execution.
@@ -306,7 +311,7 @@ That output confirms the override reached the function app. The team still watch
 
 This is the point where hosting plan choice starts to matter. The plan controls scale, cold starts, networking, costs, and some timeout behavior.
 
-## Hosting Plans
+## How Do Hosting Plans Affect Execution?
 <!-- section-summary: The hosting plan decides scale behavior, cold-start options, network features, timeout limits, memory size, and cost shape. -->
 
 A **hosting plan** is the compute and billing model for a function app. It decides how Azure allocates workers, how the app scales, how cold starts behave, whether virtual network integration is available, how billing appears, and which limits apply. The same handler code can behave very differently on different plans.
@@ -329,7 +334,7 @@ The scale controller also changes how operators think about downstream systems. 
 
 The plan gives the code compute. The function app still needs identity, settings, and storage to run safely.
 
-## Identity, Secrets, and Storage
+## How Should Identity, Secrets, and Storage Work?
 <!-- section-summary: Production function apps need managed identity, least-privilege access, safe app settings, and a carefully protected storage account used by the Functions host. -->
 
 **Managed identity** gives a function app an identity in Microsoft Entra ID so it can request tokens for Azure resources. This lets the function access services such as Storage, Key Vault, Service Bus, Azure SQL, or Application Insights without shipping static passwords in code. The identity still needs Azure RBAC or service-specific permissions at the right scope.
@@ -344,7 +349,7 @@ Storage security deserves real attention. Access to the function storage account
 
 Once identity and storage are in place, the last day-to-day question is visibility. Event work happens in the background, so the system needs evidence.
 
-## Monitoring and Operations
+## How Do You Operate Functions and Decide When Another Service Is Simpler?
 <!-- section-summary: Function operations depend on invocation logs, Application Insights traces, correlation IDs, queue evidence, retry counts, and disabled-function or app-setting checks. -->
 
 **Application Insights** is the main monitoring home for many Azure Functions apps. It collects request data, dependency calls, exceptions, traces, performance details, and invocation evidence. The important beginner point is simple: the checkout API may already have returned success while the receipt function fails in the background. Without logs and traces, the user-facing request looks fine and the business side effect silently breaks.
@@ -367,7 +372,7 @@ This operational view also explains why small functions need good names. `sendOr
 
 Functions has a clear boundary too. Some backend work belongs in a service.
 
-## When A Service Is Simpler
+### When A Service Is Simpler
 <!-- section-summary: A normal service can be the simpler home for large APIs, shared routing, long-lived processes, heavy in-memory state, and steady connection-heavy workloads. -->
 
 Azure Functions works best when the job has a clear event and a bounded piece of work. A service such as App Service, Container Apps, or AKS can fit code that behaves like a full application. A large REST API with many routes, shared authentication middleware, streaming responses, stable connection pools, and steady traffic usually wants a continuously running process.
@@ -378,7 +383,7 @@ Functions can still live beside that API. The API stays on App Service or Contai
 
 The simplest rule is to follow the work. If the code behaves like one small reaction to one event, Functions is a strong candidate. If the code behaves like a product service with many routes and shared stateful behavior, a service host will usually be calmer to operate.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: A production Functions design connects event payloads, trigger choice, idempotent handlers, app boundaries, hosting plans, identity, storage, and monitoring into one operating story. -->
 
 Let's put the Orders receipt flow back together. The checkout API commits the order, then publishes a message to `orders-receipts`. That message contains `eventId`, `orderId`, and `correlationId`. A Queue Storage trigger on `sendOrderReceipt` starts one invocation for the message.
@@ -393,13 +398,47 @@ That is the whole operating story. Azure Functions is small code, and the produc
 
 *Use this checklist before designing or debugging a function: event payload, trigger behavior, handler boundaries, hosting plan, runtime identity, and the evidence trail all work together.*
 
-## What's Next
+### What's Next
 
 Functions gives us a clean home for event-shaped work around an application. The next article returns to server-shaped work with Azure Virtual Machines. We will look at images, VM sizes, managed disks, network interfaces, extensions, process supervision, patching, backups, and the evidence a team needs when it still owns a full guest operating system.
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[What Work Fits Azure Functions?]{kind="recap"}
+Azure Functions runs small event-driven handlers while Azure manages the host process, scaling layer, and much of the runtime infrastructure. Azure Functions fits bounded event work, especially background jobs, scheduled jobs, queue processors, webhooks, and file or stream reactions.
+:::
+
+:::expand[How Do Events, Triggers, and Invocations Work?]{kind="recap"}
+An event is the input that explains why the function runs, and its payload carries enough stable information for safe retry and audit. A trigger connects one event source to one function, and the trigger choice controls the input shape, scale signal, retry behavior, and failure path. An invocation is one execution attempt, so handler code stays stateless, bounded, idempotent, and explicit about the side effect it owns.
+:::
+
+:::expand[What Is a Function App?]{kind="recap"}
+A function app is the Azure resource boundary for deployment, runtime settings, identity, hosting plan, app settings, and operational inspection.
+:::
+
+:::expand[How Do Bindings Connect Services?]{kind="recap"}
+Bindings connect function parameters and return values to external services, while SDK clients remain useful when code needs tighter error handling or explicit control.
+:::
+
+:::expand[How Do Timeouts, Retries, and Idempotency Shape Behavior?]{kind="recap"}
+Timeouts stop long executions, retries repeat failed work, and idempotency keeps repeated invocations from duplicating business side effects.
+:::
+
+:::expand[How Do Hosting Plans Affect Execution?]{kind="recap"}
+The hosting plan decides scale behavior, cold-start options, network features, timeout limits, memory size, and cost shape.
+:::
+
+:::expand[How Should Identity, Secrets, and Storage Work?]{kind="recap"}
+Production function apps need managed identity, least-privilege access, safe app settings, and a carefully protected storage account used by the Functions host.
+:::
+
+:::expand[How Do You Operate Functions and Decide When Another Service Is Simpler?]{kind="recap"}
+Function operations depend on invocation logs, Application Insights traces, correlation IDs, queue evidence, retry counts, and disabled-function or app-setting checks. A normal service can be the simpler home for large APIs, shared routing, long-lived processes, heavy in-memory state, and steady connection-heavy workloads. A production Functions design connects event payloads, trigger choice, idempotent handlers, app boundaries, hosting plans, identity, storage, and monitoring into one operating story.
+:::
+
+## References
 
 - [Azure Functions overview](https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview) - Official overview of Azure Functions scenarios, development lifecycle, and hosting options.
 - [Azure Functions triggers and bindings](https://learn.microsoft.com/en-us/azure/azure-functions/functions-triggers-bindings) - Official explanation of triggers, input bindings, output bindings, and supported binding types.

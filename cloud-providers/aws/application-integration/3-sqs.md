@@ -26,23 +26,10 @@ aliases:
 6. [How Do Lambda and Container Consumers Process SQS Messages?](#how-do-lambda-and-container-consumers-process-sqs-messages)
 7. [How Do You Secure an SQS Queue?](#how-do-you-secure-an-sqs-queue)
 8. [How Does a Complete Queue-Based System Behave?](#how-does-a-complete-queue-based-system-behave)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Amazon Simple Queue Service is easiest to understand as a durable place for **work that must not be forgotten but does not have to finish during the caller's current request**. A queue separates the moment an application requests work from the later moment a consumer performs it.
-
-The sections below answer these questions in order:
-
-1. **Why Should Some Work Wait in a Queue?**
-2. **What Do Producers, Queues, and Consumers Do?**
-3. **How Does the SQS Message Lifecycle Work?**
-4. **How Do Retries, Dead-Letter Queues, and Idempotency Work Together?**
-5. **When Should You Use Standard or FIFO Queues?**
-6. **How Do Lambda and Container Consumers Process SQS Messages?**
-7. **How Do You Secure an SQS Queue?**
-8. **How Does a Complete Queue-Based System Behave?**
-
-## Why Should Some Work Wait in a Queue?
-<!-- section-summary: SQS removes deferred work from the synchronous request path and buffers temporary differences between production and consumption rates. -->
 
 Imagine a user uploads a video. The system stores it, creates thumbnails, transcodes several formats, scans content, sends a notification, and updates analytics. If the upload API performs every task before responding, then the user's request succeeds only if every future dependency is healthy and fast right now.
 
@@ -57,6 +44,20 @@ Request -> Upload API
 ```
 
 A slow transcode delays the response. A notification outage can fail an otherwise valid upload. A sudden wave of uploads reaches every downstream service at once.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Should Some Work Wait in a Queue?**
+2. **What Do Producers, Queues, and Consumers Do?**
+3. **How Does the SQS Message Lifecycle Work?**
+4. **How Do Retries, Dead-Letter Queues, and Idempotency Work Together?**
+5. **When Should You Use Standard or FIFO Queues?**
+6. **How Do Lambda and Container Consumers Process SQS Messages?**
+7. **How Do You Secure an SQS Queue?**
+8. **How Does a Complete Queue-Based System Behave?**
+
+## Why Should Some Work Wait in a Queue?
+<!-- section-summary: SQS removes deferred work from the synchronous request path and buffers temporary differences between production and consumption rates. -->
 
 Start with one question: **Does the caller need the completed result before continuing?**
 
@@ -584,6 +585,8 @@ The core rules are:
 10. Independent subscribers need fanout to separate queues rather than competition on one queue.
 
 The deepest mental model is simple: **the work does not have to be performed by this exact process or at this exact moment, but it must not be forgotten.**
+
+## Check Your Answers
 
 :::expand[Why Should Some Work Wait in a Queue?]{kind="recap"}
 SQS removes deferred work from the synchronous request path and buffers temporary differences between production and consumption rates.

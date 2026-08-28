@@ -22,7 +22,11 @@ id: article-containers-orchestration-kubernetes-operations-telemetry-pipelines
 
 When a request fails inside `checkout-service`, evidence may exist as a container log line, an in-memory metric, spans inside application processes, and Kubernetes metadata about the Pod, Deployment, Node, namespace, and container. A backend query cannot see that evidence until a system captures, identifies, processes, transports, and stores it. That system is the telemetry pipeline.
 
-Seven questions follow the data from source to query:
+At the instant `checkout-service` fails, a log line may exist in a Node file, a metric observation may exist in memory or behind `/metrics`, and spans may still exist inside several application processes. Kubernetes also knows which Pod, Deployment, namespace, Node, and container were involved. None of that guarantees that a later backend query can retrieve or correlate the evidence.
+
+The data must survive a sequence of boundaries: capture it before the source disappears, attach usable identity, perform controlled processing, transport it across unreliable links, and store it in the intended backend. Telemetry is therefore a distributed data-delivery problem before it becomes an observability query.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why does useful telemetry need a delivery pipeline?**
 2. **How do receivers, processors, exporters, and service pipelines form one active route?**
@@ -36,10 +40,6 @@ Seven questions follow the data from source to query:
 <!-- section-summary: Telemetry is a data-delivery problem before it is a query problem because evidence begins in ephemeral processes, files, endpoints, and APIs. -->
 
 ### A signal is not queryable merely because it exists
-
-At the instant `checkout-service` fails, a log line may exist in a Node file, a metric observation may exist in memory or behind `/metrics`, and spans may still exist inside several application processes. Kubernetes also knows which Pod, Deployment, namespace, Node, and container were involved. None of that guarantees that a later backend query can retrieve or correlate the evidence.
-
-The data must survive a sequence of boundaries: capture it before the source disappears, attach usable identity, perform controlled processing, transport it across unreliable links, and store it in the intended backend. Telemetry is therefore a distributed data-delivery problem before it becomes an observability query.
 
 Signals begin in different places:
 

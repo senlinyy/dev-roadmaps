@@ -26,23 +26,10 @@ aliases:
 6. [How Does EventBridge Cross Accounts and SaaS Boundaries?](#how-does-eventbridge-cross-accounts-and-saas-boundaries)
 7. [How Do You Build a Complete EventBridge Architecture?](#how-do-you-build-a-complete-eventbridge-architecture)
 8. [How Should You Design Event Contracts?](#how-should-you-design-event-contracts)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Amazon EventBridge starts from one distributed-systems question: **Something happened in one part of the system. How do other parts that care find out without the producer knowing who they are?** It answers with a managed event router. Producers publish facts to an event bus, rules independently match those facts, and matching events are delivered to targets.
-
-The sections below answer these questions in order:
-
-1. **Why Do Applications Need an Event Router?**
-2. **What Is the Difference Between an Event and a Command?**
-3. **What Does an EventBridge Event Look Like?**
-4. **How Do Applications Publish and Match Events?**
-5. **How Do Archives and Replay Differ from Retries and DLQs?**
-6. **How Does EventBridge Cross Accounts and SaaS Boundaries?**
-7. **How Do You Build a Complete EventBridge Architecture?**
-8. **How Should You Design Event Contracts?**
-
-## Why Do Applications Need an Event Router?
-<!-- section-summary: EventBridge moves consumer knowledge and content-based routing out of the producer, reducing knowledge and temporal coupling. -->
 
 Imagine an online store where placing an order must affect payment, inventory, email, fraud, and analytics:
 
@@ -58,6 +45,20 @@ Order service
 The order application can directly call all five. At first, that is easy to read. It also creates two forms of coupling.
 
 **Knowledge coupling** means the order service knows every consumer, how to contact it, and often how to respond to its failures. Adding a recommendation or compliance consumer requires changing producer code or configuration.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Do Applications Need an Event Router?**
+2. **What Is the Difference Between an Event and a Command?**
+3. **What Does an EventBridge Event Look Like?**
+4. **How Do Applications Publish and Match Events?**
+5. **How Do Archives and Replay Differ from Retries and DLQs?**
+6. **How Does EventBridge Cross Accounts and SaaS Boundaries?**
+7. **How Do You Build a Complete EventBridge Architecture?**
+8. **How Should You Design Event Contracts?**
+
+## Why Do Applications Need an Event Router?
+<!-- section-summary: EventBridge moves consumer knowledge and content-based routing out of the producer, reducing knowledge and temporal coupling. -->
 
 **Temporal coupling** means downstream services may need to be available while the producer is completing its operation. A slow or unavailable nonessential consumer can delay order placement.
 
@@ -530,6 +531,8 @@ Replay:     Put selected history through the source bus again.
 ```
 
 If you remember one sentence, use this: **A producer publishes a durable fact to an event bus; rules independently select events by their content and route matches to targets, allowing producers and consumers to evolve without knowing about one another.**
+
+## Check Your Answers
 
 :::expand[Why Do Applications Need an Event Router?]{kind="recap"}
 EventBridge moves consumer knowledge and content-based routing out of the producer, reducing knowledge and temporal coupling.

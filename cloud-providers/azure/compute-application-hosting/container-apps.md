@@ -12,30 +12,36 @@ aliases:
 
 ## Table of Contents
 
-1. [What Is Container Apps](#what-is-container-apps)
-2. [Managed Environments](#managed-environments)
-3. [Container Apps and Replicas](#container-apps-and-replicas)
-4. [Images and Registries](#images-and-registries)
-5. [Revisions](#revisions)
-6. [Ingress](#ingress)
-7. [Scale Rules](#scale-rules)
-8. [Secrets and Managed Identity](#secrets-and-managed-identity)
-9. [Dapr and Sidecars](#dapr-and-sidecars)
-10. [Logs](#logs)
-11. [When Container Apps Fits](#when-container-apps-fits)
-12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
-
-## What Is Container Apps
-<!-- section-summary: Azure Container Apps runs container images with managed ingress, revisions, scale rules, identity, and logs, while the team still owns the image and runtime configuration. -->
+1. [What Is Azure Container Apps?](#what-is-azure-container-apps)
+2. [How Do Environments, Apps, and Replicas Fit Together?](#how-do-environments-apps-and-replicas-fit-together)
+3. [How Do Images and Revisions Make Releases Traceable?](#how-do-images-and-revisions-make-releases-traceable)
+4. [How Does Ingress Route Traffic?](#how-does-ingress-route-traffic)
+5. [How Do Scale Rules Change Replica Count?](#how-do-scale-rules-change-replica-count)
+6. [How Do Secrets, Identity, Dapr, and Sidecars Support the App?](#how-do-secrets-identity-dapr-and-sidecars-support-the-app)
+7. [What Logs Explain Runtime Behavior?](#what-logs-explain-runtime-behavior)
+8. [When Is Container Apps the Right Fit?](#when-is-container-apps-the-right-fit)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 **Azure Container Apps** is a managed Azure service for running containerized applications. A containerized application is an application packaged as a container image, usually built from a Dockerfile, with the code, runtime, libraries, and startup command in one deployable artifact. Container Apps gives that image a place to run without asking the team to operate a Kubernetes cluster as the main daily surface.
-
-For AWS readers, Container Apps sits near the same day-to-day problem space as ECS services or tasks on Fargate, and sometimes near App Runner for HTTP container apps. The Azure detail to notice is the **revision**, because revisions and traffic weights are the release surface operators use for canaries and rollback.
 
 We will keep one production example in our hands for the whole article. The team runs `devpolaris-orders`, an ecommerce backend in `rg-devpolaris-orders-prod`. The system has `ca-orders-api-prod`, a public HTTP API that receives checkout requests, and `ca-orders-worker-prod`, a background worker that reads messages from an Azure Storage Queue after each order is created.
 
 Those two services are useful because they show the two common Container Apps shapes. The API needs a public HTTPS entry point, one warm replica during normal hours, safe releases, and logs tied to each revision. The worker needs no public endpoint, can scale down to zero while the queue is empty, and needs a managed identity so it can read queue messages and write receipt files without a stored password.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Is Azure Container Apps?**
+2. **How Do Environments, Apps, and Replicas Fit Together?**
+3. **How Do Images and Revisions Make Releases Traceable?**
+4. **How Does Ingress Route Traffic?**
+5. **How Do Scale Rules Change Replica Count?**
+6. **How Do Secrets, Identity, Dapr, and Sidecars Support the App?**
+7. **What Logs Explain Runtime Behavior?**
+8. **When Is Container Apps the Right Fit?**
+
+## What Is Azure Container Apps?
+<!-- section-summary: Azure Container Apps runs container images with managed ingress, revisions, scale rules, identity, and logs, while the team still owns the image and runtime configuration. -->
 
 Here is the structure of Container Apps before we go deeper. Each concept answers one production question that appears during deployment, scaling, security review, or incident response.
 
@@ -60,7 +66,7 @@ The important beginner idea is that Container Apps gives containers a managed pr
 
 This is the bridge between the App Service article and the Functions article. App Service works well for a traditional web app or API that fits a managed web-hosting model. Container Apps helps when the team wants container-first releases, worker processes, scale rules based on events, and optional sidecars while keeping the platform smaller than a full Kubernetes operating model.
 
-## Managed Environments
+## How Do Environments, Apps, and Replicas Fit Together?
 <!-- section-summary: A managed environment is the shared Container Apps boundary for related apps, networking, logging, workload profiles, and isolation decisions. -->
 
 A **managed environment** is the shared boundary around one or more container apps and jobs. It is the place where Azure groups related runtime concerns: networking, log destination, Dapr configuration, workload profiles, and platform operations. Microsoft describes the environment as a secure boundary, and that word matters because many production choices happen at this layer before one app starts.
@@ -71,13 +77,13 @@ The environment also helps the team avoid mixing unrelated blast zones. Developm
 
 Networking starts at the environment. Azure can create a virtual network arrangement for the environment, or the team can provide an existing virtual network for more control. In production, teams often provide a VNet because they want private database access, predictable subnet planning, private endpoints, firewall routing, or clearer separation from other workloads.
 
-The environment also carries the workload profile choice. A workload profile describes the compute capacity style available to apps in the environment. Many teams begin with consumption-style behavior because they want scale-to-zero and pay-per-use behavior for low or spiky traffic. Dedicated workload profiles become interesting when a workload needs more predictable capacity, specialized hardware, or stronger cost planning.
+The environment also carries the workload profile choice. A workload profile describes the compute capacity style available to apps in the environment. Many teams begin with consumption-style behavior because they want scale-to-zero and pay-per-use behavior for low or spiky traffic. Choose a dedicated workload profile for more predictable capacity, specialized hardware, or stronger cost planning.
 
 Logs belong in this conversation early. Apps in the same environment can write to the same Log Analytics workspace, which gives operators one place to query system logs, console logs, and related platform events. During an incident, the environment name tells the team which set of apps, logs, network rules, and platform events belong together.
 
 This environment boundary gives us the shared home. The next question is what actually runs inside that home. That smaller unit is the container app.
 
-## Container Apps and Replicas
+### Container Apps and Replicas
 <!-- section-summary: A container app is the service definition, while replicas are the running instances that serve traffic or process work. -->
 
 A **container app** is the service definition for one workload inside a managed environment. It names the image, container resources, environment variables, ingress settings, revision mode, secrets, identity, and scale rules. The container app is the thing an operator opens when they want to know what the service is configured to run.
@@ -125,7 +131,7 @@ That last sentence describes a common production story. A team can deploy a perf
 
 The container app definition tells Azure what to run. The image tells Azure exactly which build to pull and start. That is where release evidence begins.
 
-## Images and Registries
+## How Do Images and Revisions Make Releases Traceable?
 <!-- section-summary: A container image is the release artifact Container Apps pulls from a registry, so stable tags and registry access make releases understandable. -->
 
 A **container image** is the packaged application artifact. It includes the application code, runtime, libraries, and default startup command. Container Apps pulls that image from a registry such as Azure Container Registry, Docker Hub, GitHub Container Registry, or another supported registry when it starts replicas.
@@ -150,7 +156,7 @@ Private registry access needs its own security path. A quick demo might use a re
 
 Images answer the artifact question. Revisions answer the versioned runtime question: once this image and template are deployed, how does Azure remember and route the running version?
 
-## Revisions
+### Revisions
 <!-- section-summary: A revision is an immutable runtime snapshot, and revision mode decides whether releases replace one another or run side by side for controlled traffic movement. -->
 
 A **revision** is an immutable snapshot of a container app version. It records the revision-scoped parts of the app, such as container image, container configuration, resource allocation, environment variable mappings, and scale rules. When those template values change, Azure creates a new revision.
@@ -193,7 +199,7 @@ That separation matters during real releases. If the team changes the API image,
 
 Revisions give us a safe release path. The next question is how traffic reaches one of those revisions in the first place.
 
-## Ingress
+## How Does Ingress Route Traffic?
 <!-- section-summary: Ingress controls inbound reachability, protocol, target port, and traffic routing, so it is the first place to check for many HTTP failures. -->
 
 **Ingress** is the Container Apps setting that controls inbound traffic. It decides whether an app receives requests from the public web, from inside the environment, from a virtual network path, or from nowhere at all. It also defines the protocol and the target port that Azure uses to reach the container.
@@ -216,7 +222,7 @@ Ingress also connects directly to release safety. In multiple revision mode, tra
 
 Traffic gets requests into the app. Scale rules decide how many replicas exist when that traffic or event load changes.
 
-## Scale Rules
+## How Do Scale Rules Change Replica Count?
 <!-- section-summary: Scale rules watch HTTP, TCP, CPU, memory, or event signals and adjust replica counts within the minimum and maximum limits. -->
 
 A **scale rule** tells Container Apps when to add or remove replicas. The rule watches a signal, compares it to a threshold, and asks the platform for more or fewer running instances within the configured minimum and maximum replica counts. Container Apps uses KEDA-supported scaling for many event sources, so a worker can scale from a queue backlog before the container has started.
@@ -240,7 +246,7 @@ The scale rule only starts containers. The application still needs safe concurre
 
 Scaling creates more running code. That running code still needs secrets and identity before it can call databases, queues, registries, and other Azure services.
 
-## Secrets and Managed Identity
+## How Do Secrets, Identity, Dapr, and Sidecars Support the App?
 <!-- section-summary: Secrets hold sensitive configuration, while managed identity gives a container app an Entra ID identity for passwordless access to Azure resources. -->
 
 A **secret** in Container Apps is a named sensitive value stored at the container app level. The app can reference that secret from environment variables or scale rules. Secrets are useful for values that still exist as strings, such as third-party webhook signing secrets or legacy connection strings.
@@ -283,7 +289,7 @@ Identity also helps with image pulls from Azure Container Registry. Instead of s
 
 Secrets and identity cover access to other services. Some systems also need helper runtime behavior for service-to-service calls, pub/sub, state, or bindings. That is where Dapr can enter the design.
 
-## Dapr and Sidecars
+### Dapr and Sidecars
 <!-- section-summary: Dapr is an optional sidecar layer that can provide service invocation, pub/sub, state access, and bindings for microservice designs. -->
 
 **Dapr**, short for Distributed Application Runtime, is an optional sidecar runtime that Container Apps can add beside an application container. A sidecar is a helper container that runs next to the app and provides shared behavior through local HTTP or gRPC APIs. The app talks to its local sidecar, and the sidecar handles supported patterns such as service invocation, pub/sub, state access, and bindings.
@@ -298,7 +304,7 @@ Dapr also changes the log story. The app has its own console logs, and the Dapr 
 
 Dapr is optional, so it belongs in the design because the system benefits from the sidecar APIs rather than because every container platform article mentions it. The required evidence for every Container Apps workload remains logs, metrics, revision state, ingress behavior, scale behavior, and identity access.
 
-## Logs
+## What Logs Explain Runtime Behavior?
 <!-- section-summary: Container Apps exposes console, system, and HTTP logs so operators can separate platform failures from application failures. -->
 
 **Logs** are the first evidence trail for a Container Apps problem. Container Apps can send logs to Log Analytics at the environment level, and the platform separates several kinds of information. Console logs come from the app's standard output and standard error streams. System logs come from the Container Apps service. HTTP logs come from the ingress layer when HTTP logging is enabled through diagnostic settings.
@@ -344,7 +350,7 @@ Metrics complete the picture. Replica count, request count, status codes, CPU, m
 
 Now we have the main pieces. The final design question is when this service is the right compute choice.
 
-## When Container Apps Fits
+## When Is Container Apps the Right Fit?
 <!-- section-summary: Container Apps fits container-first APIs, workers, and microservices when the team wants managed platform behavior without owning a Kubernetes cluster. -->
 
 Container Apps fits workloads that already think in containers. The team builds an image, deploys it, controls CPU and memory per replica, chooses ingress, and lets Azure handle managed runtime behavior around that image. APIs, background workers, event processors, small microservices, and internal tools often fit this shape.
@@ -359,7 +365,7 @@ The Orders team can make a reasonable first production choice with Container App
 
 The service can outgrow that first choice in several directions. A simple API can move to App Service if the team wants a more standard web-app host. A short event handler can move to Functions if the function trigger model fits better. A large platform with many custom Kubernetes requirements can move to AKS. The decision stays grounded in workload shape, operations evidence, and the amount of platform control the team is ready to own.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: A Container Apps workload is understandable when the team can explain the environment, app, image, revision, ingress, scale, identity, and logs. -->
 
 Azure Container Apps turns a container image into a managed Azure service. The managed environment gives related apps a shared boundary for networking, logs, and platform settings. The container app defines one workload. Replicas are the running copies. Images come from registries. Revisions preserve versioned runtime snapshots. Ingress controls reachability and target ports. Scale rules decide replica counts. Secrets and managed identity handle access. Logs and metrics give operators evidence.
@@ -372,13 +378,47 @@ For `devpolaris-orders`, the final production shape is easy to say out loud. `ca
 
 The same sentence also gives the incident checklist. A bad release can point to the image, revision state, target port, ingress traffic weights, logs, identity permissions, secrets, scale limits, or downstream dependencies. Container Apps hides a lot of infrastructure, but production still needs the team to name those facts clearly.
 
-## What's Next
+### What's Next
 
 The next article moves from Container Apps to Azure Functions. Container Apps runs a full container process with ingress, revisions, and scale rules, while Functions starts from events and organizes code around triggers, invocations, bindings, timeouts, retries, and hosting-plan tradeoffs.
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[What Is Azure Container Apps?]{kind="recap"}
+Azure Container Apps runs container images with managed ingress, revisions, scale rules, identity, and logs, while the team still owns the image and runtime configuration.
+:::
+
+:::expand[How Do Environments, Apps, and Replicas Fit Together?]{kind="recap"}
+A managed environment is the shared Container Apps boundary for related apps, networking, logging, workload profiles, and isolation decisions. A container app is the service definition, while replicas are the running instances that serve traffic or process work.
+:::
+
+:::expand[How Do Images and Revisions Make Releases Traceable?]{kind="recap"}
+A container image is the release artifact Container Apps pulls from a registry, so stable tags and registry access make releases understandable. A revision is an immutable runtime snapshot, and revision mode decides whether releases replace one another or run side by side for controlled traffic movement.
+:::
+
+:::expand[How Does Ingress Route Traffic?]{kind="recap"}
+Ingress controls inbound reachability, protocol, target port, and traffic routing, so it is the first place to check for many HTTP failures.
+:::
+
+:::expand[How Do Scale Rules Change Replica Count?]{kind="recap"}
+Scale rules watch HTTP, TCP, CPU, memory, or event signals and adjust replica counts within the minimum and maximum limits.
+:::
+
+:::expand[How Do Secrets, Identity, Dapr, and Sidecars Support the App?]{kind="recap"}
+Secrets hold sensitive configuration, while managed identity gives a container app an Entra ID identity for passwordless access to Azure resources. Dapr is an optional sidecar layer that can provide service invocation, pub/sub, state access, and bindings for microservice designs.
+:::
+
+:::expand[What Logs Explain Runtime Behavior?]{kind="recap"}
+Container Apps exposes console, system, and HTTP logs so operators can separate platform failures from application failures.
+:::
+
+:::expand[When Is Container Apps the Right Fit?]{kind="recap"}
+Container Apps fits container-first APIs, workers, and microservices when the team wants managed platform behavior without owning a Kubernetes cluster. A Container Apps workload is understandable when the team can explain the environment, app, image, revision, ingress, scale, identity, and logs.
+:::
+
+## References
 
 - [Azure Container Apps overview](https://learn.microsoft.com/en-us/azure/container-apps/overview) - Microsoft Learn overview of the serverless container platform, common uses, features, revisions, ingress, scaling, registries, secrets, and logs.
 - [Azure Container Apps environments](https://learn.microsoft.com/en-us/azure/container-apps/environment) - Microsoft Learn guide to environments, virtual networks, workload profiles, shared logs, and environment isolation choices.

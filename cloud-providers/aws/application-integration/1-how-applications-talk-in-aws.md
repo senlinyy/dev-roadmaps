@@ -23,11 +23,30 @@ aliases:
 6. [Where Do EventBridge Pipes, Amazon MQ, and Streams Fit?](#where-do-eventbridge-pipes-amazon-mq-and-streams-fit)
 7. [How Do You Debug a Missing Message?](#how-do-you-debug-a-missing-message)
 8. [How Do You Choose the Communication Pattern?](#how-do-you-choose-the-communication-pattern)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 AWS application integration is easier to understand when you begin with the communication problem instead of a comparison such as "SQS versus SNS versus EventBridge." Two pieces of software need to exchange a question, an instruction, a fact, or progress through a longer process. Once they run in separate processes, containers, functions, machines, or services, failures and timing become part of the design.
 
-The sections below answer these questions in order:
+Start with the smallest possible relationship:
+
+```text
+Application A  -------------------->  Application B
+```
+
+A wants B either to provide information or to perform work. As soon as A and B are separate runtime units, the simple arrow hides difficult questions:
+
+Application-integration services take responsibility for different parts of those problems. A useful first map is:
+
+```text
+API Gateway     -> Talk to a service now and wait for an answer.
+SQS             -> Keep this work safe until a worker can do it.
+SNS             -> Give the same news to interested subscribers.
+EventBridge     -> Examine an event and route it by rules.
+Step Functions  -> Remember and carry out a whole process.
+```
+
+Keep these questions in view as you work through the lesson:
 
 1. **What Problems Appear When Applications Communicate?**
 2. **What Can One Application Say to Another?**
@@ -40,32 +59,6 @@ The sections below answer these questions in order:
 
 ## What Problems Appear When Applications Communicate?
 <!-- section-summary: Separate applications become coupled by time, location, processing rate, and responsibility for remembering a multi-step process. -->
-
-Start with the smallest possible relationship:
-
-```text
-Application A  -------------------->  Application B
-```
-
-A wants B either to provide information or to perform work. As soon as A and B are separate runtime units, the simple arrow hides difficult questions:
-
-- What happens if B is unavailable?
-- What happens if B processes work more slowly than A produces it?
-- What if three or ten systems need the same information?
-- What if only particular consumers care about a message?
-- What if the business operation contains several ordered steps?
-- What if one step fails after earlier steps succeeded?
-- Which component remembers how far the process progressed?
-
-Application-integration services take responsibility for different parts of those problems. A useful first map is:
-
-```text
-API Gateway     -> Talk to a service now and wait for an answer.
-SQS             -> Keep this work safe until a worker can do it.
-SNS             -> Give the same news to interested subscribers.
-EventBridge     -> Examine an event and route it by rules.
-Step Functions  -> Remember and carry out a whole process.
-```
 
 These are learning boundaries rather than absolute feature boundaries. The services overlap and are often composed. Their deeper purpose becomes clearer through four kinds of coupling.
 
@@ -375,7 +368,7 @@ create_shipment()
 send_email()
 ```
 
-This becomes a home-grown workflow engine when tasks take hours, involve several services or people, run in parallel, retry under different policies, or must survive the coordinating process crashing.
+Tasks that take hours, involve several services or people, run in parallel, retry under different policies, or must survive a coordinator crash turn this design into a home-grown workflow engine.
 
 Step Functions represents the process as a state machine and retains execution state:
 
@@ -506,7 +499,7 @@ An EventBridge-to-SQS-to-worker path means, "route the event to this application
 ## How Do You Debug a Missing Message?
 <!-- section-summary: Trace the actual path from left to right and find the last boundary with confirmed evidence. -->
 
-Distributed systems become manageable when debugging follows the message rather than jumping between unrelated dashboards. Draw the real path:
+Debug a distributed system by following the message rather than jumping between unrelated dashboards. Draw the real path:
 
 ```text
 Producer -> EventBridge -> SQS -> Lambda -> Database
@@ -630,6 +623,8 @@ Step Functions -> workflow owns process state
 ```
 
 Once those responsibilities are clear, individual AWS features are easier to place because the architecture has already decided who should wait, who should know the recipients, who should buffer excess work, and who should remember the next step.
+
+## Check Your Answers
 
 :::expand[What Problems Appear When Applications Communicate?]{kind="recap"}
 Separate applications become coupled by time, location, processing rate, and responsibility for remembering a multi-step process.

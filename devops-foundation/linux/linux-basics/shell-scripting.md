@@ -9,18 +9,15 @@ id: article-devops-foundation-linux-linux-basics-shell-scripting
 
 ## Table of Contents
 
-1. [Why Scripts Matter](#why-scripts-matter)
-2. [What a Shell Script Is](#what-a-shell-script-is)
-3. [Shebang, Execute Bit, and `PATH`](#shebang-execute-bit-and-path)
-4. [Variables and Quoting](#variables-and-quoting)
-5. [Exit Codes and Branching](#exit-codes-and-branching)
-6. [A Safer Deploy Script](#a-safer-deploy-script)
-7. [Functions, `trap`, and Cleanup](#functions-trap-and-cleanup)
-8. [Loops and Safe File Handling](#loops-and-safe-file-handling)
-9. [References](#references)
-
-## Why Scripts Matter
-<!-- section-summary: Shell scripts turn repeated server operations into reviewed, repeatable commands. -->
+1. [Why Does Repeated Shell Work Become a Script?](#why-does-repeated-shell-work-become-a-script)
+2. [What Actually Runs a Shell Script?](#what-actually-runs-a-shell-script)
+3. [How Do the Shebang, Execute Bit, and PATH Select Execution?](#how-do-the-shebang-execute-bit-and-path-select-execution)
+4. [How Do Expansion, Quoting, Arguments, and Environment Values Work?](#how-do-expansion-quoting-arguments-and-environment-values-work)
+5. [How Do Exit Codes, Tests, and Pipelines Control Decisions?](#how-do-exit-codes-tests-and-pipelines-control-decisions)
+6. [How Do You Build a Safer and Repeatable Deploy Script?](#how-do-you-build-a-safer-and-repeatable-deploy-script)
+7. [How Do Functions, Temporary Files, Signals, and Traps Bound Cleanup?](#how-do-functions-temporary-files-signals-and-traps-bound-cleanup)
+8. [How Do You Iterate over Input Without Turning Data into Shell Syntax?](#how-do-you-iterate-over-input-without-turning-data-into-shell-syntax)
+9. [Check Your Answers](#check-your-answers)
 
 After you can navigate the filesystem and edit a config file, the next problem is repetition. A deploy over SSH often turns into the same chain of commands: pull a release artifact, install dependencies, restart a service, validate Nginx, check a health endpoint, and inspect logs when something fails.
 
@@ -28,9 +25,23 @@ Typing those steps manually works once. The risk grows when the team deploys eve
 
 A **shell script** is a repeatable sequence of terminal commands saved in a text file. Instead of typing the same release, backup, validation, or cleanup steps by hand, you put the commands in one file and let Bash run them in order.
 
+Keep these questions in view as you work through the lesson:
+
+1. **Why Does Repeated Shell Work Become a Script?**
+2. **What Actually Runs a Shell Script?**
+3. **How Do the Shebang, Execute Bit, and `PATH` Select Execution?**
+4. **How Do Expansion, Quoting, Arguments, and Environment Values Work?**
+5. **How Do Exit Codes, Tests, and Pipelines Control Decisions?**
+6. **How Do You Build a Safer and Repeatable Deploy Script?**
+7. **How Do Functions, Temporary Files, Signals, and Traps Bound Cleanup?**
+8. **How Do You Iterate over Input Without Turning Data into Shell Syntax?**
+
+## Why Does Repeated Shell Work Become a Script?
+<!-- section-summary: Shell scripts turn repeated server operations into reviewed, repeatable commands. -->
+
 Bash is a good fit for this layer because it orchestrates other programs. It calls `systemctl`, `curl`, `rsync`, `tar`, `journalctl`, `nginx -t`, and package tools. Larger business logic belongs in a language with stronger data structures and tests, but server glue often belongs in Bash because Linux servers already have it.
 
-## What a Shell Script Is
+## What Actually Runs a Shell Script?
 <!-- section-summary: A shell script is a text file of commands that Bash executes in order. -->
 
 One command you already trust can turn into the first script. A health check is a good example: the same URL, the same flags, the same success-or-failure decision after every deploy. Saving that command in a file gives you the smallest useful script.
@@ -73,7 +84,13 @@ That error is good for automation. The script should fail loudly so a deploy ste
 
 As scripts grow, the goal is clarity. A good operations script makes the important paths, service names, and checks obvious. A future engineer should be able to open the file and understand which machine state it changes.
 
-## Shebang, Execute Bit, and `PATH`
+The shell is both an interpreter and a process orchestrator. Some commands, such as `cd`, `export`, `read`, and `printf`, may be shell **builtins** because they need to affect shell state or are efficient to implement internally. Other command names resolve to executable files, and Bash creates child processes to run them. A script often coordinates many such children and turns their statuses and output into one higher-level operation.
+
+Running `bash check-app.sh` normally creates a child Bash process. Changes to its current directory, shell variables, options, and functions disappear when that child exits. The parent shell receives only the script's exit status and whatever output or files the script produced.
+
+`source settings.sh`, also written `. settings.sh`, is different: it reads commands into the current shell. A sourced file can change the caller's variables, functions, options, and directory. That is useful for deliberately loading shell definitions and dangerous when the file is untrusted or unexpectedly calls `exit`. Prefer executing operational scripts as children; source only files whose purpose is to modify the current shell.
+
+## How Do the Shebang, Execute Bit, and `PATH` Select Execution?
 <!-- section-summary: The shebang tells Linux which interpreter runs the script, and the execute bit allows direct execution. -->
 
 After `bash check-app.sh` works, the natural next step is running a script directly as `./deploy.sh`. At that point Linux needs to know which interpreter should run the text file. The first line handles that:
@@ -132,7 +149,7 @@ The production symptom is "the script works over SSH and fails in CI." CI may ha
 
 _The image shows the chain that lets a text file run like a command._
 
-## Variables and Quoting
+## How Do Expansion, Quoting, Arguments, and Environment Values Work?
 <!-- section-summary: Bash variables store strings, and quoting keeps those strings as one argument after expansion. -->
 
 The first script may work perfectly until a path contains a space. A release directory named `/srv/web/releases/2026-06-24 09-30` may look harmless to a person. Unquoted Bash variables can split that path into two separate words.
@@ -196,11 +213,58 @@ The same quoting rule applies after substitution. Store the value, quote it when
 
 The production symptom is a cleanup loop that works for normal names and breaks on a release directory with a space. The next decision is to quote every variable expansion unless you intentionally need word splitting, and to test scripts with paths that contain spaces before adding deletion commands.
 
+Single and double quotes preserve different kinds of text. Single quotes keep every character literal, while double quotes allow parameter expansion, command substitution, and selected escapes:
+
+```bash
+name="web"
+printf '%s\n' '$name'    # prints $name
+printf '%s\n' "$name"    # prints web
+```
+
+Arguments supplied to a script become positional parameters. `$0` identifies how the script was invoked, `$1` is the first argument, `$#` is the argument count, and `"$@"` expands every supplied argument while preserving each as a separate word. That last form is the safe way to forward arbitrary arguments:
+
+```bash
+#!/usr/bin/env bash
+
+if (( $# < 1 )); then
+    printf 'usage: %s RELEASE_ARCHIVE [extra tar options...]\n' "$0" >&2
+    exit 64
+fi
+
+archive=$1
+shift
+tar -xzf "$archive" "$@"
+```
+
+Do not replace `"$@"` with `$*` or an unquoted expansion. The original caller may have supplied an argument containing spaces or wildcard characters, and the script should pass the same argument boundaries onward.
+
+Environment variables are exported name-value pairs inherited by child processes. A normal shell variable remains inside the current shell; `export APP_ENV=production` makes the value available to commands the shell starts. A child can inherit or override a value for its descendants, but it cannot normally rewrite the parent's environment after it exits.
+
+Parameter expansion can supply defaults and enforce required configuration without a separate branch:
+
+```bash
+app_dir=${APP_DIR:-/srv/web}
+release_id=${RELEASE_ID:?RELEASE_ID must be set}
+log_level=${LOG_LEVEL:=info}
+```
+
+`${APP_DIR:-/srv/web}` uses the default when `APP_DIR` is unset or empty. `${RELEASE_ID:?...}` stops expansion with an error when the required value is absent. `${LOG_LEVEL:=info}` also assigns the default in the current shell. These forms are compact, so use names and messages that make the contract obvious.
+
+Arrays preserve a list of argument boundaries. They are safer than building one command string and asking the shell to parse it again:
+
+```bash
+curl_args=(--fail --silent --show-error --connect-timeout 3)
+curl_args+=(--header "X-Release: $release_id")
+curl "${curl_args[@]}" "$health_url"
+```
+
+Input is data, not shell syntax. Avoid `eval` and command strings assembled from user input. An array gives the target program the intended arguments without turning spaces, semicolons, substitutions, or wildcards inside values into a second layer of shell code.
+
 ![Quoted variable splitting infographic showing an unquoted release path breaking into words and a quoted path staying whole](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/quoted-variable-splitting.png)
 
 _The image shows why quotes protect paths and arguments before a script reaches production data._
 
-## Exit Codes and Branching
+## How Do Exit Codes, Tests, and Pipelines Control Decisions?
 <!-- section-summary: Scripts make decisions from exit codes, where `0` means success and nonzero values represent failure. -->
 
 After variables hold the important paths and URLs, the script has to decide whether each step worked. Printed output alone is not enough. A health endpoint may print an error page, `curl` may print a connection error, or a command may produce no output at all. The script needs a small machine-readable signal that says whether the step worked.
@@ -268,7 +332,29 @@ That command-and-result rhythm is the core of shell scripting. Run a command, ch
 
 The production symptom of ignored exit codes is a deploy that restarts a service even after extraction failed. The next decision is to make failure stop the script near the broken command and print enough context for the operator to know which check failed.
 
-## A Safer Deploy Script
+Short-circuit operators use the same statuses. `build && deploy` runs `deploy` only after a successful build. `check || recover` runs `recover` only after a failed check. They are useful when the relationship is simple; a named `if` block is clearer when failure needs logging, cleanup, or several recovery steps.
+
+Pipelines connect the standard output of one process to the standard input of the next:
+
+```bash
+journalctl -u app.service --since '10 minutes ago' | grep -F 'ERROR' | tail -20
+```
+
+Without extra handling, Bash normally reports the status of the last pipeline command. An earlier command can fail while `tail` succeeds. A common Bash safety baseline is:
+
+```bash
+set -euo pipefail
+```
+
+- `-e` asks Bash to exit after many unhandled command failures, although conditions, short-circuit lists, functions, and substitutions have important exceptions.
+- `-u` treats an unset variable expansion as an error, which catches misspelled configuration names.
+- `pipefail` makes a pipeline fail when any component fails rather than considering only the last command.
+
+These options strengthen a script; they do not replace explicit checks. Commands can return nonzero for an expected condition, and cleanup still needs a trap. Put expected failures inside `if`, `while`, or a deliberate `||` branch so the script documents that status as data rather than an accident.
+
+Tests are commands too. `[[ -f "$path" ]]` returns a status that `if` consumes. External tools also define their own status contracts: `grep` commonly returns `1` for no match and values above `1` for an actual error. Read the contract before treating every nonzero code as the same failure.
+
+## How Do You Build a Safer and Repeatable Deploy Script?
 <!-- section-summary: A production script should fail early, name important paths, validate services, and leave a clear rollback clue. -->
 
 Now put the pieces together in a deploy script. Shell scripts are powerful because they can change files, restart services, and move releases forward with one command. That also means a small mistake can keep running after the real failure already happened. A missing variable can turn into an empty path. A failed command in the middle of a pipeline can be hidden by a later successful command.
@@ -351,11 +437,17 @@ The middle of the script does the operational work:
 
 This script assumes the unit file uses `/srv/web/current` as its working directory. Scripts and service files need to agree on paths. The next system administration articles connect Bash with systemd and process inspection.
 
+A safe deploy script validates every assumption that matters before mutation: the archive is a readable regular file, required tools resolve through `PATH`, the target filesystem has space, the service name is expected, and the current release can be identified for recovery. Divide the operation into stages such as validate, prepare, activate, verify, and clean up. When the verify stage fails, the script should leave enough state and evidence to select or restore the previous release.
+
+Idempotence means repeating the script against the same intended state does not accumulate unintended changes. `mkdir -p` already expresses that property. Replacing a symlink with the same target should also settle cleanly. Appending a configuration line on every run is not idempotent; checking or rendering the desired file first is safer. Shell automation is largely state management: observe current state, decide whether a transition is necessary, perform the narrow transition, and verify the result.
+
+Configuration changes deserve their own candidate-and-validation boundary. Write or render a candidate to a temporary file, run the service's parser against it, install it atomically only after success, then reload when the service supports reload. Restarting first and discovering invalid syntax afterward reverses the safe order.
+
 ![Bash safety flags infographic showing errexit, nounset, pipefail, explicit checks, and useful error output](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/bash-safety-flags.png)
 
 _The image turns the common safety options into a small script reliability checklist._
 
-## Functions, `trap`, and Cleanup
+## How Do Functions, Temporary Files, Signals, and Traps Bound Cleanup?
 <!-- section-summary: Functions group repeated work, and traps run cleanup or diagnostics when a script exits. -->
 
 After a deploy script works once, it often grows by copy and paste. The same health check appears after restart and after rollback. The same log message appears before several commands. At the same time, the script may create a temporary directory or update a symlink that needs cleanup if the run fails halfway through.
@@ -432,6 +524,24 @@ With this trap, a failed health check prints recent service logs before the scri
 
 Traps exist because scripts often create temporary files, update symlinks, or start work that needs cleanup. A trap can remove a temp directory on exit, print diagnostics on error, or restore state after an interrupted run. Keep trap functions small because they run during failure paths, where the script is already under stress.
 
+Create temporary paths with `mktemp` instead of guessing a name in `/tmp`. Guessable names can collide with another run or be pre-created by another user. Register cleanup immediately after creation so every later exit path is covered:
+
+```bash
+tmp_dir=$(mktemp -d)
+cleanup() {
+    rm -rf -- "$tmp_dir"
+}
+trap cleanup EXIT HUP INT TERM
+
+candidate="$tmp_dir/nginx.conf"
+render_config >"$candidate"
+sudo nginx -t -c "$candidate"
+```
+
+`EXIT` handles normal and error exits. `HUP`, `INT`, and `TERM` cover common termination signals, although a process cannot trap `KILL`. The `--` before the path ends option parsing so a value beginning with `-` is still treated as an operand. Capture important status values before running diagnostic or cleanup commands, because each later command replaces `$?`.
+
+Functions return statuses like other commands. `return 0` reports success to the caller; a nonzero return lets `if check_health` choose a recovery path. Function arguments use their own `$1`, `$#`, and `"$@"`, while variables are global unless declared `local`. Keeping inputs explicit makes functions easier to test and prevents one stage from accidentally overwriting another stage's state.
+
 Example output from a failed deploy might look like this:
 
 ```console
@@ -447,7 +557,7 @@ The exit code tells automation that the script failed. The recent logs give the 
 
 _The image shows how `trap` keeps cleanup attached to every exit path, including failures._
 
-## Loops and Safe File Handling
+## How Do You Iterate over Input Without Turning Data into Shell Syntax?
 <!-- section-summary: Loops repeat checks across files or hosts, and null-delimited file lists handle awkward filenames safely. -->
 
 The last beginner scripting step is repetition inside the script itself. Manual checks get old quickly when the same question applies to several targets. A release may need to check the local health URL, the public Nginx URL, and a small list of files before it continues.
@@ -495,13 +605,292 @@ The script above only prints candidates. A real cleanup script should also keep 
 
 Null-delimited loops exist because newline-delimited file lists cannot safely represent every valid filename. The under-the-hood idea is simple: `find -print0` separates names with the zero byte, and normal path names cannot contain that byte. The next decision before deletion is to print candidates first, compare them with the active symlink, then add `rm -rf -- "$old_release"` only after review.
 
+Avoid `for file in $(find ...)`. Command substitution removes trailing newlines, and the unquoted result is split and glob-expanded, so one filename can become several loop items. A simple glob is safe when one directory level is enough:
+
+```bash
+for file in /srv/web/releases/*; do
+    [[ -e "$file" ]] || continue
+    printf '%s\n' "$file"
+done
+```
+
+For recursive traversal, keep the null delimiter or let `find -exec ... {} +` pass paths as arguments directly. Use `read -r` so backslashes remain data, and set `IFS=` so leading and trailing whitespace is preserved. Quote every filename expansion and place `--` before operands for commands that support it.
+
+Use shell for orchestration where processes, files, and command statuses are the main model. Move to Python or another general-purpose language when the work needs nested data structures, complex parsing, concurrency, or substantial business logic. Decide whether the script requires Bash features such as arrays and `[[ ... ]]`; if so, declare Bash in the shebang rather than labeling it portable `sh`.
+
+Static analysis and trace output help before production. `shellcheck scripts/deploy.sh` catches common quoting, test, and expansion mistakes. `bash -n scripts/deploy.sh` checks syntax without executing. `set -x` prints expanded commands for debugging, but it can expose secret values in logs; enable it only around nonsecret work or use a controlled debug mode. Secrets should not be placed casually in command-line arguments because process listings and audit records may preserve them.
+
+Prompts also need context. An interactive confirmation can protect a human cleanup command and can hang unattended CI forever. Prefer an explicit `--dry-run` that prints intended changes and a separate noninteractive approval flag for automation. The caller should be able to tell whether the script is observing, planning, or mutating state.
+
+The deeper reason is that the shell does not pass a command-line string to most programs. It constructs an argument vector. Quoting controls how source text becomes those arguments, and the receiving program sees only the finished values. Compare the two calls:
+
+```bash
+name='quarterly report.txt'
+printf '<%s>\n' $name
+printf '<%s>\n' "$name"
+```
+
+The unquoted expansion can become two arguments, while the quoted expansion remains one. Globbing happens after word splitting, so an unquoted value containing `*` may also expand into filenames. Quoting `"$variable"` and `"$@"` preserves the data boundary; it is not decoration around a string.
+
+Command substitution has another boundary. `result=$(command)` captures standard output but removes trailing newline characters. It does not capture standard error, and it cannot preserve an arbitrary null byte inside a Bash variable. Use command substitution for a small textual value such as an identifier, not as a container for an unbounded file list. Arrays, a loop that reads a stream, or a temporary file preserve structure more clearly.
+
+`IFS` controls some splitting and `read` behavior. Changing it globally can alter later expansions in surprising ways. Keep a change local to the command that needs it:
+
+```bash
+while IFS= read -r line; do
+  printf 'received: %s\n' "$line"
+done < "$input_file"
+```
+
+`IFS=` prevents leading and trailing whitespace from being trimmed, and `-r` prevents backslashes from becoming escape characters. This loop still treats newline as a record boundary, so it is appropriate only when that is the input contract.
+
+Failure handling also needs an explicit model. `set -e` does not mean “every nonzero status always exits.” Shell grammar contains contexts—tests in `if`, parts of `&&` and `||` lists, and other conditional positions—where failure is being inspected rather than treated as fatal. Make expected alternatives visible:
+
+```bash
+if ! nginx -t; then
+  log 'candidate Nginx configuration is invalid'
+  return 1
+fi
+
+if grep -q '^maintenance=true$' "$env_file"; then
+  log 'maintenance mode is enabled'
+fi
+```
+
+The first failure is an error that stops the stage. The second command uses `grep` as a question: status `0` means the line exists, `1` means it does not, and a larger status means an actual grep error. When these meanings differ, capture and interpret the status rather than relying on a blanket option.
+
+Pipelines add multiple process statuses. With `pipefail`, the pipeline is nonzero if a stage fails, but you may still need to know which one. Bash exposes the statuses through `PIPESTATUS` immediately after the pipeline:
+
+```bash
+producer | validator | consumer
+pipeline_status=("${PIPESTATUS[@]}")
+printf 'producer=%s validator=%s consumer=%s\n' "${pipeline_status[@]}"
+```
+
+Copy the array immediately because the next command changes it. In a critical workflow, separate stages or use temporary artifacts when each status and intermediate result must be independently inspected.
+
+Cleanup must preserve the original result. A trap that fails can otherwise replace or obscure the status of the work that triggered it. Capture `$?` first, disable recursive traps, perform best-effort cleanup, and exit with the saved status:
+
+```bash
+tmp_dir=''
+
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  if [[ -n $tmp_dir && -d $tmp_dir ]]; then
+    rm -rf -- "$tmp_dir"
+  fi
+  exit "$status"
+}
+
+trap cleanup EXIT INT TERM
+tmp_dir=$(mktemp -d)
+```
+
+Register the trap immediately after the resource exists. Keep the target initialized, quoted, and checked so an unset or unexpectedly broad value never becomes a removal path. For a temporary file, `mktemp` provides a non-predictable name and creates the object atomically; hand-built names in `/tmp` can race with another process.
+
+Signals are requests delivered asynchronously. `SIGINT` may come from an interactive interrupt, `SIGTERM` from a service manager, and `SIGHUP` from a lost terminal or application-specific reload convention. A trap should make cleanup bounded and safe, but it cannot make every command transactional. `SIGKILL` cannot be trapped, and a machine failure can occur between any two commands. Design persistent changes so recovery does not depend only on the cleanup function running.
+
+That matters during publishing. Create and validate a release under a unique temporary or versioned path. Only after validation should one small operation expose it as current. If the script dies before the switch, users continue to see the old release; if it dies afterward, the new release is already complete. Avoid copying files one by one into the live directory, where interruption can expose a mixture of versions.
+
+Concurrency is another form of state. Two correct deploy scripts can conflict when they run at the same time. A lock states that only one publisher may change the active release:
+
+```bash
+lock_file=/run/lock/web-deploy.lock
+exec 9>"$lock_file"
+if ! flock -n 9; then
+  die 'another deployment is already running'
+fi
+```
+
+The open file descriptor holds the lock for the process. The script still needs permission to create or open the lock file, and every competing publisher must honor the same convention. A lock does not replace validation, idempotence, or atomic publication; it protects the shared transition from concurrent writers.
+
+Idempotence means the requested state can be applied again without accumulating unintended changes. `mkdir -p` is idempotent for a directory's existence. Repeatedly appending a configuration line with `>>` is not: every run adds another copy. Check the current state, create a full candidate, validate it, and replace the destination only when needed. Distinguish a safe repeated outcome from merely ignoring errors with `|| true`.
+
+Secrets deserve separate handling. Command-line arguments can appear in process listings and logs. `set -x` prints expanded commands, so tracing a line containing a token may disclose it. Prefer a protected file descriptor, a service credential mechanism, or a permissions-restricted configuration file supported by the receiving program. Disable tracing around secret reads, and never place the secret in an error message.
+
+Interactive confirmation is also an interface decision. A prompt that waits forever breaks scheduled automation. Accept an explicit flag such as `--yes`, refuse dangerous operations when a terminal is absent, or make the safe default do nothing. When reading from a user, read from the terminal deliberately rather than consuming data that was supposed to be piped into the script.
+
+A reviewable shell program separates five responsibilities:
+
+1. Constants and defaults name the external state the script may touch.
+2. Argument parsing and validation reject missing, contradictory, or malformed input before mutation.
+3. Logging and error helpers make each transition visible without leaking secrets.
+4. Worker functions perform one stage and return a meaningful status.
+5. `main` orders the stages, while traps own bounded cleanup.
+
+This structure makes a script read like an operational plan. It also makes the decision to outgrow shell clearer. When data structures become nested, concurrency becomes central, error recovery becomes transactional, or portability across shells dominates the work, a general-purpose language may provide safer types and libraries. Shell remains excellent when its job is to connect existing commands while preserving their argument, stream, status, and process boundaries.
+
+The review question for every line is therefore concrete: which arguments will the receiver get, which streams are connected, which status is inspected, which shell or child state changes, and what happens if interruption occurs immediately afterward? A safe script makes those boundaries visible and keeps persistent mutations small, validated, repeatable, and recoverable.
+
+Test those claims with representative data: empty values, spaces, leading dashes, wildcard characters, missing files, failed commands, partial setup, repeated execution, and concurrent execution when shared state exists. The happy path proves the script can work; boundary cases prove its quoting, status, cleanup, and idempotence model.
+
+Keep the interpreter and required external commands explicit so another host does not silently run a different language or feature set.
+
+### How Does a Complete Script Keep Its Responsibilities Visible?
+
+A practical script can follow one predictable architecture: constants and inputs, logging and error helpers, cleanup registration, validation, worker functions, and one `main` function. Calling `main "$@"` at the end makes the entry point explicit and prevents top-level setup from becoming an accidental sequence nobody can test separately.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly app_dir=${APP_DIR:-/srv/web}
+readonly keep_releases=${KEEP_RELEASES:-5}
+dry_run=false
+tmp_dir=
+
+log() {
+    printf '[%s] %s\n' "$(date --iso-8601=seconds)" "$*"
+}
+
+die() {
+    printf 'error: %s\n' "$*" >&2
+    exit 1
+}
+
+cleanup() {
+    local status=$?
+    if [[ -n ${tmp_dir:-} && -d $tmp_dir ]]; then
+        rm -rf -- "$tmp_dir"
+    fi
+    exit "$status"
+}
+
+usage() {
+    printf 'usage: %s [--dry-run]\n' "$0"
+}
+
+parse_args() {
+    while (( $# > 0 )); do
+        case $1 in
+            --dry-run) dry_run=true ;;
+            -h|--help) usage; exit 0 ;;
+            --) shift; break ;;
+            *) die "unknown argument: $1" ;;
+        esac
+        shift
+    done
+}
+
+validate() {
+    [[ -d $app_dir/releases ]] || die "missing releases directory: $app_dir/releases"
+    [[ $keep_releases =~ ^[0-9]+$ ]] || die 'KEEP_RELEASES must be a non-negative integer'
+    command -v find >/dev/null || die 'find is required'
+    command -v readlink >/dev/null || die 'readlink is required'
+}
+
+list_release_candidates() {
+    find "$app_dir/releases" -mindepth 1 -maxdepth 1 -type d -print0
+}
+
+remove_release() {
+    local release=$1
+    if [[ $dry_run == true ]]; then
+        printf 'would remove: %s\n' "$release"
+    else
+        rm -rf -- "$release"
+        printf 'removed: %s\n' "$release"
+    fi
+}
+
+main() {
+    local current
+    local release
+    local -a candidates=()
+
+    parse_args "$@"
+    validate
+
+    tmp_dir=$(mktemp -d)
+    trap cleanup EXIT HUP INT TERM
+
+    current=$(readlink -f "$app_dir/current")
+
+    while IFS= read -r -d '' release; do
+        [[ $release == "$current" ]] && continue
+        candidates+=("$release")
+    done < <(list_release_candidates)
+
+    if (( ${#candidates[@]} <= keep_releases )); then
+        log 'no old releases need removal'
+        return 0
+    fi
+
+    mapfile -d '' candidates < <(
+        printf '%s\0' "${candidates[@]}" |
+        sort -z
+    )
+
+    for release in "${candidates[@]:0:${#candidates[@]}-keep_releases}"; do
+        remove_release "$release"
+    done
+}
+
+main "$@"
+```
+
+This example treats paths as array elements rather than one string. The null-delimited producer and `read -d ''` preserve unusual filenames. `--` stops `rm` option parsing. The current symlink target is excluded before any deletion decision, and dry-run changes the worker behavior without changing selection logic.
+
+The script still has assumptions that deserve review. Lexical sorting works only because release directories use a sortable timestamp naming scheme. Concurrent cleanup runs could race, so a shared production job may need a lock such as `flock`. The number of retained releases is validated, but available disk space and rollback policy may require stronger checks. A robust script states those contracts instead of hiding them in a clever command.
+
+Process substitution in `done < <(list_release_candidates)` keeps the `while` loop in the current shell, so additions to the `candidates` array remain visible afterward. A pipeline into `while` may run the loop in a subshell in Bash, causing variable changes to disappear. This child-shell rule is easy to miss and is another reason to keep stateful loops explicit.
+
+The cleanup trap captures `$?` before testing or removing anything, then exits with the same status. Without that capture, a successful `rm` could replace the original error status and make a failed operation look successful. Cleanup should be safe when called after partial setup; testing whether `tmp_dir` is nonempty and exists makes it repeatable.
+
+Logging also needs a secret boundary. Print the stage, target, and result, but do not print access tokens, passwords, private keys, or full environment dumps. `set -x` traces expanded values and can leak them even when the script never calls `echo`. Turn tracing off before secret-bearing commands and prefer passing secrets through protected files or file descriptors when the consuming tool supports them.
+
+Run three cheap checks before trusting a script:
+
+```bash
+bash -n scripts/cleanup-releases.sh
+shellcheck scripts/cleanup-releases.sh
+scripts/cleanup-releases.sh --dry-run
+```
+
+Syntax checking proves only that Bash can parse the file. ShellCheck catches common static mistakes. Dry-run exercises real discovery and selection without applying deletion. A test directory containing spaces, leading dashes, an active symlink, and more releases than the retention limit provides stronger evidence than one happy-path filename.
+
 Shell scripting grows from one repeated command. Add variables for important paths, quote expansions, check exit codes, group repeated behavior into functions, and print useful diagnostics when the script stops.
 
 ![Shell scripting summary infographic showing shebang, quoting, exit codes, functions, traps, loops, and safe file handling](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/shell-scripting-summary.png)
 
 _The summary image gathers the scripting habits that keep small automation readable and safe._
 
-## References
+## Check Your Answers
+
+:::expand[Why Does Repeated Shell Work Become a Script?]{kind="recap"}
+A script turns remembered terminal steps into reviewed process orchestration with one repeatable entry point and status.
+:::
+
+:::expand[What Actually Runs a Shell Script?]{kind="recap"}
+An interpreter reads the text, builtins change shell state, and child processes perform most external operations.
+:::
+
+:::expand[How Do the Shebang, Execute Bit, and `PATH` Select Execution?]{kind="recap"}
+The invocation path, execute permission, shebang, and executable search path together determine which interpreter and tools run.
+:::
+
+:::expand[How Do Expansion, Quoting, Arguments, and Environment Values Work?]{kind="recap"}
+Bash expands text into arguments; quotes, arrays, positional parameters, and exported values preserve the intended boundaries.
+:::
+
+:::expand[How Do Exit Codes, Tests, and Pipelines Control Decisions?]{kind="recap"}
+Commands report statuses that drive branches, while strict options and `pipefail` expose otherwise hidden failures.
+:::
+
+:::expand[How Do You Build a Safer and Repeatable Deploy Script?]{kind="recap"}
+Validate assumptions, separate stages, make transitions idempotent, verify runtime health, and keep a recoverable previous state.
+:::
+
+:::expand[How Do Functions, Temporary Files, Signals, and Traps Bound Cleanup?]{kind="recap"}
+Functions name status-producing work, `mktemp` creates safe scratch space, and traps attach cleanup to every reachable exit.
+:::
+
+:::expand[How Do You Iterate over Input Without Turning Data into Shell Syntax?]{kind="recap"}
+Preserve input as quoted arguments, use null-delimited traversal for paths, and avoid reparsing data through command strings.
+:::
+
+### References
 
 - [GNU Bash manual](https://www.gnu.org/software/bash/manual/bash.html) - Official Bash reference for shell syntax, expansion, variables, and execution.
 - [Bash conditional expressions](https://www.gnu.org/software/bash/manual/html_node/Bash-Conditional-Expressions.html) - Documents `[[ ... ]]` test operators.

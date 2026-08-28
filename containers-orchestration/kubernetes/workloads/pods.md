@@ -20,9 +20,6 @@ id: article-containers-orchestration-kubernetes-workloads-pods
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## Why Is the Pod Kubernetes' Smallest Schedulable Unit?
-<!-- section-summary: A Pod gives Kubernetes one object for placing and operating a complete application instance made from one container or a few tightly coupled containers. -->
-
 A running application eventually executes as one or more operating-system processes. A container packages one of those processes with its executable, libraries, environment, filesystem view, and isolation settings. Kubernetes still needs a larger unit that it can place on a node and describe through its API.
 
 That unit is the **Pod**.
@@ -39,16 +36,7 @@ A Pod represents **one running application instance as Kubernetes sees it**. It 
 
 The common case is one application container in one Pod. A product-search API might have twenty replicas, with each replica represented by a separate Pod containing one `search-api` container. Each Pod is one replaceable instance behind a Service.
 
-Multiple containers fit when they form one inseparable runtime unit. A video-processing Pod could contain:
-
-- a `transcoder` that converts an uploaded source file into streaming segments; and
-- a `segment-uploader` that sends completed segments from a shared local volume to object storage.
-
-Those processes need the same node, the same temporary files, and the same lifetime. Kubernetes can schedule the complete Pod once and keep that relationship intact.
-
-The same logic explains why a web frontend, an API, and a database usually occupy separate Pods. They scale at different rates, receive separate releases, and recover independently. Ten busy API Pods may serve one frontend release while a database runs under a StatefulSet. Packing all three processes into one Pod would couple every scaling and replacement decision.
-
-The questions below build the Pod from the operating-system process upward and then follow it through a real lifecycle:
+Keep these questions in view as you work through the lesson:
 
 1. **Why Is the Pod Kubernetes' Smallest Schedulable Unit?**
 2. **How Does a Pod Object Become Running Processes on a Node?**
@@ -58,6 +46,18 @@ The questions below build the Pod from the operating-system process upward and t
 6. **How Does a Pod Start, Become Ready, and Shut Down?**
 7. **How Do Phase, Container State, Conditions, and STATUS Describe One Pod?**
 8. **How Do You Trace a Pod from Scheduling to Application Failure?**
+
+## Why Is the Pod Kubernetes' Smallest Schedulable Unit?
+<!-- section-summary: A Pod gives Kubernetes one object for placing and operating a complete application instance made from one container or a few tightly coupled containers. -->
+
+Multiple containers fit when they form one inseparable runtime unit. A video-processing Pod could contain:
+
+- a `transcoder` that converts an uploaded source file into streaming segments; and
+- a `segment-uploader` that sends completed segments from a shared local volume to object storage.
+
+Those processes need the same node, the same temporary files, and the same lifetime. Kubernetes can schedule the complete Pod once and keep that relationship intact.
+
+The same logic explains why a web frontend, an API, and a database usually occupy separate Pods. They scale at different rates, receive separate releases, and recover independently. Ten busy API Pods may serve one frontend release while a database runs under a StatefulSet. Packing all three processes into one Pod would couple every scaling and replacement decision.
 
 Here is the smallest useful Pod specification for a search API:
 
@@ -615,7 +615,7 @@ status:
 ## How Do You Trace a Pod from Scheduling to Application Failure?
 <!-- section-summary: Diagnose a Pod in lifecycle order, using assignment, conditions, events, container state, logs, and runtime inspection to find the first stage that failed. -->
 
-Pod debugging becomes much clearer when commands follow the execution path. Start with the stored object and identify the first incomplete or failing layer.
+Commands that follow the execution path make Pod debugging much clearer. Start with the stored object and identify the first incomplete or failing layer.
 
 ### 1. Confirm identity, node, IP, readiness, and restarts
 

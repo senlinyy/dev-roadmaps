@@ -20,39 +20,31 @@ id: article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exis
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## Why Does One Running Container Stop Being Enough in Production?
-<!-- section-summary: One process on one machine can serve requests, while a production service also needs capacity, replacement, stable traffic, and controlled change. -->
-
 Every server-side application begins as an operating-system process. A web server opens a port, receives a request from a browser, runs some code, and returns a response. During development, that entire system may fit on one laptop.
 
 An operating system already provides useful local supervision. A service manager such as `systemd` can start a process when the machine boots and restart it after an exit. This is enough for many small applications. The machine supplies CPU and memory, the process serves traffic, and the service manager keeps the process alive.
 
 Production expands the problem along two axes: capacity and failure. One process can use only the resources of its machine, and losing that machine removes the process with it. If one application copy can safely handle 2,000 requests per second while demand reaches 12,000, six copies provide the required capacity before any failure margin is added. Spreading those copies across machines prevents one machine from carrying the entire service.
 
-The moment the service spans several machines, someone or something must answer a new set of questions:
+Keep these questions in view as you work through the lesson:
 
-- Which machines have enough CPU and memory for each application copy?
-- How many copies should exist during normal demand and during a peak?
-- Which copies are ready to receive client requests?
-- Where should a replacement run after a machine disappears?
-- How can callers use one stable address while copies receive new IP addresses?
-- How can a new version replace the current version while the service keeps accepting traffic?
-- Where can an engineer see the requested state, the live state, and the reason for a delay?
+1. **Why Does One Running Container Stop Being Enough in Production?**
+2. **Which Problem Do Containers Solve, and Which Problem Remains?**
+3. **What Does Kubernetes Do in Plain Terms?**
+4. **How Does Desired State Turn Failures Into Routine Work?**
+5. **How Does a Kubernetes Cluster Turn a Manifest Into a Running Application?**
+6. **How Do Callers Keep One Address While Pods Change?**
+7. **How Do Scaling and Releases Work?**
+8. **When Does Kubernetes Earn Its Complexity, and What Do Teams Still Own?**
+
+## Why Does One Running Container Stop Being Enough in Production?
+<!-- section-summary: One process on one machine can serve requests, while a production service also needs capacity, replacement, stable traffic, and controlled change. -->
+
+The moment the service spans several machines, someone or something must answer a new set of questions:
 
 These are coordination questions. Starting a process is one action. Keeping many changing processes organized across many changing machines is an ongoing control problem.
 
 A fleet of scripts can perform the individual actions. One script chooses a machine, another starts a process, another edits a load balancer, and another restarts failed work. The scripts also need shared memory. After a script finishes, the system still needs to remember that six copies should exist. When a machine fails ten minutes later, another component must notice that the live count fell to five and decide what to do next. Releases, scaling, placement, traffic, and recovery all need to agree on the same picture of the application.
-
-Kubernetes exists to provide that shared picture and the continuous coordination around it. The questions below form the path through this article:
-
-1. **Why does one running container stop being enough in production?**
-2. **Which problem do containers solve, and which problem remains?**
-3. **What does Kubernetes do in plain terms?**
-4. **How does desired state turn failures into routine work?**
-5. **How does a Kubernetes cluster turn a manifest into a running application?**
-6. **How do callers keep one address while Pods change?**
-7. **How do scaling and releases work?**
-8. **When does Kubernetes earn its complexity, and what do teams still own?**
 
 ## Which Problem Do Containers Solve, and Which Problem Remains?
 <!-- section-summary: A container image packages an application consistently; an orchestrator coordinates many running copies across machines. -->
@@ -423,7 +415,7 @@ A useful way to divide responsibility is:
 - **Platform teams operate:** clusters, worker capacity, upgrades, networking, storage integrations, policy, and observability foundations.
 - **Application teams own:** code behavior, data handling, dependency resilience, health semantics, and release acceptance.
 
-That boundary makes Kubernetes easier to reason about. It is an operating layer with strong control mechanisms, and those mechanisms become useful when teams give them accurate requests and signals.
+That boundary makes Kubernetes easier to reason about. It is an operating layer with strong control mechanisms, and those mechanisms rely on accurate requests and signals from teams.
 
 ![A Studio Light summary infographic shows teams declaring application intent, the Kubernetes API preserving it, controllers and the scheduler coordinating worker Pods, Services routing only to ready copies, and status flowing back for inspection](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/kubernetes-coordination-summary.png)
 
@@ -431,7 +423,7 @@ That boundary makes Kubernetes easier to reason about. It is an operating layer 
 
 ### When Kubernetes is a good choice
 
-Kubernetes introduces a real platform to learn and operate. Its API, networking, storage, security, upgrades, capacity, and observability all require engineering work. The value becomes strongest when many applications and teams can reuse that investment.
+Kubernetes introduces a real platform to learn and operate. Its API, networking, storage, security, upgrades, capacity, and observability all require engineering work. The investment provides its strongest value when many applications and teams can reuse it.
 
 Kubernetes is often a good fit when several of these needs appear together:
 
@@ -463,36 +455,36 @@ The decision should connect Kubernetes features to recurring operational problem
 ## Check Your Answers
 <!-- section-summary: Eight questions revisit the production problem, the Kubernetes control model, the application path, and the platform boundary. -->
 
-:::expand[Why does one running container stop being enough in production?]{kind="recap"}
+:::expand[Why Does One Running Container Stop Being Enough in Production?]{kind="recap"}
 One container serves one application copy on one machine. A production service may need more capacity, survival across process and machine loss, a stable network destination, gradual releases, and a shared record of current and requested state. Coordinating those needs across a changing fleet becomes a continuous control problem.
 :::
 
-:::expand[Which problem do containers solve, and which problem remains?]{kind="recap"}
+:::expand[Which Problem Do Containers Solve, and Which Problem Remains?]{kind="recap"}
 A container image packages an application with the runtime files it needs, and a container runtime starts that packaged process on one machine. The remaining problem is fleet coordination: replica count, placement, replacement, stable discovery, release order, and shared status across many machines.
 :::
 
-:::expand[What does Kubernetes do in plain terms?]{kind="recap"}
+:::expand[What Does Kubernetes Do in Plain Terms?]{kind="recap"}
 Kubernetes stores a team's application request and continuously coordinates a cluster toward it. The control plane accepts and manages the request, worker nodes supply runtime resources, Pods carry application containers, Deployments manage replaceable copies, and Services give those copies a stable network identity.
 :::
 
-:::expand[How does desired state turn failures into routine work?]{kind="recap"}
+:::expand[How Does Desired State Turn Failures Into Routine Work?]{kind="recap"}
 Desired state remains stored after the original command ends. Controllers repeatedly compare that request with observed state and take actions that close useful gaps. When a six-replica Deployment has five Pods, the missing copy becomes ordinary reconciliation work driven by the existing request.
 :::
 
-:::expand[How does a Kubernetes cluster turn a manifest into a running application?]{kind="recap"}
+:::expand[How Does a Kubernetes Cluster Turn a Manifest Into a Running Application?]{kind="recap"}
 A cluster combines a control plane with worker nodes. `kubectl` sends the manifest to the API server in the control plane. After validation and storage, controllers create the needed objects and Pods, and the scheduler assigns each pending Pod to a suitable worker. The worker's kubelet asks its container runtime to start the containers, while readiness and status flow back through the API.
 :::
 
-:::expand[How do callers keep one address while Pods change?]{kind="recap"}
+:::expand[How Do Callers Keep One Address While Pods Change?]{kind="recap"}
 A Service provides a stable name and port. Its selector identifies the application's Pods, and Kubernetes maintains backend endpoint records for matching ready Pods. Replacement changes Pod names and addresses while callers continue using the same Service identity.
 :::
 
-:::expand[How do scaling and releases work?]{kind="recap"}
+:::expand[How Do Scaling and Releases Work?]{kind="recap"}
 Scaling changes the desired replica count, so controllers create or remove Pods and the scheduler places new work. A release changes the Deployment's Pod template, so the Deployment coordinates old and new ReplicaSets at a controlled rate. Readiness determines when new Pods count as available for traffic.
 :::
 
-:::expand[When does Kubernetes earn its complexity, and what do teams still own?]{kind="recap"}
-Kubernetes becomes valuable when several workloads and teams repeatedly need scheduling, replicas, recovery, discovery, controlled releases, and shared policy. It coordinates declared resources, placement, Pod lifecycle, rollout mechanics, and Service membership. Platform and application teams still own cluster capacity, upgrades, security configuration, application correctness, durable data, dependency resilience, useful health signals, and release acceptance. A smaller system may gain more from a managed application platform that owns more of the operational layer.
+:::expand[When Does Kubernetes Earn Its Complexity, and What Do Teams Still Own?]{kind="recap"}
+Kubernetes is valuable for several workloads and teams that repeatedly need scheduling, replicas, recovery, discovery, controlled releases, and shared policy. It coordinates declared resources, placement, Pod lifecycle, rollout mechanics, and Service membership. Platform and application teams still own cluster capacity, upgrades, security configuration, application correctness, durable data, dependency resilience, useful health signals, and release acceptance. A smaller system may gain more from a managed application platform that owns more of the operational layer.
 :::
 
 ## References

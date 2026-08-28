@@ -20,7 +20,19 @@ id: article-containers-orchestration-kubernetes-operations-logs-and-events
 8. [Check Your Answers](#check-your-answers)
 9. [References](#references)
 
-The explanation follows 7 practical questions:
+A container can run only after several Kubernetes components have done their work. The scheduler chooses a node. The kubelet pulls the image, prepares volumes and environment data, and asks the container runtime to start the process. The process then reads its configuration and begins its own application work.
+
+Each part can report what it observed:
+
+- **container logs** come from the process's standard output and standard error streams;
+- **Kubernetes Events** come from components such as the scheduler, kubelet, and controllers; and
+- **Pod status** records the current and most recent container states, readiness conditions, restart counts, reasons, and exit codes.
+
+Suppose a `checkout` Deployment has several Pods. One Pod cannot schedule, another cannot pull its image, and a third starts the application and then exits. They can all look unhealthy in a list even though the failures belong to different lifecycle stages.
+
+The three Pods may all appear unhealthy in a list, yet their causes live at different stages of the Pod lifecycle.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why do container logs, Kubernetes Events, and Pod state answer different questions?**
 2. **How do you locate the exact Pod and container that produced an observation?**
@@ -32,18 +44,6 @@ The explanation follows 7 practical questions:
 
 ## Why do container logs, Kubernetes Events, and Pod state answer different questions?
 <!-- section-summary: Container logs, Kubernetes Events, and Pod state describe different parts of the same workload lifecycle. -->
-
-A container can run only after several Kubernetes components have done their work. The scheduler chooses a node. The kubelet pulls the image, prepares volumes and environment data, and asks the container runtime to start the process. The process then reads its configuration and begins its own application work.
-
-Each part can report what it observed:
-
-- **container logs** come from the process's standard output and standard error streams;
-- **Kubernetes Events** come from components such as the scheduler, kubelet, and controllers; and
-- **Pod status** records the current and most recent container states, readiness conditions, restart counts, reasons, and exit codes.
-
-Suppose a `checkout` Deployment has several Pods. One Pod cannot schedule, another cannot pull its image, and a third starts the application and then exits. They can all look unhealthy in a list even though the failures belong to different lifecycle stages.
-
-The three Pods may all appear unhealthy in a list, yet their causes live at different stages:
 
 | Stage reached | Strong first evidence | Example |
 |---|---|---|
@@ -67,7 +67,6 @@ Kubernetes observations       -> Pod conditions and Events
 ```
 
 If `migrate-db` fails, the checkout process may never start and its log stream is correctly empty. If the scheduler cannot place the Pod, none of the container streams can exist yet. The lifecycle stage determines whether process output is possible, so sparse logs are evidence rather than automatically a logging failure.
-
 
 ## How do you locate the exact Pod and container that produced an observation?
 <!-- section-summary: Namespace, controller ownership, Pod revision, container name, and node placement identify the source before log reading begins. -->

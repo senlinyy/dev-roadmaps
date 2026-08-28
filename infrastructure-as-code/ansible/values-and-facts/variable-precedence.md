@@ -1,8 +1,8 @@
 ---
 title: "Variable Precedence"
-description: "Understand why Ansible chooses one variable value when the same name appears in multiple places."
-overview: "Variable precedence is Ansible's conflict rule for values."
-tags: ["ansible", "variables", "precedence"]
+description: "Learn how Ansible resolves competing variable definitions, why precedence differs from keyword configuration, and how facts, register, set_fact, and dictionaries behave."
+overview: "Ansible resolves values per host from many sources. This article builds a practical precedence model from role defaults through inventory, play data, facts, set_fact, and extra variables, then shows how to debug collisions without assuming the last file wins or dictionaries merge."
+tags: ["ansible", "variables", "precedence", "set-fact", "debugging"]
 order: 2
 id: article-infrastructure-as-code-ansible-variables-facts-precedence
 aliases:
@@ -12,212 +12,400 @@ aliases:
 
 ## Table of Contents
 
-1. [When Values Collide](#when-values-collide)
-2. [The Practical Precedence Shape](#the-practical-precedence-shape)
-3. [Defaults, Environments, and Host Exceptions](#defaults-environments-and-host-exceptions)
-4. [Extra Variables and Release Inputs](#extra-variables-and-release-inputs)
-5. [Facts, Registered Results, and set_fact](#facts-registered-results-and-set_fact)
-6. [Auditing the Winning Value](#auditing-the-winning-value)
-7. [Common Precedence Failures and Rollback](#common-precedence-failures-and-rollback)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
-10. [References](#references)
+1. [Why Is Precedence More Than the Last Line Written?](#why-is-precedence-more-than-the-last-line-written)
+2. [How Do Defaults, Inventory, and Host Exceptions Layer?](#how-do-defaults-inventory-and-host-exceptions-layer)
+3. [What Do Play Variables and Extra Variables Mean?](#what-do-play-variables-and-extra-variables-mean)
+4. [Why Are Role Defaults and Role Variables So Different?](#why-are-role-defaults-and-role-variables-so-different)
+5. [How Do Facts and Registered Results Add Time to Resolution?](#how-do-facts-and-registered-results-add-time-to-resolution)
+6. [What Does setfact Actually Create?](#what-does-setfact-actually-create)
+7. [Why Do Dictionary Values Usually Replace Instead of Merge?](#why-do-dictionary-values-usually-replace-instead-of-merge)
+8. [How Do You Audit the Value That Won?](#how-do-you-audit-the-value-that-won)
+9. [Check Your Answers](#check-your-answers)
 
-## When Values Collide
-<!-- section-summary: Variable precedence is Ansible's rule system for selecting one value when several sources define the same variable. -->
+One Ansible variable name can appear in role defaults, inventory groups, a host file, a play, a registered result, and `--extra-vars`. The winner is selected by Ansible's precedence categories and host context, not by whichever line happens to appear latest in the repository.
 
-**Variable precedence** is the order Ansible uses when the same variable name appears in more than one place. The final value has to be one value for one host during one task. Precedence is the rulebook Ansible follows to choose it.
-
-Use the orders platform again. The role default says `orders_api_log_level: info`. Production inventory says `orders_api_log_level: warn`. A single host file says `orders_api_log_level: debug` during an incident. A release engineer passes `-e orders_api_log_level=error` during a special test. Ansible needs one final value for `orders-web-01` before it can render the config file.
-
-This happens constantly in real playbooks. A value can come from role defaults, inventory groups, host variables, play variables, facts, registered results, `set_fact`, variable files, or extra variables. The goal is to place values where the winner feels obvious during review.
-
-## The Practical Precedence Shape
-<!-- section-summary: Ansible has broad precedence categories, and variables sit above many other control sources. -->
-
-Ansible has a large official precedence list. Beginners can start with the practical shape before memorizing every row. From lower to higher, Ansible considers configuration settings, command-line options, playbook keywords, variables, and direct assignment inside some module or plugin calls.
-
-
-![Precedence Stack](/content-assets/articles/article-infrastructure-as-code-ansible-variables-facts-precedence/precedence-stack.png)
-
-*The precedence stack shows how role defaults, inventory values, play values, set_fact, and extra vars compete for one final value.*
-
-That shape explains a common surprise. A command-line option such as `-u deploy` sets the remote user as an option. A variable such as `ansible_user` can still override it because variables sit higher than ordinary command-line options. Passing `-e ansible_user=breakglass` is even stronger because extra variables are high-precedence variables.
-
-Inside the variable category, the official list is long. A useful daily pattern is this: role defaults are weak, inventory and play variables are stronger, host-specific values can beat broader group values, values created during the run can affect later tasks, and extra variables are among the strongest variable inputs.
-
-This is why variable design matters. Precedence solves conflicts, and the team still has to make the intent visible. A clean repository makes the override path clear before production output surprises anyone.
-
-| Source | Example | Best use | Cleanup expectation |
-|---|---|---|---|
-| Role defaults | `roles/orders_api/defaults/main.yml` | Friendly reusable starting values | Rarely urgent |
-| Group vars | `inventories/prod/group_vars/prod_web.yml` | Environment or service-group intent | Reviewed like app config |
-| Host vars | `inventories/prod/host_vars/orders-web-02.yml` | One-host exception | Add reason and expiry |
-| Play vars | `vars:` inside a play | Values that belong to that play shape | Keep narrow |
-| Registered/set facts | `register`, `set_fact` | Decisions made during this run | Ends with the run unless cached |
-| Extra vars | `-e @release-vars.yml` | One release or rollback event | Store with job evidence |
-
-## Defaults, Environments, and Host Exceptions
-<!-- section-summary: Healthy precedence starts with weak defaults and moves to narrower values only when the context really needs them. -->
-
-A role default is a good home for the weakest useful value. It makes the role runnable without forcing every caller to define every setting. For the orders API role, defaults might look like this:
+Suppose a role default contains:
 
 ```yaml
-orders_api_log_level: info
-orders_api_listen_port: 8080
-orders_api_config_dir: /etc/orders-api
-orders_api_health_path: /health
+# roles/web/defaults/main.yml
+web_port: 8080
 ```
 
-Production inventory can override values that truly belong to production. These values are stronger because the environment is making a real decision.
+and production inventory contains:
 
 ```yaml
-orders_api_log_level: warn
-orders_api_public_name: orders.example.com
-orders_api_database_host: orders-db.prod.internal
+# group_vars/prod.yml
+web_port: 80
 ```
 
-A host variable should usually be a narrow exception. During an incident, the team might enable debug logging on one host, and that exception should be easy to find later.
+Production hosts receive `80` because inventory group variables have higher variable precedence than role defaults. It does not matter that the default file was edited later or is alphabetically after the inventory file.
+
+The execution model is per host:
+
+```text
+selected host
+    -> collect applicable variable sources
+    -> order them by precedence category
+    -> higher source overrides same-name lower source
+    -> evaluate task with resulting host context
+```
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Is Precedence More Than the Last Line Written?**
+2. **How Do Defaults, Inventory, and Host Exceptions Layer?**
+3. **What Do Play Variables and Extra Variables Mean?**
+4. **Why Are Role Defaults and Role Variables So Different?**
+5. **How Do Facts and Registered Results Add Time to Resolution?**
+6. **What Does `set_fact` Actually Create?**
+7. **Why Do Dictionary Values Usually Replace Instead of Merge?**
+8. **How Do You Audit the Value That Won?**
+
+## Why Is Precedence More Than the Last Line Written?
+<!-- section-summary: Variable sources belong to ordered categories and are resolved per host, so file order alone cannot explain the winning value. -->
+
+Two hosts in one play can therefore receive different winners because they belong to different groups or have different host variables.
+
+There are also two related precedence systems. Configuration settings such as `forks`, connection behavior, or privilege options can come from configuration files, environment variables, command options, play keywords, and variables. Ordinary data variables have their own detailed source ordering. Do not mix a command option such as `-u` with a variable collision as if they were identical mechanisms.
+
+Some connection variables can override keywords because they participate as variables. Debug by naming the exact setting and all places it can be defined, not by memorizing one oversimplified list.
+
+## How Do Defaults, Inventory, and Host Exceptions Layer?
+<!-- section-summary: Weak role defaults provide reusable behavior, group variables describe classes of hosts, and host variables encode narrow real exceptions. -->
+
+A practical shape is:
+
+```text
+role defaults
+    weakest, caller-friendly starting values
+        |
+group_vars/all
+    organization-wide environment data
+        |
+group_vars for environment or role
+    class-specific settings
+        |
+host_vars
+    one-host exception
+```
+
+For example:
 
 ```yaml
-orders_api_log_level: debug
-orders_api_debug_reason: "Investigating checkout timeout on 2026-06-13"
+# roles/webserver/defaults/main.yml
+web_workers: 2
+web_log_level: info
 ```
 
-That host variable should have a cleanup plan. It is stronger than the production group value for that host, so it can outlive the incident and quietly keep one server different from the rest of the fleet. Many teams add an incident ticket number or expiry note near temporary host exceptions so the override is easy to remove later.
+```yaml
+# group_vars/all.yml
+web_log_level: notice
+```
 
-Inventory group relationships can also create surprises. A host can belong to several groups, and sibling group values can collide. Clear group naming helps, and so does avoiding duplicate ownership. A value such as `orders_api_database_host` should have one obvious inventory home rather than appearing in several sibling groups that happen to include the same host.
+```yaml
+# group_vars/prod.yml
+web_workers: 8
+web_log_level: warn
+```
 
-## Extra Variables and Release Inputs
-<!-- section-summary: Extra variables are strong runtime inputs, so they work well for release events and poorly for hidden long-term configuration. -->
+```yaml
+# host_vars/web03.yml
+web_workers: 4
+```
 
-Extra variables come from `-e` or `--extra-vars`. They have very high precedence, which makes them useful for values that belong to one run. A release version is a good example because the repository can avoid a commit for every deployment event.
+A production host normally gets eight workers and warning logging. `web03` gets four workers but keeps the production log level.
+
+This is an intent hierarchy. Defaults make the role usable. Group data describes shared reality. A host file documents an actual exception. If most hosts need exceptions, the grouping or role interface is probably wrong.
+
+A subtle collision occurs when a host belongs to sibling groups at the same precedence level and both define the same variable. Inventory loading order and group priority can affect the result. Do not rely on ambiguous sibling collisions for policy. Model groups with a clear parent/child relationship, use `ansible_group_priority` where appropriate, or define the value once in the environment group.
+
+Inspect the resolved inventory graph and host data after changing memberships. Group hierarchy is part of variable behavior.
+
+## What Do Play Variables and Extra Variables Mean?
+<!-- section-summary: Play variables express one execution's intent, while extra variables are high-precedence caller overrides that can replace most other values. -->
+
+Play variables are close to one procedure:
+
+```yaml
+- name: Deploy web service
+  hosts: web
+  vars:
+    deployment_mode: rolling
+    release_version: "2.4.1"
+```
+
+They mean “for this play execution, use these values.” They outrank inventory data in the normal variable model, which makes them useful for procedure-specific choices and risky for hiding stable environment truth.
+
+Extra variables sit at very high precedence:
 
 ```bash
-ansible-playbook -i inventories/prod/hosts.yml site.yml -e orders_api_release=2026.06.13
+ansible-playbook -i inventories/prod deploy.yml \
+  -e release_version=2.4.2
 ```
 
-For several release values, a file is easier to review and store with the pipeline run. The file also preserves YAML types more clearly than a long command line.
+This fits an approved release version or emergency maintenance flag. It can also override a host safety exception or role value without changing reviewed inventory.
 
-```yaml
-orders_api_release: "2026.06.13"
-orders_api_deploy_reason: "checkout totals fix"
-orders_api_canary_size: 1
-```
-
-Then the job can call the file directly. The job log should preserve which file or values were used.
+Use extra variables as an explicit API. Validate supported names and values, record them with the run, and prefer a protected YAML or JSON file for structured inputs:
 
 ```bash
-ansible-playbook -i inventories/prod/hosts.yml site.yml -e @release-vars.yml
+ansible-playbook -i inventories/prod deploy.yml \
+  --extra-vars @release.yml
 ```
 
-Extra variables become risky when they carry stable environment settings. If production only works because the job always passes `-e orders_api_database_host=orders-db.prod.internal`, part of production lives outside repository review. A manual run without that extra variable can render a different config.
+Do not pass secrets on a command line. Stable values repeatedly supplied with `-e` belong in inventory, role configuration, or a controlled automation-platform variable set.
 
-The production habit is simple. Use extra variables for release events, emergency overrides, and explicit operator input. Move long-lived environment configuration back into inventory or role configuration after the emergency ends.
+Command-line position does not create further precedence among categories. A high-precedence extra variable wins because of its source, not because the flag appeared after the playbook name.
 
-## Facts, Registered Results, and set_fact
-<!-- section-summary: Values created during a run can influence later tasks, so they should have precise names and short lifetimes. -->
+## Why Are Role Defaults and Role Variables So Different?
+<!-- section-summary: Defaults form the role's easy-to-override public interface, while role vars are strong internal values that callers should rarely need to replace. -->
 
-Facts are variables that Ansible gathers from the host. Registered results are variables created from task output. `set_fact` creates host variables during the run. These values are useful because the playbook can react to live evidence instead of only static inventory.
-
-For example, a playbook can derive a local config path after it reads host facts. That derived value is useful for later tasks in the same run.
+Role defaults live under `defaults/main.yml` and have deliberately low precedence:
 
 ```yaml
-- name: Select orders API service manager
-  ansible.builtin.set_fact:
-    orders_api_service_manager: "{{ 'systemd' if ansible_facts.service_mgr == 'systemd' else 'unknown' }}"
+web_service_name: nginx
+web_port: 8080
 ```
 
-That value can drive later tasks on the same host. It should have a clear prefix and a short purpose. A name like `orders_api_service_manager` tells the reader that the value belongs to this role and came from host state.
+Inventory, play variables, and other caller sources can specialize them. This makes defaults the natural public configuration surface.
 
-Registered results behave the same way for output. A validation task can register a result, and a later task can branch from `config_validation.rc`. This is powerful. The value only exists after the registering task has run for that host, so a later condition should handle skipped tasks and missing fields carefully.
-
-Extra variables can still override many values created elsewhere. That is one reason `-e` should be treated like a strong operator decision. If the command line says `-e orders_api_service_manager=manual`, the playbook may receive that value even though a task tried to derive a value from facts.
-
-## Auditing the Winning Value
-<!-- section-summary: Operators can inspect compiled inventory and add controlled debug tasks to prove which value Ansible selected. -->
-
-When a rendered file contains the wrong value, start by asking what Ansible selected for one host. The `ansible-inventory --host` command shows compiled inventory values for a host before the playbook runs. It is a good first check for group and host variable problems.
-
-
-![Audit Winning Value](/content-assets/articles/article-infrastructure-as-code-ansible-variables-facts-precedence/audit-winning-value.png)
-
-*The audit flow shows how to check safe debug output, inventory data, and release inputs before changing the source that actually won.*
-
-```bash
-ansible-inventory -i inventories/prod/hosts.yml --host orders-web-01.example.com
-```
-
-Inside a playbook, a debug task can show the final value at the moment a task runs. This is useful because play variables, role variables, facts, and `set_fact` values may affect runtime state in ways inventory output alone may miss.
+Role variables under `vars/main.yml` are much stronger:
 
 ```yaml
-- name: Show selected orders API log level
+web_internal_layout: /opt/company/web
+```
+
+They are difficult for ordinary inventory data to override. Use them for truly internal constants only. Putting a normal environment setting in role vars surprises callers who reasonably expect production inventory to win.
+
+The design question is not merely which source wins. It is who should own the value. A reusable role owns safe implementation defaults. Environment inventory owns environment facts. A play owns procedure-specific intent. An explicit release input owns one-run artifact selection.
+
+Prefix role variables to avoid accidental collisions with other roles. `web_port` and `web_service_name` are safer than generic `port` and `name`. Precedence resolves a collision mechanically, but clear naming prevents the collision from existing.
+
+Role parameters supplied at invocation also have their own precedence behavior. Treat the role call as an explicit interface and avoid defining the same key simultaneously through several nearby sources unless the override is intentional and tested.
+
+## How Do Facts and Registered Results Add Time to Resolution?
+<!-- section-summary: Facts and registered values appear during execution, so the winning host context can change as tasks gather and create data. -->
+
+Facts are host variables discovered from the managed system:
+
+```yaml
+- name: Show operating-system family
   ansible.builtin.debug:
-    var: orders_api_log_level
-  tags:
-    - debug-values
+    var: ansible_facts.os_family
 ```
 
-Then a targeted run can call only that troubleshooting tag. The normal deploy path stays quieter.
+Inventory expresses declared data; facts express observed data. Avoid reusing fact names for custom inventory values, or readers cannot tell which authority produced the value.
+
+Registered variables appear after their task runs:
+
+```yaml
+- name: Read current application version
+  ansible.builtin.command: application --version
+  register: app_version_result
+  changed_when: false
+
+- name: Show version output
+  ansible.builtin.debug:
+    var: app_version_result.stdout
+```
+
+Before the command, `app_version_result` does not exist. After it, the current host has a structured result containing fields such as `rc`, `stdout`, `stderr`, `changed`, and failure status.
+
+Register therefore introduces time. A skipped task can create a different result shape; a task that never ran cannot supply a normal `stdout`. Later conditions should handle definedness and skip semantics.
+
+Registered variables are host-scoped. Each host receives its own command result. `run_once`, delegation, and facts copied to other hosts can complicate where the value resides, so inspect `hostvars` and task context rather than assuming one global variable.
+
+Facts and register values can override same-name lower sources according to precedence. Use distinctive names for runtime results to avoid unintentionally replacing durable input.
+
+## What Does `set_fact` Actually Create?
+<!-- section-summary: set_fact creates a high-precedence variable for the current host, and caching can also create a lower-precedence persisted fact for later runs. -->
+
+`set_fact` calculates and stores a host variable during execution:
+
+```yaml
+- name: Select effective worker count
+  ansible.builtin.set_fact:
+    effective_web_workers: "{{ web_workers | int }}"
+```
+
+The new value has high precedence for the rest of the run on that host. It is useful for derived runtime data, not as a replacement for a clear input hierarchy.
+
+Because the value is host-scoped, a task runs once per host unless controlled. Setting it on one host does not automatically create a global variable for the play. Other hosts can read it through `hostvars` only when execution and availability are understood.
+
+With `cacheable: true`, `set_fact` has subtle dual behavior. The current run receives a high-precedence set-fact host variable, while the cached copy used in later runs behaves like a lower-precedence cached fact. A later inventory value can therefore win differently on another run.
+
+```yaml
+- name: Cache discovered application region
+  ansible.builtin.set_fact:
+    application_region: "{{ discovered_region }}"
+    cacheable: true
+```
+
+Fact-cache lifetime and clearing become part of correctness. Do not cache secrets or rapidly changing values merely for convenience. Name which source should be authoritative after the current run.
+
+`set_fact` can hide poor design when used repeatedly to overwrite inputs. Prefer a new derived name such as `effective_web_workers` so the original source and transformation stay visible.
+
+## Why Do Dictionary Values Usually Replace Instead of Merge?
+<!-- section-summary: Precedence chooses the winning value for a key; it does not recursively combine same-name dictionaries unless configuration explicitly constructs a merge. -->
+
+Suppose defaults contain:
+
+```yaml
+web_settings:
+  port: 8080
+  log_level: info
+  workers: 2
+```
+
+and production inventory contains:
+
+```yaml
+web_settings:
+  workers: 8
+```
+
+The higher-precedence dictionary can replace the lower one, leaving only `workers`. Precedence answers which `web_settings` value wins; it does not automatically merge nested keys by intent.
+
+Implicit hash-merging configuration has historically created surprising cross-source behavior. Prefer explicit composition:
+
+```yaml
+web_settings_defaults:
+  port: 8080
+  log_level: info
+  workers: 2
+
+web_settings_environment:
+  workers: 8
+```
+
+```yaml
+- name: Build effective settings
+  ansible.builtin.set_fact:
+    web_settings_effective: >-
+      {{ web_settings_defaults | combine(web_settings_environment, recursive=true) }}
+```
+
+Now the merge order and recursion are visible and testable. Alternatively, use separate scalar variables when independent override is the real contract.
+
+Lists also replace unless the automation explicitly combines them. Do not assume a host list appends to a group list merely because both use the same name.
+
+Explicit merges need type validation. A string where a dictionary is expected can fail late or produce confusing template behavior. Assert mapping and list shapes before combining.
+
+## How Do You Audit the Value That Won?
+<!-- section-summary: Audit from inventory and role design through per-host debug output, then remove accidental collisions instead of relying on memorized precedence. -->
+
+For a collision across:
+
+```text
+role default
+group_vars/all
+group_vars/prod
+host_vars/api03
+play vars
+set_fact
+extra vars
+```
+
+start by listing every definition with repository search. Classify each source and ask which ones apply to the host at the moment the task runs.
+
+Inspect inventory:
 
 ```bash
-ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com --tags debug-values
+ansible-inventory -i inventories/prod --graph
+ansible-inventory -i inventories/prod --host api03
 ```
 
-Use this pattern carefully around secrets. Debug output can land in terminal scrollback, CI artifacts, or controller job history. For non-secret values such as ports, hostnames, log levels, and release versions, it gives a clean way to prove the selected value.
+Use a narrow debug task in a protected run:
 
-Search also matters. A role-specific variable name makes it easy to find every source, and that makes collisions easier to explain.
-
-```bash
-rg "orders_api_log_level" inventories roles playbooks
+```yaml
+- name: Show effective nonsecret web settings
+  ansible.builtin.debug:
+    msg:
+      host: "{{ inventory_hostname }}"
+      workers: "{{ web_workers }}"
+      log_level: "{{ web_log_level }}"
 ```
 
-If the search returns six different owners for one stable value, the team has a design problem. Overrides are healthy when each one has a clear owner, reason, and cleanup path.
+Do not dump `hostvars` or secrets into shared logs. Increase verbosity carefully when diagnosing source loading.
 
-## Common Precedence Failures and Rollback
-<!-- section-summary: Precedence problems usually come from hidden extra vars, stale host exceptions, sibling group collisions, or generic variable names. -->
+Audit timing: was the variable read before or after `register` or `set_fact`? Audit group hierarchy: did sibling groups collide? Audit run inputs: did `--extra-vars` override the repository? Audit role layout: is a caller setting trapped under `vars/main.yml`?
 
-The most common precedence failure is a hidden extra variable. A pipeline passes a value that nobody sees during code review, and the repository appears to say one thing while production receives another. The fix is to log release variable files, keep them with the run record, and move stable values into inventory.
+The design goal is a short, explainable override path:
 
-A stale host exception is another common problem. During an incident, `orders-web-02` gets `orders_api_log_level: debug`. Two weeks later, one host still logs differently and nobody remembers why. The fix is to annotate temporary host variables and remove them during incident cleanup.
-
-Sibling group collisions are harder to spot. A host belongs to both `prod_web` and `blue_pool`, and both groups define `orders_api_log_level`. Ansible will choose a winner based on inventory merge rules. The better fix is to decide which group owns the value: pool membership might own rollout behavior, while environment groups own service configuration.
-
-Rollback is mostly about restoring the intended source. If an extra variable caused the bad config, rerun without the extra variable or with the previous approved release file. If a repository variable caused it, revert that variable and run the playbook against a canary host. If a host exception caused it, remove the host variable and confirm that `ansible-inventory --host` now shows the group value.
-
-```bash
-ansible-inventory -i inventories/prod/hosts.yml --host orders-web-02.example.com
-ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-02.example.com --check --diff
+```text
+role defaults
+    -> environment group data
+    -> rare host exception
+    -> explicit run-specific release input
 ```
 
-Those two checks prove the selected value and preview the file change before the rollback touches the host. After the real rollback run, the recap should show the expected changed tasks and zero failures.
+Facts and registered results should use different names for observed runtime data. Derived values should use `effective_` names. Dictionaries should merge explicitly. High precedence is not higher truth; it is only the mechanical winner. The correct source is the one whose ownership matches the meaning of the value.
 
-## Putting It All Together
-<!-- section-summary: Precedence works well when the team can explain why each stronger value exists and when it should be removed. -->
+The full precedence documentation contains more sources than the practical path above: inventory-file variables, group and host variable plugins, facts, play and block vars, task vars, included-variable files, role parameters, and include parameters all occupy defined positions. Consult the current reference when two less-common sources collide rather than extending a simplified mnemonic beyond its purpose.
 
-The orders platform now has a predictable value flow. Role defaults provide weak starting values. Production inventory supplies stable environment settings. Host variables carry rare, documented exceptions. Extra variables carry release inputs. Facts, registered results, and `set_fact` values help the playbook react during a run.
+Scope matters alongside precedence. A variable defined for a block applies only inside that block. A task variable applies only to that task. A role default can remain visible after loading, while registered and set-fact data stay associated with the host. A high-precedence value outside the current scope does not participate.
 
+Lazy evaluation can also surprise. Jinja2 expressions stored as variable values may be evaluated when used, so changing another referenced value can affect the result. Prefer simple data in inventory and perform transformations in named derived values where timing stays understandable.
 
-![Precedence Summary](/content-assets/articles/article-infrastructure-as-code-ansible-variables-facts-precedence/precedence-summary.png)
+Connection variables demonstrate the overlap between data and execution settings. `ansible_user`, `ansible_connection`, `ansible_port`, and `ansible_become_user` can come from inventory and may override related command or play settings according to general precedence. Audit them as security-sensitive input because the winner changes where and as whom tasks run.
 
-*The summary keeps precedence practical: choose a home, document overrides, audit the winner, and protect extra vars.*
+Use mandatory checks when a low default must not silently survive in a sensitive environment. A production secret reference or account identifier may be safer with no role default, forcing inventory or the approved job to provide it explicitly.
 
-When `orders-web-02` renders `debug` for `orders_api_log_level`, the team should be able to explain the source quickly. If the answer is a temporary host variable, it should have an owner and a cleanup path. If the answer is an extra variable, it should appear in the deployment record.
+Finally, test precedence through behavior. A role scenario can load defaults, apply environment-like variables, then invoke a caller override and assert the rendered result. This protects the documented interface if role structure changes. Do not test Ansible's whole precedence engine; test the short override path the role promises callers.
 
-Precedence is a powerful feature because it allows reuse and overrides. It stays safe when the strongest values are visible, intentional, and short-lived where possible.
+When debugging, print both the effective value and the host classification that should own it. Seeing `web_workers: 4` is less useful than seeing that the host belongs to `prod`, `web`, and an exception group. Then search those group and host sources before looking for timing-dependent values.
 
-## What's Next
+Avoid solving an unexplained collision by adding an extra variable because it happens to win. That creates a stronger hidden override while leaving the wrong source in place. Remove or rename the accidental definition, put the intended value at its natural ownership level, and rerun inventory inspection and the narrow play.
 
-Variables describe values the team supplies or creates. Facts describe what Ansible observes from each host. The next article shows how facts and conditionals let one playbook adapt to operating systems, service managers, interfaces, and feature flags.
+Secrets follow the same precedence mechanics but should not be debugged with plaintext. Check whether the variable is defined, which Vault or credential source was selected, and whether the consuming task received the expected reference. Use `no_log` for the sensitive boundary and protect verbose controller output.
+
+A healthy variable design makes the winner predictable from meaning: a role default for reusable behavior, group data for a class, host data for a documented exception, runtime results for observation, and extra vars for a deliberate one-run decision.
+
+When diagnosing a surprising winner, verify its type and timing as well as its value. A later runtime source may replace a boolean with a string, or a task-created value may exist only after part of the play executes. The effective context is both host-specific and time-specific, which is why a static source scan can miss the real conflict.
+
+Precedence fixes should reduce future ambiguity. Moving the same duplicate definition to a still-higher source may solve one run while making the design harder to inspect. Remove stale owners, rename independently owned concepts, or establish one documented override boundary so the next operator does not need another emergency `-e` value.
+
+Variable precedence is separate from Ansible configuration precedence. `ansible-config dump --only-changed` helps reveal configuration settings selected from defaults, configuration files, environment variables, and command-line options; it does not explain an application variable's host-level winner. Facts can also have two representations: freshly gathered `ansible_facts` and cached fact data. Inspect the exact host context and source category before concluding that a later-looking file should win.
+
+## Check Your Answers
+
+:::expand[Why Is Precedence More Than the Last Line Written?]{kind="recap"}
+Ansible resolves applicable sources per host by category. Edit order and filename position do not replace the precedence model.
+:::
+
+:::expand[How Do Defaults, Inventory, and Host Exceptions Layer?]{kind="recap"}
+Defaults provide weak role behavior, groups describe shared classes, and host vars should document rare real exceptions rather than routine configuration.
+:::
+
+:::expand[What Do Play Variables and Extra Variables Mean?]{kind="recap"}
+Play vars express one procedure; extra vars are powerful high-precedence inputs. Validate and record them instead of hiding stable production truth in flags.
+:::
+
+:::expand[Why Are Role Defaults and Role Variables So Different?]{kind="recap"}
+Defaults are the easy-to-override public interface. Role vars are strong internal values and should not hold ordinary caller configuration.
+:::
+
+:::expand[How Do Facts and Registered Results Add Time to Resolution?]{kind="recap"}
+Facts are discovered host data and register values appear after tasks, so both host identity and execution time affect what is available.
+:::
+
+:::expand[What Does `set_fact` Actually Create?]{kind="recap"}
+It creates a high-precedence current-run host variable; caching also creates a lower-precedence fact for later runs with separate lifecycle concerns.
+:::
+
+:::expand[Why Do Dictionary Values Usually Replace Instead of Merge?]{kind="recap"}
+Precedence selects one same-name value. Use explicit `combine` logic or separate variables when nested dictionaries need intentional composition.
+:::
+
+:::expand[How Do You Audit the Value That Won?]{kind="recap"}
+Find every definition, classify sources, inspect per-host inventory and timing, debug only nonsecrets, and redesign accidental collisions into a short ownership path.
+:::
 
 ---
 
 **References**
 
-- [Controlling how Ansible behaves: precedence rules](https://docs.ansible.com/projects/ansible/latest/reference_appendices/general_precedence.html) - Official precedence guide for configuration settings, command-line options, playbook keywords, variables, direct assignment, and extra variables.
-- [Using variables](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_variables.html) - Official guide to variable definition, extra variables, registered variables, and variable usage.
-- [How to build your inventory](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_inventory.html) - Official inventory guide, including group and host variables and variable merging behavior.
-- [Discovering variables: facts and magic variables](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_vars_facts.html) - Official guidance for facts, magic variables, and values discovered from hosts.
-- [ansible.builtin.set_fact](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/set_fact_module.html) - Official module reference for creating host variables and facts during a playbook run.
-- [ansible.builtin.debug](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/debug_module.html) - Official module reference for printing variables during troubleshooting.
-- [ansible-playbook](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html) - Official CLI reference for `--extra-vars`, tags, limits, check mode, and diff mode.
+- [Ansible: Controlling precedence](https://docs.ansible.com/ansible/latest/reference_appendices/general_precedence.html)
+- [Ansible: Variable precedence](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html#understanding-variable-precedence)
+- [Ansible: Inventory variables](https://docs.ansible.com/ansible/latest/inventory_guide/intro_inventory.html)
+- [Ansible: set_fact](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/set_fact_module.html)
+- [Ansible: combine filter](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/combine_filter.html)

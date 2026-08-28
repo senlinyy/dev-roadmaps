@@ -43,7 +43,7 @@ restart current template → new Pod instances without choosing an older applica
 
 All three may create or delete Pods, but the desired-state reason and recovery meaning are different.
 
-The article follows seven questions:
+Keep these questions in view as you work through the lesson:
 
 1. **What changes when a Deployment rolls out a new Pod template?**
 2. **Why does a Deployment keep old and new ReplicaSets during replacement?**
@@ -185,7 +185,7 @@ The Pod must remain ready for that time before the Deployment counts it as avail
 
 ### Readiness is the controller's evidence that replacement capacity is useful
 
-A `Running` container proves that a process exists, not that it can serve users. During a safe handoff, an old Ready Pod remains useful while a new Pod starts but is not Ready. Only after the new Pod becomes Ready—and remains so for `minReadySeconds` when configured—does the controller have evidence that it can retire more old capacity.
+A `Running` container proves that a process exists, not that it can serve users. During a safe handoff, an old Ready Pod remains useful while a new Pod starts but is not Ready. Only after the new Pod reports Ready—and has remained so for a configured `minReadySeconds`—does the controller have evidence that it can retire more old capacity.
 
 If new Pods stay unhealthy while old Pods remain, the apparent lack of progress is often the availability guardrail doing its job. The controller refuses to trade proven serving capacity for an unproven replacement.
 

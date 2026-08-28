@@ -1,7 +1,7 @@
 ---
 title: "Continuous Integration"
-description: "Learn how Continuous Integration keeps code changes small, tested, and ready to merge through mainline work, pull request checks, clean runners, and practical test design."
-overview: "Continuous Integration is the daily validation loop that catches integration problems while the change is still small. This article follows one checkout API change through branches, pull requests, workflow YAML, test layers, clean runners, and failure diagnosis."
+description: "Learn how Continuous Integration protects a shared mainline through small changes, reproducible builds, automated checks, and fast feedback."
+overview: "Continuous Integration is an automated feedback loop for answering whether a proposed change still works when combined with everyone else's work. This article builds that model from first principles, then connects it to branches, pull requests, clean runners, locked dependencies, test layers, and required checks."
 tags: ["integration", "testing", "workflows", "feature-flags"]
 order: 1
 id: article-cicd-fundamentals-continuous-integration
@@ -13,90 +13,197 @@ aliases:
 
 ## Table of Contents
 
-1. [The CI Loop](#the-ci-loop)
-2. [The Shared Mainline](#the-shared-mainline)
-3. [Pull Requests and Required Checks](#pull-requests-and-required-checks)
-4. [What a CI Workflow Actually Runs](#what-a-ci-workflow-actually-runs)
-5. [A Practical GitHub Actions CI File](#a-practical-github-actions-ci-file)
-6. [What CI Should Test](#what-ci-should-test)
-7. [Clean Runners and Locked Dependencies](#clean-runners-and-locked-dependencies)
-8. [Failure Mode: The Build Breaks After Merge](#failure-mode-the-build-breaks-after-merge)
-9. [Failure Mode: The Test Flakes](#failure-mode-the-test-flakes)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [Why Does Continuous Integration Exist?](#why-does-continuous-integration-exist)
+2. [Why Must Integration Be Frequent?](#why-must-integration-be-frequent)
+3. [How Do the Mainline, Branches, and Pull Requests Fit Together?](#how-do-the-mainline-branches-and-pull-requests-fit-together)
+4. [How Do Required Checks Protect the Shared Mainline?](#how-do-required-checks-protect-the-shared-mainline)
+5. [What Does a CI Runner Actually Do?](#what-does-a-ci-runner-actually-do)
+6. [Why Do Clean Runners and Locked Dependencies Matter?](#why-do-clean-runners-and-locked-dependencies-matter)
+7. [Which Checks Should a CI Pipeline Run?](#which-checks-should-a-ci-pipeline-run)
+8. [How Does the Complete CI Feedback Loop Work?](#how-does-the-complete-ci-feedback-loop-work)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## The CI Loop
-<!-- section-summary: Continuous Integration turns every small code change into a repeatable build and test signal before the change joins shared work. -->
+**Continuous Integration**, usually shortened to **CI**, is a system for repeatedly answering one practical question: if this change joins everyone else's changes, does the combined software still work?
 
-Continuous Integration, usually shortened to **CI**, means developers integrate their code into a shared codebase frequently, and an automated build checks each integration. The important part is the rhythm. A developer changes a small piece of code, pushes it, the CI system builds and tests it, and the team gets a clear signal while the change still fits in one person's head.
+That question begins with a difference between local and integrated behavior. Imagine Alice changes authentication, Bob renames a database field, and Carol changes an API response. Each developer tests alone and sees a passing result. Alice's new authentication code now expects `user.id`, while Bob's database layer returns `user.userId`. Both changes can look reasonable in isolation, yet the application fails when they meet.
 
-Imagine a small product team working on `checkout-api`, a Node.js service that calculates carts, validates discounts, and creates payment requests. Lina changes tax calculation, Marco changes discount rules, and Priya changes a database migration for payment records. Each change looks harmless on its own, yet the real question is whether those changes still work together inside the same application.
+The problem is the connection between the changes. Local success does not imply that the integrated application succeeds:
 
-CI gives the team a shared answer to that question. Every proposed change runs through the same validation path: install dependencies, lint the code, run unit tests, run integration tests, and build the application. If the path passes, the change has evidence behind it. If the path fails, the developer has a small, recent change to inspect instead of a week of mixed work from three people.
-
-This article follows that checkout example through the main CI concepts. We will cover the **mainline**, small branches, pull request checks, workflow files, runners, test layers, dependency locks, and two common failure modes. Those pieces connect together as one feedback loop that starts with a small code change and ends with a clear merge decision.
-
-## The Shared Mainline
-<!-- section-summary: CI needs one shared branch that represents the latest healthy work, so developers integrate against the same target often. -->
-
-The **mainline** is the shared branch that represents the current accepted state of the project. Many teams call it `main`, some call it `trunk`, and older repositories may call it `master`. The name matters less than the rule behind it: everyone integrates with the same branch often, and the team treats that branch as the source of truth.
-
-In the checkout example, `main` contains the current production-ready code. Lina creates a branch called `lina/tax-rounding`, changes a few files, and opens a pull request back to `main`. Marco does the same for `marco/discount-cap`, and Priya does the same for `priya/payment-migration`.
-
-Short-lived branches work well with CI because the branch stays close to `main`. Lina can finish her rounding fix in one day, run the checks, review the result, and merge. If she keeps that branch open for three weeks, `main` keeps changing underneath her. Marco may edit the same cart module, Priya may change the schema, and Lina discovers the real integration problem only after many unrelated changes have piled up.
-
-Some teams go further and use **trunk-based development**. In that style, developers integrate tiny changes into the mainline many times a day. Work that will take longer than a day can still be integrated behind a **feature flag**, which is a runtime switch that controls whether users see the new behavior. In `checkout-api`, the discount change could use a flag like this while the team finishes the rollout plan:
-
-```javascript
-export function calculateDiscount(cart, flags) {
-  if (flags.percentageDiscountCap) {
-    return calculateDiscountWithCap(cart);
-  }
-
-  return calculateLegacyDiscount(cart);
-}
+```text
+Alice's working change
+        +
+Bob's working change
+        +
+Carol's working change
+        ≠
+a working combined application
 ```
 
-The new discount code can live in the shared codebase while `percentageDiscountCap` stays off for customers. CI still builds and tests the new code path, so the team learns about broken imports, type errors, or schema conflicts early. The feature flag has a cost because the team must test both paths and remove the flag after rollout, so teams use it deliberately for work that needs to integrate before it is ready for users.
+Software teams deliver combined systems, so they need evidence about the combined state. CI creates that evidence automatically after relevant changes. A developer pushes a commit, an automation service detects it, prepares a machine, downloads the repository, installs the declared dependencies, and runs the project's checks. A passing result makes the commit a candidate for integration. A failure sends the developer back to a small, recent change.
 
-## Pull Requests and Required Checks
-<!-- section-summary: Pull requests give humans a review surface, and required checks give the repository a machine-enforced merge rule. -->
+Keep these questions in view as you work through the lesson:
 
-A **pull request**, often shortened to **PR**, is a proposed change from one branch into another branch. It gives reviewers a place to inspect the diff, discuss the design, and see the automated status of the change. In a CI workflow, the PR is the meeting point between human review and machine validation.
+1. **Why Does Continuous Integration Exist?**
+2. **Why Must Integration Be Frequent?**
+3. **How Do the Mainline, Branches, and Pull Requests Fit Together?**
+4. **How Do Required Checks Protect the Shared Mainline?**
+5. **What Does a CI Runner Actually Do?**
+6. **Why Do Clean Runners and Locked Dependencies Matter?**
+7. **Which Checks Should a CI Pipeline Run?**
+8. **How Does the Complete CI Feedback Loop Work?**
 
-When Lina opens `lina/tax-rounding`, the repository host sends a workflow event to the CI system. GitHub Actions, GitLab CI, Jenkins, CircleCI, Buildkite, and other systems all follow the same broad shape. A repository event starts a workflow run, the workflow runs jobs on one or more runners, and the result comes back as a status check on the commit.
+## Why Does Continuous Integration Exist?
+<!-- section-summary: Continuous Integration repeatedly checks whether one change still works after it is combined with the team's shared code. -->
 
-A **status check** is the pass, fail, pending, or skipped result attached to a commit or pull request. A required status check turns that result into a merge rule. If the repository protects `main` and requires the `ci / validate` check, the merge button stays blocked until that check passes.
+The products that run this loop can differ. GitHub Actions, GitLab CI, Jenkins, CircleCI, Buildkite, Azure Pipelines, TeamCity, or a team's own scripts can all implement CI. The durable model underneath each product is the same:
 
-That rule changes team behavior in a healthy way. The reviewer no longer has to ask whether Lina remembered to run the test suite locally, because the repository already has a check for it. The reviewer can focus on the code and product behavior, while CI handles repeatable validation.
+```text
+change
+  ↓
+automatic verification
+  ↓
+fast, objective feedback
+```
 
-There is still one important design choice. A required check should represent work that always matters for the protected branch. If a required job can skip because of a path filter or an optional condition, the repository may show a green result even though the important validation did not run. Teams usually keep the required check simple and reliable, then add optional specialist checks around it.
+The word **objective** matters here. A developer's memory of running a test yesterday is difficult for the rest of the team to inspect. A recorded workflow run gives the proposed commit the same repeatable checks as every other commit. Humans still decide whether the design and business behavior make sense; automation supplies evidence for checks that machines can perform consistently.
 
-## What a CI Workflow Actually Runs
-<!-- section-summary: A workflow turns repository events into jobs, and each job runs ordered steps on a fresh runner. -->
+CI therefore protects shared software state rather than merely automating a YAML file. Workflow syntax, runners, tests, pull requests, and status checks are mechanisms for maintaining that protection.
 
-A **workflow** is the automation recipe stored in the repository. In GitHub Actions, workflow files live under `.github/workflows/` and use YAML. The workflow describes which events should start a run, which jobs should run, which runner image each job needs, and which steps run inside each job.
+## Why Must Integration Be Frequent?
+<!-- section-summary: Frequent integration keeps the change batch and failure search space small enough for developers to diagnose quickly. -->
 
-A **job** is a group of steps that run on the same runner. A **runner** is the machine or container environment that executes the job. A **step** is one action or shell command inside that job, such as checking out the repository, installing Node.js, installing dependencies, or running `npm test`.
+The **continuous** part describes frequency, not a process running every millisecond. Developers integrate often enough that they do not accumulate large, isolated piles of work.
 
-The checkout team can think about a workflow run as a fresh rehearsal of the change. The runner starts with an empty workspace, downloads the repository, installs the declared tools, installs the locked dependencies, and runs the same commands every time. That fresh start matters because CI should prove the repository contains everything needed to build the project. The basic path looks like this:
+Suppose a team combines its work after three months. Hundreds of changes arrive together, dozens of tests fail, and nobody knows which interaction produced which failure. The team has both a large change batch and a large search space. Every diagnosis may require understanding work that several people completed weeks ago.
 
-![CI runner loop showing small branch, pull request event, fresh runner, dependency install, validation, and required check result](/content-assets/articles/article-cicd-fundamentals-continuous-integration/ci-runner-loop.png)
+Frequent integration changes the economics:
 
-*A CI run turns one small branch into a fresh-runner validation path, then sends either a merge signal or a repair signal back to the developer.*
+```text
+small change → integrate → verify
+small change → integrate → verify
+small change → integrate → verify
+```
 
-The CI system needs a reproducible recipe for validation. The application-specific details live in repository scripts, workflow files, and test commands. If the team can explain the recipe in those files, the runner can repeat it for every proposed change.
+If the application passed five minutes ago and fails after one small commit, the newest commit is an obvious place to begin. The code is still fresh in the developer's mind, the affected surface is limited, and reverting or repairing the change is usually inexpensive. Small changes, frequent integration, and quick feedback reinforce one another.
 
-## A Practical GitHub Actions CI File
-<!-- section-summary: A useful CI file starts small: trigger on pull requests, run one validation job, install locked dependencies, and execute the same scripts developers use locally. -->
+CI is therefore a feedback system. A developer changes the software, automation observes the result through checks, and the pass or fail signal guides the next adjustment. Feedback that arrives in three minutes can shape the current change. Feedback that arrives three weeks later competes with many later changes and a developer who has moved on to other work.
 
-For a Node.js service like `checkout-api`, a first CI workflow can stay compact. It should run when a pull request targets `main`, use a Linux runner, check out the repository, install the project Node version, install dependencies from the lockfile, then run the normal validation scripts. One practical version keeps all of that inside a single required `validate` job:
+Pipeline speed affects developer behavior. When the essential checks finish in a few minutes, developers are willing to push small commits and respond immediately. When the same checks take several hours, people tend to push larger batches and switch contexts while they wait. Larger batches then create harder failures, which makes integration slower again.
+
+This creates two opposite loops:
+
+```text
+fast feedback
+    ↓
+small corrections
+    ↓
+small commits
+    ↓
+easier integration
+```
+
+```text
+slow feedback
+    ↓
+large batches
+    ↓
+large corrections
+    ↓
+painful integration
+```
+
+Change size matters for the same reason. A pull request with 85 changed lines gives a reviewer and a failed test a bounded search area. A pull request with 14,700 changed lines can produce seventeen failures whose causes overlap. CI can run on either change, but its signal is much easier to act on when the proposal is small.
+
+Frequent does not require unfinished behavior to reach users. A team can integrate a partial implementation behind a **feature flag**, a runtime switch that keeps the behavior disabled while its code lives on the shared branch. The team must test both paths and later remove the flag, so flags have a maintenance cost. Used deliberately, they allow small integrations without prematurely releasing the feature.
+
+## How Do the Mainline, Branches, and Pull Requests Fit Together?
+<!-- section-summary: The mainline is the shared integration point, branches isolate small changes, and pull requests propose joining those changes to the shared state. -->
+
+CI needs a shared integration point. Most repositories call it `main`; other teams use names such as `trunk`, `master`, or `develop`. The name is less important than the role: the **mainline** represents the team's latest accepted combined state.
+
+Developers converge on that one branch:
+
+```text
+Alice's change ─┐
+Bob's change   ─┼──→ main
+Carol's change ─┘
+```
+
+A healthy team maintains a useful invariant: `main` should normally satisfy the team's automated definition of working software. That definition might require compilation, linting, tests, basic security checks, and a successful build. It does not prove that the software contains no bugs. It gives everyone one dependable answer to the question, “Where is the current integrated system?”
+
+A branch gives one change a temporary place to develop without immediately changing that shared state. If `main` works and Alice begins a password-reset feature, she can create `feature/password-reset` and commit there. The branch lets her experiment while `main` continues to serve as the accepted integration point.
+
+The branch should remain short-lived. While Alice works, other commits continue to enter `main`. A branch open for one day stays close to its target. A branch open for several weeks can diverge across source code, schemas, dependencies, and interfaces. CI cannot remove that divergence; frequent integration prevents it from growing.
+
+A **pull request** is an integration proposal: “Combine the commits on this branch with the target branch.” It creates one surface for two different forms of validation.
+
+Humans can assess questions such as:
+
+- Does this behavior match the product requirement?
+- Is the design understandable and appropriately simple?
+- Are the names, boundaries, and failure behavior sensible?
+- Does the change create a maintenance risk the tests cannot express?
+
+Machines can repeat questions such as:
+
+- Does the source parse and compile?
+- Do lint, type, and formatting rules pass?
+- Do the automated tests still succeed?
+- Can the repository produce its expected build output?
+
+Neither replaces the other. A test suite cannot decide whether a confusing design is the best product choice. A reviewer should not manually repeat hundreds of deterministic test cases on every proposal. The pull request combines human judgment with automated evidence before the branch joins the mainline.
+
+## How Do Required Checks Protect the Shared Mainline?
+<!-- section-summary: A required check converts a CI result from optional information into an enforced condition for merging. -->
+
+There is a large operational difference between running CI and requiring CI to pass. If a workflow reports failed tests but the repository still permits the merge, the result is only advisory. Developers can ignore the red status, whether by accident or under delivery pressure.
+
+A **required status check** attaches an enforceable rule to the protected branch:
+
+```text
+required checks pass  → merge may proceed
+required checks fail  → merge remains blocked
+```
+
+On GitHub, branch protection rules or rulesets can name the checks that must succeed before a pull request merges. A strict configuration can also require the branch to be brought up to date with the target before the check counts. CI then becomes a constraint on what may enter `main`, rather than a dashboard the team is expected to remember to inspect.
+
+The exact commit being checked matters. Imagine `main` contains commits `A-B-C-D`, while Alice created her branch from `C` and added `X`. A passing run against `C+X` does not answer whether `D+X` works. The intended integrated state is the second combination.
+
+Teams solve that timing problem in two common ways. A repository can require Alice to update her branch from `main`, producing a new check against the latest target. A busy repository can use a **merge queue**, which creates temporary candidate combinations in merge order, checks each combination, and merges only a candidate that passes. Both approaches enforce the deeper rule: test the state the repository is actually about to integrate.
+
+Required checks should be dependable. If a required job is skipped by a path filter or optional condition when its evidence still matters, the branch can appear healthy without performing the intended validation. Teams usually make the core required signal simple and predictable, then place specialist or slower checks around it.
+
+The green-main goal can be expressed compactly. Let `V(x)` mean “the required verification passes for commit `x`.” If `M` is the current main commit, the team wants `V(M)` to remain true. Before accepting a proposed change `C`, it wants evidence that `V(M + C)` is true. The notation is simple, but it captures the core protection CI provides.
+
+Even this rule has a boundary. A green status means the commit passed the checks the team chose. It does not prove the absence of bugs. If the pipeline has no password-reset test, green CI provides little evidence about password reset. Required checks make selected constraints enforceable; the quality and coverage of those constraints still belong to the team.
+
+## What Does a CI Runner Actually Do?
+<!-- section-summary: A CI service responds to a repository event by assigning a job to a runner and executing declared steps as ordinary commands. -->
+
+The machinery behind “run CI” is less mysterious than the phrase sounds. A CI service receives an event, assigns work to a machine, and executes commands.
+
+A **workflow** is the repository's automation recipe. A **job** is a group of steps that share one execution environment. A **runner** is the virtual machine, physical machine, container, or hosted environment that performs a job. A **step** invokes an action or a shell command, such as checking out the repository or running `npm test`.
+
+For a Node.js repository, the local validation recipe might be:
+
+```bash
+npm ci
+npm run lint
+npm test
+npm run build
+```
+
+CI creates another computer and runs that recipe when a relevant event occurs. Exit code `0` normally marks a shell step successful; a non-zero exit code marks it failed and changes the job result.
+
+A small GitHub Actions workflow makes the pieces concrete:
 
 ```yaml
-name: ci
+name: CI
 
 on:
   pull_request:
+  push:
     branches:
       - main
 
@@ -104,17 +211,17 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: validate
+  test:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version-file: .nvmrc
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -123,116 +230,165 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Unit tests
+      - name: Run tests
         run: npm test
 
       - name: Build
         run: npm run build
 ```
 
-The workflow has a few important details. The `pull_request` trigger runs validation when someone opens or updates a PR targeting `main`. The `permissions` block gives the workflow read access to repository contents and avoids granting broad default permissions. The `validate` job runs on `ubuntu-latest`, which gives the team a hosted Linux runner for the job.
+`name` supplies a readable workflow label. `on` declares the events that start it. Pull request runs answer whether a proposal is ready to merge; the `push` run on `main` confirms the state after integration actually occurs.
 
-The checkout step matters because the runner starts with an empty workspace. `actions/checkout` places the repository files into that workspace so later commands can see `package.json`, source files, and tests. The setup step reads `.nvmrc`, installs the project Node version, and enables the npm package cache.
+The `jobs` map can contain one job or several independent and dependent jobs. `runs-on: ubuntu-latest` requests an Ubuntu runner for `test`. The checkout action makes the repository available because a new runner does not begin with the application's source files. The setup action installs Node 24, bringing CI closer to a project and production environment that also uses Node 24.
 
-The `npm ci` command matters because CI should use the lockfile exactly. If `package.json` and `package-lock.json` disagree, `npm ci` fails instead of silently updating the lockfile. That failure is useful because it tells the developer to fix the dependency record in the pull request.
+`npm ci` reconstructs dependencies. Linting looks for statically detectable mistakes and policy violations. Tests check behavior. The build step proves the application can compile or bundle under the declared configuration. A missing import can escape a narrow unit test and still fail the production build, so building in CI moves that discovery earlier than deployment.
 
-The scripts at the end should match local development. If developers run `npm run lint`, `npm test`, and `npm run build` on their laptop, CI should run those commands too. This keeps the repository contract simple: the same scripts explain how to validate the project in a clean environment.
+The YAML describes this automation, but it is not CI's central idea. Another product can express the same event, runner, commands, and result with different syntax. The feedback loop remains the same.
 
-## What CI Should Test
-<!-- section-summary: CI needs enough tests to catch real integration problems while still returning feedback fast enough for daily work. -->
+## Why Do Clean Runners and Locked Dependencies Matter?
+<!-- section-summary: A clean runner tests whether the repository can reconstruct the application without hidden state from one developer's machine. -->
 
-A useful CI pipeline has tests that answer the right questions quickly. A test suite with only one slow browser test may catch a real bug, yet it gives poor feedback because developers wait too long and the failure gives little detail. A test suite with only tiny unit tests may run fast, yet it can miss the moment where two pieces stop working together.
+A developer laptop collects undeclared tools and state over time: global runtimes, command-line programs, old packages, credentials, environment variables, and generated files. The application may work because one of those invisible dependencies happens to exist.
 
-Most teams use a mix of **unit tests**, **integration tests**, and a small number of **end-to-end tests**. A unit test checks one small piece, such as `calculateDiscountWithCap(cart)`. An integration test checks two or more pieces together, such as the discount service writing the correct final total into the order repository. An end-to-end test checks a user-sized path, such as adding an item to a cart, applying a discount, and reaching the payment handoff. For `checkout-api`, the team might shape the CI test mix like this:
+A **clean runner** asks a stronger question: given the repository, its declared runtime, its declared dependency graph, and its build instructions, can another environment reconstruct a working application? This turns CI into a reproducibility test before the first unit test runs.
 
-| Test layer | Checkout example | Why it belongs in CI |
-|---|---|---|
-| **Unit tests** | Tax rounding, discount caps, validation helpers | They run fast and point to a small piece of code. |
-| **Integration tests** | API handler plus database migration in a test database | They catch wiring problems between modules and data shape. |
-| **End-to-end smoke tests** | One happy checkout path against a temporary app instance | They prove the critical user path still connects. |
+Consider a project whose `package.json` allows `some-library` versions compatible with `^4.2.0`. A dependency resolver might install `4.2.1` today and `4.9.0` months later. Two runs of the same commit would then use different transitive software, which makes failures harder to reproduce.
 
-That mix gives the team useful coverage without turning every pull request into a long release rehearsal. The lower layers catch most mistakes quickly. The higher layer protects the most important business path with a small number of carefully maintained checks.
+Package ecosystems solve this with lock files such as:
 
-![CI test signal mix showing unit tests, integration tests, smoke tests, quality checks, and the merge signal they create](/content-assets/articles/article-cicd-fundamentals-continuous-integration/ci-test-signal-mix.png)
+- `package-lock.json`
+- `pnpm-lock.yaml`
+- `yarn.lock`
+- `poetry.lock`
+- `Cargo.lock`
+- `Gemfile.lock`
 
-*A practical CI suite combines fast logic checks, integration wiring checks, a small smoke path, and basic quality gates into one merge signal.*
+The package manifest describes the acceptable direct dependencies and version ranges. The lock file records the precise dependency graph that the project expects to install. Together they make repeated installations much more alike:
 
-CI should also include checks that protect the codebase shape. Linting catches style and correctness rules that tools can detect. Type checking catches mismatched function calls before runtime. A build step proves the application can compile or bundle with the production settings.
+```text
+same source
+  + same locked dependency graph
+  + same declared runtime
+  ≈ repeatable result
+```
 
-The team should decide which checks block merge and which checks only report extra information. For example, lint, unit tests, and build might block every pull request. A long nightly browser suite can run on a schedule and create a ticket when it fails, because the team accepts that it gives slower feedback than the core CI check.
+This is why Node.js pipelines commonly use `npm ci`. During normal development, `npm install` can resolve packages and update the lock file. In verification, `npm ci` performs a clean installation from the recorded lock and fails when the manifest and lock disagree. CI should reveal an inconsistent dependency record rather than invent a new one while deciding whether a commit is safe.
 
-## Clean Runners and Locked Dependencies
-<!-- section-summary: CI should run on a fresh environment with locked dependencies, so the result comes from the repository instead of one developer's machine. -->
+Caching does not change that contract. A package cache can avoid downloading unchanged archives, but the job should still reconstruct the installed dependency tree from the lock file. A cache accelerates reproducible work; it should not replace declared setup with an opaque old workspace.
 
-A **clean runner** is a fresh execution environment for a job. It may be a hosted virtual machine, a container, or a self-hosted machine that the CI system prepares before each job. The goal is the same: the job should prove the repository can build from a clean start.
+Clean environments also expose missing runtime steps. If integration tests need PostgreSQL, the workflow should start a test database and provide a test connection string. If the application imports generated code, the workflow should run the generator. If a CLI is required, the project should declare how to install it. The fix belongs in the repository's automated recipe, not in a private checklist for configuring Sarah's laptop.
 
-This is where many first CI failures feel confusing. Lina's tests pass locally because her laptop still has an old package inside `node_modules`. The CI runner starts fresh, runs `npm ci`, and fails because the lockfile never included that package. CI did the right thing because the repository is missing part of the dependency contract.
+Perfect parity across development, CI, staging, and production is rarely possible. The environments should still become increasingly representative rather than unrelated. Testing with Node 18 and SQLite offers weak evidence for a production service that uses Node 24 and PostgreSQL. Explicit runtimes and realistic dependencies narrow that gap.
 
-The fix belongs in the pull request. Lina updates `package.json`, runs the package manager locally so `package-lock.json` changes too, and commits both files. The next CI run installs from the lockfile and the missing package problem disappears.
+## Which Checks Should a CI Pipeline Run?
+<!-- section-summary: CI should run the fastest useful set of checks that protects the failure boundaries the team would regret crossing. -->
 
-Caching can speed this up, but caching has to support reproducibility instead of replacing it. In the workflow above, `actions/setup-node` caches npm package data based on the lockfile. Each job still creates `node_modules` from a clean install while avoiding repeated downloads when the dependency set stays the same.
+There is no universal checklist. A team should ask, “Which detectable failures would make us regret merging this commit?” The answer often includes formatting, linting, static analysis, type checking, unit tests, a build, integration tests, and selected security or dependency checks.
 
-Clean runners also catch missing environment setup. If `checkout-api` needs `DATABASE_URL` for integration tests, the workflow should create a test database or service container and pass a test-only value. If the build needs generated code, the workflow should run the generator. CI should document those setup steps through automation instead of depending on someone remembering them.
+The goal is useful confidence at an acceptable feedback cost. Adding every imaginable test can make the core loop so slow that developers stop integrating frequently. Running only one tiny unit test produces fast feedback with little evidence. A well-shaped pipeline uses different checks because each observes a different boundary.
 
-## Failure Mode: The Build Breaks After Merge
-<!-- section-summary: A pull request can pass against an older target branch, so busy teams need up-to-date checks or a merge queue. -->
+For a payment function such as `chargeCustomer(customer, amount)`:
 
-The first common CI surprise happens when two pull requests pass separately and still break `main` after both merge. Lina's tax rounding PR passes. Marco's discount cap PR also passes. Lina merges first, then Marco merges a PR that still tested against the older version of `main`, and now the combined cart behavior fails.
+| Check | What it can establish |
+|---|---|
+| Lint or static analysis | The source follows selected syntax and correctness rules. |
+| Type checking | The caller and function agree about expected data types. |
+| Unit test | Fee calculation behaves correctly for isolated inputs. |
+| Integration test | The service exchanges the expected data with its database or provider adapter. |
+| End-to-end test | A user-sized payment path connects from entry point to final outcome. |
 
-This problem comes from timing. Each PR had a green result for the code it tested, but Marco's final merge combined his branch with Lina's newer change. If the protected branch allows merges without a fresh up-to-date check, the repository may merge a combined state that skipped final CI validation.
+No row replaces all the others. Unit tests can be fast and precise while missing a schema mismatch. An end-to-end test can prove a broad path while making a failure slower and harder to localize. Teams usually place many fast checks near the bottom of the stack, selected integration tests around important boundaries, and a smaller number of end-to-end paths for critical behavior.
 
-Teams usually handle this in one of two ways. The first option is requiring pull request branches to be up to date with `main` before merging. Marco updates his branch after Lina merges, CI runs again against the newer target, and the conflict appears before merge.
+Cheap checks should generally report failure before expensive checks consume time. If formatting or lint can reject the commit in ten seconds, waiting twenty minutes for an integration suite before showing that result wastes feedback time. A conceptual ordering is:
 
-The second option is a **merge queue**. A merge queue takes approved pull requests, builds a temporary combined result in order, runs the required checks, and merges only after the queued result passes. This works well for busy repositories because developers do not have to keep clicking update on their branches all day.
+```text
+format → lint → type check → unit tests → build → integration → end to end
+ fast                                                        expensive
+```
 
-The checkout team can choose based on volume. A small team may be fine with up-to-date branches. A larger team with many pull requests per hour often gets a smoother path from a merge queue, because the queue serializes the final validation for the protected branch.
+Jobs can run some checks in parallel when that shortens the total path. The principle is not a rigid linear order; it is to expose inexpensive, high-value failures early and preserve enough context to act on them.
 
-## Failure Mode: The Test Flakes
-<!-- section-summary: A flaky test sometimes passes and sometimes fails on the same code, so the team must treat it as a broken signal. -->
+Flaky tests damage this system. A **flaky test** passes and fails against the same code because it depends on timing guesses, shared state, nondeterministic ordering, or an unreliable external system. Developers soon rerun red jobs until they turn green, teaching the team to ignore the very signal CI is meant to protect.
 
-A **flaky test** gives different results for the same code. It may fail because it depends on wall-clock timing, shared test data, network order, or a browser wait that guesses instead of observing a real condition. The worst part is the trust damage. Developers start rerunning the job until it passes, and then a real failure looks like more background noise.
+The durable fix is to make the test observe a real condition. A background-worker test should wait for the order status or queue state, rather than sleeping for an assumed one second. If a blocking flaky test must be quarantined temporarily, record the owner, reason, repair deadline, and route back into required CI. Permanent quarantine silently converts a known signal failure into an untested risk.
 
-In `checkout-api`, imagine an integration test that creates an order, waits one second, and expects a background worker to mark the order as `ready_for_payment`. On a quiet runner, the worker finishes in time. On a busy runner, the worker finishes after the assertion, and the test fails even though the code stayed the same.
+Finally, green CI has a precise interpretation: no selected automated check detected a violation. It is evidence, not proof of correctness. That distinction encourages teams to improve checks when production exposes a missing boundary instead of treating the green badge as a universal guarantee.
 
-The fix should make the test observe the system behavior directly. The test can poll the order status with a short timeout, or the code can expose a test helper that waits for the worker queue to drain. The important point is that the test waits for a real condition instead of sleeping for a guessed number of milliseconds.
+## How Does the Complete CI Feedback Loop Work?
+<!-- section-summary: The complete loop combines small proposals, the actual integration state, reproducible execution, trustworthy checks, and rapid repair. -->
 
-When a flaky test blocks everyone, the team can quarantine it for a short time, but quarantine needs ownership. A healthy quarantine record says which test moved, why it moved, who owns the fix, and when the team will bring it back into the required check. A flaky test that stays outside CI forever turns into an untested production risk with a label on it.
+Suppose Alice adds a `/health` endpoint. She branches from `main`, implements the endpoint in a small commit, pushes the branch, and opens a pull request.
 
-The CI rule stays simple. A red required check deserves attention. If the team cannot trust that sentence, the team has to fix the signal before adding more tests.
+```http
+GET /health
 
-## Putting It All Together
-<!-- section-summary: CI works as one loop: small changes enter a shared target, clean automation checks them, and trustworthy results guide merge decisions. -->
+200 OK
+{
+  "status": "healthy"
+}
+```
 
-Now the checkout team has a complete CI path. Developers keep changes small, aim them at the shared mainline, and use pull requests for review. The repository starts a workflow on each pull request, the runner builds from a clean workspace, and required checks decide whether the change can merge. The full loop connects those pieces like this:
+The pull request event starts CI. A fresh Ubuntu runner checks out the proposed state, installs Node 24, recreates dependencies with `npm ci`, and runs lint, tests, and the production build. If a required check fails, Alice repairs the change and pushes again. If the checks and human review pass, the branch can join `main`.
 
-![Continuous Integration summary showing main branch, small change, pull request, clean runner, required checks, merge, and fix loop](/content-assets/articles/article-cicd-fundamentals-continuous-integration/ci-summary.png)
+The push to `main` can run CI again to verify the state after integration. The repeating path is:
 
-*The full CI loop keeps work close to the main branch, validates it in automation, and routes failures back into a small repair cycle.*
+```text
+small change
+    ↓
+proposed integration
+    ↓
+clean, reproducible verification
+    ↓
+ ┌──┴──┐
+pass  fail
+ ↓      ↓
+main   fix and repeat
+```
 
-The value comes from the connection between the pieces. Small branches keep failures understandable. Pull requests give humans a review surface. Required checks make validation consistent. Clean runners prove the repository can build without hidden local state. A balanced test mix catches real problems while feedback is still fast enough for daily work.
+Five ideas make the loop strong: small changes, one shared mainline, automated checks, a clean reproducible environment, and fast feedback. Remove frequent integration and branches accumulate painful conflicts. Remove automation and humans must repeat every mechanical check. Remove clean execution and hidden machine state decides the result. Remove reproducibility and one commit can produce different builds. Remove speed and developers stop working in small feedback cycles.
 
-CI also creates a clean boundary for the next delivery stages. After `checkout-api` passes CI, the team has a validated commit. That commit can produce an artifact, such as a container image or package, and later delivery workflows can promote that artifact through environments.
+This also clarifies the boundary between CI and later delivery work. CI asks whether the change can safely join the shared codebase under the team's selected checks. **Continuous Delivery** asks whether a verified version remains in a releasable state. **Continuous Deployment** goes further by automatically taking qualifying changes into production. CI produces the validated commit and often the build input that those later stages use, but passing integration checks alone does not decide production health or release policy.
 
-The important habit is treating CI as the first shared production signal. A green CI run says the code integrated successfully under the repository's current rules. Product review, production health, and deployment safety still need their own checks later in the delivery system.
+The most useful mental model is therefore an automated feedback loop that protects shared software state. Changes interact; delayed discovery makes interaction failures more expensive; frequent integration keeps the failure domain small; reproducible automation tests the intended combined state; required checks reject selected violations; and the team repeats the loop.
 
-## What's Next
-<!-- section-summary: The next step is understanding how pipeline jobs, runners, and artifacts carry a validated commit toward delivery. -->
+That framing turns the visible tools into one coherent system. A branch bounds the proposal. A pull request combines human and machine review. A runner reconstructs the repository. Lock files stabilize dependencies. Test layers observe different failure boundaries. Required checks defend `main`. Fast feedback returns the result while the developer can still make a small correction.
 
-You now have the core CI loop: small changes, shared mainline, pull request checks, workflow jobs, clean runners, locked dependencies, and useful tests. That is the foundation underneath the rest of CI/CD.
+## Check Your Answers
 
-The next topic goes one layer deeper into pipeline structure. Once a change passes CI, teams need to understand jobs, runners, artifacts, caches, and how one validated commit turns into a build output that later deployment steps can trust.
+:::expand[Why Does Continuous Integration Exist?]{kind="recap"}
+Separately working changes can fail when combined. CI repeatedly verifies a proposed combined state and returns objective evidence while the change is still small.
+:::
 
----
+:::expand[Why Must Integration Be Frequent?]{kind="recap"}
+Frequent integration limits both the change batch and the diagnostic search space. Fast feedback encourages small commits and inexpensive corrections.
+:::
 
-**References**
+:::expand[How Do the Mainline, Branches, and Pull Requests Fit Together?]{kind="recap"}
+The mainline is the accepted shared state, a branch isolates a small proposal, and a pull request brings human review and automated validation together before integration.
+:::
 
-- [Continuous Integration by Martin Fowler](https://www.martinfowler.com/articles/continuousIntegration.html) - Defines CI as frequent integration into a shared codebase verified by automated builds and tests.
-- [Understanding GitHub Actions](https://docs.github.com/en/actions/get-started/understand-github-actions) - Explains workflows, events, jobs, runners, and steps in GitHub Actions.
-- [Workflow syntax for GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax) - Documents the YAML structure used to define workflow triggers, jobs, and steps.
-- [Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows) - Documents `pull_request` behavior and how GitHub checks the merge result for pull request workflows.
-- [About status checks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks) - Explains status checks, check results, and required checks for protected branches.
-- [About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) - Covers required reviews, required status checks, merge queues, and branch protection behavior.
-- [npm ci](https://docs.npmjs.com/cli/v9/commands/npm-ci/) - Documents clean installs, lockfile requirements, and why `npm ci` fits automated environments.
-- [actions/setup-node](https://github.com/actions/setup-node) - Documents Node.js setup, lockfile guidance, and dependency caching behavior in GitHub Actions.
-- [Just Say No to More End-to-End Tests](https://testing.googleblog.com/2015/04/just-say-no-to-more-end-to-end-tests.html) - Explains the testing pyramid shape and the cost of relying too heavily on end-to-end tests.
-- [Feature Toggles by Martin Fowler](https://martinfowler.com/articles/feature-toggles.html) - Explains feature flags as a way to change system behavior without changing deployed code.
+:::expand[How Do Required Checks Protect the Shared Mainline?]{kind="recap"}
+Required checks block a merge until selected automation passes against the intended integration state. They enforce chosen constraints but do not prove the software has no bugs.
+:::
+
+:::expand[What Does a CI Runner Actually Do?]{kind="recap"}
+A repository event starts a workflow, a job receives a runner, and ordered steps check out the code, prepare tools, install dependencies, and execute ordinary validation commands.
+:::
+
+:::expand[Why Do Clean Runners and Locked Dependencies Matter?]{kind="recap"}
+Clean execution exposes hidden machine assumptions, while explicit runtimes and lock files make the same source reconstruct a similar dependency environment on every run.
+:::
+
+:::expand[Which Checks Should a CI Pipeline Run?]{kind="recap"}
+Choose fast, trustworthy checks for the boundaries the team would regret breaking. Different test layers provide different evidence, and green CI means only that those selected checks passed.
+:::
+
+:::expand[How Does the Complete CI Feedback Loop Work?]{kind="recap"}
+Small changes target the mainline, reproducible automation checks the actual candidate state, required results guide merge or repair, and the loop repeats with rapid feedback.
+:::
+
+## References
+
+- [Available rules for GitHub rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets) - Documents required status checks and strict branch-update behavior.
+- [Creating an example GitHub Actions workflow](https://docs.github.com/en/actions/tutorials/create-an-example-workflow) - Introduces workflow events, hosted runners, checkout, and command steps.
+- [Workflow syntax for GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax) - Documents workflow names, triggers, jobs, runners, steps, and permissions.

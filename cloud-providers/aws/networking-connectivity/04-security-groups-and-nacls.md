@@ -44,20 +44,6 @@ Client                                  Web server
 
 Those two directions explain most of the difference between an AWS security group and a network access control list, or NACL.
 
-The sections below answer these questions in order:
-
-1. **What Must Happen to One Packet?**
-2. **How Are Security Groups Different From NACLs?**
-3. **Why Are Security Group References Useful?**
-4. **How Do Stateless NACLs Work?**
-5. **Why Do NACLs Need Ephemeral-Port Rules?**
-6. **How Do Ordered Allow and Deny Rules Work?**
-7. **How Do Flow Logs Help Explain a Failure?**
-8. **How Do You Troubleshoot a Packet Path?**
-
-## What Must Happen to One Packet?
-<!-- section-summary: A working connection needs a route, filtering permission in both relevant directions, and a listening destination service. -->
-
 A TCP packet carries facts such as:
 
 ```text
@@ -79,6 +65,20 @@ May this packet go there?
 ```
 
 A route such as `0.0.0.0/0 → internet gateway` does not allow internet traffic. It selects a next hop for destinations without a more-specific route. Security groups and NACLs may still reject the packet.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Must Happen to One Packet?**
+2. **How Are Security Groups Different From NACLs?**
+3. **Why Are Security Group References Useful?**
+4. **How Do Stateless NACLs Work?**
+5. **Why Do NACLs Need Ephemeral-Port Rules?**
+6. **How Do Ordered Allow and Deny Rules Work?**
+7. **How Do Flow Logs Help Explain a Failure?**
+8. **How Do You Troubleshoot a Packet Path?**
+
+## What Must Happen to One Packet?
+<!-- section-summary: A working connection needs a route, filtering permission in both relevant directions, and a listening destination service. -->
 
 The reverse is also true. A security group can allow TCP `443`, but it cannot manufacture a missing route, internet gateway, NAT path, peering route, or listening service.
 

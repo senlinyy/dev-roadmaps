@@ -33,7 +33,11 @@ flowchart TD
     Parse --> Memory[In-memory application configuration]
 ```
 
-A ConfigMap update, a projected-file update, and an application reload are different events. Seven questions make those boundaries explicit:
+A ConfigMap update, a projected-file update, and an application reload are different events.
+
+Configuration can reach a process through environment variables, command-line arguments, files, an API, or a combination of those interfaces. Files are especially useful when the application already expects formats such as `nginx.conf`, `application.yaml`, `prometheus.yml`, `log4j2.xml`, or `haproxy.cfg`.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why does some configuration fit a file better than environment variables?**
 2. **How does a ConfigMap key reach an application path?**
@@ -45,8 +49,6 @@ A ConfigMap update, a projected-file update, and an application reload are diffe
 
 ## Why does some configuration fit a file better than environment variables?
 <!-- section-summary: A file preserves structured configuration in the format and path an application already understands. -->
-
-Configuration can reach a process through environment variables, command-line arguments, files, an API, or a combination of those interfaces. Files are especially useful when the application already expects formats such as `nginx.conf`, `application.yaml`, `prometheus.yml`, `log4j2.xml`, or `haproxy.cfg`.
 
 Consider this structured YAML:
 

@@ -1,430 +1,374 @@
 ---
 title: "Dependency and Package Risk"
-description: "Review third-party packages, registries, dependency graphs, lockfiles, dependency confusion, maintainer risk, and CI guardrails before a release trusts them."
-overview: "Start with one dependency update pull request for Harbor Books. Follow the package name to its registry, direct and transitive dependencies, lockfile evidence, dependency confusion risk, malicious package behavior, review steps, and CI guardrails."
-tags: ["devsecops", "dependencies", "package-registries", "lockfiles"]
+description: "Learn how package identity, dependency graphs, lockfiles, immutable installation, namespace controls, update review, build isolation, and continuous inventory reduce software dependency risk."
+overview: "Treat a package manager as a remote-code acquisition system. Trace direct, transitive, runtime, and build authority; make version resolution reproducible with lockfiles; review update pull requests as supplier changes; defend private namespaces and human package selection; enforce CI guardrails; contain build scripts and network; and balance patching with the risk of every new version."
+tags: ["devsecops", "dependencies", "packages", "supply-chain"]
 order: 1
 id: article-devsecops-pipeline-security-dependency-scanning
 ---
 
 ## Table of Contents
 
-1. [Your App Uses Other People's Code](#your-app-uses-other-peoples-code)
-2. [The Dependency Update PR](#the-dependency-update-pr)
-3. [Package Name and Registry](#package-name-and-registry)
-4. [Direct and Transitive Dependencies](#direct-and-transitive-dependencies)
-5. [Lockfile as Release Evidence](#lockfile-as-release-evidence)
-6. [Dependency Confusion and Private Names](#dependency-confusion-and-private-names)
-7. [Malicious Packages and Maintainer Risk](#malicious-packages-and-maintainer-risk)
-8. [Review the Update PR](#review-the-update-pr)
-9. [CI Guardrails](#ci-guardrails)
-10. [Production Checklist](#production-checklist)
-11. [Next: SBOMs and Reachability](#next-sboms-and-reachability)
-12. [References](#references)
+1. [Why Is a Package Manager a Remote-Code Acquisition System?](#why-is-a-package-manager-a-remote-code-acquisition-system)
+2. [How Do Dependency Graphs Expand Trust and Authority?](#how-do-dependency-graphs-expand-trust-and-authority)
+3. [Why Do Lockfiles and Immutable Installation Matter?](#why-do-lockfiles-and-immutable-installation-matter)
+4. [How Should a Dependency Update Pull Request Be Reviewed?](#how-should-a-dependency-update-pull-request-be-reviewed)
+5. [How Do Namespace, Maintainer, and Package-Name Attacks Work?](#how-do-namespace-maintainer-and-package-name-attacks-work)
+6. [How Do CI Guardrails and Continuous Inventory Reduce Risk?](#how-do-ci-guardrails-and-continuous-inventory-reduce-risk)
+7. [How Do Build Isolation and Reachability Change Priority?](#how-do-build-isolation-and-reachability-change-priority)
+8. [What Does a Secure Dependency Lifecycle Look Like?](#what-does-a-secure-dependency-lifecycle-look-like)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Your App Uses Other People's Code
-<!-- section-summary: Dependency risk starts with the ordinary fact that production software imports code from package ecosystems and internal registries. -->
+An application rarely consists only of code written by its team. A package manager reads a manifest, resolves package names and versions, downloads archives from registries, verifies available integrity metadata, installs a graph, and may execute package scripts.
 
-Your app uses other people's code. That is normal. A checkout service that writes every HTTP client, date parser, test runner, UI helper, and logging library from scratch would move slowly and still make security mistakes. Modern delivery works because teams reuse packages from ecosystems such as npm, PyPI, Maven Central, Linux distributions, and internal registries.
+That makes it a remote-code acquisition system:
 
-A **dependency** is software your application relies on. For Harbor Books, `checkout-api` uses a private package named `@harbor/coupon-rules` to evaluate partner coupon rules. It also uses public packages for logging, JSON parsing, tests, and build tooling. When one of those packages changes, new code enters the release even when no engineer changed a business logic file.
-
-This article follows one dependency update pull request. The pull request looks small at first: one private package moves from `2.4.1` to `2.4.2`, and the lockfile changes. The secure delivery question is larger than the diff count. Which package changed? Which registry served it? Which transitive dependencies came with it? Which lockfile entries changed? Could the build resolve a private name from the wrong place? Did a maintainer or install script change the risk?
-
-The answer should live inside careful code review. We will start with the pull request, then walk through the evidence a reviewer and CI system should check before production trusts the update.
-
-## The Dependency Update PR
-<!-- section-summary: One update pull request gives the article a concrete release path from package name to CI policy. -->
-
-Harbor Books sells books online, and `checkout-api` decides whether a coupon can apply to a cart. Maya opens the automated dependency update pull request from Renovate. The title is ordinary: `Update @harbor/coupon-rules to 2.4.2`.
-
-The manifest diff is small:
-
-```json
-{
-  "dependencies": {
-    "@harbor/coupon-rules": "2.4.2"
-  }
-}
+```text
+package name and version rule
+      -> resolver and registry
+      -> publisher-controlled archive
+      -> install or build execution
+      -> runtime code inside the application
 ```
 
-The reviewer reads this as one direct dependency change. **Direct dependency** means the project names the package in its own manifest. The old version was `2.4.1`, and the new version is `2.4.2`. That sounds safe, but a package update can change more than one line of application behavior.
+The security identity of a package is not merely its short name. It includes ecosystem, namespace or scope, registry, version, resolved artifact, integrity digest, publisher or maintainer control, and sometimes signing or provenance. `utils@1.4` from an internal registry and a public package with the same name are not the same supplier relationship.
 
-The pull request also changes `package-lock.json`. The lockfile records where npm resolved the package, which exact tarball it selected, and which integrity hash npm expects. A private package such as `@harbor/coupon-rules` should come from Harbor Books' approved registry, not from the public npm registry or an unexpected mirror.
+The package manager can execute authority at several times. Installation hooks may run immediately in CI. Build plugins can read source and credentials. Runtime libraries can access application data and network. Command-line tools may execute only on developer or build machines but still alter the final output.
 
-Here is the review spine for this pull request:
+Keep these questions in view as you work through the lesson:
 
-| Review question | Harbor Books example |
-|---|---|
-| What package changed? | `@harbor/coupon-rules` |
-| Where should it come from? | Harbor Books' private npm registry |
-| Is it direct or transitive? | Direct dependency in `checkout-api` |
-| What did the lockfile resolve? | Version, tarball URL, integrity hash, and dependencies |
-| Could another registry win? | Check `.npmrc` scope rules and registry policy |
-| Did package behavior change? | Check scripts, changelog, maintainer, and new dependencies |
-| Can CI enforce the rule? | Lockfile install, dependency review, registry checks, and audit policy |
+1. **Why Is a Package Manager a Remote-Code Acquisition System?**
+2. **How Do Dependency Graphs Expand Trust and Authority?**
+3. **Why Do Lockfiles and Immutable Installation Matter?**
+4. **How Should a Dependency Update Pull Request Be Reviewed?**
+5. **How Do Namespace, Maintainer, and Package-Name Attacks Work?**
+6. **How Do CI Guardrails and Continuous Inventory Reduce Risk?**
+7. **How Do Build Isolation and Reachability Change Priority?**
+8. **What Does a Secure Dependency Lifecycle Look Like?**
 
-Now we can walk those questions in order, starting with the package name and registry.
+## Why Is a Package Manager a Remote-Code Acquisition System?
+<!-- section-summary: Installing a package selects code controlled by an external or internal publisher, downloads it from a registry, and may execute it during build and runtime. -->
 
-## Package Name and Registry
-<!-- section-summary: A package name needs a registry source before a reviewer can decide whether the build downloaded the intended software. -->
+Therefore “we do not import this package in production” does not automatically mean it is harmless. A build dependency can steal a publish token during installation or modify generated output. Runtime presence and build-time authority are separate risks.
 
-A **package registry** is the service that stores packages and package metadata. npm has the public npm registry. Python packages usually come from PyPI. Java dependencies often come from Maven Central. Companies also run private registries through GitHub Packages, Artifactory, Nexus, AWS CodeArtifact, Azure Artifacts, or another internal service.
+A package archive can also contain unexpected binaries, configuration, generated code, or scripts. Review cannot stop at one exported function. The installed object and its lifecycle behavior are the relevant input.
 
-A package name only has useful security meaning together with its registry. The name `@harbor/coupon-rules` should refer to Harbor Books' internal package in the private registry. If npm resolves the same name from another registry, the pull request has changed the release input even though the name looks familiar.
+Vulnerability scanning covers known defects associated with known versions. Dependency security also includes malicious publication, compromised maintainer accounts, namespace confusion, typosquatting, unexpected install scripts, mutable resolution, abandoned projects, and excessive dependency growth. A clean vulnerability feed does not make an untrustworthy package safe.
 
-For npm, the scope is the part before the slash. The scope `@harbor` can be mapped to a private registry in `.npmrc`:
+Treat every new dependency as onboarding a software supplier. The supplier gains some combination of build, source, runtime, data, network, and release influence. The team should know why that trust is necessary and how it will be maintained or removed.
 
-```ini
-@harbor:registry=https://npm.pkg.github.com
-registry=https://registry.npmjs.org/
-//npm.pkg.github.com/:_authToken=${NPM_TOKEN}
+Package identity should be verified before the first install, when the name is most likely to be chosen from search results, documentation, or a copied command. Confirm the official project repository links to the expected registry package and that the registry links back consistently. Check namespace ownership and release history rather than trusting a familiar-looking name.
+
+The registry is part of the acquisition boundary. It authenticates publishers, stores archives and metadata, serves resolver requests, and may expose signatures or provenance. Registry account compromise can publish malicious code under the correct name, so multifactor authentication, protected publishing automation, short-lived credentials, and narrow namespace access matter.
+
+Package managers also translate metadata into execution. A lifecycle script that runs automatically is more authoritative than a library function invoked only by one code path. Review whether scripts are necessary, whether CI can disable them during initial inspection, and whether the build can reproduce required outputs without granting every dependency shell access.
+
+A dependency can affect security without running directly. It can modify generated source, compiler configuration, bundler resolution, or test outcomes. The review should trace how package-controlled output enters the release and whether a later trusted job assumes that output is safe.
+
+## How Do Dependency Graphs Expand Trust and Authority?
+<!-- section-summary: Direct dependencies bring transitive graphs, and the security importance of each node depends more on what code can do than how many edges separate it from the application. -->
+
+A manifest shows direct dependencies. Installation expands them into a graph:
+
+```text
+application
+  -> library A
+       -> library B
+       -> library C
+            -> library D
 ```
 
-`@harbor:registry` sends packages under the `@harbor` scope to GitHub Packages. The plain `registry` line leaves normal public packages on the public npm registry. The auth token line lets CI authenticate to the private registry. A reviewer should treat a change to this file like a production route change, because it changes where dependency bytes come from.
+The team deliberately selected A but may never have heard of D. D can still appear in the runtime artifact or execute during build.
 
-Python and Java have the same source question with different files. pip can install from PyPI, an internal index, or both. Maven resolves artifacts from repositories configured in project or user settings. A dependency review checks those routes with the same plain question: does each private name resolve from the private source?
+Depth is not the same as risk. A deeply transitive parser reachable from Internet input may be critical. A direct package used only for a harmless compile-time transformation may have less runtime impact, though it still receives build authority. Ask what the component can access and influence.
 
-```bash
-python -m pip install \
-  --index-url https://packages.harborbooks.internal/simple \
-  -r requirements.txt
+The graph can contain several relationship types:
+
+- Runtime dependencies shipped or loaded with the application.
+- Development dependencies used for tests and local tooling.
+- Build dependencies that generate or transform release output.
+- Optional dependencies activated by platform or feature.
+- Peer or plugin relationships loaded by a host framework.
+
+These categories are useful but not perfect security boundaries. Test and build code runs in CI, where tokens and source may be sensitive. An optional package may be present in production even when its feature is off. The final artifact and executed build process reveal reality.
+
+More dependencies create more trust relationships: more maintainers, registries, release processes, transitive graphs, update events, advisories, and potential namespace errors. Count alone does not determine risk, but unnecessary packages expand the surface without adding required capability.
+
+Authority analysis should include installation and build. A package script can read environment variables, modify the workspace, contact the Internet, or publish output. If the build job also holds registry or cloud credentials, a dependency compromise can use them during the legitimate job without first stealing them for later.
+
+Production images should contain less than build environments. Use multi-stage builds or equivalent packaging so compilers, package managers, test frameworks, and build-only dependencies do not ship into runtime. This reduces component inventory, attack surface, and future vulnerability response.
+
+Dependency authority should be evaluated at each stage. During install, can it execute shell commands and reach the network? During build, can it read private source or alter binaries? At runtime, can it process attacker input, access customer data, or make outbound requests? The same package may have different consequences at every stage.
+
+Graph review also reveals concentration. One small transitive utility may appear through hundreds of direct dependencies and across many services. Its compromise creates multiplicity even if its individual function is simple. Inventory should support reverse queries from package version to every artifact and deployment.
+
+Optional and platform-specific branches deserve evidence. A developer on one operating system may not install the package used in the production Linux build. Generate and inspect the graph under the actual release platform rather than assuming a local lockfile view reveals every selected dependency.
+
+Deduplicate carefully. Two packages may wrap the same underlying library, increasing versions and update work. Reducing redundant frameworks and utilities can shrink the number of suppliers and conflicting transitive versions without rewriting product features.
+
+![Dependency graph review expands direct packages into transitive code and checks source, version, integrity, scripts, authority, and rollback](/content-assets/articles/article-devsecops-pipeline-security-dependency-scanning/dependency-graph-review.png)
+
+_Review the graph and the authority of its nodes; a package's distance from the manifest does not determine its consequence._
+
+## Why Do Lockfiles and Immutable Installation Matter?
+<!-- section-summary: Version ranges express allowed future choices, while a committed lockfile and frozen install preserve the exact resolved graph, sources, and integrity used for a release. -->
+
+A manifest range such as `^1.4.0` does not identify one artifact. It allows a resolver to choose among future compatible versions under ecosystem rules. Two builds on different days can install different graphs even when source control is unchanged.
+
+Uncertainty affects reproducibility and review. Tests may pass against version 1.4.2 while production later resolves 1.4.7. A compromised or broken transitive release can enter without a manifest diff.
+
+A **lockfile** records the resolution: exact versions, transitive graph, source locations, and available integrity values. It turns a broad request into release evidence.
+
+```text
+manifest: what versions are allowed?
+lockfile: what versions and artifacts were selected?
 ```
 
-This pip command uses one controlled index. `--index-url` names the package index pip should query. Harbor Books would avoid putting private names on a command that also searches a public index through `--extra-index-url`, since pip documents dependency confusion risk for that pattern.
+The lockfile should be committed and reviewed. A one-line manifest change can rewrite hundreds of lock entries. Those entries reveal added packages, source changes, version jumps, and integrity updates that are invisible in the manifest alone.
 
-```xml
-<dependency>
-  <groupId>com.harborbooks.checkout</groupId>
-  <artifactId>coupon-rules</artifactId>
-  <version>2.4.2</version>
-</dependency>
+The lockfile is not self-enforcing. CI must use an immutable or frozen install mode that rejects disagreement instead of silently recalculating the graph. If the package manager rewrites the lockfile during the build, the reviewed evidence no longer controls installation.
+
+Integrity hashes help detect archive modification relative to the lockfile. They do not establish that the selected package was trustworthy or that the registry served the correct package when the lock entry was first created. Review package identity and source before accepting a new integrity value.
+
+Lockfile behavior differs across ecosystems and package-manager versions. Pin the toolchain, understand workspace or platform-specific sections, and ensure all released targets are represented. A lockfile produced by one tool version may be interpreted differently by another.
+
+Treat unexpected lockfile changes as security-relevant. If a source URL moves from the internal registry to a public one, a transitive package appears, or install scripts are introduced, the reviewer needs an explanation.
+
+The lockfile and an SBOM answer related but different questions. The lockfile controls or records dependency resolution for the build. The SBOM inventories components in a particular produced artifact. Build steps can add or remove software after installation, so both views are useful.
+
+Resolution includes registry choice. A lock entry that records only name and version but not source may be insufficient to distinguish private and public packages. Where the ecosystem records resolved URLs or registries, enforce them. Where it does not, combine lockfile review with package-manager registry policy and network restrictions.
+
+Lockfile integrity should be protected through ordinary source review. An attacker who can replace both package archive and reviewed integrity value can make checksum verification pass. The hash detects mismatch with the committed decision; branch protection and reviewer judgment protect that decision.
+
+Do not regenerate the lockfile casually to remove merge conflicts. Resolution can select new versions throughout the graph, transforming a conflict cleanup into an unreviewed update. Re-run the graph summary and tests, and explain changes beyond the intended packages.
+
+For monorepos and workspaces, make sure all manifests and shared lockfiles are covered by ownership and CI. A change in one workspace can alter resolution for another service. The released subgraph should still be identifiable by artifact.
+
+## How Should a Dependency Update Pull Request Be Reviewed?
+<!-- section-summary: An update PR changes supplier code, resolved graph, scripts, source, integrity, and possible runtime behavior, so automation should expose the change rather than replace human judgment. -->
+
+A dependency update is a security event even when the manifest diff is one line. It can add hundreds of transitive packages, change maintainer-controlled code, introduce scripts, alter licensing, change runtime behavior, or fix known vulnerabilities.
+
+Automation is valuable because it discovers releases and opens a pull request with version and advisory context. It should reduce search work, not make the trust decision invisible.
+
+Review the proposed update across several dimensions:
+
+- Is the package, namespace, and registry the intended one?
+- What direct and transitive versions change?
+- Which source URLs and integrity values change in the lockfile?
+- Are install or build scripts added or modified?
+- What do upstream release notes, advisories, and source diffs say?
+- Did maintainership, ownership, or publishing behavior change?
+- Which tests exercise the affected behavior?
+- Can the team roll back precisely?
+
+Do not review only the headline vulnerability. An update that fixes CVE X may also introduce unrelated behavior or a new transitive supplier. Conversely, delaying every update because change has risk leaves known vulnerabilities and unsupported code in place.
+
+The dependency update PR should run frozen installation, ordinary tests, security tests, dependency review, license or policy checks, build, and artifact comparison where useful. High-authority build plugins deserve deeper scrutiny than a small runtime data library with a narrow interface.
+
+Review the lockfile diff in graph terms. Identify packages added, removed, or moved between sources. A large mechanical diff can be summarized by tooling, but the summary should not hide new registry domains, lifecycle scripts, or unexpected major changes.
+
+Treat bot identity as a proposer, not an approver. Protected branch rules and accountable owners should still govern sensitive manifests, lockfiles, registry configuration, and build plugins.
+
+After merge, continuous scanning remains necessary. A package can become known vulnerable tomorrow even though its bytes and review did not change. The recorded graph and artifact inventory let the team reevaluate old releases against new knowledge.
+
+Update review should assess behavior, not only successful tests. A compromised package may preserve the public API while adding credential collection or outbound traffic. For high-authority build dependencies, compare install scripts, new domains, published archive contents, and generated output. Run the update on an isolated low-secret runner first.
+
+Major, minor, and patch labels are publisher statements about compatibility, not security guarantees. A malicious release can use any version number, and a legitimate patch can still change important behavior. Semantic-version policy helps manage compatibility but does not replace review.
+
+Batch size affects evidence. Updating fifty unrelated packages at once reduces the ability to attribute a failure or suspicious behavior. Smaller coherent updates are easier to review and roll back, though automation can group tightly coupled ecosystems where independent movement is impractical.
+
+Record why an update is urgent. Known exploitation, a reachable high-impact flaw, registry compromise, or maintainer warning may justify an expedited path. Preserve the same identity, graph, frozen install, test, and approval evidence even when the review window is shorter.
+
+## How Do Namespace, Maintainer, and Package-Name Attacks Work?
+<!-- section-summary: Package resolution and human selection depend on namespaces and publisher control, so private-name ownership, registry routing, typo defenses, and maintainer review are part of package identity. -->
+
+Package names create a namespace problem. An organization may use a private package called `parcelpulse-auth`. If the package manager can also search a public registry where an attacker publishes the same name, resolver configuration or version preference may select the public package. This is dependency confusion.
+
+Private names need explicit ownership boundaries. Use scoped namespaces where the ecosystem supports them, reserve critical names publicly when appropriate, and configure registry routing so private packages resolve only from the authorized internal source.
+
+![Package source check joins manifest name, registry rule, lockfile URL, and allow or block decision](/content-assets/articles/article-devsecops-pipeline-security-dependency-scanning/package-source-check.png)
+
+_Package identity includes registry and namespace; the same short name from another source is a different trust relationship._
+
+Verify the resolved source in the lockfile and CI. A developer configuration that uses the internal registry does not prove the production build did. Fail when a private namespace resolves to an unauthorized public location.
+
+**Typosquatting** targets human selection. An attacker publishes a name visually or phonetically similar to a popular package and waits for a developer to mistype it. Review exact spelling, scope, publisher, repository, documentation links, and project history before first installation.
+
+Popularity is evidence, not proof. Download counts, stars, and many dependents can indicate community scrutiny, but they can be manipulated and do not prevent maintainer compromise. A popular package can still publish a malicious version.
+
+Maintainer trust is part of package trust. Accounts change, ownership transfers, release automation changes, and projects become abandoned. Watch for sudden publisher additions, unexpected release cadence, repository transfers, or packages revived after long inactivity.
+
+Malicious packages change the threat model because there may be no vulnerability to discover. The code is behaving as designed by the attacker. Controls need to reduce the packages trusted, constrain their authority, and make new versions explicit.
+
+Internal packages need the same discipline. A private registry and familiar team name do not guarantee safe publication. Protect maintainer accounts, release workflows, namespace write permissions, and provenance.
+
+Dependency confusion can exploit version preference. If the internal registry contains version `1.2.0` and the public package offers malicious `9.9.9`, a resolver that searches both may choose the higher public version. Scoping and source mapping are stronger than hoping internal versions always win.
+
+Names can also be abandoned and reclaimed depending on ecosystem policy. Removal or ownership transfer can change who controls future releases. Preserve exact versions and monitor project status rather than assuming the namespace owner is permanent.
+
+Publisher diversity matters. A transitive graph may rely on many packages controlled by one maintainer account, or one package may have dozens of publishers. Both create different compromise paths. Review the identities that can release security-sensitive build plugins and runtime components.
+
+Private package publication should use workload identity or narrowly scoped automation instead of broad personal tokens where supported. Publishing provenance can show that the expected release workflow produced the artifact, adding evidence beyond the registry username.
+
+## How Do CI Guardrails and Continuous Inventory Reduce Risk?
+<!-- section-summary: CI should enforce frozen resolution, approved sources, reviewed graph changes, script policy, vulnerability and license thresholds, and reproducible evidence while continuous inventory reevaluates released artifacts. -->
+
+CI is the enforcement point because it turns repository intent into a release. Useful guardrails include:
+
+- Reject manifest and lockfile disagreement.
+- Use the pinned package-manager and frozen install command.
+- Allow only approved registries and namespace routing.
+- Detect newly added dependencies and transitive graph changes.
+- Flag or block lifecycle scripts that violate policy.
+- Run vulnerability, license, integrity, and policy checks.
+- Produce the final artifact from the resolved graph.
+- Generate an SBOM tied to the artifact digest.
+
+Dependency review asks a change-focused question: what packages and risk does this pull request add or change? Vulnerability scanning asks which known advisories match the selected versions. Both are useful and neither proves that package code is benign.
+
+Policy should distinguish historical debt from new risk. When onboarding an older repository, baseline existing findings into owned remediation work while preventing pull requests from adding unacceptable new dependencies or vulnerabilities.
+
+Continuous scanning is required because vulnerability intelligence changes. Store the lockfile, SBOM, artifact digest, owner, environment, and deployment mapping so a new advisory can be joined against production inventory without rebuilding everything first.
+
+An SBOM is an inventory, not the installation control. Generate it from the final artifact or build reality where possible. Keep it connected to provenance so responders know which process produced the document and which digest it describes.
+
+CI should also preserve evidence for rejected changes. The graph diff, policy rule, source, and finding allow developers to understand the denial and reviewers to evaluate exceptions. A generic “dependency check failed” invites bypass.
+
+Monitor guardrail health: repositories missing lockfiles, frozen install disabled, registry policy bypass, scanner coverage gaps, stale inventories, and dependencies without owners. A green result has value only if the expected controls ran on the released object.
+
+Guardrails should validate negative conditions. Attempt to resolve a private package from a public registry in a test project and expect failure. Add a manifest change without updating the lockfile and expect frozen install to fail. Introduce an unapproved registry URL or lifecycle script and ensure policy reports the exact reason.
+
+Use network policy to support resolver policy. If the trusted build should use only an internal proxy, prevent direct fallback to public registries. This also creates a controlled place for caching, malware checks, and outage management, though the proxy itself becomes trusted infrastructure.
+
+Separate vulnerability intelligence from dependency inventory. The same artifact inventory can be joined with new feeds repeatedly. Rebuilding an artifact merely to learn whether it contains a package is slower and may produce different bytes; preserve the SBOM and resolved graph of the actual release.
+
+Exceptions should name package, version, artifact or service scope, reason, owner, compensating control, and expiry. A global scanner ignore for a package name can hide later versions or services where the original reachability assumption does not hold.
+
+## How Do Build Isolation and Reachability Change Priority?
+<!-- section-summary: Build sandboxing limits what package code can do, while reachability and exploit context help prioritize known vulnerabilities without declaring present but unreachable code permanently safe. -->
+
+Reduce what dependencies can access during installation and build. Pull-request jobs should have no publish token or production secret. Use ephemeral runners, read-heavy repository permission, separate caches, and narrow filesystems. A malicious package then has less authority even if executed.
+
+Network access matters. Build scripts often download tools or contact registries, but unrestricted egress also enables exfiltration and mutable inputs. Use approved mirrors or proxies, block internal and production routes, and allow only destinations needed for the job where practical.
+
+Separate build authority from publish and deploy authority. Produce an identified artifact in the build job, then pass it to a small publisher or deployment job. A dependency executed during build should not inherit registry write or cloud deployment merely because those operations happen later in the pipeline.
+
+For known vulnerabilities, component presence is not the entire risk decision. Ask whether the affected version is present, the vulnerable code is included, the application reaches it, attacker input can reach the application path, exploit prerequisites hold, and meaningful impact follows.
+
+Reachability can change priority. A vulnerable parser invoked by public input deserves different urgency from the same library installed but unused. It should not create complacency. Feature flags, code paths, configuration, and future releases can change; record assumptions and expiry.
+
+Avoid the “latest is safest” fallacy. The newest release may remove known vulnerabilities but introduce malicious or unstable code. Avoid the opposite fallacy of never updating. Old versions accumulate known defects and lose support. Controlled, reviewed movement is the sustainable security strategy.
+
+Production images should remove build-only packages and tools. Re-scan and regenerate evidence for the final artifact, because source dependency analysis can include packages not shipped and miss OS or files introduced by the image build.
+
+Reachability evidence has confidence levels. Static analysis may show no call path, but dynamic workloads can use reflection, plugins, configuration, or rarely exercised features. Runtime observation can show that a path executed, but absence from a short trace does not prove impossibility. Use reachability to order work and state its assumptions.
+
+Known exploitation changes priority sharply. A lower-severity flaw actively used against Internet-facing services can outrank a higher theoretical issue in a disabled internal feature. Combine advisory severity with exploitation intelligence, exposure, affected function, impact, and available controls.
+
+Build sandboxing should keep package code from controlling the security evidence about itself. A dependency executed during build should not be able to overwrite scan reports, provenance, or SBOMs without detection. Generate core evidence through protected tooling and bind it to the final digest.
+
+If a build requires network downloads beyond package resolution, record and pin them or move them into declared dependencies. Hidden `curl` operations inside scripts defeat lockfile reproducibility and expand the supply chain beyond the inventory.
+
+## What Does a Secure Dependency Lifecycle Look Like?
+<!-- section-summary: A secure lifecycle minimizes suppliers, resolves exact artifacts from approved sources, reviews every graph change, contains build authority, inventories final releases, monitors new knowledge, and removes obsolete trust. -->
+
+A secure dependency update flow is:
+
+```text
+need for a package or update
+      -> verify identity, source, maintainer, and purpose
+      -> inspect manifest and resolved graph change
+      -> update committed lockfile
+      -> frozen CI install from approved registries
+      -> tests, dependency review, policy, and build isolation
+      -> final artifact and SBOM by digest
+      -> controlled publish and deployment
+      -> continuous advisory matching and ownership
 ```
 
-In Maven, `groupId`, `artifactId`, and `version` identify the package. Harbor Books owns the `com.harborbooks` group in its internal repository manager. Public Java libraries can flow through an approved mirror, while internal group IDs should resolve from the internal repository.
+Before adding a new supplier, ask whether standard language or platform functionality already solves the need, whether an existing approved dependency can serve it, and whether the package's capability justifies its trust cost.
 
-![Package source check infographic showing a dependency manifest, registry rule, lockfile resolved URL, and allow or block decision for private and public registries](/content-assets/articles/article-devsecops-pipeline-security-dependency-scanning/package-source-check.png)
+For each accepted package, preserve ecosystem, namespace, registry, version, resolved integrity, direct or transitive path, runtime or build role, scripts, owner, and update method. This makes first installation and later incident response reviewable.
 
-*A dependency name earns trust only after the manifest, registry rule, and lockfile point to the expected source.*
+The trust chain explains many supply-chain attacks:
 
-Once the package source is clear, the reviewer needs the full graph. A direct package can carry other packages into the build.
-
-## Direct and Transitive Dependencies
-<!-- section-summary: Direct dependencies are named by the project, while transitive dependencies arrive through the packages the project already uses. -->
-
-A **direct dependency** is a package your project names in its manifest. A **transitive dependency** is a package that arrives because another package depends on it. Your code may import `@harbor/coupon-rules`, and that package may depend on a parser, a date library, or a small utility package that your service never names directly.
-
-Transitive dependencies are still part of the release. If a transitive package gains an install script, changes maintainers, or brings a vulnerable version, production still receives that code through the dependency graph. The reviewer therefore checks the graph instead of stopping at `package.json`.
-
-For the Harbor Books pull request, the reviewer can inspect why the package exists:
-
-```bash
-npm explain @harbor/coupon-rules
-npm ls @harbor/coupon-rules --all
+```text
+developer trusts package name
+  -> resolver trusts registry mapping
+  -> registry trusts publisher identity
+  -> build trusts package archive and scripts
+  -> release trusts build output
+  -> runtime trusts released artifact
 ```
 
-`npm explain` shows why npm installed a package and which dependency path pulled it in. `npm ls --all` prints the resolved tree under that package. The reviewer uses these commands to confirm that `checkout-api` depends on the package directly and to see whether the update brought any new packages with it.
+Breaking one identity or authorization link can introduce code far downstream. Strong controls make every link explicit and reduce the authority it carries.
 
-Example output can look like this:
 
-```bash
-@harbor/coupon-rules@2.4.2
-node_modules/@harbor/coupon-rules
-  @harbor/coupon-rules@"2.4.2" from the root project
-```
+_Dependency security is a lifecycle of supplier choice, exact resolution, review, containment, evidence, monitoring, and removal._
 
-Python and Maven reviewers use different commands for the same graph question:
+The review unit is therefore the resolved dependency graph used by the release, not only the short manifest developers edit. That graph shows the selected versions, indirect packages, source locations, integrity records, and scripts that can affect the build.
 
-```bash
-python -m pip install --dry-run --report pip-report.json -r requirements.txt
-python -m pip inspect
-mvn dependency:tree -Dincludes=com.harborbooks.checkout:coupon-rules
-```
+Production habits matter: use frozen installs, review lockfiles, restrict registries, separate private namespaces, minimize lifecycle scripts, keep build jobs low authority, remove build tooling from runtime, generate digest-bound SBOMs, assign owners, scan continuously, and test precise rollback.
 
-`pip install --dry-run --report` shows what pip would install without changing the environment. `pip inspect` reports installed package metadata in JSON. `mvn dependency:tree` prints the Maven dependency graph and helps Java teams see which path selected a package version.
+The deepest principle is that every dependency is executable trust. The goal is not zero third-party code; it is knowing exactly which code and supplier entered, limiting what it can do, controlling how it changes, and finding every release affected when new evidence appears.
 
-Maven adds one important production detail called **dependency mediation**. When two branches of the dependency graph request different versions of the same artifact, Maven chooses one according to its resolution rules. Teams often use `dependencyManagement` or a Maven BOM to make version choices explicit across the service.
+The lifecycle also needs removal. When a package is no longer used, delete it from the manifest, update the lockfile, verify the resolved graph and final image no longer contain it, and remove related registry or publisher permissions. A dormant dependency still creates advisory noise and potential execution paths.
 
-```xml
-<dependencyManagement>
-  <dependencies>
-    <dependency>
-      <groupId>com.fasterxml.jackson</groupId>
-      <artifactId>jackson-bom</artifactId>
-      <version>2.17.2</version>
-      <type>pom</type>
-      <scope>import</scope>
-    </dependency>
-  </dependencies>
-</dependencyManagement>
-```
+Practice the reverse query. Select a transitive package and version, find every lockfile and SBOM that names it, map those artifacts to environments, identify owners, and decide which build or runtime role the package had. If that search takes days, improve inventory before the next urgent advisory.
 
-This block imports a Jackson bill of materials. `dependencyManagement` gives the project one place to control resolved Jackson versions. `type` and `scope` tell Maven to import version guidance from the BOM instead of treating it like a normal runtime jar.
+Finally, compare expected and actual release composition. The manifest expresses intention, the lockfile records resolution, the build log records installation, and the SBOM records the artifact. Mismatches reveal undeclared downloads, leftover packages, build scripts, or incomplete generation that deserve investigation.
 
-![Dependency graph review infographic showing direct dependencies expanding into transitive packages, then lockfile and reviewer checks for version, source, hash, scripts, and rollback](/content-assets/articles/article-devsecops-pipeline-security-dependency-scanning/dependency-graph-review.png)
+Track dependency ownership over time. A package accepted for one feature should still have a team responsible for advisories, updates, replacement, and removal after the original author moves on. Record unsupported or end-of-life status as an actionable risk rather than waiting for the next CVE.
 
-*A dependency review follows the direct package into the transitive graph before it trusts the final resolved set.*
+When the organization operates a package proxy, rehearse compromise and outage behavior. Builds should fail predictably instead of falling back to an unapproved public source, and responders should be able to identify every artifact built from a suspect cached package during the affected interval.
 
-The graph tells the reviewer what can enter the build. The lockfile tells the reviewer exactly what the resolver selected.
+Retain the proxy logs and package digests needed for that investigation.
 
-## Lockfile as Release Evidence
-<!-- section-summary: Lockfiles record exact resolved versions, sources, and integrity data so CI can repeat the same dependency decision. -->
+Test their retrieval periodically.
 
-A **lockfile** records the exact package versions and artifact metadata selected by the package manager. For npm, the file is usually `package-lock.json`. Python teams may use `poetry.lock`, `uv.lock`, or a compiled requirements file with hashes. Maven teams usually rely on pinned versions, dependency management, repository manager controls, and reproducible build settings instead of one built-in lockfile.
+Repeat this review whenever dependency resolution, registry origin, or package ownership changes.
 
-The Harbor Books pull request changes this lockfile entry:
+## Check Your Answers
 
-```json
-{
-  "node_modules/@harbor/coupon-rules": {
-    "version": "2.4.2",
-    "resolved": "https://npm.pkg.github.com/download/@harbor/coupon-rules/2.4.2",
-    "integrity": "sha512-exampleHashForTheTarball",
-    "dependencies": {
-      "coupon-expression-parser": "1.7.4"
-    }
-  }
-}
-```
+:::expand[Why Is a Package Manager a Remote-Code Acquisition System?]{kind="recap"}
+Package resolution downloads publisher-controlled code and may execute it during install, build, and runtime, so identity includes registry, version, artifact, and maintainer.
+:::
 
-`version` is the resolved package version. `resolved` is the tarball source npm will fetch. `integrity` is a hash that lets npm check the downloaded package content. The `dependencies` object shows packages pulled by `@harbor/coupon-rules`. A source URL or integrity change deserves review because it changes the exact artifact CI will install.
+:::expand[How Do Dependency Graphs Expand Trust and Authority?]{kind="recap"}
+Direct choices pull transitive runtime and build code whose risk depends on reachable authority and impact, not graph depth alone.
+:::
 
-CI should install from the lockfile instead of letting the resolver make a fresh decision during the release. npm has a command for this:
+:::expand[Why Do Lockfiles and Immutable Installation Matter?]{kind="recap"}
+The lockfile records exact resolution, and frozen CI ensures the reviewed graph rather than a newly computed graph enters the release.
+:::
 
-```bash
-npm ci
-```
+:::expand[How Should a Dependency Update Pull Request Be Reviewed?]{kind="recap"}
+Treat updates as supplier-code changes and review package identity, graph, sources, integrity, scripts, maintainers, behavior, tests, and rollback.
+:::
 
-`npm ci` expects the manifest and lockfile to agree. If the pull request updates `package.json` without updating `package-lock.json`, the command fails. That failure is useful because the dependency decision should appear in the reviewed pull request instead of hidden lockfile churn inside CI.
+:::expand[How Do Namespace, Maintainer, and Package-Name Attacks Work?]{kind="recap"}
+Protect private names and registry routing, verify exact package identity, resist typosquatting, and monitor maintainer and ownership changes.
+:::
 
-Python teams can get similar repeatability with pinned requirements and hashes:
+:::expand[How Do CI Guardrails and Continuous Inventory Reduce Risk?]{kind="recap"}
+Enforce exact resolution and approved sources in CI, produce final-artifact inventory, and continuously join released versions with changing advisories.
+:::
 
-```bash
-python -m pip install --require-hashes -r requirements.txt
-```
+:::expand[How Do Build Isolation and Reachability Change Priority?]{kind="recap"}
+Contain dependency execution with low-authority isolated builds and use reachability to prioritize, while preserving assumptions and continuous review.
+:::
 
-```bash
-requests==2.32.3 \
-    --hash=sha256:examplehash
-pydantic==2.8.2 \
-    --hash=sha256:anotherexamplehash
-```
-
-`--require-hashes` tells pip to require hashes for installed packages. Each `--hash` line pins an expected artifact hash. Lock-generation tools usually write these files, and reviewers look for unexpected package additions, removed hashes, or source changes.
-
-The lockfile gives the reviewer a stable artifact list. The next risk appears when a private package name can resolve from the wrong place.
-
-## Dependency Confusion and Private Names
-<!-- section-summary: Dependency confusion happens when a build can choose a public package where the team expected a private package. -->
-
-**Dependency confusion** is a package resolution problem. A build expects a private package, but the resolver can also find a public package with the same name or a higher version. An attacker can abuse that ambiguity by publishing a package that looks like an internal dependency and waiting for a misconfigured build to install it.
-
-For Harbor Books, `@harbor/coupon-rules` should resolve only from the private registry. If the `.npmrc` scope rule disappears, or if a registry proxy allows private names to fall through to the public npm registry, a public package could satisfy a private-looking dependency. The name alone would look right during a quick review, while the source would be wrong.
-
-The npm control is a scope-to-registry mapping:
-
-```ini
-@harbor:registry=https://npm.pkg.github.com
-always-auth=true
-```
-
-`@harbor:registry` reserves the scope route. `always-auth` makes npm send credentials for requests to the configured registry, which helps private registry access behave consistently in CI. The platform team should also own the public organization names where the ecosystem supports that, since unclaimed names can create confusion later.
-
-The Python control is usually an internal index or proxy that owns private names and mirrors approved public packages. Harbor Books would install through that controlled source:
-
-```bash
-python -m pip install \
-  --index-url https://packages.harborbooks.internal/simple \
-  -r requirements.txt
-```
-
-The Maven control is private `groupId` ownership plus repository manager policy:
-
-```xml
-<mirror>
-  <id>harborbooks-all</id>
-  <mirrorOf>*</mirrorOf>
-  <url>https://maven.harborbooks.internal/repository/all</url>
-</mirror>
-```
-
-`mirrorOf` set to `*` sends Maven resolution through the controlled repository manager. The repository manager can decide which public artifacts are mirrored and which internal group IDs stay internal. A dependency pull request that adds a new repository directly to a project POM should get careful review, because it changes the resolver route.
-
-Dependency confusion is a source problem. The next risk sits inside the package itself.
-
-## Malicious Packages and Maintainer Risk
-<!-- section-summary: A package can introduce risk through harmful scripts, compromised maintainers, abandoned projects, typosquatting, or build-time behavior. -->
-
-A **malicious package** is a package that intentionally performs harmful behavior. It might read CI secrets, send environment variables away, download a second-stage script, alter a build output, or hide behavior in generated files. The harmful behavior can run during install, build, tests, or application runtime.
-
-Package ecosystems move quickly, and speed creates several attacker paths. An attacker can publish a confusing name, compromise a maintainer account, take over an abandoned package, add harmful code to a transitive dependency, or abuse install hooks. A reviewer checks package behavior and maintainer signals together instead of relying on version number alone.
-
-npm packages can define lifecycle scripts such as `preinstall`, `install`, and `postinstall`:
-
-```json
-{
-  "scripts": {
-    "postinstall": "node scripts/setup.js"
-  }
-}
-```
-
-Many legitimate packages use scripts to compile native modules or prepare assets. A new or changed install script still gets attention because it runs on developer machines and CI runners during installation. If `@harbor/coupon-rules` adds a new transitive package with a `postinstall` script, the reviewer asks what it does and why the service needs it.
-
-Python packages can run build backends while creating or installing distributions. A switch from a wheel to a source distribution can introduce build-time code where the team expected a prebuilt artifact. Maven library resolution usually avoids arbitrary install scripts, but Maven plugins execute during the build and deserve separate review.
-
-Maintainer risk is the human and project side of the same question. The reviewer looks at release history, project activity, security advisories, ownership changes, package age, source repository health, and whether the package is needed at runtime or only in development. OpenSSF Scorecard, GitHub Dependency Review, OSV, npm audit, pip-audit, Maven audit tooling, and commercial software composition analysis tools can add signals, but the pull request still needs a human owner for the decision.
-
-For Harbor Books, the review may end in three different ways. A routine patch from the known private registry with no new scripts can continue. A private package that resolves from a public URL stops immediately. A new transitive package with a two-day-old maintainer account and an install script gets deeper review before merge.
-
-Now we can turn those ideas into a practical pull request review.
-
-## Review the Update PR
-<!-- section-summary: A dependency review checks intent, source, graph changes, lockfile evidence, scripts, advisory data, and rollback. -->
-
-The dependency update pull request should be reviewed like a normal engineering change with extra supply-chain questions. The reviewer wants to know what changed, why it changed, what else it pulled in, which source supplied it, and how Harbor Books can recover if the update causes trouble.
-
-The first pass checks intent. A patch update for a bug fix or security advisory usually has a clear reason. A major version update needs compatibility review. A new direct dependency needs an engineering reason, because the team must track that package after merge.
-
-The second pass checks package source and lockfile entries:
-
-```bash
-git diff -- package.json package-lock.json .npmrc
-npm explain @harbor/coupon-rules
-npm view @harbor/coupon-rules@2.4.2 name version dist.integrity
-```
-
-`git diff` shows manifest, lockfile, and registry route changes. `npm explain` shows the dependency path. `npm view` reads package metadata from the configured registry. The reviewer checks that the package name, version, source, and integrity match the update they expected.
-
-The third pass checks package contents before the build trusts them:
-
-```bash
-npm pack @harbor/coupon-rules@2.4.2 --dry-run
-npm view @harbor/coupon-rules@2.4.2 scripts dependencies
-```
-
-`npm pack --dry-run` shows which files would be included in the package tarball. The `scripts` and `dependencies` metadata help the reviewer spot install-time behavior and newly introduced transitive packages.
-
-The fourth pass checks advisory and policy signals. The team may use GitHub Dependency Review, npm audit, OSV, OpenSSF Scorecard, OWASP guidance, or a commercial SCA tool. **Software composition analysis**, or **SCA**, means identifying components, versions, licenses, and known vulnerabilities in the software your team builds.
-
-The fifth pass checks rollback. Harbor Books should be able to revert the dependency pull request, restore the previous lockfile, rebuild the last known good image, and redeploy the previous signed digest. If the registry route changed, rollback also includes fixing the registry rule and purging any cached artifact from the wrong source.
-
-A pull request template can keep this review steady:
-
-```md
-## Dependency Review
-
-- Direct dependencies changed:
-- Transitive packages added or removed:
-- Private packages still resolve from the private registry:
-- Lockfile source and integrity changes reviewed:
-- Install scripts or build plugins added or changed:
-- Vulnerability, license, and package-health signals reviewed:
-- Rollback path:
-```
-
-This checklist gives junior reviewers a concrete path. It also gives CI a clear set of rules to automate.
-
-## CI Guardrails
-<!-- section-summary: CI guardrails turn dependency review rules into repeatable checks for every pull request and release. -->
-
-**CI/CD** is the automation that builds, tests, scans, and releases code. Human review can catch unusual dependency changes, and CI should enforce rules that always apply. The strongest setup uses both: reviewers handle judgment, and automation handles repeatable facts.
-
-Harbor Books starts with a clean lockfile install and audit:
-
-```yaml
-name: dependency-check
-
-on:
-  pull_request:
-
-jobs:
-  node-dependencies:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm audit --audit-level=high
-```
-
-`npm ci` verifies that the lockfile can reproduce the dependency set. `npm audit --audit-level=high` checks npm advisory data and fails on high-severity findings according to npm's audit behavior. Some teams replace or supplement this with OSV, GitHub Dependabot alerts, OWASP Dependency-Check, or commercial SCA tools.
-
-GitHub Dependency Review can add pull-request feedback when dependency changes introduce vulnerabilities or policy issues:
-
-```yaml
-name: dependency-review
-
-on:
-  pull_request:
-
-jobs:
-  dependency-review:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
-```
-
-Registry policy should also run in CI. Harbor Books can write a small check that reads `package-lock.json` and fails when internal packages resolve from an unapproved host:
-
-```bash
-node scripts/check-npm-registry-rules.mjs package-lock.json
-```
-
-A useful failure message should tell the developer exactly what broke:
-
-```bash
-@harbor/coupon-rules resolved from registry.npmjs.org, expected npm.pkg.github.com
-```
-
-That output points to the fix. The developer can check `.npmrc`, registry credentials, and lockfile source entries instead of guessing why "dependency policy" failed.
-
-The final CI habit is artifact control. Mature teams route package downloads through an internal repository manager or registry proxy. That gives the organization a place to cache approved artifacts, block known malicious packages, enforce private namespace rules, and record which build downloaded which package.
-
-## Production Checklist
-<!-- section-summary: Dependency safety comes from checking names, sources, graphs, lockfiles, package behavior, policy signals, and rollback together. -->
-
-By the end of the Harbor Books review, the team has answered the important questions for `@harbor/coupon-rules`:
-
-| Area | Good answer |
-|---|---|
-| Package identity | `@harbor/coupon-rules` changed from `2.4.1` to `2.4.2` |
-| Registry source | The `@harbor` scope resolves from the private registry |
-| Dependency graph | New direct and transitive packages are visible in review |
-| Lockfile evidence | `version`, `resolved`, `integrity`, and dependencies are reviewed |
-| Confusion risk | Private names have explicit registry routes and no public fallback |
-| Package behavior | Install scripts, build plugins, and package contents are reviewed |
-| Maintainer signal | Advisory, release history, and project-health signals are checked |
-| CI guardrails | Lockfile install, dependency review, registry checks, and audit policy run on PRs |
-| Rollback | The team can restore the previous lockfile and deploy the previous signed digest |
-
-This is the core work of dependency and package risk. Know the names. Know the sources. Know the graph. Keep the lockfile honest. Give reviewers a checklist. Give CI repeatable checks. Keep a rollback path close to the release record.
-
-![Dependency risk review loop infographic showing source, graph, lockfile, behavior, signals, and rollback around a pull request and release path](/content-assets/articles/article-devsecops-pipeline-security-dependency-scanning/dependency-risk-review-loop.png)
-
-*A dependency update review loops through source, graph, lockfile, package behavior, external signals, and rollback before release.*
-
-## Next: SBOMs and Reachability
-
-The dependency pull request gave Harbor Books confidence before merge. After release, the team needs inventory. If a new advisory appears tomorrow, security will ask: which services contain this vulnerable package, which versions are deployed, and which image digest carried it into production?
-
-The next article answers that inventory question with SBOMs, then adds reachability so Harbor Books can separate package presence from real exposure.
-
----
+:::expand[What Does a Secure Dependency Lifecycle Look Like?]{kind="recap"}
+Minimize suppliers, verify identity, lock exact artifacts, review graph changes, contain builds, inventory releases, monitor, and remove obsolete trust.
+:::
 
 ## References
 
-- [npm package-lock.json](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json) - npm documentation for lockfile structure, resolved URLs, integrity, and dependency tree data.
-- [npm ci](https://docs.npmjs.com/cli/v11/commands/npm-ci) - npm documentation for clean lockfile installs in automated environments.
-- [npm scopes](https://docs.npmjs.com/cli/v11/using-npm/scope) - npm documentation for scoped package names and registry association.
-- [pip install](https://pip.pypa.io/en/latest/cli/pip_install/) - pip documentation for package indexes, including dependency confusion warnings around extra indexes.
-- [pip secure installs](https://pip.pypa.io/en/latest/topics/secure-installs/) - pip documentation for hash-checking mode and repeatable installs.
-- [Maven dependency mechanism](https://maven.apache.org/guides/introduction/introduction-to-dependency-mechanism.html) - Maven documentation for transitive dependencies, mediation, dependency management, and BOMs.
-- [OWASP Top 10: Vulnerable and Outdated Components](https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/) - OWASP guidance on risks from vulnerable, unsupported, or misconfigured components.
-- [OWASP Software Component Verification Standard](https://owasp.org/www-project-software-component-verification-standard/) - OWASP project for software component inventory, provenance, and verification practices.
-- [GitHub Dependency Review](https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-dependency-review) - GitHub documentation for pull-request dependency review.
-- [OpenSSF Scorecard](https://github.com/ossf/scorecard) - OpenSSF tool for assessing open source project security practices.
+- [npm package-lock.json](https://docs.npmjs.com/cli/configuring-npm/package-lock-json) - Documents exact dependency-tree and integrity recording.
+- [npm ci](https://docs.npmjs.com/cli/commands/npm-ci) - Documents frozen installation behavior against a lockfile.
+- [GitHub dependency review](https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-dependency-review) - Describes change-focused dependency analysis.
+- [GitHub Dependabot version updates](https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/about-dependabot-version-updates) - Documents automated update pull requests.
+- [Package URL specification](https://github.com/package-url/purl-spec) - Defines canonical package coordinates including ecosystem and namespace.
+- [OWASP Software Component Verification Standard](https://owasp.org/www-project-software-component-verification-standard/) - Provides software-component governance and verification guidance.

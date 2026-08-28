@@ -9,577 +9,347 @@ id: article-devsecops-container-image-security-registry-security-immutable-tags
 
 ## Table of Contents
 
-1. [The Warehouse for Built Images](#the-warehouse-for-built-images)
-2. [Private Registries, Repositories, Tags, and Digests](#private-registries-repositories-tags-and-digests)
-3. [Separate Push Identity from Pull Identity](#separate-push-identity-from-pull-identity)
-4. [Push the Image and Capture the Digest](#push-the-image-and-capture-the-digest)
-5. [Immutable Tags and Digest-Based Deploys](#immutable-tags-and-digest-based-deploys)
-6. [Promote Tags Without Rebuilding](#promote-tags-without-rebuilding)
-7. [Retention, Quarantine, and Release History](#retention-quarantine-and-release-history)
-8. [Private Connectivity and Audit Logs](#private-connectivity-and-audit-logs)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
-11. [References](#references)
+1. [What Does a Container Registry Actually Store?](#what-does-a-container-registry-actually-store)
+2. [Why Are Digests Stronger Identities Than Tags?](#why-are-digests-stronger-identities-than-tags)
+3. [How Should Push and Pull Authority Be Separated?](#how-should-push-and-pull-authority-be-separated)
+4. [Why Should a Pipeline Build Once and Capture the Digest?](#why-should-a-pipeline-build-once-and-capture-the-digest)
+5. [How Does Promotion Work Without Rebuilding?](#how-does-promotion-work-without-rebuilding)
+6. [How Do Quarantine, Retention, and Rollback Preserve Trust?](#how-do-quarantine-retention-and-rollback-preserve-trust)
+7. [How Do Private Access, Logs, Signatures, and Provenance Fit Together?](#how-do-private-access-logs-signatures-and-provenance-fit-together)
+8. [What Does a Complete Secure Registry Release Look Like?](#what-does-a-complete-secure-registry-release-look-like)
+9. [Check Your Answers](#check-your-answers)
 
-## The Warehouse for Built Images
-<!-- section-summary: The registry is the controlled warehouse where built images wait before Kubernetes pulls an approved digest. -->
+A container registry is not merely a folder of compressed files. It is a supply-chain service that accepts, stores, names, distributes, and often retains metadata for executable artifacts. A consumer that pulls an image is obtaining the filesystem and execution description that will become a process.
 
-In the previous article, the `payments-api` team built evidence for one exact image digest. CI scanned the image, created an SBOM, signed it, and attached release evidence. Now the image needs a safe place to wait before Kubernetes pulls it.
+That makes the registry a security boundary between producers and consumers:
 
-A **container registry** is the warehouse for built images. It stores image manifests, image layers, tags, digests, and sometimes related artifacts such as SBOMs, signatures, and attestations. CI pushes images into the warehouse. Kubernetes pulls approved images out of it. Security teams use the warehouse records to answer who published an image, which tag pointed to it, which digest production pulled, and whether old releases are still available for rollback.
+```text
+source and build system
+  -> registry
+  -> deployment system and runtime
+```
 
-For a beginner, the registry can look like a simple upload location. In production, it sits between build and runtime. If the wrong identity can push into it, a trusted image name can carry untrusted content. If tags can move silently, a deployment manifest can keep the same text while new Pods pull different bytes. If old production digests disappear too early, rollback turns into a scramble.
+If an attacker can replace the artifact in the middle, application source controls can be bypassed. If a consumer can upload arbitrary content, a runtime identity can become a producer. If old releases disappear, investigation and deterministic rollback become harder.
 
-Here is the simple flow for our team:
+The vocabulary matters:
+
+- A **registry** is the service endpoint that hosts artifacts and related metadata.
+- A **repository** is a named collection, such as `team/payments-api`.
+- A **tag** is a human-readable reference in that repository, such as `1.7`, `candidate`, or `production`.
+- A **digest** is a content-derived identity, such as `sha256:ABC`.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Does a Container Registry Actually Store?**
+2. **Why Are Digests Stronger Identities Than Tags?**
+3. **How Should Push and Pull Authority Be Separated?**
+4. **Why Should a Pipeline Build Once and Capture the Digest?**
+5. **How Does Promotion Work Without Rebuilding?**
+6. **How Do Quarantine, Retention, and Rollback Preserve Trust?**
+7. **How Do Private Access, Logs, Signatures, and Provenance Fit Together?**
+8. **What Does a Complete Secure Registry Release Look Like?**
+
+## What Does a Container Registry Actually Store?
+<!-- section-summary: A registry is a distribution service for executable artifacts and metadata; repositories organize related images, while tags label manifests and digests identify their exact content. -->
+
+An image can include manifests, configuration objects, and filesystem layers. A multi-platform image can use an index that refers to separate manifests for different architectures. Registry authorization and evidence should account for the object consumers actually retrieve, not only the friendly repository name.
+
+The first useful distinction is location versus trust. Presence in an organizational registry does not automatically mean an artifact is approved. A build may have pushed an untested candidate. A vulnerability response may have quarantined a previously approved digest. A compromised producer may have uploaded malicious content. The registry stores artifacts; policy determines which stored artifacts can progress.
+
+Private registries reduce public exposure and give the organization control over identity, network paths, retention, immutability, and logs. They do not make every artifact safe. Image contents, build provenance, signing, and vulnerability decisions remain separate controls.
 
 ![Registry release checkpoint infographic showing a CI push role sending payments-api into a private registry, audit logs recording the action, and a Kubernetes pull role receiving the approved digest](/content-assets/articles/article-devsecops-container-image-security-registry-security-immutable-tags/registry-release-checkpoint.png)
 
-*The registry is a release checkpoint: CI can publish, Kubernetes can pull, and the audit log connects those actions to the approved digest.*
+Treat a registry repository as a release history. Its access policy and mutation rules should make it possible to answer which artifacts entered, who produced them, which names referred to them, which evidence accompanied them, and which deployment systems pulled them.
 
-The registry has to answer a few security questions. Which pipeline can push `payments-api`? Which Kubernetes cluster can pull it? Can someone overwrite the tag that production uses? Can the team prove that the image deployed on Tuesday is the same image that passed review on Monday? Can they roll back to a known-good digest if the new release breaks checkout?
+Repository boundaries should follow ownership closely enough that permissions remain understandable. Putting unrelated teams and trust levels behind one shared wildcard makes a narrow role difficult to express. At the other extreme, creating arbitrary repositories without lifecycle ownership produces ungoverned storage. Establish who may create repositories, which release policy each inherits, and who responds to findings on their contents.
 
-Those questions connect this article to the rest of the module. Image hardening reduces what goes into the image. Image evidence tells the team what CI produced. Registry security controls who can publish, who can consume, which labels can move, how long images stay available, and which exact bytes Kubernetes receives.
+Because layers can be shared between images, authorization must still be evaluated through an allowed manifest or repository relationship. Knowing a blob digest should not become a shortcut around repository access. The registry implementation, caches, and mirrors all participate in the distribution boundary and need consistent authentication and transport protection.
 
-## Private Registries, Repositories, Tags, and Digests
-<!-- section-summary: A registry stores image content, a repository groups versions of one image, tags are human labels, and digests identify exact content. -->
+## Why Are Digests Stronger Identities Than Tags?
+<!-- section-summary: Tags are convenient names that can move, whereas digests identify exact content; immutable tags reduce name reuse, and digest-based deployment guarantees which artifact a consumer requests. -->
 
-A **private registry** is a registry that requires authentication and authorization before clients can push or pull images. The word private can mean a managed cloud service such as Amazon ECR, Azure Container Registry, Google Artifact Registry, GitHub Container Registry, or a self-hosted registry inside a company network. The important part is the access boundary: the `payments-api` image belongs to the team, and random internet users should have no path to read it or replace it.
+Tags and digests solve different problems. A tag helps a person say “version 4.2.1” or “the production release.” A digest lets a machine say “these exact contents.”
 
-Inside the registry, a **repository** groups related image versions under one name. For example, the team might use this repository:
+By default, many registries allow a tag to be changed:
 
-```bash
-111122223333.dkr.ecr.us-east-1.amazonaws.com/payments-api
+```text
+payments-api:4.2.1 -> sha256:AAA
+
+later
+
+payments-api:4.2.1 -> sha256:BBB
 ```
 
-That repository can contain many releases of the same service: commit builds, staging candidates, production releases, and rollback images. The repository name usually maps to the application or component, so `payments-api`, `payments-worker`, and `fraud-rules-api` would each get their own repository. This gives access policies, retention rules, scan settings, and audit searches a clean boundary.
+The label looks unchanged while the artifact changes. A scanner may have approved `AAA`, staging may have tested `AAA`, and production may later pull `BBB`. The visible name hides a broken evidence chain.
 
-A **tag** is a human-readable pointer to an image manifest. A tag might look like `sha-4f8c2a1`, `staging-2026-06-21`, `prod-2026-06-21-001`, or `v1.18.3`. Humans like tags because a tag carries meaning. A release manager can understand `prod-2026-06-21-001` faster than a 64-character hash.
+An immutable-tag rule prevents an existing tag from being reassigned. Once `4.2.1` points to `sha256:AAA`, a second push attempting to make it point to `sha256:BBB` fails. This protects release names from silent reuse and catches accidental rebuilds of an already published version.
 
-A **digest** is a content identifier, usually written as `sha256:...`. A digest comes from a cryptographic hash of the manifest or layer content. If the content changes, the digest changes. That is why digests are so useful for deployment evidence. When Kubernetes pulls `payments-api@sha256:abc...`, the cluster asks for one exact image version instead of whatever a tag happens to point to at that moment.
+Digest-based deployment is related but not identical. A workload specification can request:
 
-The OCI Distribution Spec gives these terms their standard meaning across registries. The registry handles push and pull APIs. The repository scopes those API calls. The manifest describes the image. The blobs hold layer content. The tag points at a manifest. The digest identifies content by hash. Docker, Kubernetes, and cloud registries use these ideas so teams can move images through different tools without changing the basic vocabulary.
-
-The practical takeaway for the `payments-api` team is simple: use **tags for workflow labels** and **digests for runtime identity**. CI can publish a tag named after the Git commit. The release job can add a production tag after approval. Kubernetes should deploy the digest that the pipeline recorded after push.
-
-## Separate Push Identity from Pull Identity
-<!-- section-summary: CI needs permission to publish images, while Kubernetes needs only enough permission to download approved images. -->
-
-Once the repository exists, the next question is access. The team has two very different callers. The CI pipeline needs to push new image versions after it builds `payments-api`. The Kubernetes cluster needs to pull approved image versions before it starts Pods. These callers have different jobs, so they should have different identities and different permissions.
-
-The **push identity** belongs to automation that publishes images. In a cloud environment, this might be a short-lived federated role assumed by GitHub Actions, GitLab CI, Azure Pipelines, Buildkite, Jenkins, or another build system. In a smaller setup, it might be a registry robot account or service account. The important design is that this identity belongs to CI, has a clear name such as `ci-payments-api-publisher`, and can push only to the `payments-api` repository.
-
-The **pull identity** belongs to the runtime path. Kubernetes pulls images before the application container starts, so the pull identity often sits at the node, kubelet, or image credential layer. In managed Kubernetes with a cloud registry, a node role or workload-specific image credential provider may handle the pull. In a generic Kubernetes cluster, the team may create an `imagePullSecret` in the namespace. The application service account inside the Pod usually handles application API calls after startup, while the image pull identity handles registry access before startup.
-
-Here is a narrow Amazon ECR-style push policy for the CI role. The `GetAuthorizationToken` action uses `Resource: "*"`, while the upload and manifest actions stay scoped to one repository ARN.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "GetRegistryLoginToken",
-      "Effect": "Allow",
-      "Action": "ecr:GetAuthorizationToken",
-      "Resource": "*"
-    },
-    {
-      "Sid": "PushPaymentsApiImages",
-      "Effect": "Allow",
-      "Action": [
-        "ecr:BatchCheckLayerAvailability",
-        "ecr:CompleteLayerUpload",
-        "ecr:InitiateLayerUpload",
-        "ecr:PutImage",
-        "ecr:UploadLayerPart"
-      ],
-      "Resource": "arn:aws:ecr:us-east-1:111122223333:repository/payments-api"
-    }
-  ]
-}
+```text
+registry.example/team/payments-api@sha256:AAA
 ```
 
-Here is the matching pull policy for a Kubernetes node role or registry pull role. It can authenticate, get the image manifest, and download layers. It has no upload permission, no delete permission, and no permission to change repository settings.
+Now the runtime itself asks for exact content. Even if some tag moves, this deployment remains tied to `AAA`.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "GetRegistryLoginToken",
-      "Effect": "Allow",
-      "Action": "ecr:GetAuthorizationToken",
-      "Resource": "*"
-    },
-    {
-      "Sid": "PullPaymentsApiImages",
-      "Effect": "Allow",
-      "Action": [
-        "ecr:BatchGetImage",
-        "ecr:GetDownloadUrlForLayer"
-      ],
-      "Resource": "arn:aws:ecr:us-east-1:111122223333:repository/payments-api"
-    }
-  ]
-}
+Immutable tags protect the mapping from human name to digest. Digest references protect the consumer's artifact choice. A strong release uses both: stable version labels for operators and exact digests for evidence and execution.
+
+Tags still have useful jobs. They can represent versions, candidate states, channel names, or environment promotion. They support discovery and familiar commands. The problem begins when a mutable label is treated as if it were cryptographic identity.
+
+`latest` is especially troublesome because it communicates neither version nor approval state. Different environments can cache or resolve it at different times, and a rollback request such as “go back to latest” is meaningless. If a floating development tag is retained for convenience, do not let production trust depend on it.
+
+A helpful analogy is:
+
+```text
+registry repository  -> place to look
+tag                  -> changeable name
+digest               -> content fingerprint
 ```
 
-The same shape applies outside AWS. In Azure Container Registry, a pipeline identity might receive push rights to one repository, while the Kubernetes pull identity receives pull rights. In GitHub Container Registry, a GitHub Actions workflow can publish packages, while a cluster gets a read-only token. In a self-hosted registry, the same idea usually appears as robot accounts with repository-scoped permissions.
+The digest should appear in scan results, SBOMs, signatures, provenance, deployment records, pull logs, incident notes, and rollback decisions. That shared identity prevents evidence from drifting away from the artifact it describes.
 
-For a generic Kubernetes cluster, an image pull secret makes the pull identity visible in YAML. The secret stores registry credentials, and the Deployment references it through `imagePullSecrets`. The secret must live in the same namespace as the Pod that uses it.
+## How Should Push and Pull Authority Be Separated?
+<!-- section-summary: Producing and consuming software are different capabilities, so build identities should push narrowly while runtime identities pull approved repositories without gaining mutation authority. -->
 
-```bash
-kubectl create secret docker-registry payments-api-registry \
-  --namespace payments \
-  --docker-server=registry.example.com \
-  --docker-username="$REGISTRY_PULL_USER" \
-  --docker-password="$REGISTRY_PULL_TOKEN"
+Creating software and executing software are different powers. A CI pipeline needs permission to push artifacts and perhaps attach evidence. A Kubernetes node or workload needs permission to pull an artifact. Giving both identities the same broad registry role violates capability separation.
+
+Suppose a runtime pull credential can also push. Compromise of one application or node could then upload a malicious replacement, create deceptive tags, or alter evidence for future deployments. The consumer has become a producer.
+
+Use distinct identities:
+
+```text
+CI build identity
+  -> push to one owned repository
+  -> attach approved evidence
+  -> cannot administer registry policy
+
+runtime pull identity
+  -> read required repositories
+  -> cannot push, delete, retag, or change policy
 ```
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: payments-api
-  namespace: payments
-spec:
-  template:
-    spec:
-      imagePullSecrets:
-        - name: payments-api-registry
-      containers:
-        - name: payments-api
-          image: registry.example.com/platform/payments-api:prod-2026-06-21-001
+Scope each identity by repository, operation, environment, and lifetime. One team's build should not push another team's image. A development builder should not automatically modify production release labels. A pull identity for one cluster should not require registry administration.
+
+Temporary authentication is preferable to long-lived credentials. A protected workflow can exchange its workload identity for a short registry session. A node or platform component can obtain pull authority from its runtime identity. Rotation and revocation then operate on workload trust rather than secrets copied across projects.
+
+Separate other capabilities as well. Deleting retained artifacts, changing immutable-tag policy, moving quarantine state, editing retention rules, and administering signing trust are not normal build actions. Place them behind distinct operational or security roles with audit evidence.
+
+Capability separation does not require a unique account for every command. It requires that compromise of one role does not automatically grant an unrelated power. Review effective permissions, including groups, inherited roles, repository wildcards, service-account impersonation, and administrative APIs.
+
+Test the boundary negatively. Use the pull identity to attempt a push and delete. Use the normal build identity to alter immutability or another repository. Use an untrusted pull request to request production push authority. Each action should fail before a release relies on the boundary.
+
+## Why Should a Pipeline Build Once and Capture the Digest?
+<!-- section-summary: One controlled build creates one artifact; after push, the registry-returned digest becomes the subject for tests, evidence, promotion, deployment, and rollback. -->
+
+The central release invariant is:
+
+> The exact artifact tested and approved is the exact artifact production runs.
+
+Build the image once. After the registry accepts it, capture the digest it exposes for the pushed object. A simplified flow is:
+
+```text
+build payments-api:commit-8421
+  -> push candidate
+  -> resolve registry digest sha256:ABC
+  -> scan, attest, and test sha256:ABC
+  -> promote sha256:ABC
+  -> deploy sha256:ABC
 ```
 
-This separation helps during incidents. If the CI token leaks, responders can rotate the push identity without changing how the cluster pulls current images. If a node pull credential leaks, responders can revoke read access without giving an attacker the ability to publish a replacement image. The registry stays useful because each identity has one job.
+Why capture after push? A local image identifier and the registry manifest digest can refer to different levels of an image's representation. Registry processing and multi-platform publishing can also determine the final subject consumers use. Query the authoritative stored object and carry that digest forward.
 
-## Push the Image and Capture the Digest
-<!-- section-summary: The pipeline should record the digest after push because the registry decides the final manifest identity. -->
+Do not reconstruct the identity from log text or assume the tag still points to the object pushed moments ago. Capture a machine-readable output from the push or registry and verify it before creating evidence.
 
-Now the CI role has permission to push. The next step is the actual publication flow. A beginner-friendly version of the flow has three pieces: build the image, push it with a useful tag, then record the digest that the registry reports.
+For a multi-platform release, capture the index digest and each platform manifest required by policy. Tests may exercise only one architecture while production uses another. The evidence model should show which common source and build produced each platform object and which exact manifest a given runtime consumed. A single friendly tag can otherwise hide different untested binaries.
 
-For `payments-api`, the team should avoid a release process where every build pushes only `latest`. A commit tag gives each build a unique label. A build number, Git SHA, or source revision works well because the tag connects the registry entry back to source control. The team can still add environment tags later during promotion.
+Every later operation should state the digest explicitly. The SBOM describes `ABC`. The scan evaluates `ABC`. A signature or provenance attestation names `ABC`. Staging pulls `ABC`. The production manifest requests `ABC`. Audit and rollback records mention `ABC`.
 
-```bash
-REGISTRY="111122223333.dkr.ecr.us-east-1.amazonaws.com"
-IMAGE="payments-api"
-GIT_SHA="4f8c2a19d5be"
+This model turns a release from a sequence of similar labels into a chain around one object:
 
-docker build \
-  --tag "$REGISTRY/$IMAGE:sha-$GIT_SHA" \
-  .
-
-docker push "$REGISTRY/$IMAGE:sha-$GIT_SHA"
+```text
+reviewed source
+  -> controlled build
+  -> stored digest
+  -> evidence and tests for that digest
+  -> authorized consumers of that digest
 ```
 
-After the push, the registry has the final manifest. The digest the team deploys should come from the registry, especially when the build creates a multi-platform image or the registry stores an image index. The Docker CLI can inspect the remote reference:
+If a step discovers a different digest, stop. Do not copy the approval from the expected artifact to the unexpected one. Investigate whether the pipeline rebuilt, published a different platform, resolved a changed tag, or was modified.
 
-```bash
-docker buildx imagetools inspect "$REGISTRY/$IMAGE:sha-$GIT_SHA"
+Build identity and promotion identity can also be separated. The builder creates a candidate in a controlled repository. A later release workflow, after evidence checks and approvals, changes promotion state or writes the digest to deployment configuration. The release workflow does not need to rebuild or alter the artifact bytes.
+
+## How Does Promotion Work Without Rebuilding?
+<!-- section-summary: Promotion is a change in release state or authorized reference for an existing digest, not another compilation; rebuilding breaks the transfer of tests and evidence. -->
+
+Rebuilding for each environment is dangerous because build inputs can change without source changes. A base tag may move, a package repository may publish a new dependency, a build tool may update, or the environment may be compromised differently. Staging and production can receive different bytes even when both builds use the same commit.
+
+Promotion should therefore be a state transition over an existing artifact:
+
+```text
+sha256:ABC
+  candidate -> tested -> approved -> production
 ```
 
-The output includes a digest line for the image reference. In an ECR-based pipeline, the AWS CLI can return the digest as a machine-friendly value:
+The state can be represented by controlled metadata, an environment release record, or an immutable promotion tag. Whatever mechanism is used, it should point to the same digest and preserve who authorized the transition.
 
-```bash
-DIGEST=$(aws ecr describe-images \
-  --repository-name payments-api \
-  --image-ids imageTag="sha-$GIT_SHA" \
-  --query 'imageDetails[0].imageDigest' \
-  --output text)
-
-echo "$DIGEST"
-```
-
-At this point the pipeline has two identifiers. The tag `sha-4f8c2a19d5be` helps humans connect the image to a commit. The digest `sha256:...` identifies the exact manifest Kubernetes should run. A mature pipeline stores both in a release record, along with scan results, SBOM location, signature status, build URL, source commit, and approval state.
-
-Here is a small release record shape:
-
-```json
-{
-  "service": "payments-api",
-  "sourceCommit": "4f8c2a19d5be",
-  "sourceTag": "sha-4f8c2a19d5be",
-  "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
-  "registry": "111122223333.dkr.ecr.us-east-1.amazonaws.com",
-  "repository": "payments-api",
-  "sbom": "oci://111122223333.dkr.ecr.us-east-1.amazonaws.com/payments-api@sha256:...",
-  "scanGate": "passed",
-  "buildUrl": "https://ci.example.com/payments-api/runs/8421"
-}
-```
-
-This is where image evidence and registry security join together. The evidence from the previous article has a stable target now. The team can say, "This digest passed the gate, and this digest is what production is allowed to pull."
-
-## Immutable Tags and Digest-Based Deploys
-<!-- section-summary: Immutable tags stop accidental tag replacement, and digest deploys make Kubernetes pull the exact approved image. -->
-
-The next risk shows up after the first few releases. Someone pushes `payments-api:prod` on Monday, and Kubernetes deploys it. On Tuesday, another job pushes a different image with the same `prod` tag. Some Pods might still run Monday's image. New Pods might pull Tuesday's image. The tag name stayed the same, while the content behind the tag moved.
-
-This is why teams care about **immutable tags**. An immutable tag setting tells the registry to reject a second push that tries to reuse an existing tag. In Amazon ECR, enabling tag immutability on a repository makes ECR return `ImageTagAlreadyExistsException` when a push tries to overwrite an existing tag. Azure Container Registry can lock image or repository attributes so a tag or digest cannot receive writes or deletes. Different registries expose the control differently, but the production goal stays the same: release tags should keep pointing to the image they named at release time.
-
-For an ECR repository, the setting can be created with the repository:
-
-```bash
-aws ecr create-repository \
-  --repository-name payments-api \
-  --image-tag-mutability IMMUTABLE \
-  --image-scanning-configuration scanOnPush=true
-```
-
-For an existing repository, the team can update the tag mutability setting:
-
-```bash
-aws ecr put-image-tag-mutability \
-  --repository-name payments-api \
-  --image-tag-mutability IMMUTABLE
-```
-
-Immutable tags reduce accidental replacement, but **digest-based deployment** gives the runtime the strongest release identity. Kubernetes supports image references by tag, digest, or tag plus digest. When a reference includes both a tag and a digest, Kubernetes uses the digest for pulling. That means the tag can help humans understand the release, while the digest controls the actual bytes pulled by the cluster.
-
-Here is a Deployment that pins `payments-api` by digest:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: payments-api
-  namespace: payments
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: payments-api
-  template:
-    metadata:
-      labels:
-        app: payments-api
-    spec:
-      containers:
-        - name: payments-api
-          image: 111122223333.dkr.ecr.us-east-1.amazonaws.com/payments-api@sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8080
-```
-
-Here is the tag-plus-digest form. Some teams like this because the tag keeps the release name visible in manifests, dashboards, and review diffs, while Kubernetes still pulls by digest.
-
-```yaml
-image: 111122223333.dkr.ecr.us-east-1.amazonaws.com/payments-api:prod-2026-06-21-001@sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
-```
-
-The team should reserve `latest` for development convenience and use a named tag plus digest for production releases. Kubernetes gives `latest` special pull-policy behavior, and humans have a hard time answering which code is running from the word `latest`. A production incident needs specific evidence: commit, build, digest, scan result, deployment time, and rollback target.
+A production tag can be helpful for discovery, but it is not the evidence itself. If the workflow moves `production` from `AAA` to `ABC`, it should record the old and new digests, approval, time, policy result, and deployment target. Production manifests can still use the immutable digest.
 
 ![Tag digest promotion infographic showing a production tag, an immutable digest lock, promotion to Kubernetes, rollback, and known-good digest selection](/content-assets/articles/article-devsecops-container-image-security-registry-security-immutable-tags/tag-digest-promotion.png)
 
-*Tags help humans follow releases, while digests give Kubernetes the exact artifact identity for promotion and rollback.*
+Promotion without rebuilding transfers test results. Integration and security tests that exercised `ABC` remain relevant because production receives `ABC`. Environmental differences still matter—credentials, network, configuration, and load can change behavior—but artifact identity is no longer another variable.
 
-## Promote Tags Without Rebuilding
-<!-- section-summary: Promotion should move approval labels to an already-built digest instead of rebuilding a new image for each environment. -->
+This pattern also keeps source and artifact release separate. A commit can produce an image that is never promoted. A previously built digest can advance after a delayed approval. A rollback can select a previous known-good digest without attempting to recreate old bytes from source and historical package repositories.
 
-Once the team pins deployments by digest, the release flow can get cleaner. The pipeline can build the image once, then promote that same digest through dev, staging, and production. Rebuilding for each environment creates a subtle problem: the team can end up testing one digest and deploying another digest. Even if the source commit is the same, package repositories, base image pulls, build timestamps, and generated files can change between builds.
+Immutable version tags and digest deployments reinforce the model. A version name never silently changes, and the workload states the exact object. A mutable environment label, if used, expresses current state rather than artifact identity and is governed by a promotion role.
 
-**Tag promotion** means the team adds a new tag to an existing image manifest after that digest passes a gate. For example, CI pushes `sha-4f8c2a19d5be`. Staging tests pass. Security gates pass. A release approver approves production. The release job then attaches `prod-2026-06-21-001` to the same manifest and deploys the digest from that manifest.
+Treat copying between registries as promotion only when the copied content identity and evidence are verified. If a transfer rewrites or loses the subject relationship, create a traceable mapping and verify the destination digest before deployment.
 
-In ECR, retagging can happen without pulling the image layers back to the CI worker. The release job reads the existing manifest and writes it back with a new tag:
+Promotion should also be concurrency-safe. Two release workflows must not race to move the same environment label after reviewing different candidates. Require the expected previous digest, serialize the protected transition, and record the result that deployment configuration actually consumed. This turns promotion into an auditable comparison-and-set operation rather than a last-writer-wins tag update.
 
-```bash
-SOURCE_TAG="sha-4f8c2a19d5be"
-PROMOTE_TAG="prod-2026-06-21-001"
+## How Do Quarantine, Retention, and Rollback Preserve Trust?
+<!-- section-summary: Registries need explicit trust states, append-oriented history, and protected retention so unsafe artifacts can be blocked while old release evidence remains available for rollback and investigation. -->
 
-MANIFEST=$(aws ecr batch-get-image \
-  --repository-name payments-api \
-  --image-ids imageTag="$SOURCE_TAG" \
-  --query 'images[0].imageManifest' \
-  --output text)
+Registry security is not the same as image security. A well-configured registry can safely store a vulnerable image. A hardened image can be mishandled by mutable names and broad permissions. The release system needs trust states in addition to storage.
 
-aws ecr put-image \
-  --repository-name payments-api \
-  --image-tag "$PROMOTE_TAG" \
-  --image-manifest "$MANIFEST"
+Quarantine follows naturally from that separation. A newly pushed artifact can exist but remain ineligible for production until required evidence and tests pass. A later disclosure or compromised signer can move an existing digest back to a blocked state without deleting the historical object immediately.
 
-DIGEST=$(aws ecr describe-images \
-  --repository-name payments-api \
-  --image-ids imageTag="$PROMOTE_TAG" \
-  --query 'imageDetails[0].imageDigest' \
-  --output text)
+Policy should answer whether a consumer may pull or deploy from each state. Development scanners may need read access to quarantined artifacts. Production deployers should not. The authority that moves an artifact out of quarantine should be distinct from the untrusted producer where feasible.
+
+Retention is a security property because releases create evidence. Deleting an older digest too early can break rollback, erase the subject of an incident, remove the artifact needed to reproduce a scan, or make an attestation impossible to inspect. Unlimited retention has cost and data-governance consequences, so define rules by release and investigation need.
+
+Release history should be append-oriented. Publishing version `4.2.1` should create a durable mapping to one digest. A repair should become `4.2.2` or another new release, not silently rewrite history. Promotion records should add transitions rather than erase the previous production digest.
+
+Immutability makes rollback deterministic. If `4.2.0` always means `sha256:OLD` and the artifact is retained, rollback selects a known object. If a tag was overwritten, the name no longer tells responders which bytes previously worked.
+
+A rollback record should include the selected digest, reason, approver, target environment, previous digest, and evidence status. A historically valid artifact may now have a known vulnerability or revoked signature. Emergency rollback policy should balance service recovery with current security knowledge and document compensating controls.
+
+Garbage collection must respect retained manifests, layers, signatures, SBOMs, and attestations. Deleting an apparently untagged object can remove a digest still referenced by deployment configuration or evidence. Use inventory rather than tag presence alone to decide what is safe to remove.
+
+Quarantine must also have a release path. Record why the digest was blocked, which policy or incident created the state, who may reassess it, and what new evidence is required. Otherwise teams may bypass quarantine by copying the same bytes under another tag or repository. Policy should recognize the digest across names and prevent accidental laundering of a blocked artifact.
+
+Retention rules need legal and operational sensitivity as well as storage cost. An image can contain proprietary code, licensed components, or accidentally embedded data. Limit readers of retired artifacts, preserve what incident and rollback policy requires, and document the controlled deletion event when the period ends. The audit trail can remain after artifact deletion when policy allows, but it should clearly show that the bytes are no longer retrievable.
+
+## How Do Private Access, Logs, Signatures, and Provenance Fit Together?
+<!-- section-summary: Private registries and networks reduce exposure, audit logs explain actions, and digest-bound signatures and provenance explain which artifact was authorized and how it was produced. -->
+
+A private registry requires authentication and can restrict repositories to organizational producers and consumers. Private network connectivity can reduce exposure further by keeping push and pull traffic on controlled paths rather than public endpoints.
+
+Network privacy is not authorization. A compromised workload inside the network should still face registry authentication and least privilege. TLS, certificate validation, and trusted endpoints protect the artifact in transit. Egress and DNS controls can make it harder for a workload to pull from an unapproved external registry.
+
+Audit logging answers a different question from scanning or signing: who did what, when, and from where? Useful events include authentication, push, pull, tag creation or movement, delete, quarantine change, retention change, policy administration, and failed authorization.
+
+Log digests, not only tags. A record that says “pulled production” is ambiguous after the label moves. A record that includes `sha256:ABC` can be matched to deployment, evidence, and incident scope. Retain logs somewhere the pushing or deleting identity cannot erase.
+
+Signatures add artifact authorization. A verifier can check that an approved identity signed the exact digest. Provenance adds a claim about creation: source revision, workflow, builder, and other build context. Neither replaces registry authorization, vulnerability review, or audit logs.
+
+The controls answer different questions:
+
+```text
+registry access  -> who may store or retrieve?
+digest           -> which exact artifact?
+immutable tag    -> can this release name be reused?
+signature        -> did an approved identity endorse it?
+provenance       -> how and from what was it built?
+audit log        -> what registry action occurred?
+deployment policy-> may this artifact run here now?
 ```
 
-The release job can then update a Kubernetes manifest or a GitOps repository with the digest:
+A stronger architecture binds them. The build identity pushes one candidate repository, the registry records the digest, evidence is attached to that digest, a promotion identity changes release state after checks, and the runtime pull identity reads only allowed repositories. Network policy limits alternate registries, while logs provide an independent action trail.
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: payments-api
-  namespace: payments
-spec:
-  template:
-    spec:
-      containers:
-        - name: payments-api
-          image: 111122223333.dkr.ecr.us-east-1.amazonaws.com/payments-api:prod-2026-06-21-001@sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
-```
+Monitor the boundary rather than only configuring it once. Alert on pushes from unexpected identities, mutation attempts against immutable tags, pulls of quarantined or retired digests, deletion of recent releases, access from unusual network paths, repeated authorization failures, and administration outside the normal workflow. Join registry pull events with cluster deployment inventory so an unexplained consumer becomes visible.
 
-Here is a compact CI sketch that shows the release shape. The exact syntax will change by CI system, but the separation of jobs is the important part.
+Mirrors and caches require the same reasoning. A runtime may appear to pull from an approved internal endpoint while the mirror fetches from an uncontrolled upstream or serves stale mutable tags. Pin upstreams, validate TLS and artifact digests, scope mirror administration, and ensure audit evidence can trace an internal object to its source.
 
-```yaml
-name: payments-api-release
+## What Does a Complete Secure Registry Release Look Like?
+<!-- section-summary: A secure release preserves artifact identity and capability separation from one controlled build through evidence, promotion, digest deployment, runtime pull, retention, and later investigation. -->
 
-on:
-  push:
-    branches: [main]
+Consider release `4.2.1` of the payments API:
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build and push commit image
-        run: |
-          IMAGE="$REGISTRY/payments-api:sha-$GITHUB_SHA"
-          docker build --tag "$IMAGE" .
-          docker push "$IMAGE"
-          aws ecr describe-images \
-            --repository-name payments-api \
-            --image-ids imageTag="sha-$GITHUB_SHA" \
-            --query 'imageDetails[0].imageDigest' \
-            --output text > digest.txt
-      - name: Store release evidence
-        run: |
-          echo "digest=$(cat digest.txt)" >> "$GITHUB_OUTPUT"
+1. Protected CI builds the image once from reviewed source.
+2. A narrow build identity pushes it as a candidate.
+3. The registry returns `sha256:ABC`.
+4. CI binds the SBOM, scan, provenance, and signature to `ABC`.
+5. Policy confirms the required evidence and trust state.
+6. Staging deploys `ABC` and records the result.
+7. An accountable promotion changes `ABC` to approved production state.
+8. The version tag `4.2.1` is immutable and maps to `ABC`.
+9. Production configuration requests `ABC` directly.
+10. A pull-only runtime identity retrieves it through an allowed path.
+11. Registry and deployment logs record the digest.
+12. Retention preserves `ABC`, its evidence, and promotion history.
 
-  promote:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      id-token: write
-      contents: write
-    steps:
-      - name: Promote approved digest
-        run: |
-          SOURCE_TAG="sha-$GITHUB_SHA"
-          PROMOTE_TAG="prod-$(date +%Y-%m-%d)-${GITHUB_RUN_NUMBER}"
-          MANIFEST=$(aws ecr batch-get-image \
-            --repository-name payments-api \
-            --image-ids imageTag="$SOURCE_TAG" \
-            --query 'images[0].imageManifest' \
-            --output text)
-          aws ecr put-image \
-            --repository-name payments-api \
-            --image-tag "$PROMOTE_TAG" \
-            --image-manifest "$MANIFEST"
-```
+What if another artifact appears under the same version? Immutable-tag policy rejects the replacement. If a separate tag points to the new digest, it has no inherited approval; it must pass the trust workflow as a new artifact.
 
-Notice the workflow shape. Build publishes once. Evidence attaches to that one pushed image. Promotion adds a release label to the same content. Deployment uses the digest. This keeps the registry as the place where release approval meets exact image identity.
+What if a new vulnerability affects `ABC`? The registry can mark it quarantined for future deployments while runtime inventory identifies current use. The team builds a repaired `DEF`, publishes new evidence, and promotes it through the same path. Historical records for `ABC` remain available.
 
-## Retention, Quarantine, and Release History
-<!-- section-summary: Cleanup rules save space, quarantine prevents risky pulls, and release history keeps rollback digests available. -->
-
-After a few months, the `payments-api` repository will fill with images. Every commit build creates a tag. Every staging test creates a candidate. Every production release creates a release tag. The registry needs cleanup, but cleanup has to respect production rollback.
-
-**Retention** means the registry expires images based on age, count, tag pattern, or other rules. A useful retention policy treats different tags differently. Short-lived CI tags can expire quickly. Production tags should stay longer. Known-good rollback digests should stay available as long as the team needs them for incident response and compliance.
-
-Here is an ECR lifecycle policy shape for a build repository where short-lived candidate tags start with `sha-` and production tags live in a separate release repository. This separation keeps cleanup simple because the build repository holds disposable candidates, while the release repository holds rollback history.
-
-```json
-{
-  "rules": [
-    {
-      "rulePriority": 10,
-      "description": "Expire old commit images after 14 days",
-      "selection": {
-        "tagStatus": "tagged",
-        "tagPrefixList": ["sha-"],
-        "countType": "sinceImagePushed",
-        "countUnit": "days",
-        "countNumber": 14
-      },
-      "action": {
-        "type": "expire"
-      }
-    }
-  ]
-}
-```
-
-For the release repository, a second policy can keep a practical number of production releases:
-
-```json
-{
-  "rules": [
-    {
-      "rulePriority": 10,
-      "description": "Keep the most recent 30 production releases",
-      "selection": {
-        "tagStatus": "tagged",
-        "tagPrefixList": ["prod-"],
-        "countType": "imageCountMoreThan",
-        "countNumber": 30
-      },
-      "action": {
-        "type": "expire"
-      }
-    }
-  ]
-}
-```
-
-The build repository policy can be applied like this:
-
-```bash
-aws ecr put-lifecycle-policy \
-  --repository-name payments-api-builds \
-  --lifecycle-policy-text file://payments-api-builds-lifecycle.json
-```
-
-The team should preview cleanup rules before applying them, especially if Kubernetes uses digest-pinned deployments. Some registries treat untagged manifests differently from tagged images, and a single manifest can carry more than one tag. If a shared repository keeps both `sha-*` and `prod-*` tags on the same manifest, the team should avoid a rule that deletes a production digest just because it also has an old short-lived tag. A practical release process keeps a release tag on every digest that might be deployed or rolled back, such as `prod-2026-06-21-001` or `rollback-safe-2026-q2`.
-
-**Quarantine** means a newly pushed image waits in a restricted place until it passes gates. Some registries have explicit quarantine or locking controls. Many teams implement the same idea with repository separation. For example, CI pushes to `payments-api-builds`, scanners and policy checks run there, and the release job copies or promotes the approved manifest into `payments-api-release`. Kubernetes has pull permission only on the release repository.
-
-That separation gives the team a clean safety line:
-
-| Repository | Who can push | Who can pull | Typical tags |
-|---|---|---|---|
-| `payments-api-builds` | CI build identity | CI, scanners, release automation | `sha-*`, `candidate-*` |
-| `payments-api-release` | Release identity only | Kubernetes pull identity | `prod-*`, `rollback-safe-*` |
-
-Rollback needs the same discipline. A **known-good digest** is a digest that the team has already deployed or tested and kept in release history. When a new deployment breaks checkout, the incident commander should have a small list of previous production digests instead of searching old pipeline logs under pressure.
-
-Here is a simple rollback record:
-
-```json
-[
-  {
-    "release": "prod-2026-06-21-001",
-    "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
-    "sourceCommit": "4f8c2a19d5be",
-    "deployedAt": "2026-06-21T14:20:00Z",
-    "status": "known-good"
-  },
-  {
-    "release": "prod-2026-06-14-004",
-    "digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-    "sourceCommit": "a1b2c3d4e5f6",
-    "deployedAt": "2026-06-14T10:05:00Z",
-    "status": "known-good"
-  }
-]
-```
-
-The rollback action can update the Deployment to a previous digest:
-
-```bash
-KNOWN_GOOD_DIGEST="sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-IMAGE="111122223333.dkr.ecr.us-east-1.amazonaws.com/payments-api@$KNOWN_GOOD_DIGEST"
-
-kubectl set image deployment/payments-api \
-  payments-api="$IMAGE" \
-  --namespace payments
-
-kubectl rollout status deployment/payments-api \
-  --namespace payments
-```
-
-Many production teams use GitOps instead of direct `kubectl set image`. In that case, the rollback changes the image field in the environment repository, reviewers approve the change, and the GitOps controller applies it. The registry part stays the same: the known-good digest must still exist, the Kubernetes pull identity must still have permission, and audit logs should show the pull.
-
-## Private Connectivity and Audit Logs
-<!-- section-summary: Network controls decide where registry traffic can flow, and audit logs show who changed or pulled release artifacts. -->
-
-Access policies answer who can use the registry. Network controls answer where registry traffic can travel. For a small team, a public registry endpoint with strong authentication may be enough. For a payments system, teams often add private connectivity so CI runners and Kubernetes nodes reach the registry through private network paths.
-
-A **private endpoint** gives a resource inside a private network a private IP path to a managed service. For example, Amazon ECR can use AWS PrivateLink interface endpoints, and Azure Container Registry can use Azure Private Link private endpoints. This means Kubernetes nodes in private subnets can pull images without a general internet path to the registry endpoint. The details vary by provider, especially around DNS, endpoint policies, and layer storage.
-
-In AWS, ECR pulls involve ECR APIs and image layers stored behind S3-backed infrastructure. That is why private ECR access often needs both ECR interface endpoints and an S3 gateway endpoint for the layer downloads. In Azure, private endpoints require private DNS to resolve the registry name to private IP addresses, and managed CI services may need self-hosted agents with network line of sight after public access is disabled.
-
-The production design question is practical: can the `payments-api` release path reach the registry while other paths cannot? A common setup looks like this:
-
-| Caller | Network path | Registry permission |
-|---|---|---|
-| CI build runner | Private runner subnet or controlled outbound IPs | Push to build repository |
-| Scanner | Private runner subnet | Pull candidate images and attach findings |
-| Release job | Private runner subnet | Retag or promote approved digests |
-| Kubernetes nodes | Private cluster subnet | Pull release repository only |
-| Developer laptops | No direct production push path | Read-only or no production registry access |
-
-Network controls and audit logs work together. Network rules narrow where registry traffic can come from, and **audit logging** records who called the registry API, what action they took, when they took it, and where the request came from. In ECR, CloudTrail records API calls such as `PutImage`, `BatchGetImage`, repository setting changes, delete actions, and lifecycle policy actions. Other registries expose similar events through cloud audit logs or registry logs.
-
-Here are useful ECR events to search during release review or incident response:
-
-```bash
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=EventName,AttributeValue=PutImage \
-  --max-results 20
-
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=EventName,AttributeValue=DeleteRepository \
-  --max-results 20
-
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=EventName,AttributeValue=PutImageTagMutability \
-  --max-results 20
-```
-
-The team should alert on a few high-signal events. A human identity pushing to the production repository deserves review. A repository changing from immutable to mutable deserves review. A delete action against a release repository deserves review. Repeated denied pulls from a Kubernetes namespace can point to a broken pull secret, an expired token, or a workload trying to use an image it should not reach.
-
-Audit logs turn registry controls into evidence. During an incident, the team can connect the release record, the tag promotion event, the Kubernetes deployment change, and the registry pull events. That chain helps them answer whether production ran the digest that passed the gate.
-
-## Putting It All Together
-<!-- section-summary: A secure registry flow gives each release one pushed image, one approved digest, controlled identities, and a rollback path. -->
-
-Now put the pieces back into the `payments-api` story. A small team can start with a modest release pipeline on day one, as long as the registry flow keeps the release identity stable.
-
-The build job uses a short-lived CI identity named `ci-payments-api-publisher`. It builds the container once, pushes it to a private repository with a commit tag, captures the digest from the registry, and stores the digest with the scan and SBOM evidence. That one digest is the object the rest of the release process talks about.
-
-The registry uses least-privilege access. CI can push only to the build repository. The scanner can pull candidates and attach findings. The release job can add production tags to approved manifests. Kubernetes can pull only from the release repository or approved repository path. Human developers do not get broad production push rights for normal work.
-
-The repository protects release tags. Immutable tag settings or registry lock controls reject accidental overwrites. Production deployment manifests use digest references, often with a helpful tag next to the digest. Kubernetes pulls the digest, so a tag movement cannot quietly change the image that new Pods receive.
-
-Retention and quarantine keep operations clean. CI tags expire after a short window. Production tags stay long enough for rollback and audit. Candidate images stay away from the Kubernetes pull identity until scan, policy, and approval gates pass. Known-good digests live in release history, and rollback updates Kubernetes to one of those digests.
-
-Private connectivity and audit logging close the loop. CI runners and cluster nodes reach the registry through controlled network paths where the environment requires it. Registry audit logs show `PutImage`, promotion, pull, delete, lifecycle, and settings changes. When the team asks what happened during a release, the registry can answer with events instead of guesses.
-
-Here is the compact checklist the team can keep next to the release pipeline:
-
-| Control | Production target for `payments-api` |
-|---|---|
-| Private registry | `payments-api` stored in a private repository |
-| Push identity | CI role can push only build images |
-| Pull identity | Kubernetes pull identity can pull only approved images |
-| Immutable tags | Release tags cannot be overwritten |
-| Digest deployment | Kubernetes manifest references `@sha256:...` |
-| Promotion | Approval adds a tag to the existing digest |
-| Retention | CI images expire, release and rollback digests stay available |
-| Quarantine | Candidate images stay away from production pull access |
-| Private connectivity | CI and cluster reach registry through approved network paths |
-| Audit logging | Registry changes and pulls appear in audit logs |
+What if production must roll back? The release record identifies the previous known-good digest rather than asking the registry what an old mutable label once meant. Current policy and incident authority determine whether that digest remains acceptable for emergency use.
 
 ![Registry controls summary infographic showing least privilege, immutable tags, digest deploys, retention, quarantine, private access, and audit logs around the payments-api private registry](/content-assets/articles/article-devsecops-container-image-security-registry-security-immutable-tags/registry-controls-summary.png)
 
-*Registry security works as a set of small controls around one release path: publish narrowly, deploy by digest, keep rollback history, and log the changes.*
+The design can be stated as invariants:
 
-That is the registry's job in the container security story. It keeps the path from build evidence to runtime deployment traceable, controlled, and reversible.
+1. **Artifact identity:** every security and deployment decision names a digest.
+2. **Stable release names:** a published version cannot silently point to new bytes.
+3. **Testing transfers:** production runs the same digest that staging tested.
+4. **Capability separation:** consumers cannot become producers, and normal producers cannot administer registry controls.
+5. **Presence is not approval:** stored and quarantined artifacts do not automatically qualify for production.
+6. **Explainable history:** retained artifacts, evidence, promotion records, and logs show what happened.
+7. **Controlled access:** pushes and pulls use authenticated, encrypted, scoped paths.
 
-## What's Next
+The three most important distinctions are simple:
 
-The registry controls which image Kubernetes can pull. The next article moves inside the cluster after the pull succeeds. We will look at **container runtime isolation**: how namespaces, cgroups, Linux capabilities, seccomp, AppArmor or SELinux, read-only filesystems, and Kubernetes security settings limit what the `payments-api` container can do while it is running.
+```text
+tag is not digest
+push is not pull
+stored is not trusted
+```
 
-## References
+Together they produce the registry mental model:
 
-- [OCI Distribution Specification](https://github.com/opencontainers/distribution-spec/blob/main/spec.md) - Defines registry, repository, push, pull, tag, manifest, blob, and digest concepts used by compliant registries.
-- [Kubernetes Images](https://kubernetes.io/docs/concepts/containers/images/) - Documents image names, tags, digests, pull policies, digest pinning, and private registry pull configuration.
-- [Kubernetes Pull an Image from a Private Registry](https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/) - Shows how Kubernetes uses image pull secrets for private registries.
-- [Docker image digests](https://docs.docker.com/dhi/core-concepts/digests/) - Explains Docker image digests as SHA-256 content identifiers.
-- [Amazon ECR tag immutability](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html) - Documents repository tag immutability and the CLI commands for ECR.
-- [Amazon ECR retagging](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-retag.html) - Shows how to retag an existing ECR image manifest without pulling and pushing layers again.
-- [Amazon ECR lifecycle policies](https://docs.aws.amazon.com/AmazonECR/latest/userguide/LifecyclePolicies.html) - Documents image cleanup rules, previews, and lifecycle policy behavior.
-- [Amazon ECR image scanning](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-scanning.html) - Documents ECR basic and enhanced scanning modes.
-- [Amazon ECR CloudTrail logging](https://docs.aws.amazon.com/AmazonECR/latest/userguide/logging-using-cloudtrail.html) - Lists ECR events captured through AWS CloudTrail for audit and incident response.
-- [Amazon ECR VPC endpoints](https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html) - Explains PrivateLink access to ECR APIs and required S3 gateway endpoint considerations for layer pulls.
-- [Azure Container Registry image locking](https://learn.microsoft.com/en-us/azure/container-registry/container-registry-image-lock) - Documents locking images, repositories, and read/write/delete attributes in ACR.
-- [Azure Container Registry private endpoints](https://learn.microsoft.com/en-us/azure/container-registry/container-registry-private-endpoints) - Documents private endpoint setup, DNS, and access considerations for ACR.
-- [Azure Container Registry retention policy](https://learn.microsoft.com/en-us/azure/container-registry/container-registry-retention-policy) - Documents retention behavior for untagged manifests and the caution for digest-based pulls.
+```text
+secure registry release
+  = exact artifact identity
+  + immutable human naming
+  + separated producer and consumer powers
+  + build-once promotion
+  + explicit trust state
+  + protected history and evidence
+  + observable controlled access
+```
+
+The registry is therefore not the place where trust begins or ends. It is the checkpoint that preserves the artifact and its identity between build and runtime while enforcing who may mutate, approve, retrieve, retain, or investigate it.
+
+## Check Your Answers
+
+:::expand[What Does a Container Registry Actually Store?]{kind="recap"}
+A registry distributes executable artifacts and metadata; repositories organize them, tags provide readable labels, and digests identify exact stored content.
+:::
+
+:::expand[Why Are Digests Stronger Identities Than Tags?]{kind="recap"}
+A tag may move, while a digest names exact content; immutable tags protect release-name mappings and digest deployments protect the consumer's actual choice.
+:::
+
+:::expand[How Should Push and Pull Authority Be Separated?]{kind="recap"}
+Builders need narrow producer rights and runtimes need narrow consumer rights, so compromise of a pull identity cannot upload, delete, retag, or administer releases.
+:::
+
+:::expand[Why Should a Pipeline Build Once and Capture the Digest?]{kind="recap"}
+One controlled build creates one registry digest, which becomes the shared subject for tests, evidence, promotion, deployment, logging, and rollback.
+:::
+
+:::expand[How Does Promotion Work Without Rebuilding?]{kind="recap"}
+Promotion changes the approved state or controlled label of an existing digest; rebuilding would create new bytes and break the transfer of testing evidence.
+:::
+
+:::expand[How Do Quarantine, Retention, and Rollback Preserve Trust?]{kind="recap"}
+Explicit trust states block unsafe artifacts, while append-oriented history and protected retention preserve exact objects for response, explanation, and deterministic rollback.
+:::
+
+:::expand[How Do Private Access, Logs, Signatures, and Provenance Fit Together?]{kind="recap"}
+Private paths and authorization constrain access, logs record actions, signatures identify approval, and provenance explains how the exact digest was produced.
+:::
+
+:::expand[What Does a Complete Secure Registry Release Look Like?]{kind="recap"}
+The complete path carries one digest from protected build through bound evidence and accountable promotion to pull-only deployment, retained history, and later reevaluation.
+:::

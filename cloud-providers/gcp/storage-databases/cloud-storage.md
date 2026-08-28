@@ -1,7 +1,7 @@
 ---
 title: "Cloud Storage"
-description: "Design Cloud Storage buckets and objects for profile photos, ticket PDFs, inspection documents, signed URLs, metadata, lifecycle, versioning, soft delete, and retention."
-overview: "Cloud Storage gives applications a durable home for whole files outside app servers and relational databases. The guide follows uploaded documents through buckets, objects, names, generations, metadata, IAM, signed URLs, lifecycle, and retention."
+description: "Design Cloud Storage buckets and objects for private uploads, signed URLs, metadata, concurrency, lifecycle, versioning, soft delete, and retention."
+overview: "Cloud Storage gives applications a durable home for whole objects outside temporary servers. The guide follows private user documents through buckets, names, generations, metadata, IAM, signed URLs, lifecycle, storage classes, and retention."
 tags: ["gcp", "cloud-storage", "buckets", "objects"]
 order: 2
 id: article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects
@@ -13,376 +13,438 @@ aliases:
 
 ## Table of Contents
 
-1. [Why Apps Store Files Outside the App](#why-apps-store-files-outside-the-app)
-2. [Buckets](#buckets)
-3. [Objects and Object Names](#objects-and-object-names)
-4. [Generations and Metadata](#generations-and-metadata)
-5. [IAM and Private Access](#iam-and-private-access)
-6. [Signed URLs](#signed-urls)
-7. [Lifecycle, Versioning, Soft Delete, and Retention](#lifecycle-versioning-soft-delete-and-retention)
-8. [A Practical Bucket Baseline](#a-practical-bucket-baseline)
-9. [Production Checks](#production-checks)
-10. [Putting It Together](#putting-it-together)
-11. [References](#references)
+1. [Why Do Objects Need a Home Outside Application Servers?](#why-do-objects-need-a-home-outside-application-servers)
+2. [How Do Buckets and Object Names Locate Bytes?](#how-do-buckets-and-object-names-locate-bytes)
+3. [How Do Generations, Metadata, and Consistency Protect Changes?](#how-do-generations-metadata-and-consistency-protect-changes)
+4. [How Should Identities Control Private Objects?](#how-should-identities-control-private-objects)
+5. [How Do Signed URLs Delegate Temporary Access?](#how-do-signed-urls-delegate-temporary-access)
+6. [How Do Soft Delete, Versioning, Lifecycle, and Storage Classes Differ?](#how-do-soft-delete-versioning-lifecycle-and-storage-classes-differ)
+7. [When Should Retention Make Deletion Impossible?](#when-should-retention-make-deletion-impossible)
+8. [How Does a Private Upload System Fit Together?](#how-does-a-private-upload-system-fit-together)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Why Apps Store Files Outside the App
-<!-- section-summary: Cloud Storage solves the file/object problem for apps that keep whole uploaded or generated files outside runtime and database storage. -->
+Imagine that a user uploads `alice.jpg`. Saving it at `/home/app/uploads/alice.jpg` on one application server works only while the system has one stable machine. With servers A, B, and C, harder questions immediately appear. Which server received the upload? How does server B read a file written through server A? What happens when that host fails or a deployment replaces it? How can a browser transfer the image without making the application relay every byte?
 
-Many applications need to keep whole files. A user uploads a profile photo. A venue sends a ticket PDF. A field team uploads inspection documents. The app server can receive those bytes, yet the server process should not be the long-term home for them.
+The original design accidentally gives the file the same lifetime as compute. Cloud Storage separates those lifetimes:
 
-Relational databases are usually the wrong default for large file bytes because the database also has to manage tables, indexes, transactions, backups, and query performance. App containers are even more temporary. A new deploy, scale-down event, or instance restart can remove local files from the runtime.
+```text
+app server A ──┐
+app server B ──┼──→ Cloud Storage
+app server C ──┘
+```
 
-Think of the app server as the front desk, not the archive room. It can accept the uploaded file, check permissions, and write a database record. The long-term bytes need a storage service designed for objects, durability, access control, lifecycle, and recovery. That keeps the runtime small and keeps the database focused on business records.
+Application instances can start and disappear while the data retains an independent home. That separation is the core purpose of Cloud Storage.
 
-For example, a ticketing app might store the order, payment status, and ticket ownership in Cloud SQL, then store the finished PDF ticket in Cloud Storage. The database record keeps the object name. The browser receives the file only through a controlled path such as a signed URL after the app verifies the user may view it.
+The simplest useful object-storage abstraction is **name to bytes**:
 
-**Cloud Storage** is Google Cloud's object storage service. It gives you buckets for durable object storage, access control, signed links, metadata, lifecycle rules, versioning, soft delete, and retention controls. The app stores the object name in its database and lets Cloud Storage store the bytes.
+```text
+PUT "cat.jpg" → bytes
+GET "cat.jpg" → bytes
+DELETE "cat.jpg"
+LIST objects
+```
 
-![Signed URL upload path](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/signed-url-path.png)
-*The app can keep business records in a database while Cloud Storage owns the file bytes and time-limited upload or download paths.*
+Keep these questions in view as you work through the lesson:
 
-## Buckets
-<!-- section-summary: A bucket is the named operational boundary for Cloud Storage objects and their location, access, lifecycle, and retention settings. -->
+1. **Why Do Objects Need a Home Outside Application Servers?**
+2. **How Do Buckets and Object Names Locate Bytes?**
+3. **How Do Generations, Metadata, and Consistency Protect Changes?**
+4. **How Should Identities Control Private Objects?**
+5. **How Do Signed URLs Delegate Temporary Access?**
+6. **How Do Soft Delete, Versioning, Lifecycle, and Storage Classes Differ?**
+7. **When Should Retention Make Deletion Impossible?**
+8. **How Does a Private Upload System Fit Together?**
 
-A **bucket** is the top-level container for objects. Bucket names are globally unique, so a production name often includes the product, environment, purpose, and region, such as `venue-prod-ticket-docs-us`. The bucket also owns settings that affect every object inside it.
+## Why Do Objects Need a Home Outside Application Servers?
+<!-- section-summary: Cloud Storage separates the lifetime of named byte payloads from the temporary compute that uploads or reads them. -->
 
-For an inspection platform, you might create separate buckets for production documents, staging documents, and temporary upload staging. Separation gives the team clearer IAM, lifecycle, retention, and incident response boundaries.
+Cloud Storage is Google Cloud's managed object-storage service. It stores **objects** inside **buckets**. An object consists of a name, data, and metadata. This differs from both a remote Linux disk and a relational database.
 
-Important bucket decisions include:
+A filesystem exposes operations such as `open`, `seek`, append, truncate, directory rename, and file locking. Object storage starts with create, read, replace, delete, and list operations over whole objects. When someone says they uploaded a file to Cloud Storage, the service actually stored an object.
 
-| Bucket decision | What it controls | Example choice |
-|---|---|---|
-| Location | Where object data is stored | `us-central1` for a regional app, or a dual/multi-region choice for broader resilience |
-| Storage class | Cost and access pattern | `STANDARD` for active documents |
-| IAM style | How access is granted | Uniform bucket-level access for IAM-only object access |
-| Public exposure | Whether public object access is allowed | Public access prevention for private documents |
-| Recovery and retention | How previous copies survive | Soft delete, versioning, lifecycle, and retention policies |
+Object data is immutable for the lifetime of one generation. Updating part of `profile.jpg` does not ordinarily mutate bytes 3,000 through 4,000 in place. An overwrite atomically creates a replacement generation. Readers see the completed old generation or the completed new generation, rather than a partially rewritten mixture:
 
-For AWS readers, a bucket is the closest GCP equivalent to an S3 bucket. The same design habit applies: use bucket boundaries for environment, ownership, access, and retention rather than dumping unrelated files into one global bucket.
+```text
+profile.jpg, generation 100
+        ↓ replace
+profile.jpg, generation 101
+```
+
+This object-level model is a natural fit for photographs, videos, PDFs, archives, backups, large immutable artifacts, static assets, and machine-learning datasets. It is not a relational query engine merely because an object contains JSON, and it is not automatically a normal shared disk merely because an object represents a file.
+
+## How Do Buckets and Object Names Locate Bytes?
+<!-- section-summary: A bucket groups objects that share broad policies, while the object name identifies one payload within that boundary. -->
+
+Every object belongs to a **bucket**. A bucket such as `acme-production-uploads` may contain object names like:
+
+```text
+users/42/avatar.jpg
+users/93/avatar.jpg
+invoices/2026/9001.pdf
+exports/report.csv
+```
+
+A bucket is more than a folder. It is a major policy and configuration boundary. At bucket level, teams choose geographic location, access controls, public-access policy, soft delete, versioning, lifecycle rules, retention, and default storage behavior. A useful definition is: a bucket contains objects that broadly share location, security, and lifecycle requirements.
+
+Putting everything in one bucket makes unlike policies collide. Public website images, private payroll files, 24-hour temporary processing objects, seven-year financial records, and ordinary user uploads require different access and deletion rules. Separate boundaries such as `prod-public-assets`, `prod-private-uploads`, `prod-temp-processing`, and `prod-regulated-records` make those policies easier to state and audit. This does not imply one bucket for every user or file; it means one boundary for each coherent policy set.
+
+Bucket names occupy a globally shared namespace, so each must be globally unique. They are publicly observable identifiers rather than secrets. A name such as `acme-prod-uploads-a71c` avoids exposing private details. A name containing an email address and medical category would place sensitive information in an identifier visible through administrative surfaces.
+
+The bucket's location answers where the bytes reside. A region keeps data in one Google Cloud region. A dual-region spreads it across a selected regional pair. A multi-region covers a broader geography. Location influences latency, price, data transfer, failure tolerance, and residency. Ordinary application data commonly belongs near the primary compute and users unless reliability or residency requirements point elsewhere.
+
+Inside the bucket, an **object name** addresses the payload. Together, bucket and name form a reference such as:
+
+```text
+gs://acme-uploads/users/42/avatar.jpg
+```
+
+Traditionally, Cloud Storage uses a flat namespace. In that model, `users/42/avatar.jpg` is one string containing slash characters. Tools can display the prefixes as folders for convenience. Cloud Storage also offers an optional hierarchical namespace in which folders become real resources and operations such as atomic folder rename are available. The accurate model is therefore:
+
+```text
+flat namespace
+→ path-like object names displayed as folders
+
+hierarchical namespace
+→ real folder resources when deliberately enabled
+```
+
+Useful names encode non-sensitive identity and organization. Names such as `users/42/uploads/01K...jpg` or `users/42/avatar/original.jpg` can support prefix listing, policy organization, pipelines, and debugging. Names and metadata can appear in logs and tools, so neither should contain secrets unnecessarily.
 
 ![Bucket and object boundary](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/bucket-object-boundary.png)
-*Bucket policy owns the broad boundary. Object names and metadata make individual files understandable inside that boundary.*
+*The bucket owns broad policy; its keyspace maps application-visible names to stored objects.*
 
-## Objects and Object Names
-<!-- section-summary: An object is the stored byte payload, and its object name is the stable handle your app saves and uses later. -->
+## How Do Generations, Metadata, and Consistency Protect Changes?
+<!-- section-summary: Immutable generations and metadata versions let clients identify exact state and reject changes based on stale assumptions. -->
 
-An **object** is a stored byte payload plus metadata. A profile photo, ticket PDF, invoice export, inspection image, or ZIP archive can all be objects. Cloud Storage does not require folders in the filesystem sense; names with slashes are still object names.
+An object name usually refers to the current live object, not its entire history. If Alice and then Bob replace `report.csv`, the name remains the same while Cloud Storage assigns a new **generation** to each immutable data version:
 
-The **object name** is the path-like string your app uses to find the object again. A weak name such as `photo.jpg` collides quickly. A useful name carries enough context for operations while keeping the database as the source of business search.
-
-Think of the bucket as a large labeled cabinet and the object name as the label on one stored item. The slash characters in `ticket-pdfs/event_20260704/order_913812/ticket.pdf` make the name readable for humans and tools, but Cloud Storage still stores an object under one name. The app should treat that full name as an important identifier.
-
-Good object names often include purpose, tenant or account, date, and record ID:
-
-- `profile-photos/user_8492/avatar/current.jpg`
-- `ticket-pdfs/event_20260704/order_913812/ticket.pdf`
-- `inspections/site_4471/2026/07/report_771/front-door.jpg`
-
-The database should still store the record owner, status, and permissions. Cloud Storage stores the bytes at the object name. The app joins those ideas by saving the object name on the business record.
-
-This split keeps search and authorization clear. A support screen should find an inspection by site ID, inspector, date, and review status in the database. After the app decides the user may view it, the stored object name tells Cloud Storage which bytes to serve through a controlled path such as a signed URL.
-
-## Generations and Metadata
-<!-- section-summary: A generation identifies one specific write of an object, while metadata stores object facts used for serving, auditing, and cleanup. -->
-
-Every time Cloud Storage writes an object, it assigns a **generation**. The object name may stay the same, while the generation distinguishes one write from another. This is useful for regenerated ticket PDFs, replaced inspection photos, and restore runbooks that copy a previous version back.
-
-An object also has **metadata**. Some metadata is system-managed, such as size, content type, checksum, creation time, and generation. You can also attach custom metadata for operational hints, such as source app, upload flow, or document category.
-
-Think of the object name as the public label and the generation as the exact write behind that label. The name `ticket-pdfs/event_20260704/order_913812/ticket.pdf` can stay stable while the file is regenerated. The generation lets support and restore runbooks point at one specific version of the bytes instead of guessing which replacement they are seeing.
-
-Metadata is the small card attached to the object. It should help tools and humans understand the file without opening it. Content type helps browsers handle a PDF as a PDF. Checksums help verify bytes. Custom metadata can record safe operational hints such as `source=checkout` or `document_type=ticket`. It should not carry secrets, long notes, or the business database record.
-
-A small upload might include a content type and custom metadata:
-
-```bash
-gcloud storage cp ./ticket.pdf \
-  gs://venue-prod-ticket-docs-us/ticket-pdfs/event_20260704/order_913812/ticket.pdf \
-  --content-type=application/pdf \
-  --custom-metadata=source=checkout,document_type=ticket
+```text
+report.csv, generation 18492
+        ↓ replace
+report.csv, generation 18493
 ```
 
-Important details in this command:
+The generation identifies the exact data instance. That distinction solves a concurrency problem. Suppose two processes read `config.json` at generation 10. Process A successfully writes generation 11. Process B still assumes generation 10 is current. An unconditional write would silently erase A's change.
 
-- `gs://venue-prod-ticket-docs-us/...` is the bucket and object name.
-- `--content-type=application/pdf` helps browsers and downstream tools handle the file correctly.
-- `--custom-metadata` adds small operational labels to the object; it should not hold secrets or large business records.
+A generation-match **precondition** turns that write into a conditional operation:
 
-A quick describe command shows the exact object metadata and generation:
-
-```bash
-gcloud storage objects describe \
-  gs://venue-prod-ticket-docs-us/ticket-pdfs/event_20260704/order_913812/ticket.pdf \
-  --format="yaml(name,generation,contentType,metadata,size)"
+```text
+write only if current generation is still 10
 ```
 
-Example output:
+Because it is now 11, B's mutation fails and the application can reread or resolve the conflict. This is optimistic concurrency control: the client acts only while its state assumption remains true. The special generation-match value `0` supports another important condition—create only if the object does not yet exist. That is useful for deduplication, idempotent workers, race-safe uploads, and write-once job results.
 
-```yaml
-contentType: application/pdf
-generation: '1719858400123456'
-metadata:
-  document_type: ticket
-  source: checkout
-name: ticket-pdfs/event_20260704/order_913812/ticket.pdf
-size: '184233'
+Objects also carry **metadata**, meaning information about how the bytes should be interpreted or handled. Examples include content type, content disposition, cache control, creation time, storage class, custom metadata, and generation. A JPEG's raw bytes do not tell every consumer whether it should be cached for one day or downloaded under a specific filename; metadata supplies those instructions.
+
+Cloud Storage distinguishes data generation from **metageneration**:
+
+```text
+generation
+→ version of the object data
+
+metageneration
+→ version of metadata for that generation
 ```
 
-## IAM and Private Access
-<!-- section-summary: IAM controls who can use a bucket or object, and private-by-default buckets are the safer default for user documents. -->
+Changing only `Cache-Control` can increase metageneration while leaving generation unchanged. Metageneration preconditions protect concurrent metadata changes in the same way generation preconditions protect data mutations.
 
-**IAM**, Identity and Access Management, controls which principals can perform actions on Cloud Storage resources. A principal can be a user, group, service account, or workload identity. For app-owned documents, the app service account should receive only the roles it needs on the specific bucket.
+Strong consistency makes this model practical. After Cloud Storage returns a successful write, ordinary reads and listings can immediately observe it. Metadata updates and deletes are also strongly consistent. Applications do not need to sleep and hope that a successful upload eventually appears. Public caches remain a separate layer: cached content can stay visible according to its cache lifetime after the underlying object changes.
 
-The key beginner idea is that bucket access and application permission are different layers. Cloud Storage IAM decides whether a principal can use the bucket or object. Your application still decides whether this customer, support agent, or internal tool is allowed to see a specific business document. Do not make the bucket public just because browsers need to download files.
+The combined model is:
 
-Two bucket settings make private storage easier to operate. **Uniform bucket-level access** makes IAM the main access model for the bucket and objects. **Public access prevention** blocks common public exposure paths. Together, they support a private-by-default design for tickets, photos, and inspection documents.
+```text
+object name
+    ↓
+current immutable generation
+    ├── bytes
+    └── metadata, with its own metageneration
 
-For private user documents, the usual shape is: the app service account can read or write the bucket, normal users cannot access the bucket directly, and the app hands out short-lived URLs only after its own business permission check. That keeps cloud storage credentials and broad bucket permissions away from browsers.
-
-An app service account might receive object create and read access on the document bucket:
-
-```bash
-gcloud storage buckets add-iam-policy-binding gs://venue-prod-ticket-docs-us \
-  --member="serviceAccount:ticket-docs-api@venue-prod.iam.gserviceaccount.com" \
-  --role="roles/storage.objectUser"
+preconditions
+→ mutate only while stated assumptions remain true
 ```
 
-Important details in this command:
+This is much more precise than treating the object name as a mutable file whose history and concurrency do not matter.
 
-- The member is the workload identity used by the API, not a human developer account.
-- `roles/storage.objectUser` allows object work without handing out broad project administration.
-- Bucket-scoped grants make review easier because the permission sits near the data it protects.
+## How Should Identities Control Private Objects?
+<!-- section-summary: Workload identities and IAM should grant narrow access, while uniform access and public-access prevention remove common authorization ambiguity. -->
 
-## Signed URLs
-<!-- section-summary: A signed URL gives time-limited access to one object operation without making the bucket public. -->
+Once objects are durable and addressable, Cloud Storage must decide who can perform each operation. **Identity and Access Management**, or IAM, maps principals to roles and permissions on buckets and objects. An upload service may create objects, a thumbnail service may read originals and write derived images, and an analytics service may read selected data. An anonymous internet user should receive no access to private documents.
 
-A **signed URL** is a URL with a cryptographic signature that grants temporary access to a specific Cloud Storage operation. It is useful for browser uploads or downloads of one object while broad bucket permissions stay on the server side.
+Prefer workload identities to embedded long-lived credentials. A Cloud Run service, Compute Engine VM, or GKE workload can use its cloud identity and receive only the Storage permissions it needs. The weak alternative—a service-account JSON key committed to code or copied among machines—creates a secret-distribution problem and makes credential rotation and attribution harder.
 
-For example, the app can ask Cloud Storage for a 10-minute upload URL for `inspections/site_4471/2026/07/report_771/front-door.jpg`. The browser uploads directly to Cloud Storage. The app records the object name and later decides who can view or replace the file.
+Historically, Cloud Storage could combine IAM with per-object access-control lists, or ACLs. Two parallel systems make authorization difficult to explain: IAM might deny a user while one object's ACL still grants access. **Uniform bucket-level access** disables ACLs so IAM becomes the authorization system. It is a strong default for new production buckets.
 
-```bash
-gcloud storage sign-url \
-  gs://inspection-prod-docs-us/inspections/site_4471/2026/07/report_771/front-door.jpg \
-  --duration=10m \
-  --http-verb=PUT \
-  --headers=Content-Type=image/jpeg \
-  --format=yaml
+Uniform access does not mean that every object must always have identical permissions. **Managed folders** can attach IAM policies to groups of objects sharing name prefixes, and they require uniform bucket-level access. The important change is using IAM rather than the legacy object ACL mechanism.
+
+Public exposure deserves a second guardrail. **Public Access Prevention** blocks grants to public principals such as `allUsers` from making data anonymously accessible through IAM or ACLs. IAM answers which principals may act; Public Access Prevention adds the stronger boundary that anonymous public access must never be one of those outcomes.
+
+These controls apply at the cloud-resource layer. The application may still need to decide whether Alice owns invoice 991 or whether a support agent can inspect it. The app checks that business authorization first, then uses its workload identity to act on the private object or delegates a narrow temporary operation.
+
+## How Do Signed URLs Delegate Temporary Access?
+<!-- section-summary: A signed URL carries narrowly scoped, expiring authority so browsers can transfer private bytes directly with Cloud Storage. -->
+
+Consider a private `invoice.pdf`. Alice authenticates to the application and asks to download it. Routing the entire file through the app works, but the application then becomes a byte relay:
+
+```text
+Cloud Storage → application → Alice
 ```
 
-Important details in this command:
+For a 100 MB object, that consumes application bandwidth and capacity even though the app's real job is to decide whether Alice is authorized. The better split leaves the app in the control path and Cloud Storage in the data path.
 
-- `--duration=10m` limits how long the URL can be used.
-- `--http-verb=PUT` signs an upload operation; a download URL would use `GET`.
-- The signed headers should match the browser upload request, including content type if required.
-- `--format=yaml` makes the example output easy to read in a review ticket.
+A **signed URL** is a URL whose cryptographic signature grants a specific operation on a specific resource until an expiry time. The application authenticates Alice, checks ownership, and creates a short-lived signed GET URL. Alice's browser then downloads directly from Cloud Storage. V4 signed URLs can provide time-limited read or write access and can expire no later than seven days after creation.
 
-Example redacted output:
+Possession of a usable signed URL is temporary authority. It should be treated like a credential, not an ordinary harmless link. Use short expirations, HTTPS, narrow resources and methods, and avoid unnecessary logging or exposure. Anyone who obtains the URL may exercise its represented permission until it expires.
 
-```yaml
-expiration: '2026-07-04 18:12:44'
-http_verb: PUT
-resource: gs://inspection-prod-docs-us/inspections/site_4471/2026/07/report_771/front-door.jpg
-signed_url: https://storage.googleapis.com/inspection-prod-docs-us/inspections/site_4471/2026/07/report_771/front-door.jpg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=inspection-uploader%40inspection-prod.iam.gserviceaccount.com%2F20260704%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260704T180244Z&X-Goog-Expires=600&X-Goog-SignedHeaders=content-type%3Bhost&X-Goog-Signature=REDACTED
+Signed uploads apply the same separation in the other direction. A 2 GB video need not travel from browser to application and then from application to Storage. Instead:
+
+1. The browser asks the app for upload permission.
+2. The app authenticates the user and chooses the exact object name.
+3. The app issues a short-lived signed upload URL.
+4. The browser sends the bytes directly to Cloud Storage.
+
+![Signed URL upload path](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/signed-url-path.png)
+*The application grants temporary upload authority while Cloud Storage receives the data directly.*
+
+The app controls who can upload, where, which operation is allowed, and how long the authority lasts. Storage handles the large data transfer. A database can then retain the logical document ID, owner, bucket, and object name rather than storing either the object bytes or an expiring signed URL.
+
+## How Do Soft Delete, Versioning, Lifecycle, and Storage Classes Differ?
+<!-- section-summary: Historical protection, automated cleanup, and access-based pricing solve different operational problems and must be designed separately. -->
+
+Accidental deletion is inevitable. An operator may delete a production prefix, automation may target the wrong data, or compromised credentials may remove objects. **Soft delete** retains deleted objects in a recoverable state for a configured window before permanent removal. New Cloud Storage buckets currently enable it by default, generally for seven days; the configurable range is seven to ninety days, or zero to disable it.
+
+**Object Versioning** preserves a different kind of history. When `report.csv` changes from generation A to generation B, A remains as a noncurrent version. This is useful when the application deliberately needs accessible earlier generations, not only when someone deletes an object by mistake. Google recommends soft delete when the primary objective is protection against accidental or malicious deletion; versioning remains useful for explicit version history. Both mechanisms can coexist.
+
+Version history has a cost consequence. If an application rewrites a large object one hundred times and every generation remains, all those bytes consume billable storage. Cloud Storage imposes no default maximum version count. A versioning decision therefore needs a cleanup answer.
+
+**Object Lifecycle Management** supplies automatic housekeeping. It evaluates declared conditions and performs actions such as deleting old objects, changing storage class, removing noncurrent versions, or aborting incomplete multipart uploads. A temporary export can delete itself after thirty days instead of relying on a person to remember it seven years later.
+
+Storage classes solve an economic problem rather than a recovery problem. Frequently read website content and a six-year-old backup have unlike access patterns. Standard, Nearline, Coldline, and Archive classes trade at-rest price against access and minimum-duration economics. **Autoclass** can move objects toward colder classes according to access and return them to Standard when accessed.
+
+The first-principles question for class is how often the bytes will realistically be read. The first-principles question for lifecycle is when housekeeping should happen. Neither mechanism is a historical recovery guarantee.
+
+### Follow one object through its history
+
+Suppose `dataset.bin` is written on Monday and replaced on Tuesday. The live object name now resolves to Tuesday's generation. With Object Versioning, Monday's generation can remain noncurrent. If Tuesday's live generation is deleted on Wednesday, soft delete can keep that deleted state recoverable for the configured window. A lifecycle rule can later delete sufficiently old noncurrent generations. A storage class can change the cost profile of a generation that is rarely accessed. These features can all touch the same name while answering different questions.
+
+That layered history also explains why a lifecycle rule must be reviewed beside recovery. A rule that deletes noncurrent generations after seven days can make a thirty-day version-history requirement impossible. A rule that moves old objects to Archive changes access economics but does not create another historical copy. A rule that deletes temporary objects reduces cost but cannot tell whether the application still considers one of them authoritative.
+
+Estimate accumulation before enabling versioning. If a ten-gigabyte object changes daily, keeping every generation can preserve hundreds of gigabytes within a month. The correct response is not to avoid versions universally; it is to connect the feature to a deliberate number or age of useful generations and an understood recovery procedure.
+
+The soft-delete window also has cost and threat implications. A longer window gives operators more time to discover deletion, while preserving deleted bytes for longer. Disabling it can be appropriate only when another recovery plan truly covers the data and the team accepts immediate permanent deletion. The default should prompt a design decision rather than become an unexamined policy.
+
+Keep the boundaries explicit:
+
+| Mechanism | Main question |
+|---|---|
+| Soft delete | “Can we undo a recent deletion?” |
+| Object Versioning | “Should older generations remain explicitly accessible?” |
+| Lifecycle Management | “When should automatic housekeeping act?” |
+| Storage class or Autoclass | “What access frequency should the economics fit?” |
+
+For an ordinary upload bucket, soft delete may provide the recent safety window. A versioned bucket also needs lifecycle rules to retire generations according to policy. Temporary exports can receive aggressive cleanup. Archive data can use a colder class only after the team understands access and minimum-duration consequences.
+
+## When Should Retention Make Deletion Impossible?
+<!-- section-summary: Retention policies prohibit early deletion, and Bucket Lock makes weakening that prohibition irreversible for the bucket. -->
+
+Most lifecycle questions ask how long to keep something. **Retention** reverses the question: how long must deletion or replacement be impossible? Financial records may have to remain for seven years even when an administrator attempts to remove them early.
+
+A bucket retention policy makes Storage reject deletion or replacement until each object has reached the configured minimum age:
+
+```text
+DELETE invoice.pdf
+age = 3 years
+required retention = 7 years
+        ↓
+      denied
 ```
 
-The app should return the signed URL and the object name together. The browser uses the URL for the upload request. The app stores the object name, such as `inspections/site_4471/2026/07/report_771/front-door.jpg`, on the inspection record. Later screens should use that stored object name to request a fresh download URL after the app checks that the current user can view the inspection.
+Without a stronger control, an administrator might shorten the policy and then delete the data. **Bucket Lock** makes the retention policy itself hard to weaken. Once locked, the policy cannot be removed or shortened; it can only be extended. The lock is irreversible for the bucket's lifetime.
 
-That handoff keeps storage credentials on the server. The browser receives a narrow temporary capability for one object and one HTTP verb. If the user refreshes the page after the URL expires, the old URL should fail with a 403-style response from Cloud Storage, and the browser should ask the app for a new URL. The object is still present; only the temporary access path expired.
+That power is appropriate when a real compliance rule requires it and dangerous when enabled casually. A mistaken thirty-year locked retention period can create long-lived cost, privacy, and legal problems. Soft delete is a recovery convenience, retention is a deletion prohibition, and locked retention prevents even administrators from simply weakening the prohibition.
 
-For downloads, the flow is similar. The app checks the user's business permission, signs a short-lived `GET` URL for the stored object name, and returns it to the browser. Store object names in the database instead of signed URLs; signed URLs expire, and anyone with a copied URL can use it until the expiry time.
+A useful protection hierarchy is:
 
-For AWS readers, signed URLs are the Cloud Storage counterpart to S3 presigned URLs. One practical GCP detail is that object generations can give you an exact previous write to inspect or restore after a replace.
+```text
+ordinary uploads
+→ soft delete for a recent recovery window
 
-## Lifecycle, Versioning, Soft Delete, and Retention
-<!-- section-summary: Lifecycle and retention controls decide how old objects, deleted objects, previous generations, and compliance records survive over time. -->
+objects needing accessible history
+→ Object Versioning plus lifecycle cleanup
 
-Files need a cleanup and recovery plan. Temporary upload objects should expire. Ticket PDFs may need long retention. Inspection photos may need a recent recovery window. Replaced documents may need older generations for support investigations.
-
-**Object Versioning** keeps noncurrent generations after objects are replaced or deleted. **Soft delete** keeps recently deleted objects or buckets recoverable for a configured period. **Object Lifecycle Management** applies rules such as deleting temporary files after a set age or removing old noncurrent versions. A **retention policy** prevents objects from being removed until they satisfy the retention period.
-
-Here is a lifecycle rule for upload staging objects:
-
-```json
-{
-  "rule": [
-    {
-      "action": {
-        "type": "Delete"
-      },
-      "condition": {
-        "age": 7,
-        "matchesPrefix": ["upload-staging/"]
-      }
-    },
-    {
-      "action": {
-        "type": "Delete"
-      },
-      "condition": {
-        "isLive": false,
-        "age": 90
-      }
-    }
-  ]
-}
+regulated records
+→ retention policy and, only if justified, Bucket Lock
 ```
 
-Important details in this config:
+Cloud Storage remains an object service through all these controls. It is not the application's relational database. Storing `orders/1.json`, `orders/2.json`, and so forth does not give arbitrary joins, transactional relationships, or queries over object contents. It is also not automatically a normal shared disk for software that seeks, writes small blocks, calls `fsync`, and depends on filesystem locking. Hierarchical namespace and Cloud Storage FUSE can help particular filesystem-oriented cases, but the native object model should still guide the design.
 
-- The first rule deletes old temporary upload objects after seven days.
-- The second rule deletes noncurrent object versions after 90 days.
-- Lifecycle rules should match the business record policy so storage cleanup does not remove evidence the app still needs.
+## How Does a Private Upload System Fit Together?
+<!-- section-summary: A production upload design separates buckets by policy, authorizes with workload identity, delegates transfers with signed URLs, and plans concurrency and recovery. -->
 
-Apply the rule with:
+Suppose a document application accepts private PDFs. Application servers are disposable, browsers should upload directly, users may download only their own files, accidental deletion should be recoverable, and temporary exports should disappear after thirty days.
 
-```bash
-gcloud storage buckets update \
-  gs://inspection-prod-docs-us \
-  --lifecycle-file=inspection-lifecycle.json
+Begin with separate buckets such as `prod-user-documents` and `prod-temp-exports`. Long-lived documents and disposable exports have different lifecycle policies, so one policy boundary would be needlessly complicated. Choose locations according to application compute, users, residency, availability needs, and cost.
+
+Keep the document bucket private with uniform bucket-level access, IAM, and Public Access Prevention. Give the Cloud Run service its own workload identity and only the object operations it requires, rather than broad authority over every Storage setting.
+
+When Alice requests an upload, the application authenticates her and creates a non-sensitive, collision-resistant name such as `users/42/documents/01KXYZ.pdf`. It issues a short-lived signed PUT URL. The browser sends the PDF directly to Storage.
+
+The application database stores business meaning:
+
+```text
+document_id = 991
+owner       = 42
+bucket      = prod-user-documents
+object_name = users/42/documents/01KXYZ.pdf
 ```
 
-Important details in this command:
+Cloud Storage owns the large bytes. The database owns document identity and ownership. When Alice later requests document 991, the application checks that she owns the record and signs a temporary GET URL for the stored object name. The browser again transfers bytes directly with Storage.
 
-- `--lifecycle-file` points Cloud Storage at the reviewed JSON policy.
-- The update changes bucket behavior, so staging should prove it before production.
-- After applying it, describe the bucket and confirm the lifecycle rule is present.
+Important replacements use generation preconditions. A worker expecting generation 882 says to replace only while generation 882 remains current. If another actor already created 883, the stale worker fails rather than overwriting newer work.
 
-Retention policy deserves a separate review because it blocks deletion before the retention age. A seven-year retention policy for submitted inspection reports might look like this:
+The bucket's soft-delete policy supplies a recovery window after accidental deletion. Lifecycle Management removes temporary exports after thirty days and cleans old versions according to the approved policy. Correct content type, cache behavior, and safe custom metadata help downstream consumers interpret each object.
 
-```bash
-gcloud storage buckets update gs://inspection-prod-docs-us \
-  --retention-period=7y
-```
+A practical production baseline asks fourteen questions:
 
-Important details in this command:
+1. What exact category of objects belongs in this bucket?
+2. Is the globally unique bucket name free of sensitive data?
+3. Does the location match compute, users, residency, and reliability needs?
+4. Does the workload truly need hierarchical namespace, or is the flat namespace sufficient?
+5. Does uniform bucket-level access make IAM the only authorization model?
+6. Should Public Access Prevention make anonymous exposure impossible?
+7. Are workloads using cloud identities instead of embedded static keys?
+8. Is the soft-delete period intentionally chosen for recovery and cost?
+9. Do lifecycle rules clean temporary objects and historical versions?
+10. Does the chosen storage class match real access frequency?
+11. Are signed URLs short-lived, resource-specific, and method-specific?
+12. Do critical mutations use generation or metageneration preconditions?
+13. Is metadata accurate and non-sensitive?
+14. If retention is required, is its irreversible lock receiving the scrutiny it deserves?
 
-- `--retention-period=7y` protects objects from deletion before the retention age.
-- Test retention behavior in a non-production bucket before applying it to required production records.
-- Locking a retention policy is a serious compliance action because it restricts later removal or shortening.
+### Walk the baseline as an operating sequence
 
-Verify the retention setting before any lock decision:
+The sequence begins before an upload. The bucket exists for one policy category, uses a non-sensitive globally unique name, and has a location chosen rather than inherited by accident. Uniform bucket-level access removes the second ACL authorization path. Public Access Prevention states that anonymous access is outside the design. The application has a workload identity with narrow object permissions.
 
-```bash
-gcloud storage buckets describe gs://inspection-prod-docs-us \
-  --format="yaml(retentionPolicy,metageneration)"
-```
+At upload time, the app authenticates the user, selects the exact object name, and grants only temporary PUT authority. After Storage acknowledges success, strong consistency means an authorized reader can retrieve or list the object immediately. The application records the logical reference and safe metadata needed by its own workflows.
 
-Example output:
+At download time, the database remains the source of ownership and business state. The app reads document 991, confirms Alice is its owner, and signs a temporary GET for its bucket and object name. The signed URL is not stored as durable data because it expires; the stable logical reference is stored instead.
 
-```yaml
-metageneration: 8
-retentionPolicy:
-  effectiveTime: '2026-07-04T12:15:03.124Z'
-  retentionPeriod: '220752000'
-```
+At replacement time, the caller includes the generation it observed. A mismatch means the name changed after the read, so the caller must not silently overwrite newer work. Metadata-only changes use the matching metageneration. Create-only workers use the “object must not exist” precondition to prevent duplicate jobs from publishing different results under one name.
 
-This output gives reviewers the effective time and retention period. A production lock should require explicit approval, because the lock is meant for records the organization must keep.
+At deletion time, soft delete retains a recent recovery opportunity. If historical generations are part of the product requirement, versioning keeps them and lifecycle rules eventually remove those no longer justified. Temporary exports follow their own age-based lifecycle because their policy differs from user documents.
+
+At compliance time, retention is applied only to the bucket intended for records that must resist deletion. Bucket Lock follows an explicit irreversible decision. Regulated records do not share that bucket with disposable processing objects because one locked policy would make ordinary cleanup impossible.
+
+At incident time, operators need more than a configuration screenshot. They should know the bucket, name, and generation of the desired object; which identity may restore it; whether the object is soft-deleted or noncurrent; and which application record must point to the recovered generation. The recovery path is part of the storage design.
+
+### Trace the controls around one private PDF
+
+Assume Alice uploads a PDF into `prod-user-documents`. The bucket is the policy boundary: its location, IAM configuration, public-access decision, recovery window, lifecycle, and any retention requirement apply to the document category. The object name gives the PDF an application-visible address without including Alice's email or other sensitive information.
+
+The successful upload creates one immutable generation. Correct `Content-Type` metadata tells consumers it is a PDF; cache and disposition metadata can influence serving behavior. If only metadata changes, metageneration changes without creating new PDF bytes. If the PDF is replaced, generation changes and a generation precondition can stop a stale worker from erasing a newer replacement.
+
+Strong consistency means a successful upload is immediately available to authorized reads and listings. A public cache may still serve an older response according to its cache lifetime, so a cached public object and the underlying strongly consistent object should not be confused during debugging.
+
+IAM grants the application identity permission to act. Uniform bucket-level access removes object ACLs as a second decision path. If different name prefixes genuinely require separate IAM policies, managed folders can provide a narrower boundary while preserving uniform access. Public Access Prevention makes an accidental grant to a public principal ineffective for a bucket that must remain private.
+
+The signed URL carries only temporary operation authority. An upload URL does not grant an ordinary database account or bucket-wide role to Alice. A download URL is issued only after the application verifies the logical owner. Both should expire quickly because anyone possessing the usable URL can exercise its permission.
+
+If Alice replaces the PDF, Object Versioning can retain the earlier generation when product behavior needs it. If she deletes it accidentally, soft delete can retain the deleted state. Lifecycle rules can remove versions and temporary exports once their justified history ends. A colder storage class can reduce the at-rest cost of infrequently read bytes, while its access and duration economics still apply.
+
+If regulation says the PDF must not be deleted before seven years, retention supplies that prohibition. Bucket Lock prevents administrators from shortening it later. That irreversible choice belongs on a bucket whose contents share the rule, not beside disposable exports.
+
+This one object demonstrates why “turn on all protection” is not a design. Every setting has a distinct job, cost, authority boundary, and recovery procedure. The production policy should name which jobs are actually required and how the team tests each one.
+
+### Review namespace choice separately
+
+A flat namespace remains appropriate when slash-separated object names merely support prefix listing and organization. Hierarchical namespace is justified when real folder resources and operations such as atomic directory rename solve a concrete workload problem. Enabling it only because humans like seeing folders confuses a tool's display with an application requirement.
+
+Likewise, a path-looking name does not convert Cloud Storage into NFS. The application still receives object semantics, generation-based replacement, and API authorization. When software depends on small in-place writes, directory locks, or ordinary shared POSIX behavior, evaluate block or file storage at the interface boundary rather than after production failures expose the mismatch.
+
+One final review connects location and access. A region, dual-region, or multi-region decision affects locality, replication properties, transfer, and residency, while IAM still determines who may act. Geographic redundancy does not make an object public or private, and private IAM does not choose where the bytes reside. Record both decisions independently, then test upload, immediate read, listing, replacement with a precondition, metadata-only change, signed transfer, deletion recovery, lifecycle cleanup, and any required retention denial. That sequence proves the object model instead of merely proving that a bucket exists.
+
+### Check the two common category errors
+
+The first category error treats JSON objects as a database. Cloud Storage can retrieve an object by name and list names or prefixes. It does not inspect every JSON payload to perform a relational join across unpaid orders, customers, and failed payments. The database should hold searchable business facts and store the object reference when a record owns a large payload.
+
+The second category error treats object storage as a shared POSIX disk. A program that opens one database file, seeks to offsets, writes 4 KiB pages, calls `fsync`, and coordinates with file locks is asking for block and filesystem semantics. Cloud Storage FUSE and hierarchical namespace add useful filesystem-facing capabilities, but the foundational object model still determines concurrency and mutation behavior. The application interface must decide the storage category.
 
 ![Cloud Storage summary](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/cloud-storage-summary.png)
-*Cloud Storage design combines naming, metadata, access, signed URLs, lifecycle, and recovery controls.*
+*Cloud Storage combines an object keyspace with identity, delegated access, housekeeping, historical protection, and deletion controls.*
 
-## A Practical Bucket Baseline
-<!-- section-summary: A first production bucket should be private, location-aware, lifecycle-managed, and easy to inspect. -->
+The complete model is:
 
-After the concepts are clear, a practical production baseline can create a private regional bucket for inspection documents:
+```text
+application
+    │ PUT / GET / DELETE
+    ▼
+bucket
+    ├── object name → generation → bytes + metadata
+    ├── object name → generation → bytes + metadata
+    └── object name → generation → bytes + metadata
 
-The baseline is the minimum production story a reviewer should be able to follow. It should say where the objects live, whether public access is blocked, how IAM is handled, how old versions survive, how deleted files can be recovered, and how temporary files age out. A bucket without that story is only a container, not an operating design.
-
-The baseline is deliberately boring. A first production bucket should be private, regionally intentional, named for its purpose, protected from accidental public exposure, and covered by lifecycle or recovery controls that match the business record. Fancy settings are less important than a design a new teammate can explain.
-
-For inspection documents, the bucket should not be a dumping ground for unrelated app files. It should hold inspection document objects, use object names the inspection app stores on records, and expose access through the app or signed URLs after business permission checks. That makes bucket policy, incident response, and cleanup much easier to review.
-
-```bash
-gcloud storage buckets create gs://inspection-prod-docs-us \
-  --project=inspection-prod \
-  --location=us-central1 \
-  --default-storage-class=STANDARD \
-  --uniform-bucket-level-access \
-  --public-access-prevention
+around the bucket:
+location      → where bytes reside
+IAM           → which identities may act
+signed URLs   → temporary delegated authority
+lifecycle     → automatic housekeeping
+soft delete   → recent deletion recovery
+versioning    → explicit historical generations
+retention     → early deletion prohibition
 ```
 
-Important details in this command:
+Cloud Storage makes large byte payloads belong to the application rather than one application server. Compute can be temporary while objects remain durable; many servers can share the same object home; browsers can transfer data directly; identities replace embedded keys; old data can clean itself up; accidental deletion can remain recoverable; and regulated data can become deliberately undeletable.
 
-- `--location=us-central1` keeps the bucket close to the app and its users if that region is the agreed home.
-- `--uniform-bucket-level-access` keeps access decisions in IAM.
-- `--public-access-prevention` helps prevent accidental public document exposure.
+## Check Your Answers
 
-Then enable object versioning and choose a soft delete duration:
+:::expand[Why Do Objects Need a Home Outside Application Servers?]{kind="recap"}
+Cloud Storage gives named byte payloads a lifetime independent of disposable application instances and exposes whole-object operations rather than local filesystem mutations.
+:::
 
-```bash
-gcloud storage buckets update gs://inspection-prod-docs-us --versioning
+:::expand[How Do Buckets and Object Names Locate Bytes?]{kind="recap"}
+A bucket groups objects sharing broad location, access, lifecycle, and retention policy. The object name identifies one payload inside that boundary.
+:::
 
-gcloud storage buckets update \
-  gs://inspection-prod-docs-us \
-  --soft-delete-duration=30d
-```
+:::expand[How Do Generations, Metadata, and Consistency Protect Changes?]{kind="recap"}
+Generations identify immutable data versions, metagenerations identify metadata versions, preconditions reject stale mutations, and strong consistency makes successful state immediately visible.
+:::
 
-Important details in these commands:
+:::expand[How Should Identities Control Private Objects?]{kind="recap"}
+Workloads should use cloud identities and least-privilege IAM. Uniform bucket-level access removes ACL ambiguity, while Public Access Prevention blocks anonymous exposure.
+:::
 
-- `--versioning` keeps previous generations after replacement or deletion.
-- `--soft-delete-duration=30d` keeps recently deleted objects recoverable for 30 days.
-- Versioning and soft delete should pair with lifecycle cleanup so old copies do not grow forever.
+:::expand[How Do Signed URLs Delegate Temporary Access?]{kind="recap"}
+The app authorizes a narrowly scoped operation and issues a short-lived signed URL; the browser then transfers bytes directly with Cloud Storage.
+:::
 
-A verification command should show the settings you expect:
+:::expand[How Do Soft Delete, Versioning, Lifecycle, and Storage Classes Differ?]{kind="recap"}
+Soft delete recovers recent deletions, versioning preserves explicit generations, lifecycle automates housekeeping, and storage classes fit access economics.
+:::
 
-```bash
-gcloud storage buckets describe gs://inspection-prod-docs-us \
-  --format="yaml(name,location,iamConfiguration.uniformBucketLevelAccess.enabled,publicAccessPrevention,versioning,softDeletePolicy)"
-```
+:::expand[When Should Retention Make Deletion Impossible?]{kind="recap"}
+Use retention for genuine minimum-age requirements. Bucket Lock makes shortening or removing that policy irreversible and therefore requires deliberate approval.
+:::
 
-Example output:
-
-```yaml
-iamConfiguration:
-  uniformBucketLevelAccess:
-    enabled: true
-location: US-CENTRAL1
-name: inspection-prod-docs-us
-publicAccessPrevention: enforced
-softDeletePolicy:
-  retentionDurationSeconds: '2592000'
-versioning:
-  enabled: true
-```
-
-## Production Checks
-<!-- section-summary: Production Cloud Storage checks prove that the bucket, object names, access, recovery, and cleanup policy match the application job. -->
-
-Before trusting the bucket, walk through the full file path. Upload a test file, describe its metadata, read it through the app path, generate a signed URL, replace it, inspect the previous generation, delete a test object, and practice restoring it during the soft delete window.
-
-Use a short checklist:
-
-| Check | What good evidence shows |
-|---|---|
-| Bucket settings | Correct location, uniform bucket-level access, public access prevention, versioning, soft delete |
-| Object naming | Names include purpose, owner or record ID, and date if useful |
-| Metadata | Content type and custom metadata support serving and operations |
-| IAM | App service account has narrow bucket access; humans use reviewed roles |
-| Signed URLs | URLs expire quickly and allow only the intended method |
-| Lifecycle | Temporary objects and old versions age out on purpose |
-| Restore | A previous generation or soft-deleted object can be recovered in a sandbox drill |
-
-Treat the checklist as a staging upload and restore drill. Upload one harmless file through the same browser path production uses, then save the request ID, object name, object generation, metadata output, and app record ID in the release notes or runbook ticket. That evidence proves the bucket settings and naming rules apply to the real app path and the bucket configuration.
-
-The IAM check should use the app service account and a human account with reviewed permissions. The app service account should upload or read exactly the object path it needs. A human account without object access should fail cleanly. Those two results prove both sides of the boundary: the application can do its job, and casual project access does not expose private documents.
-
-The signed URL check should include one successful `PUT`, one attempted `GET` against the upload URL, and one retry after expiry. The successful upload proves the app and browser agree on method, content type, and object name. The wrong-method and expired attempts should fail, which proves the URL is narrow and time-limited.
-
-The lifecycle and restore checks need their own evidence. In staging, use a short-lived test prefix such as `upload-staging/drills/` and confirm the bucket lifecycle rule targets that prefix. Then replace or delete a test object, list generations or soft-deleted state, restore the previous copy into a sandbox prefix, and compare size, checksum, content type, and app metadata. A restore drill only counts after someone proves the recovered object is the file the app expected.
-
-## Putting It Together
-<!-- section-summary: Cloud Storage is the file/object layer for apps that need durable bytes, controlled access, and recoverable object history. -->
-
-Cloud Storage fits whole files that live outside the app runtime and outside the relational database. A good design defines the bucket boundary, object names, generations, metadata, IAM, signed URLs, lifecycle, soft delete, versioning, and retention before the first production upload matters.
-
-Keep the pattern direct: the database stores business meaning and object names; Cloud Storage stores the bytes and object-level controls.
+:::expand[How Does a Private Upload System Fit Together?]{kind="recap"}
+Separate buckets by policy, authorize with workload identity, sign direct transfers, store logical references in a database, use preconditions for concurrency, and configure recovery and cleanup deliberately.
+:::
 
 ## References
 
-- [Cloud Storage buckets](https://cloud.google.com/storage/docs/buckets) - Documents bucket boundaries, naming, locations, and operational settings.
-- [Cloud Storage objects](https://cloud.google.com/storage/docs/objects) - Documents objects, object names, metadata, and generations.
-- [Signed URLs](https://cloud.google.com/storage/docs/access-control/signed-urls) - Documents temporary signed access for specific Cloud Storage operations.
-- [Object Versioning](https://cloud.google.com/storage/docs/object-versioning) - Documents previous object generations and recovery after overwrite or delete.
-- [Soft delete](https://cloud.google.com/storage/docs/soft-delete) - Documents recoverable object and bucket deletion windows.
-- [Object Lifecycle Management](https://cloud.google.com/storage/docs/lifecycle) - Documents lifecycle rules for aging, deleting, and transitioning objects.
-- [Bucket retention policies](https://cloud.google.com/storage/docs/bucket-lock) - Documents retention controls that prevent early deletion.
+- [Cloud Storage overview](https://docs.cloud.google.com/storage/docs/introduction)
+- [Cloud Storage objects](https://docs.cloud.google.com/storage/docs/objects)
+- [Cloud Storage buckets](https://docs.cloud.google.com/storage/docs/buckets)
+- [Bucket locations](https://docs.cloud.google.com/storage/docs/locations)
+- [Hierarchical namespace folders](https://docs.cloud.google.com/storage/docs/folders-overview)
+- [Request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions)
+- [Cloud Storage consistency](https://docs.cloud.google.com/storage/docs/consistency)
+- [Cloud Storage IAM](https://docs.cloud.google.com/storage/docs/access-control/iam)
+- [Uniform bucket-level access](https://docs.cloud.google.com/storage/docs/uniform-bucket-level-access)
+- [Managed folders](https://docs.cloud.google.com/storage/docs/creating-managing-managed-folders)
+- [Public Access Prevention](https://docs.cloud.google.com/storage/docs/public-access-prevention)
+- [V4 signed URLs](https://docs.cloud.google.com/storage/docs/access-control/signing-urls-with-helpers)
+- [Soft delete](https://docs.cloud.google.com/storage/docs/soft-delete)
+- [Object Versioning](https://docs.cloud.google.com/storage/docs/object-versioning)
+- [Object Lifecycle Management](https://docs.cloud.google.com/storage/docs/lifecycle)
+- [Storage classes](https://docs.cloud.google.com/storage/docs/storage-classes)
+- [Bucket Lock](https://docs.cloud.google.com/storage/docs/bucket-lock)

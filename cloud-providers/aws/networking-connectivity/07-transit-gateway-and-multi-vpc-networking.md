@@ -40,19 +40,7 @@ The first-principles question behind multi-VPC networking is:
 
 Once that is clear, peering, Transit Gateway attachments, VPC routes, TGW route-table associations, route propagation, segmentation, shared services, and return-path debugging become variations of ordinary routing.
 
-The sections below answer these questions in order:
-
-1. **Why Do Separate VPCs Need an Explicit Connection?**
-2. **When Does VPC Peering Fit?**
-3. **What Is a Transit Gateway Attachment?**
-4. **Why Are There Two Route-Table Lookups?**
-5. **How Do Multiple TGW Route Tables Create Segmentation?**
-6. **How Do Shared Services and Inspection Fit the Hub?**
-7. **When Should You Choose Peering or Transit Gateway?**
-8. **How Do You Troubleshoot a Multi-VPC Path?**
-
-## Why Do Separate VPCs Need an Explicit Connection?
-<!-- section-summary: A VPC is an isolated Layer-3 network, so traffic to another VPC needs a route and an explicit inter-network next hop. -->
+Treat every cross-VPC flow as a forward path and a return path. The source subnet first chooses an attachment or peer, the transit system makes its own routing decision, and the destination VPC chooses the final local path. Segmentation works only when each lookup and each security boundary agrees with the intended relationship.
 
 Begin with one VPC:
 
@@ -71,6 +59,20 @@ Which route matches most specifically?
         ↓
 Which next hop receives the packet?
 ```
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Do Separate VPCs Need an Explicit Connection?**
+2. **When Does VPC Peering Fit?**
+3. **What Is a Transit Gateway Attachment?**
+4. **Why Are There Two Route-Table Lookups?**
+5. **How Do Multiple TGW Route Tables Create Segmentation?**
+6. **How Do Shared Services and Inspection Fit the Hub?**
+7. **When Should You Choose Peering or Transit Gateway?**
+8. **How Do You Troubleshoot a Multi-VPC Path?**
+
+## Why Do Separate VPCs Need an Explicit Connection?
+<!-- section-summary: A VPC is an isolated Layer-3 network, so traffic to another VPC needs a route and an explicit inter-network next hop. -->
 
 `10.1.2.20` matches the local `10.1.0.0/16` route. `8.8.8.8` may match a default NAT route. AWS uses most-specific, or longest-prefix, destination matching.
 
@@ -141,7 +143,7 @@ n(n - 1) / 2
 
 Ten VPCs can require 45 peerings; 100 VPCs can require 4,950. Each edge also brings route updates, return routes, security review, DNS considerations, and owner coordination.
 
-Peering remains valuable when two VPCs need a direct, simple connection or the topology is small and stable. Its non-transitivity becomes an operational burden when the company is trying to construct a network of many networks.
+Peering remains valuable when two VPCs need a direct, simple connection or the topology is small and stable. A company constructing a network of many networks experiences peering's non-transitivity as an operational burden.
 
 ### Why Does Transit Gateway Scale Better?
 <!-- section-summary: Transit Gateway replaces many pairwise connections with one regional managed router and a roughly linear number of attachments. -->

@@ -35,13 +35,13 @@ Another application needs to send a payment request. It could connect to `10.244
 
 A Kubernetes Service separates those two identities. The caller uses one stable application name and port. Kubernetes maintains the changing set of Pod addresses behind that name.
 
-The central model for this article is:
+The central Service model is:
 
 - **Pods are application instances.** They are created, replaced, rescheduled, and removed.
 - **A Service is the stable identity of the application.** Callers depend on this identity.
 - **EndpointSlices are the current mapping from that identity to concrete instances.** They record the addresses and conditions the networking data plane can use.
 
-That model leads to seven questions:
+Keep these questions in view as you work through the lesson:
 
 1. **Why is a Pod IP a poor application address?**
 2. **What stays stable when you create a Service?**

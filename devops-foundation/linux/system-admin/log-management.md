@@ -9,28 +9,38 @@ id: article-devops-foundation-linux-system-admin-log-management
 
 ## Table of Contents
 
-1. [Why Logs Are Operational Evidence](#why-logs-are-operational-evidence)
-2. [Two Log Paths on One VM](#two-log-paths-on-one-vm)
-3. [Where the Important Logs Live](#where-the-important-logs-live)
-4. [Severity and Signal](#severity-and-signal)
-5. [Query the Journal](#query-the-journal)
-6. [Read Nginx Access and Error Logs](#read-nginx-access-and-error-logs)
-7. [Rotate Logs with logrotate](#rotate-logs-with-logrotate)
-8. [Structured Application Logs](#structured-application-logs)
-9. [Ship Logs Off the VM](#ship-logs-off-the-vm)
-10. [Common Log Failures](#common-log-failures)
-11. [References](#references)
-
-## Why Logs Are Operational Evidence
-<!-- section-summary: Logs explain what the system, services, proxy, kernel, and authentication layer observed before, during, and after an issue. -->
+1. [Why Are Logs Operational Evidence?](#why-are-logs-operational-evidence)
+2. [How Does a Log Record Move from Producer to Destination?](#how-does-a-log-record-move-from-producer-to-destination)
+3. [Where Do Important Logs Live and How Does Severity Help?](#where-do-important-logs-live-and-how-does-severity-help)
+4. [How Do You Query the systemd Journal?](#how-do-you-query-the-systemd-journal)
+5. [How Do You Read Nginx Access and Error Logs?](#how-do-you-read-nginx-access-and-error-logs)
+6. [How Does Rotation Keep File and Journal Logs Bounded?](#how-does-rotation-keep-file-and-journal-logs-bounded)
+7. [How Do Structured Logs Remain Useful Off the VM?](#how-do-structured-logs-remain-useful-off-the-vm)
+8. [How Do You Diagnose Common Logging Failures?](#how-do-you-diagnose-common-logging-failures)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 A log investigation often starts with one uncomfortable sentence: "Users saw errors around 10:21." That is not enough to act on. Logs turn that vague report into concrete questions: did the service restart, did the kernel kill a process, did Nginx return `502`, did someone run `sudo`, or did a dependency timeout?
 
 Good log management has two jobs. First, you need a quick path to the right evidence. Second, you need to keep the evidence from hurting the server. A log file that grows forever can fill `/`. A log line with a password can leak a secret. Logs that exist only on one VM can disappear when that VM is replaced.
 
+Keep these questions in view as you work through the lesson:
+
+1. **Why Are Logs Operational Evidence?**
+2. **How Does a Log Record Move from Producer to Destination?**
+3. **Where Do Important Logs Live and How Does Severity Help?**
+4. **How Do You Query the systemd Journal?**
+5. **How Do You Read Nginx Access and Error Logs?**
+6. **How Does Rotation Keep File and Journal Logs Bounded?**
+7. **How Do Structured Logs Remain Useful Off the VM?**
+8. **How Do You Diagnose Common Logging Failures?**
+
+## Why Are Logs Operational Evidence?
+<!-- section-summary: Logs explain what the system, services, proxy, kernel, and authentication layer observed before, during, and after an issue. -->
+
 The daily path is practical. The closest layer to the symptom comes first, then time and service filters, proxy logs for HTTP errors, safe rotation for file logs, structured fields for application logs, and central shipping for important evidence.
 
-## Two Log Paths on One VM
+## How Does a Log Record Move from Producer to Destination?
 <!-- section-summary: systemd services commonly log to journald, while Nginx commonly writes access and error logs as files under `/var/log/nginx`. -->
 
 On a systemd server, two log paths are usually the first stops. One shows what services and the host reported through systemd. The other holds plain log files written by tools such as Nginx, authentication services, package managers, and application processes. A missing service error sends you to the journal. A `502` from Nginx sends you to Nginx files and then back to the app journal.
@@ -71,7 +81,7 @@ The next decision is to pick the layer closest to the symptom. If `systemctl sta
 
 _The image shows how one request can leave connected evidence across proxy logs, app logs, host logs, and a central log view._
 
-## Where the Important Logs Live
+## Where Do Important Logs Live and How Does Severity Help?
 <!-- section-summary: Knowing the common log locations lets operators start from the right evidence source. -->
 
 During an incident, random log searching wastes time. A service crash, an HTTP `502`, a failed SSH login, and a disk error leave evidence in different places. The source closest to the symptom is the first useful place to inspect.
@@ -88,7 +98,7 @@ The error log says `connect() failed (111: Connection refused)` for `127.0.0.1:3
 
 Use the same path for other symptoms. A failed deploy usually starts in the service journal. A suspicious maintenance change sends you to sudo and package logs. Disk pressure sends you to kernel logs and the disk runbook. The goal is to follow the symptom through the layer that observed it, then move one layer inward or downward based on what the evidence proves.
 
-## Severity and Signal
+### How Does Severity Narrow the Search Without Proving Importance?
 <!-- section-summary: Severity levels help filter logs, but good messages still need context such as request IDs, path, status, and duration. -->
 
 Picture a noisy incident window where every request writes an `info` line. Hundreds of successful health checks and normal requests scroll past, while the warning about a slow export and the error about a killed service sit in the same stream. Severity gives you a way to reduce that noise before you inspect the details.
@@ -122,7 +132,7 @@ Severity is only one part of useful logging. A helpful log line also includes co
 
 In production, a useful warning usually leads to a decision. A slow request warning may send you to latency graphs or database logs. A service `KILL` line may send you to kernel OOM logs. A flood of debug messages may send you to configuration because the logging level itself is now creating noise and storage pressure.
 
-## Query the Journal
+## How Do You Query the systemd Journal?
 <!-- section-summary: `journalctl` filters service logs by unit, time, boot, priority, and follow mode. -->
 
 Keep the same incident from the previous section. Users reported `502` responses at `10:21`, and Nginx said the upstream connection to `127.0.0.1:3000` was refused. The next question is about the app service: was it running at that time, or did it disappear before Nginx tried to connect?
@@ -199,7 +209,7 @@ journalctl -u app.service -f
 
 This proves the service started, bound to the expected port, and served a successful request after the fix. At that point, keep the follow window open only long enough to confirm stability, then move the incident notes into a timeline: user symptom, Nginx result, app journal result, kernel evidence, operator action, fix, and verification.
 
-## Read Nginx Access and Error Logs
+## How Do You Read Nginx Access and Error Logs?
 <!-- section-summary: Nginx access logs show request outcomes, while error logs show proxy and upstream failures. -->
 
 When users report `502` responses, the first question is whether the requests reached Nginx. The access log answers that because it records each request and the status code Nginx returned to the client.
@@ -305,7 +315,7 @@ journalctl -u app.service --since "2026-06-24 10:20:00" --until "2026-06-24 10:2
 
 This bridge tells you whether the app saw the same request window. If Nginx has connection refused and the app journal has a restart at the same timestamp, treat service availability as the main branch. If Nginx has upstream timeouts and the app journal has slow request errors, treat application latency or dependency slowness as the main branch. If Nginx has a request and the app has no matching log, check upstream address, port, firewall, process state, and whether request IDs are passed through.
 
-## Rotate Logs with logrotate
+## How Does Rotation Keep File and Journal Logs Bounded?
 <!-- section-summary: logrotate compresses, removes, and recreates log files so file logs do not fill the server. -->
 
 A file-log problem often starts quietly. Access logs grow every day, rotation is missing or misconfigured, and then `/` fills during a traffic spike. `logrotate` prevents that by renaming old files, compressing archives, keeping a set number of copies, creating new files, and telling a service to reopen its logs.
@@ -396,7 +406,7 @@ The next decision is based on what rotation protects. If `/var/log/nginx` grows 
 
 _The image shows why rotation and service reload behavior must agree, especially for busy logs._
 
-## Structured Application Logs
+## How Do Structured Logs Remain Useful Off the VM?
 <!-- section-summary: Structured logs make request and error analysis easier because fields can be filtered without fragile string parsing. -->
 
 During a small incident, a plain sentence in a log may be fine. During a larger incident, operators need to ask questions across thousands of lines: which route returned `500`, which request ID failed, and which requests took more than ten seconds?
@@ -430,7 +440,7 @@ Keep structure practical. Use unambiguous timestamps such as ISO 8601. Avoid sec
 
 The next decision is schema discipline. Choose a small set of fields that appear on every request log, add extra fields only when they help debugging, and keep names stable across releases. A central search is much more useful when `request_id`, `level`, `status`, and `duration_ms` mean the same thing for every service.
 
-## Ship Logs Off the VM
+### Why Should Important Logs Leave the VM?
 <!-- section-summary: Central log shipping preserves evidence when the VM fails and lets teams search across services. -->
 
 SSH debugging often starts with local logs, and production teams usually send important logs to a central system too. Central logs survive VM replacement, support search across hosts, and make alerting easier. The exact tool varies by company: rsyslog, journald forwarding, Fluent Bit, Vector, cloud logging agents, and vendor agents are all common.
@@ -494,7 +504,7 @@ Keep short local retention even when shipping works. Local logs help when the ne
 
 The next decision is reliability. Use local retention for quick SSH debugging, central shipping for long-term search and alerting, and health checks for the forwarder. If central logs go quiet while local logs continue, investigate the agent, network route, credentials, and buffer usage.
 
-## Common Log Failures
+## How Do You Diagnose Common Logging Failures?
 <!-- section-summary: Log systems fail through disk growth, missing rotation, noisy debug output, secret leaks, time drift, and broken shipping. -->
 
 Log failures usually appear while you are already solving another problem. The app was slow, users saw `502`, or the disk filled. The useful habit is to ask what the log system itself proved, then fix the evidence path as carefully as the application.
@@ -584,6 +594,40 @@ journalctl -u rsyslog -n 20 --no-pager
 `active (running)` tells you the forwarder process is alive. The journal line tells you whether forwarding resumed or failed. A healthy logging design keeps short local retention for SSH debugging and central shipping for longer search and alerting.
 
 Good log management makes the next incident shorter. The server keeps enough local detail to debug quickly, rotates logs before they fill storage, and sends evidence to a central place before the VM disappears.
+
+## Check Your Answers
+
+:::expand[Why Are Logs Operational Evidence?]{kind="recap"}
+Logs preserve what a producer observed at a particular time, allowing operators to reconstruct changes, failures, and request paths.
+:::
+
+:::expand[How Does a Log Record Move from Producer to Destination?]{kind="recap"}
+Every record has a producer, a transport, and a destination; journal and file paths can record different views of one event.
+:::
+
+:::expand[Where Do Important Logs Live and How Does Severity Help?]{kind="recap"}
+Start at the layer closest to the symptom, then use severity as a filter rather than proof that an event matters.
+:::
+
+:::expand[How Do You Query the systemd Journal?]{kind="recap"}
+Bound journal evidence by unit, boot, kernel, priority, and exact time window before following it live.
+:::
+
+:::expand[How Do You Read Nginx Access and Error Logs?]{kind="recap"}
+Access logs describe requests and outcomes; error logs explain proxy and upstream failures one layer deeper.
+:::
+
+:::expand[How Does Rotation Keep File and Journal Logs Bounded?]{kind="recap"}
+Rotation and journal retention bound storage while respecting open-file behavior and the application's reopen mechanism.
+:::
+
+:::expand[How Do Structured Logs Remain Useful Off the VM?]{kind="recap"}
+Stable fields, trusted timestamps, correlation IDs, secret filtering, and a shipping agent make centralized events searchable.
+:::
+
+:::expand[How Do You Diagnose Common Logging Failures?]{kind="recap"}
+Check the producer, permissions, disk, rotation state, clock, forwarder, buffer, network path, and destination in order.
+:::
 
 ![Log management summary infographic showing journal logs, access logs, severity, rotation, structured logs, shipping, and failure checks](/content-assets/articles/article-devops-foundation-linux-system-admin-log-management/log-management-summary.png)
 

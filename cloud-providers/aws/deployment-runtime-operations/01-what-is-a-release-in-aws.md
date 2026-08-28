@@ -24,13 +24,25 @@ aliases:
 6. [Why Must Rollback Be Designed Before Release?](#why-must-rollback-be-designed-before-release)
 7. [How Does a Complete ECS Release Run?](#how-does-a-complete-ecs-release-run)
 8. [What Is the First-Principles Release Model?](#what-is-the-first-principles-release-model)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 A release is a controlled change to what users experience in a running production system. A deployment puts a change into the runtime environment. A release makes the intended production behavior depend on that change, observes whether the new state is acceptable, and retains a known way back.
 
 AWS has no single universal resource named "release." ECR stores artifacts, ECS runs tasks, CodeDeploy shifts traffic, AppConfig deploys configuration and feature flags, CloudWatch supplies evidence, and IAM gives workloads security identities. Release engineering connects those service-specific pieces into one production-state transition.
 
-The sections below answer these questions in order:
+Suppose version 1 of an orders API returns:
+
+```json
+{
+  "id": 123,
+  "status": "SHIPPED"
+}
+```
+
+Version 2 adds a tracking URL. Compiling and testing it on a laptop changes nothing for production users because requests still reach running version 1 processes.
+
+Keep these questions in view as you work through the lesson:
 
 1. **How Is a Release Different from a Deployment?**
 2. **Why Must a Release Use an Exact Artifact?**
@@ -43,17 +55,6 @@ The sections below answer these questions in order:
 
 ## How Is a Release Different from a Deployment?
 <!-- section-summary: Build creates bytes, deployment runs them, rollout changes exposure, and release accepts the resulting production behavior. -->
-
-Suppose version 1 of an orders API returns:
-
-```json
-{
-  "id": 123,
-  "status": "SHIPPED"
-}
-```
-
-Version 2 adds a tracking URL. Compiling and testing it on a laptop changes nothing for production users because requests still reach running version 1 processes.
 
 Production must move from:
 
@@ -256,7 +257,7 @@ Security identity answers what the running process may do. An ECS task role migh
 Changing the role can change runtime behavior without changing code. Version 42 with permission to retrieve its secret can start; version 42 without that permission can crash or fail requests. Release analysis must therefore include both identity types.
 
 ## How Does Traffic Turn a Deployment into User Experience?
-<!-- section-summary: Candidate capacity becomes a release only when a traffic policy exposes users, and that policy determines blast radius and rollback speed. -->
+<!-- section-summary: A traffic policy exposing users turns candidate capacity into a release, and that policy determines blast radius and rollback speed. -->
 
 Suppose production traffic reaches three version 1 targets. Starting two healthy version 2 targets means version 2 is deployed, but if it receives no production traffic, users have not experienced it.
 
@@ -582,6 +583,8 @@ The shortest definition is: **An AWS release is a recorded, controlled transitio
 
 Deployment gets the change into the environment. Release decides whether production should live on it.
 
+## Check Your Answers
+
 :::expand[How Is a Release Different from a Deployment?]{kind="recap"}
 Build creates bytes, deployment runs them, rollout changes exposure, and release accepts the resulting production behavior.
 
@@ -605,7 +608,7 @@ Behavior depends on code, configuration, dependencies, permissions, and data. Fe
 :::
 
 :::expand[How Does Traffic Turn a Deployment into User Experience?]{kind="recap"}
-Candidate capacity becomes a release only when a traffic policy exposes users, and that policy determines blast radius and rollback speed.
+A traffic policy exposing users turns candidate capacity into a release, and that policy determines blast radius and rollback speed.
 
 Candidate capacity is only deployed until users reach it. All-at-once exposes everyone, canary expands a small sample, and blue/green switches between complete task sets while retaining a quick traffic-based recovery path.
 :::

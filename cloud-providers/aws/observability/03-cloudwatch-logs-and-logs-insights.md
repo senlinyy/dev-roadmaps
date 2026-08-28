@@ -30,12 +30,16 @@ aliases:
 6. [How Do You Control Query Cost and Use Field Indexes?](#how-do-you-control-query-cost-and-use-field-indexes)
 7. [How Do Retention, Log Classes, and Archiving Differ?](#how-do-retention-log-classes-and-archiving-differ)
 8. [How Does a Complete Logging System Fit Together?](#how-does-a-complete-logging-system-fit-together)
-9. [What Should You Remember?](#what-should-you-remember)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
 An application continuously produces facts about requests, decisions, dependency calls, and failures. CloudWatch Logs receives and stores those facts. CloudWatch Logs Insights searches and aggregates the stored events. The two services belong to one pipeline, but storage and querying are different jobs.
 
-The sections below answer these questions in order:
+Imagine a checkout service running on Amazon ECS. ECS runs containers as tasks, and each task can disappear during deployments, scaling, or recovery. A customer clicks Pay, the browser returns a 502, and the on-call engineer sees a CloudWatch alarm saying the checkout API has a sharp increase in 5xx responses.
+
+The metric tells the team that something is wrong. The request body, customer region, payment provider, exception name, and retry attempt all live somewhere else. That detail usually lives in **logs**, which are timestamped records written by applications, platforms, and services while work is happening.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Do You Need Logs After a Metric Fires?**
 2. **What Does CloudWatch Logs Store?**
@@ -48,10 +52,6 @@ The sections below answer these questions in order:
 
 ## Why Do You Need Logs After a Metric Fires?
 <!-- section-summary: A metric tells the team that checkout is failing, but logs explain the exact request, service, and error that caused the page. -->
-
-Imagine a checkout service running on Amazon ECS. ECS runs containers as tasks, and each task can disappear during deployments, scaling, or recovery. A customer clicks Pay, the browser returns a 502, and the on-call engineer sees a CloudWatch alarm saying the checkout API has a sharp increase in 5xx responses.
-
-The metric tells the team that something is wrong. The request body, customer region, payment provider, exception name, and retry attempt all live somewhere else. That detail usually lives in **logs**, which are timestamped records written by applications, platforms, and services while work is happening.
 
 In a smaller system, a developer might SSH into one server and open `/var/log/app.log`. In AWS, the failed request may have touched an Application Load Balancer, an ECS task, a Lambda fraud-check function, an SQS retry queue, and a database client. The task that wrote the useful line may already be gone by the time someone starts investigating.
 
@@ -536,7 +536,7 @@ This is the production habit to build. Logs serve as structured evidence, stored
 *The summary image groups the controls that keep logs useful over time: retention, class, indexes, filters, and subscriptions all belong to the log group design.*
 
 
-## What Should You Remember?
+## Check Your Answers
 <!-- section-summary: CloudWatch Logs preserves detailed events, Logs Insights turns them into answers, and filters, indexes, and lifecycle controls keep the system usable. -->
 
 The complete mental model is:

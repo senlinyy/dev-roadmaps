@@ -12,28 +12,38 @@ aliases:
 
 ## Table of Contents
 
-1. [The Recovery Map](#the-recovery-map)
-2. [Retention Windows](#retention-windows)
-3. [Blob Storage Recovery](#blob-storage-recovery)
-4. [Azure SQL Database Restore](#azure-sql-database-restore)
-5. [Cosmos DB Backup Modes](#cosmos-db-backup-modes)
-6. [Managed Disks and Azure Files](#managed-disks-and-azure-files)
-7. [Vaults, Immutability, and Backup Soft Delete](#vaults-immutability-and-backup-soft-delete)
-8. [Safe Deletion and Restore Drills](#safe-deletion-and-restore-drills)
-9. [Putting It All Together](#putting-it-all-together)
-
-## The Recovery Map
-<!-- section-summary: Azure recovery design starts by naming the data, the restore point, the restore location, and the application path back to service. -->
+1. [What Does the Recovery Map Protect?](#what-does-the-recovery-map-protect)
+2. [How Do Retention Windows Set Recoverability?](#how-do-retention-windows-set-recoverability)
+3. [How Does Blob Storage Recovery Work?](#how-does-blob-storage-recovery-work)
+4. [How Does Azure SQL Restore Work?](#how-does-azure-sql-restore-work)
+5. [How Do Cosmos DB Backup Modes Differ?](#how-do-cosmos-db-backup-modes-differ)
+6. [How Are Managed Disks and Azure Files Protected?](#how-are-managed-disks-and-azure-files-protected)
+7. [How Do Vaults, Immutability, and Soft Delete Help?](#how-do-vaults-immutability-and-soft-delete-help)
+8. [How Do You Practice Safe Deletion and Restore?](#how-do-you-practice-safe-deletion-and-restore)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 A **backup** is a saved recovery point from an earlier moment. A **restore** is the work of turning that recovery point back into usable data. That second word matters a lot, because many teams can point at a backup job and still freeze during an incident. They know Azure has copies somewhere, but they cannot name which copy to choose, where to restore it, who can approve it, or how the application will use the recovered data.
 
 The previous storage articles mostly followed the Orders system so each service had a clear home. This final recovery article uses a second example because backup design needs several data shapes in one place. A learning platform called `LearnTrail` sells course subscriptions, stores invoices as PDF blobs, keeps user enrollment records in Azure SQL Database, stores high-volume activity events in Cosmos DB, runs one old video processing VM with managed disks, and shares export templates through Azure Files. This is a small enough system to picture, but it has the same recovery problems that larger systems have.
 
+Keep these questions in view as you work through the lesson:
+
+1. **What Does the Recovery Map Protect?**
+2. **How Do Retention Windows Set Recoverability?**
+3. **How Does Blob Storage Recovery Work?**
+4. **How Does Azure SQL Restore Work?**
+5. **How Do Cosmos DB Backup Modes Differ?**
+6. **How Are Managed Disks and Azure Files Protected?**
+7. **How Do Vaults, Immutability, and Soft Delete Help?**
+8. **How Do You Practice Safe Deletion and Restore?**
+
+## What Does the Recovery Map Protect?
+<!-- section-summary: Azure recovery design starts by naming the data, the restore point, the restore location, and the application path back to service. -->
+
 For `LearnTrail`, one accident can hit several data shapes at the same time. A release might update the wrong enrollment rows in SQL. A cleanup job might delete invoice PDFs from Blob Storage. A worker might write bad activity events into Cosmos DB. A VM upgrade might damage files on a data disk. Each case needs a different Azure recovery feature, because each service stores data in a different way.
 
 The practical recovery map has four questions:
-
-If you know AWS recovery tools, the Azure rows solve familiar problems. Azure Backup vaults sit near AWS Backup plans and vaults, Azure SQL PITR sits near RDS or Aurora point-in-time restore, Blob versioning and immutability sit near S3 Versioning and Object Lock, and managed disk snapshots sit near EBS snapshots. The service names change, but each data shape still needs a recovery source, a safe restore target, and a validation check.
 
 | Question | What the team needs to know | LearnTrail example |
 | --- | --- | --- |
@@ -50,7 +60,7 @@ That last question keeps the article grounded. Recovery design includes the plat
 
 Once the map exists, retention is the next decision. The team needs to know how long each recovery point remains available.
 
-## Retention Windows
+## How Do Retention Windows Set Recoverability?
 <!-- section-summary: Retention is the time limit on recovery, so the setting has to match how long the business may take to notice and respond to data loss. -->
 
 **Retention** means how long Azure keeps a recovery copy before the service, policy, or lifecycle rule removes it. A retention window turns a recovery promise into a clock. If Blob soft delete keeps deleted blobs for 30 days, the team has 30 days to recover a deleted invoice blob. If Azure SQL Database short-term retention keeps point-in-time restore coverage for 7 days, a mistake found after day 8 needs another recovery source, such as long-term retention or an export process.
@@ -75,7 +85,7 @@ Longer retention costs money because old versions, deleted blobs, snapshots, rec
 
 With the clock defined, the next question is data shape. The first `LearnTrail` data shape is Blob Storage, because files often receive accidental deletes and overwrites from scripts.
 
-## Blob Storage Recovery
+## How Does Blob Storage Recovery Work?
 <!-- section-summary: Blob recovery usually combines versioning, blob soft delete, container soft delete, lifecycle cleanup, and sometimes immutability for records that must stay fixed. -->
 
 **Azure Blob Storage** stores object data such as PDFs, images, exports, logs, and media files. A blob has a name inside a container, and application code usually reads or writes it through the storage API rather than mounting it like a normal disk. For `LearnTrail`, invoice PDFs live under names like `invoices/2026/06/invoice-10421.pdf`.
@@ -137,7 +147,7 @@ Example output:
 
 The invoices are files, but `LearnTrail` also stores enrollment state in Azure SQL Database. Database recovery uses a different shape because the team often needs one exact second before a bad write.
 
-## Azure SQL Database Restore
+## How Does Azure SQL Restore Work?
 <!-- section-summary: Azure SQL Database recovery uses automated backups, transaction logs, PITR, and long-term retention to restore a database state without treating every table as a file. -->
 
 **Azure SQL Database** is a managed relational database service. It stores structured records in tables, enforces transactions, and supports SQL queries. `LearnTrail` uses it for customers, course enrollments, payments, and support-facing account state. A bad database change can hurt many users at once because one query can update thousands of rows.
@@ -158,7 +168,7 @@ Azure SQL backup storage redundancy also matters. Geo-redundant backup storage c
 
 Azure SQL gives a strong database recovery path, but `LearnTrail` also has activity data in Cosmos DB. Cosmos DB uses backup modes rather than SQL transaction log restore.
 
-## Cosmos DB Backup Modes
+## How Do Cosmos DB Backup Modes Differ?
 <!-- section-summary: Cosmos DB recovery depends on whether the account uses periodic backup or continuous backup, because those modes give different restore windows and restore workflows. -->
 
 **Azure Cosmos DB** is a globally distributed NoSQL database service. It stores data in containers instead of relational tables, and applications often use it for high-volume events, profiles, carts, catalogs, or session-like records. `LearnTrail` uses Cosmos DB for activity events such as lesson starts, quiz attempts, and video watch progress.
@@ -196,7 +206,7 @@ The output should make risky accounts obvious:
 
 The database services now have a recovery story. The remaining `LearnTrail` state sits closer to operating system storage: managed disks and file shares.
 
-## Managed Disks and Azure Files
+## How Are Managed Disks and Azure Files Protected?
 <!-- section-summary: Disk and file-share recovery protects VM-bound storage and shared folders, but the team still needs to test whether the restored data starts and mounts cleanly. -->
 
 **Azure Managed Disks** are block storage volumes attached to virtual machines. A VM boot disk, a video worker data disk, or a legacy application disk all use this kind of storage. A **snapshot** captures a disk at a point in time. Azure supports full snapshots and incremental snapshots. Incremental snapshots store changes since the previous snapshot, and Azure can use them to create a full managed disk that represents the selected point in time.
@@ -215,7 +225,7 @@ File share recovery needs the same restore-side test as disk recovery. A templat
 
 By this point, `LearnTrail` has service-level recovery options. The next layer is where Azure Backup vaults, immutability, and backup soft delete protect the recovery points themselves.
 
-## Vaults, Immutability, and Backup Soft Delete
+## How Do Vaults, Immutability, and Soft Delete Help?
 <!-- section-summary: Azure Backup vault settings protect recovery points from accidental cleanup and malicious deletion, which matters because attackers often target backups after production. -->
 
 **Azure Backup** is Azure's managed backup service for workloads such as virtual machines, Azure Files, managed disks, databases on VMs, and other supported resources. A **Recovery Services vault** or **Backup vault** gives the team a central resource for backup policies, jobs, recovery points, monitoring, and security controls.
@@ -232,7 +242,7 @@ There is one caution that beginners need to hear clearly. Locked retention is su
 
 The last layer is operational habit. Good backup settings help, but safe deletion and restore drills reduce the chance that the team needs emergency recovery in the first place.
 
-## Safe Deletion and Restore Drills
+## How Do You Practice Safe Deletion and Restore?
 <!-- section-summary: Safe deletion catches mistakes before they destroy data, and restore drills prove that recovery settings work under real operating conditions. -->
 
 **Safe deletion** means the team proves scope, recovery, and approval before a destructive action runs. This applies to scripts, migrations, lifecycle rules, manual portal actions, and cleanup jobs. The habit sits across the whole system instead of inside one Azure product.
@@ -262,7 +272,7 @@ A healthy drill feels boring by the third time. That is the goal. The first dril
 
 Now we can put the design back together across the whole storage module.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: Azure backups and retention work best when each data shape has a named restore point, a retention window, a safe restore location, and a tested return path. -->
 
 Backups and retention are part of storage design. Blob Storage needs versioning, blob soft delete, container soft delete, lifecycle cleanup, and sometimes immutable storage for final records. Azure SQL Database needs short-term PITR for recent mistakes and long-term retention for older compliance needs. Cosmos DB needs the right backup mode before the incident. Managed Disks need snapshots or Azure Backup, plus application-aware thinking for busy services. Azure Files needs snapshot or vaulted backup policies that match how shared folders are used.
@@ -277,7 +287,41 @@ The useful test is simple: the team can name the data, name the restore point, n
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[What Does the Recovery Map Protect?]{kind="recap"}
+Azure recovery design starts by naming the data, the restore point, the restore location, and the application path back to service.
+:::
+
+:::expand[How Do Retention Windows Set Recoverability?]{kind="recap"}
+Retention is the time limit on recovery, so the setting has to match how long the business may take to notice and respond to data loss.
+:::
+
+:::expand[How Does Blob Storage Recovery Work?]{kind="recap"}
+Blob recovery usually combines versioning, blob soft delete, container soft delete, lifecycle cleanup, and sometimes immutability for records that must stay fixed.
+:::
+
+:::expand[How Does Azure SQL Restore Work?]{kind="recap"}
+Azure SQL Database recovery uses automated backups, transaction logs, PITR, and long-term retention to restore a database state without treating every table as a file.
+:::
+
+:::expand[How Do Cosmos DB Backup Modes Differ?]{kind="recap"}
+Cosmos DB recovery depends on whether the account uses periodic backup or continuous backup, because those modes give different restore windows and restore workflows.
+:::
+
+:::expand[How Are Managed Disks and Azure Files Protected?]{kind="recap"}
+Disk and file-share recovery protects VM-bound storage and shared folders, but the team still needs to test whether the restored data starts and mounts cleanly.
+:::
+
+:::expand[How Do Vaults, Immutability, and Soft Delete Help?]{kind="recap"}
+Azure Backup vault settings protect recovery points from accidental cleanup and malicious deletion, which matters because attackers often target backups after production.
+:::
+
+:::expand[How Do You Practice Safe Deletion and Restore?]{kind="recap"}
+Safe deletion catches mistakes before they destroy data, and restore drills prove that recovery settings work under real operating conditions. Azure backups and retention work best when each data shape has a named restore point, a retention window, a safe restore location, and a tested return path.
+:::
+
+## References
 
 * [Automated backups in Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/automated-backups-overview?view=azuresql) - Backup frequency, PITR behavior, redundancy choices, and short-term retention.
 * [Long-term retention backups in Azure SQL Database and Azure SQL Managed Instance](https://learn.microsoft.com/en-us/azure/azure-sql/database/long-term-retention-overview?view=azuresql) - LTR policy concepts, retention windows, and restore behavior.

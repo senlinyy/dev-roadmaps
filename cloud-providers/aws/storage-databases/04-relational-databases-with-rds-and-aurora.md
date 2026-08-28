@@ -23,10 +23,23 @@ aliases:
 6. [How Should Schema Changes Be Deployed?](#how-should-schema-changes-be-deployed)
 7. [How Should You Scale a Relational Database?](#how-should-you-scale-a-relational-database)
 8. [What Should You Review Before Production?](#what-should-you-review-before-production)
-9. [Check Your Understanding](#check-your-understanding)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-The sections below answer these questions in order:
+An order can be encoded as bytes in `orders/8472.json` and stored on EBS or S3. That answers “Where should these bytes live?” Applications soon need harder answers:
+
+These are state-management questions, not only storage questions. A database adds a data model, queries, indexes, constraints, concurrency control, transactions, crash recovery, and durability above the underlying bytes.
+
+```text
+storage: “Preserve these bytes.”
+
+database: “Preserve structured state and its rules
+           while many programs read and change it concurrently.”
+```
+
+Keep three decisions separate while reading: the relational contract the application needs, the database work AWS manages, and the availability or scaling topology the team selects. RDS and Aurora can expose familiar SQL engines while giving different storage, replication, failover, connection, backup, and cost behavior.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Does an Application Need a Database?**
 2. **What Does Amazon RDS Manage?**
@@ -39,24 +52,6 @@ The sections below answer these questions in order:
 
 ## Why Does an Application Need a Database?
 <!-- section-summary: A database keeps structured shared state correct under queries, concurrent changes, crashes, and business rules rather than merely storing bytes. -->
-
-An order can be encoded as bytes in `orders/8472.json` and stored on EBS or S3. That answers “Where should these bytes live?” Applications soon need harder answers:
-
-- Has the order already been paid?
-- Does the referenced customer exist?
-- Can two buyers purchase the final item at the same time?
-- If checkout crashes halfway, was the customer charged without an order?
-- Which paid orders did customer 123 place in the last 30 days?
-- How can the system prevent duplicate email registration?
-
-These are state-management questions, not only storage questions. A database adds a data model, queries, indexes, constraints, concurrency control, transactions, crash recovery, and durability above the underlying bytes.
-
-```text
-storage: “Preserve these bytes.”
-
-database: “Preserve structured state and its rules
-           while many programs read and change it concurrently.”
-```
 
 The application shares the database with web servers, workers, administrators, reporting jobs, and new software versions. Central database rules are valuable because correctness does not depend on every caller independently remembering every invariant.
 
@@ -392,7 +387,7 @@ Connections are another finite resource. A stateless compute tier can create hun
 
 Use bounded application pools, size the total connection budget across replicas and jobs, and consider RDS Proxy when pooling and burst absorption fit the workload. A proxy cannot repair bad SQL, unbounded transactions, or incorrect timeout handling; it manages connection pressure.
 
-Connection pressure creates a characteristic cloud mismatch. A stateless application tier may expand from 20 to 1,000 tasks in minutes. If every task opens a pool of 50 connections, the deployment can request 50,000 sessions from one state coordinator. Pool sizes that seem modest in one process become dangerous when multiplied across autoscaled processes, background workers, migration jobs, and administrator tools.
+Connection pressure creates a characteristic cloud mismatch. A stateless application tier may expand from 20 to 1,000 tasks in minutes. If every task opens a pool of 50 connections, the deployment can request 50,000 sessions from one state coordinator. Multiplication across autoscaled processes, background workers, migration jobs, and administrator tools makes an apparently modest per-process pool dangerous.
 
 Budget connections from the database outward. Reserve headroom for operations and failover, divide the remaining capacity among known callers, and test how pools respond when the database endpoint changes. Idle connection lifetime, transaction timeout, retry behavior, and reconnect storms can matter as much as the nominal pool maximum.
 
@@ -463,7 +458,7 @@ Those shapes explain why “RDS,” “Multi-AZ,” and “Aurora” cannot be t
 
 *Managed infrastructure does not replace database engineering; it gives that engineering a managed operational foundation.*
 
-## Check Your Understanding
+## Check Your Answers
 
 :::expand[Why Does an Application Need a Database?]{kind="recap"}
 A database keeps structured shared state correct under queries, concurrent changes, crashes, and business rules rather than merely storing bytes.

@@ -12,20 +12,16 @@ aliases:
 
 ## Table of Contents
 
-1. [The Production Question](#the-production-question)
-2. [What Azure Monitor Metrics Stores](#what-azure-monitor-metrics-stores)
-3. [Platform Metrics, Custom Metrics, and Dimensions](#platform-metrics-custom-metrics-and-dimensions)
-4. [Dashboards and Workbooks](#dashboards-and-workbooks)
-5. [Alert Rule Anatomy](#alert-rule-anatomy)
-6. [Thresholds, Windows, and Noise](#thresholds-windows-and-noise)
-7. [Action Groups and Routing](#action-groups-and-routing)
-8. [Operating Reviews and Runbooks](#operating-reviews-and-runbooks)
-9. [Metrics and Alerts as Code](#metrics-and-alerts-as-code)
-10. [Putting It All Together](#putting-it-all-together)
-11. [References](#references)
-
-## The Production Question
-<!-- section-summary: Metrics and alerts connect running system numbers to the people who need to respond. -->
+1. [What Problem Do Metrics and Alerts Solve?](#what-problem-do-metrics-and-alerts-solve)
+2. [What Does Azure Monitor Metrics Store?](#what-does-azure-monitor-metrics-store)
+3. [How Do Platform, Custom Metrics, and Dimensions Differ?](#how-do-platform-custom-metrics-and-dimensions-differ)
+4. [How Do Dashboards and Workbooks Help?](#how-do-dashboards-and-workbooks-help)
+5. [What Makes Up an Alert Rule?](#what-makes-up-an-alert-rule)
+6. [How Do Thresholds and Windows Control Noise?](#how-do-thresholds-and-windows-control-noise)
+7. [How Do Action Groups and Runbooks Route Response?](#how-do-action-groups-and-runbooks-route-response)
+8. [How Do You Operate Metrics and Alerts as Code?](#how-do-you-operate-metrics-and-alerts-as-code)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Imagine the same `devpolaris-orders-api` running on Azure App Service. The API accepts payment, writes the order to Azure SQL, uploads a receipt PDF to Blob Storage, and publishes a message for a worker. The application can look normal from the resource list while customers still see slow pages, failed payments, or missing receipts.
 
@@ -43,11 +39,23 @@ Azure metrics and alerts connect a few pieces that show up together in almost ev
 | **Action group** | The notification and automation target | Email, SMS, push, webhook, Azure Function, or Logic App |
 | **Alert processing rule** | A routing or suppression layer applied as alerts fire | Suppress pages during a planned maintenance window |
 
-For AWS readers, this loop should feel close to CloudWatch metrics and alarms, with action groups covering the notification and automation fan-out that AWS teams often route through SNS, EventBridge, Lambda, or incident tools. Azure uses different resource names, but the operating loop is still measure, visualize, decide, and route.
+Keep these questions in view as you work through the lesson:
 
-This article follows the same checkout system and gives every number a job. A CPU chart can explain pressure on the host, a request chart can show customer impact, and an alert can bring the right person into the incident before support messages pile up.
+1. **What Problem Do Metrics and Alerts Solve?**
+2. **What Does Azure Monitor Metrics Store?**
+3. **How Do Platform, Custom Metrics, and Dimensions Differ?**
+4. **How Do Dashboards and Workbooks Help?**
+5. **What Makes Up an Alert Rule?**
+6. **How Do Thresholds and Windows Control Noise?**
+7. **How Do Action Groups and Runbooks Route Response?**
+8. **How Do You Operate Metrics and Alerts as Code?**
 
-## What Azure Monitor Metrics Stores
+## What Problem Do Metrics and Alerts Solve?
+<!-- section-summary: Metrics and alerts connect running system numbers to the people who need to respond. -->
+
+The checkout system gives every observed number a specific job. A CPU chart can explain pressure on the host, a request chart can show customer impact, and an alert can bring the right person into the incident before support messages pile up.
+
+## What Does Azure Monitor Metrics Store?
 <!-- section-summary: Azure Monitor Metrics stores compact time-series records that are fast to chart, query, and evaluate. -->
 
 A **metric** is a number recorded at a point in time. Azure Monitor Metrics stores these numbers in a time-series database, which means each metric value is tied to a timestamp, a resource, a namespace, a metric name, the value itself, and optional dimensions. Microsoft describes this structure in the official [Azure Monitor Metrics data platform documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/data-platform-metrics).
@@ -66,7 +74,7 @@ Behind the scenes, Azure Monitor groups raw samples into time intervals before d
 
 For example, `Http5xx` is an event count, so a five-minute **Total** tells you how many server errors customers hit during that window. `HttpResponseTime` is a duration, so **Average** can show broad movement, while a percentile metric or Application Insights query gives better evidence for tail latency. `MemoryWorkingSet` is a current resource level, so **Average** or **Maximum** can show steady pressure or sudden spikes.
 
-## Platform Metrics, Custom Metrics, and Dimensions
+## How Do Platform, Custom Metrics, and Dimensions Differ?
 <!-- section-summary: Platform metrics come from Azure resources, custom metrics come from your app or agents, and dimensions split one metric into useful slices. -->
 
 **Platform metrics** are the numbers Azure resources emit for you. App Service reports request counts and HTTP status classes, Azure SQL reports CPU and connection behavior, and Storage accounts report transactions, availability, latency, and throttling. These metrics give the platform side of the story without requiring application code changes.
@@ -95,10 +103,10 @@ For the checkout system, useful custom metrics keep the dimensions small enough 
 
 The goal is enough detail to route the investigation. If `ReceiptUploadFailed` spikes only for `failureType=AuthorizationPermissionMismatch`, the team can start with managed identity, RBAC, Key Vault, or Storage account configuration. If the same metric spikes for every failure type, the team looks for a broader release, capacity, or dependency problem.
 
-## Dashboards and Workbooks
+## How Do Dashboards and Workbooks Help?
 <!-- section-summary: Dashboards help humans scan live system behavior before an alert turns into an incident. -->
 
-Metrics become useful to a team when they have a shared place to look. **Metrics Explorer** is the Azure Monitor tool for charting metric values over time, splitting them by dimensions, changing aggregation, and comparing resources. Microsoft documents that charts from Metrics Explorer can be pinned to Azure dashboards or saved to workbooks in the [Metrics Explorer guide](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/analyze-metrics).
+A team needs a shared place to make metrics useful. **Metrics Explorer** is the Azure Monitor tool for charting metric values over time, splitting them by dimensions, changing aggregation, and comparing resources. Microsoft documents that charts from Metrics Explorer can be pinned to Azure dashboards or saved to workbooks in the [Metrics Explorer guide](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/analyze-metrics).
 
 A dashboard is a simple operating view. The Orders team might pin four charts for the live checkout path: App Service request volume, App Service `Http5xx`, average response time, and Azure SQL CPU. During a release, the team can keep that dashboard open and compare the candidate version with the normal production shape.
 
@@ -119,7 +127,7 @@ For a production checkout system, a useful dashboard usually puts the customer p
 
 The dashboard tells a small story from left to right. User-facing signals come first, then the likely supporting systems. That way an engineer can see whether the symptom is isolated to the API, connected to database pressure, or part of a larger dependency problem.
 
-## Alert Rule Anatomy
+## What Makes Up an Alert Rule?
 <!-- section-summary: A metric alert rule combines scope, signal, condition, time window, severity, and actions. -->
 
 An **alert rule** is the Azure Monitor resource that checks a condition on a schedule. The official [Azure Monitor alerts overview](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview) describes alerts as proactive notifications based on Azure Monitor data, and the [metric alert type documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-types) explains that metric alerts evaluate resource metrics at regular intervals.
@@ -155,7 +163,7 @@ Metric alerts are stateful by default. A stateful alert fires once when the cond
 
 Multi-resource metric alerts help with fleet monitoring. Azure supports one metric alert rule that monitors multiple resources of the same type in the same Azure region, and it sends individual notifications for each monitored resource. That fits a group of App Service apps or a set of VMs, while more complex cross-resource logic usually belongs in log search alerts or workbooks.
 
-## Thresholds, Windows, and Noise
+## How Do Thresholds and Windows Control Noise?
 <!-- section-summary: Good alerts page on sustained customer impact and keep lower-level symptoms available for diagnosis. -->
 
 The hardest part of metric alerting is choosing which numbers deserve a page. A **symptomatic metric** describes a condition that may explain trouble, such as high CPU, memory growth, queue depth, or SQL connections. A **systemic metric** describes the user-facing failure itself, such as checkout errors, payment failures, failed receipt uploads, or high response latency.
@@ -182,12 +190,11 @@ Alert noise usually appears when rules lack a clear action. If the engineer rece
 
 Alert processing rules help during planned changes. Azure Monitor can apply processing rules as alerts fire, including adding action groups, suppressing action groups, filtering alerts, or applying the rule on a schedule. That gives the team a clean way to pause notifications during a planned database failover drill while still keeping alert instances visible for review.
 
-## Action Groups and Routing
+## How Do Action Groups and Runbooks Route Response?
 <!-- section-summary: Action groups separate problem detection from notification and automation routing. -->
 
 An **action group** defines who gets notified and which automations run when an alert fires. Microsoft describes action groups as collections of notification preferences and automated actions in the [Azure Monitor action groups documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups). They can send email, SMS, push, voice, webhook calls, Azure Functions, Logic Apps, Automation runbooks, ITSM incidents, and Event Hub messages.
 
-The useful AWS comparison is the response shape. A CloudWatch alarm might publish to SNS or trigger automation; an Azure alert rule fires and sends that response through an action group.
 
 This separation is important because the same notification target can be reused by many alert rules. The Orders team can have `ag-devpolaris-orders-oncall` for API incidents, `ag-devpolaris-data-team` for database incidents, and `ag-devpolaris-low-priority` for work-item-based operational follow-up. The alert rule detects the condition, and the action group decides where the attention goes.
 
@@ -199,7 +206,7 @@ For the checkout API, the common alert payload gives the incident tool the essen
 
 Good routing also includes ownership. An alert for App Service `Http5xx` belongs to the application team because the API is returning server errors. An alert for SQL storage approaching a service limit may belong to the data platform team. An alert for Azure Service Health in the production region may belong to the incident commander or platform operations group.
 
-## Operating Reviews and Runbooks
+### Operating Reviews and Runbooks
 <!-- section-summary: Metrics and alerts stay trustworthy when teams review user-facing indicators, tune noisy rules, and attach clear runbooks to every page. -->
 
 After dashboards and alert routes exist, the team needs a regular review habit. A **service-level indicator**, usually shortened to **SLI**, is a metric that describes a user-facing promise. For the checkout system, useful SLIs include checkout success rate, p95 checkout latency, receipt upload success rate, and queue message age. These indicators help the team decide which signals deserve pages and which signals belong on dashboards.
@@ -210,7 +217,7 @@ Every page-worthy alert should have a short runbook. The runbook explains why th
 
 Planned maintenance also needs a clear rule. Alert processing rules can suppress or adjust actions during known windows, but the team should keep customer-impact signals visible somewhere. During a planned database failover drill, suppressing a low-priority SQL CPU email may make sense. Suppressing the severity 1 checkout failure page can hide a real customer problem unless the incident commander has another live watch path.
 
-## Metrics and Alerts as Code
+## How Do You Operate Metrics and Alerts as Code?
 <!-- section-summary: Bicep keeps alert rules and action groups reviewable, repeatable, and tied to the service they protect. -->
 
 Production alerts work best when they live near the infrastructure that depends on them. The portal is useful for discovery, but Bicep or ARM templates make the rule reviewable in pull requests, repeatable across environments, and easier to recover after accidental deletion. Microsoft provides [Resource Manager template samples for metric alerts](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/resource-manager-alerts-metric), and the same resource types work naturally in Bicep.
@@ -339,7 +346,7 @@ Example alert output:
 
 If a test notification reaches email but the incident webhook receives no payload, the action group route needs attention before the alert protects production. If the alert instance fires with a vague name or no runbook link, the on-call engineer will still lose time after the metric did its job.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: Metrics, dashboards, alert rules, and action groups form one operating loop for production systems. -->
 
 Metrics and alerts work best as one operating loop. Azure resources emit platform metrics, application code emits custom workflow metrics, Metrics Explorer and workbooks turn those numbers into shared views, and metric alert rules evaluate the signals that deserve response. Action groups and alert processing rules then route that response to the right people or automations.
@@ -361,6 +368,43 @@ The important habit is connecting every alert to a real response. A metric can e
 ![Summary infographic showing the production operating loop from collecting metrics to slicing dimensions, visualizing dashboards, paging on customer impact, and routing through action groups](/content-assets/articles/article-cloud-providers-azure-observability-azure-metrics-dashboards-alerts/signal-to-response-summary.png)
 
 *The full loop turns raw signals into context, pages only on meaningful impact, and routes each alert to a useful response path.*
+
+
+---
+
+## Check Your Answers
+
+:::expand[What Problem Do Metrics and Alerts Solve?]{kind="recap"}
+Metrics and alerts connect running system numbers to the people who need to respond.
+:::
+
+:::expand[What Does Azure Monitor Metrics Store?]{kind="recap"}
+Azure Monitor Metrics stores compact time-series records that are fast to chart, query, and evaluate.
+:::
+
+:::expand[How Do Platform, Custom Metrics, and Dimensions Differ?]{kind="recap"}
+Platform metrics come from Azure resources, custom metrics come from your app or agents, and dimensions split one metric into useful slices.
+:::
+
+:::expand[How Do Dashboards and Workbooks Help?]{kind="recap"}
+Dashboards help humans scan live system behavior before an alert turns into an incident.
+:::
+
+:::expand[What Makes Up an Alert Rule?]{kind="recap"}
+A metric alert rule combines scope, signal, condition, time window, severity, and actions.
+:::
+
+:::expand[How Do Thresholds and Windows Control Noise?]{kind="recap"}
+Good alerts page on sustained customer impact and keep lower-level symptoms available for diagnosis.
+:::
+
+:::expand[How Do Action Groups and Runbooks Route Response?]{kind="recap"}
+Action groups separate problem detection from notification and automation routing. Metrics and alerts stay trustworthy when teams review user-facing indicators, tune noisy rules, and attach clear runbooks to every page.
+:::
+
+:::expand[How Do You Operate Metrics and Alerts as Code?]{kind="recap"}
+Bicep keeps alert rules and action groups reviewable, repeatable, and tied to the service they protect. Metrics, dashboards, alert rules, and action groups form one operating loop for production systems. Microsoft Learn documentation backs the metric storage, dashboard, alert, action group, common schema, and infrastructure-as-code behavior in this article.
+:::
 
 ## References
 <!-- section-summary: Microsoft Learn documentation backs the metric storage, dashboard, alert, action group, common schema, and infrastructure-as-code behavior in this article. -->

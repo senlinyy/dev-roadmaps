@@ -35,7 +35,9 @@ That distinction explains why two tools complement one another:
 
 Reachability Analyzer builds a configuration model. It does not transmit test packets through the data plane.
 
-The sections below answer these questions in order:
+Suppose an application on `10.0.1.25` needs TCP `443` on `10.0.8.40`. AWS networking does not reason about a product label such as "frontend calls payments." At the IP layer, it sees source and destination addresses, ports, and a transport protocol.
+
+Keep these questions in view as you work through the lesson:
 
 1. **How Do You Turn a Timeout Into a Packet?**
 2. **What Must Be True for the Connection to Work?**
@@ -48,8 +50,6 @@ The sections below answer these questions in order:
 
 ## How Do You Turn a Timeout Into a Packet?
 <!-- section-summary: A useful incident statement records the exact source and destination addresses, source and destination ports, and protocol. -->
-
-Suppose an application on `10.0.1.25` needs TCP `443` on `10.0.8.40`. AWS networking does not reason about a product label such as "frontend calls payments." At the IP layer, it sees values like:
 
 ```text
 Source IP:        10.0.1.25

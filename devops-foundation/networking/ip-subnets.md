@@ -9,17 +9,16 @@ id: article-devops-foundation-networking-ip-subnets
 
 ## Table of Contents
 
-1. [What IP Addresses, Subnets, and Routes Do](#what-ip-addresses-subnets-and-routes-do)
-2. [What an IP Address Represents](#what-an-ip-address-represents)
-3. [Subnets and CIDR](#subnets-and-cidr)
-4. [Private and Public Address Ranges](#private-and-public-address-ranges)
-5. [Planning a VPC Subnet Layout](#planning-a-vpc-subnet-layout)
-6. [IPv6 for the Same Service](#ipv6-for-the-same-service)
-7. [Subnet Failure Modes](#subnet-failure-modes)
-8. [References](#references)
-
-## What IP Addresses, Subnets, and Routes Do
-<!-- section-summary: IP addresses identify packet endpoints, subnets group nearby addresses, and routes choose the next hop. -->
+1. [What Do IP Addresses, Subnets, and Routes Do?](#what-do-ip-addresses-subnets-and-routes-do)
+2. [What Does an IP Address Represent on an Interface?](#what-does-an-ip-address-represent-on-an-interface)
+3. [How Do CIDR Prefixes Define a Subnet?](#how-do-cidr-prefixes-define-a-subnet)
+4. [How Does Routing Decide Between Local and Remote Delivery?](#how-does-routing-decide-between-local-and-remote-delivery)
+5. [How Do Private, Public, and Translated Addresses Differ?](#how-do-private-public-and-translated-addresses-differ)
+6. [How Do You Plan Subnets for Growth and Isolation?](#how-do-you-plan-subnets-for-growth-and-isolation)
+7. [How Does IPv6 Change Addressing Without Removing Firewall Policy?](#how-does-ipv6-change-addressing-without-removing-firewall-policy)
+8. [How Do You Diagnose Address, Prefix, and Route Failures?](#how-do-you-diagnose-address-prefix-and-route-failures)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 DNS gives the browser an address such as `203.0.113.25`. That answer is only the start of the trip. The laptop or server still has to decide where the first packet should leave, which source address it should use, and which gateway should receive it.
 
@@ -29,7 +28,21 @@ The first piece is the **IP address**. The packet needs a destination address fr
 
 The second piece is the **subnet**. A subnet tells the machine which addresses are local neighbors. If the destination sits inside the local subnet, the machine can send directly on the local network. If the destination is outside that subnet, the machine sends the packet to a gateway.
 
-The third piece is the **route**. A route tells the operating system where traffic should go next: directly on the local network, through a default gateway, over a VPN, or through a cloud VPC router. These three pieces answer the routing question that comes after DNS.
+Keep these questions in view as you work through the lesson:
+
+1. **What Do IP Addresses, Subnets, and Routes Do?**
+2. **What Does an IP Address Represent on an Interface?**
+3. **How Do CIDR Prefixes Define a Subnet?**
+4. **How Does Routing Decide Between Local and Remote Delivery?**
+5. **How Do Private, Public, and Translated Addresses Differ?**
+6. **How Do You Plan Subnets for Growth and Isolation?**
+7. **How Does IPv6 Change Addressing Without Removing Firewall Policy?**
+8. **How Do You Diagnose Address, Prefix, and Route Failures?**
+
+## What Do IP Addresses, Subnets, and Routes Do?
+<!-- section-summary: IP addresses identify packet endpoints, subnets group nearby addresses, and routes choose the next hop. -->
+
+The final part of the opening model is the **route**. A route tells the operating system where traffic should go next: directly on the local network, through a default gateway, over a VPN, or through a cloud VPC router. These three pieces answer the routing question that comes after DNS.
 
 For `https://app.example.com/dashboard`, the name lookup might return this address:
 
@@ -63,7 +76,7 @@ That output is one of the most useful next-step clues in networking. If the sour
 
 IP addressing and subnetting are the rules behind that decision. If those rules are wrong, the browser never reaches the firewall, TLS, Nginx, or app. The request can fail before the server knows anything happened, which is why route output is often the first useful clue after DNS.
 
-## What an IP Address Represents
+## What Does an IP Address Represent on an Interface?
 <!-- section-summary: An IP address identifies a host location on a network, while the subnet mask tells which part is the network and which part is the host. -->
 
 A machine can have more than one network door. A laptop may have Wi-Fi, Ethernet, a VPN tunnel, and loopback. A cloud server may have a primary network interface, a private interface, and a container bridge. Each of those doors can have its own address, and each address can send traffic from a different place in the network.
@@ -91,7 +104,7 @@ Under the hood, the host performs a bit comparison. It applies the subnet mask t
 
 The local-or-remote decision happens constantly. A wrong subnet mask can create strange symptoms: the IP can look valid, the gateway can look valid, and the app can still be unreachable because the host classified a destination incorrectly.
 
-## Subnets and CIDR
+## How Do CIDR Prefixes Define a Subnet?
 <!-- section-summary: CIDR notation uses the slash number to show how many address bits belong to the network prefix. -->
 
 Cloud networks and office networks rarely route one address at a time. A route table needs to say things like "send this whole group of app-server addresses to the private subnet" or "send every unknown public address to the internet gateway." Subnets give those groups a clear range.
@@ -150,7 +163,13 @@ The next design decision is size. A subnet for a few bastion hosts can be small.
 
 _The image makes the slash prefix visible by separating the network part from the host part of an address._
 
-## Private and Public Address Ranges
+## How Does Routing Decide Between Local and Remote Delivery?
+
+The host applies its subnet prefix to decide whether a destination is on-link. For an on-link IPv4 destination, it resolves the next-hop MAC address and sends a frame directly on the local network. For a remote destination, it consults the routing table and normally sends the packet to a gateway. Longest-prefix match selects the most specific applicable route.
+
+A route therefore has a destination prefix, a next hop or directly connected interface, and often a preference or metric. The return path matters independently. A request can reach a server while the response follows a missing, asymmetric, filtered, or translated route. A subnet says which addresses share a prefix; it does not itself guarantee that every member can communicate.
+
+## How Do Private, Public, and Translated Addresses Differ?
 <!-- section-summary: Private ranges are for internal networks, while public ranges can be routed across the internet. -->
 
 Two homes can both have a laptop at `192.168.1.42`. They do not collide because that address is private. It only has meaning inside each home network. The public internet never has to decide which house owns `192.168.1.42`, because that address should stay inside local networks.
@@ -181,7 +200,7 @@ Other reserved ranges deserve attention:
 
 The production rule is important: networks that need to talk to each other need non-overlapping CIDR blocks. VPC peering, VPNs, transit gateways, and on-prem connections all depend on that. If two networks both claim `10.0.0.0/16`, routers cannot know which side owns `10.0.5.10`.
 
-## Planning a VPC Subnet Layout
+## How Do You Plan Subnets for Growth and Isolation?
 <!-- section-summary: A good VPC plan divides a large private CIDR into non-overlapping public and private subnets with room to grow. -->
 
 A real cloud network usually uses both public and private addresses. A user resolves `app.example.com` to the public address of a load balancer. Behind that load balancer, the app servers usually live on private IPs inside a VPC. Public traffic enters the cloud edge, then internal traffic moves through private subnets toward the app.
@@ -267,7 +286,7 @@ Cloud route tables express the same idea at VPC and subnet level. If a private s
 
 _The image shows why subnet planning reserves separate address ranges for public entry points and private workloads._
 
-## IPv6 for the Same Service
+## How Does IPv6 Change Addressing Without Removing Firewall Policy?
 <!-- section-summary: IPv6 uses larger addresses and common /64 subnets, while the service still needs DNS, routing, firewall, TLS, proxy, and app handling. -->
 
 Many services need to work for clients on both IPv4 and IPv6 networks. The service name can stay the same, but DNS, firewall rules, route tables, certificates, and proxy listeners may need entries for both address families. The familiar idea still applies: an address identifies an endpoint, and a prefix describes a network range.
@@ -319,7 +338,7 @@ The address output shows `2001:db8:10:20::14/64` as the host's global IPv6 addre
 
 Many production environments run dual stack. That means they publish both A and AAAA records and allow clients to choose IPv4 or IPv6. A dual-stack service needs both address families tested because a broken IPv6 path can affect users even while IPv4 looks healthy from your own machine. When you publish an AAAA record, also verify IPv6 routes, firewall rules, load balancer listeners, TLS, and application logs from an IPv6-capable client.
 
-## Subnet Failure Modes
+## How Do You Diagnose Address, Prefix, and Route Failures?
 <!-- section-summary: Subnet incidents usually come from overlapping ranges, exhausted address pools, wrong masks, missing routes, or IPv4 and IPv6 policy drift. -->
 
 Subnet problems can make an app look flaky even while the app process is fine. A request may leave through the wrong gateway, a new instance may fail to get an address, or a private server may lose outbound internet access. These problems sit underneath HTTP, so operators check them before blaming the web layer.
@@ -379,6 +398,129 @@ These commands tell you the local address, the selected route, the local neighbo
 - `traceroute 203.0.113.25` shows where packets stop across multiple hops.
 
 If those checks look good, traffic is ready for the next gate: firewall rules.
+
+### How Do Prefix Bits Define Membership?
+
+An IPv4 address contains thirty-two bits. CIDR notation writes an address and the number of leading network bits, such as `10.20.4.0/24`. The remaining eight bits identify addresses inside that prefix. A netmask such as `255.255.255.0` expresses the same boundary for a `/24`.
+
+The network address has all host bits set to zero. In a conventional IPv4 subnet, the broadcast address has all host bits set to one. The addresses between them are potential host addresses, although a cloud or network platform may reserve additional positions. A `/24` contains 256 total addresses; it does not automatically provide 256 assignable endpoints.
+
+Prefix length controls size. A smaller prefix number leaves more host bits and describes a larger range; a larger prefix number describes a smaller range. `/16` is larger than `/24`, and `/28` is smaller. Do not memorize only a table—count the remaining bits and compute `2^(host bits)` for total IPv4 addresses.
+
+Bit boundaries need not end at an octet. A `/26` divides a `/24` into groups of 64 addresses. For `192.0.2.70/26`, the matching network range begins at `192.0.2.64` and ends at `192.0.2.127`. The host applies the prefix mask to both its own address and the destination to decide whether they share the on-link prefix.
+
+### What Do Address Scopes Mean?
+
+An IP address belongs to an interface or network namespace, not to a machine as an abstract permanent identity. A host can have loopback, private, public, link-local, tunnel, container, and service addresses at the same time. The source address selected for a connection depends on the route and interface.
+
+IPv4 private ranges are `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`. They are not globally routed on the public Internet. Loopback `127.0.0.0/8` remains inside the host. Link-local `169.254.0.0/16` supports local-link behavior. `0.0.0.0` can mean an unspecified address or, in a listening context, all local IPv4 interfaces. `0.0.0.0/0` is the default route prefix or an all-IPv4 rule scope.
+
+A public address is globally routable in principle, subject to allocation, routing, and policy. A private workload can reach public services through source NAT, which replaces its source address at an egress device and tracks return translation. NAT conserves or bridges address scopes; it is not a firewall rule and does not by itself express which flows should be permitted.
+
+A public subnet in cloud terminology normally means its route table provides a path toward an Internet gateway and the resource has an appropriate public addressing path. A private subnet lacks direct inbound Internet routing. The label does not replace security-group, network-ACL, host-firewall, or application authorization policy.
+
+### How Does Routing Use Longest-Prefix Match?
+
+The routing table can contain a connected subnet, more specific internal routes, a default route, and special policy. Linux selects the matching route with the longest prefix—the most specific destination range. A route for `10.20.4.0/24` wins over `10.20.0.0/16`, which wins over `0.0.0.0/0` for an address in all three.
+
+```bash
+ip addr show
+ip route show
+ip route get 10.20.4.18
+
+# Example output:
+# 10.20.4.18 dev eth1 src 10.20.4.7 uid 1001
+```
+
+`ip route get` asks the kernel how it would route one destination, including selected interface and source address. That is stronger evidence than reading the default route alone. For on-link IPv4 delivery, ARP resolves the next-hop IP to a link-layer address; for a remote destination, the next hop is normally a router even though the packet's IP destination remains the remote endpoint.
+
+Routing must work in both directions. A server can receive a request through one gateway and send a reply through another route that applies different translation or filtering. Stateful firewalls may reject an unexpected asymmetric path. Diagnose the return route from the destination perspective, not only the outbound path from the client.
+
+### How Should an Address Plan Preserve Future Choices?
+
+Begin with non-overlapping ranges large enough for current endpoints, platform reservations, failover, autoscaling, managed services, and future subnets. Leave deliberate gaps or expansion space. Future peering, VPNs, transit routing, or mergers make overlap expensive, because a router cannot distinguish two destinations represented by the same prefix without translation or redesign.
+
+Place subnets around routing and failure-domain needs, not just organizational names. Availability-zone-local subnets allow zonal resources and routing. Separate public ingress, private application, and restricted data tiers when their route and control policies differ. A subnet is an address and routing boundary; it is not automatically a security boundary unless policy is attached.
+
+Kubernetes and other overlays add address pools for nodes, Pods, Services, load balancers, and connected networks. These pools must avoid the VPC, on-premises, VPN, peer, and service ranges they must reach. An apparently generous cluster range can consume future routing space, so plan the full connected system.
+
+Security rules should refer to the smallest stable source or destination range that represents the real relationship. A broad VPC CIDR may allow unintended east-west reachability. A narrow address rule can still break when autoscaling places workloads in another planned subnet. Document the communication matrix and make routes and firewalls implement it together.
+
+### How Does IPv6 Change the Mechanics?
+
+IPv6 addresses contain 128 bits and use hexadecimal groups. Prefix notation works the same way: `2001:db8:1234:10::/64` says the first 64 bits identify the subnet. IPv6 usually provides enough space to give interfaces globally unique addresses without the address-conservation reason for widespread NAT.
+
+Link-local addresses in `fe80::/10` exist for local-link communication and operations such as neighbor discovery. Neighbor Discovery replaces IPv4 ARP functions and uses ICMPv6. Blocking ICMPv6 indiscriminately can break ordinary IPv6 operation, so firewall policy must understand the protocol rather than copying an IPv4 rule mechanically.
+
+No NAT does not mean no firewall. Global addressing provides routability; inbound and outbound security policy still decides permitted communication. Dual-stack clients may resolve both `A` and `AAAA`, try IPv6 and IPv4 according to their connection logic, and expose a failure that appears only on one family. Test both explicitly.
+
+### How Does a Routing Incident Narrow Down?
+
+Start on the affected endpoint with `ip addr`, `ip route`, and `ip route get DESTINATION`. Confirm address, prefix, link state, selected source, next hop, and interface. Then test the next hop, inspect neighbor state, and trace farther only after the local decision is correct.
+
+A timeout can mean no route, missing return route, silent firewall drop, unavailable endpoint, or a link problem. “Network unreachable” points toward a local routing decision. “Connection refused” usually means routing reached a host that rejected the transport connection or had no listener. DNS success says nothing about whether the returned address belongs to a reachable path from this client.
+
+Inspect VPC route tables, Internet or NAT gateways, peer or transit routes, VPN advertisements, security controls, host routing, and the destination listener as separate layers. Route relevance is directional: the source needs a forward path and the destination needs a return path. The most useful question is not “are they in the same VPC?” but “which exact route and policy handle each direction for this source and destination?”
+
+### How Do East-West and North-South Paths Affect Design?
+
+North-south traffic crosses the environment boundary, such as a public client reaching an ingress proxy or a private workload reaching the Internet through NAT. East-west traffic moves between internal workloads, tiers, zones, clusters, or connected networks. Both require addresses and routes; each may cross different firewall, translation, and inspection points.
+
+A three-tier service can place public load balancers in ingress subnets, application instances in private subnets, and databases in restricted subnets. The application does not become secure merely because its address is private. Route tables establish possible paths, security controls restrict flows, and the database still authenticates and authorizes clients.
+
+Availability zones influence subnet design because many cloud subnets are zonal. Deploying across zones commonly requires a corresponding subnet in each zone and a load-balancing or failover path. Reusing one tiny prefix everywhere can exhaust addresses during scaling or replacement, especially when old and new instances overlap during rollout.
+
+### Which Address-Planning Mistakes Are Expensive Later?
+
+Overlapping networks prevent ordinary unambiguous routing when they are connected. Tiny prefixes leave no room for platform reservations, rolling replacement, autoscaling, or managed endpoints. One enormous flat prefix can broaden failure and security scope and consume space that later services need. An address plan should reserve hierarchy without assuming every reserved range must be routed immediately.
+
+Document the owner, purpose, region, zone, environment, address family, prefix, route domain, and connected peers for each allocation. Validate new prefixes against the entire organization and cluster address pools before deployment. Renumbering live databases, allowlists, certificates, clients, and integrations is usually more expensive than leaving deliberate growth space at the start.
+
+The first-principles design rule is that addresses must be unique wherever routers need to distinguish destinations, prefixes must be large enough for lifecycle peaks, and security must be implemented by policy rather than by the comforting appearance of a private number.
+
+Route tables are also policy inputs, not active probes. A route pointing to a gateway does not prove that the gateway is attached, healthy, translating the flow, or advertising a return prefix. Peering and transit systems can have propagation and acceptance rules above the local table. Verify the selected route at every relevant boundary and the route back.
+
+Host binding is a separate decision. An application bound to `127.0.0.1` accepts only local IPv4 connections even if the host has a private address and permissive firewall. Binding to `0.0.0.0` listens on all local IPv4 addresses but does not open cloud policy or create a route. For IPv6, `::` and dual-stack socket behavior depend on the operating system and application options, so inspect the actual sockets with `ss`.
+
+Address conflicts can produce intermittent behavior as neighbors learn different link-layer mappings. DHCP, static assignment, cloud interface management, and orchestration must share one source of address ownership. Duplicate-address evidence belongs to the local link and control plane, not to DNS even when users first notice a hostname reaching the wrong machine.
+
+When documenting an incident, record the source and destination addresses as seen at each translation point. A public client address, load-balancer source, proxy address, Pod address, node address, and database source can all represent one logical request at different boundaries. Firewall and route evidence must use the tuple visible at that boundary.
+
+Always test the selected IPv4 and IPv6 paths separately when both records exist; a working family can mask the broken route or policy of the other.
+
+## Check Your Answers
+
+:::expand[What Do IP Addresses, Subnets, and Routes Do?]{kind="recap"}
+An interface owns addresses, a prefix groups destinations, and routes select the next hop and source for delivery.
+:::
+
+:::expand[What Does an IP Address Represent on an Interface?]{kind="recap"}
+An address identifies one interface or namespace scope, and a host may use several addresses for different paths.
+:::
+
+:::expand[How Do CIDR Prefixes Define a Subnet?]{kind="recap"}
+The prefix fixes network bits, leaves host bits for addresses, and defines the range used in local-delivery decisions.
+:::
+
+:::expand[How Does Routing Decide Between Local and Remote Delivery?]{kind="recap"}
+On-link destinations use neighbor resolution; remote destinations follow the most specific route through a next hop.
+:::
+
+:::expand[How Do Private, Public, and Translated Addresses Differ?]{kind="recap"}
+Private scope needs routing or translation to reach public networks, while NAT and firewall policy solve different problems.
+:::
+
+:::expand[How Do You Plan Subnets for Growth and Isolation?]{kind="recap"}
+Reserve non-overlapping space for failure domains, growth, platforms, and connected networks, then attach explicit routing and security policy.
+:::
+
+:::expand[How Does IPv6 Change Addressing Without Removing Firewall Policy?]{kind="recap"}
+IPv6 expands addresses and changes neighbor mechanics, but routability still requires deliberate filtering and dual-stack testing.
+:::
+
+:::expand[How Do You Diagnose Address, Prefix, and Route Failures?]{kind="recap"}
+Verify interface state, prefix, selected route, source, next hop, return path, translation, controls, and destination listener.
+:::
 
 ![IP subnets summary infographic showing addresses, CIDR, private ranges, VPC planning, IPv6, routes, and failure modes](/content-assets/articles/article-devops-foundation-networking-ip-subnets/ip-subnets-summary.png)
 

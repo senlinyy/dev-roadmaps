@@ -23,21 +23,7 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-The sections below answer these questions in order:
-
-1. **What Makes a Subnet Public or Private?**
-2. **What Does a Public Subnet Make Possible?**
-3. **How Should a Public Entry Tier Work?**
-4. **How Should the Private App and Data Tiers Work?**
-5. **How Do Route Tables Express the Three Tiers?**
-6. **Which Outbound Paths Can Private Workloads Use?**
-7. **How Does IPv6 Change the Picture?**
-8. **How Do You Design Subnets From Communication Requirements?**
-
 Once those questions are separate, public entry, private application servers, databases, NAT gateways, and three-tier networks become consequences of system requirements rather than labels to memorize.
-
-## What Makes a Subnet Public or Private?
-<!-- section-summary: Subnet behavior comes from routing and connectivity, not from the name or private address range. -->
 
 Suppose a VPC owns `10.0.0.0/16` and divides it into three ranges:
 
@@ -64,6 +50,20 @@ no general internet path
 ```
 
 The terminology can vary between providers and organizations, but the connectivity difference is useful. A route table makes the intended path visible in a way that a subnet name cannot.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Makes a Subnet Public or Private?**
+2. **What Does a Public Subnet Make Possible?**
+3. **How Should a Public Entry Tier Work?**
+4. **How Should the Private App and Data Tiers Work?**
+5. **How Do Route Tables Express the Three Tiers?**
+6. **Which Outbound Paths Can Private Workloads Use?**
+7. **How Does IPv6 Change the Picture?**
+8. **How Do You Design Subnets From Communication Requirements?**
+
+## What Makes a Subnet Public or Private?
+<!-- section-summary: Subnet behavior comes from routing and connectivity, not from the name or private address range. -->
 
 This does not mean route tables answer every question. A complete connection also depends on the endpoint's address, network translation where required, security policy, and an application that is listening. Public/private is about possible paths, not a guarantee that every packet succeeds.
 

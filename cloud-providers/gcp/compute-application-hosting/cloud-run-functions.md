@@ -12,453 +12,421 @@ aliases:
 
 ## Table of Contents
 
-1. [Why Event Work Lives Outside the Main Request](#why-event-work-lives-outside-the-main-request)
-2. [Function](#function)
-3. [Handler](#handler)
-4. [Trigger](#trigger)
-5. [Event](#event)
-6. [CloudEvent](#cloudevent)
-7. [Pub/Sub and Eventarc](#pubsub-and-eventarc)
-8. [Retry and Idempotency](#retry-and-idempotency)
-9. [Code Shape](#code-shape)
-10. [Deploy and Verify](#deploy-and-verify)
-11. [Identity, Secrets, and Operations](#identity-secrets-and-operations)
-12. [Putting It All Together](#putting-it-all-together)
-13. [References](#references)
+1. [Why Does Event Work Leave the Main Request?](#why-does-event-work-leave-the-main-request)
+2. [What Are a Function and Its Handler?](#what-are-a-function-and-its-handler)
+3. [How Do Events, Triggers, and CloudEvents Connect?](#how-do-events-triggers-and-cloudevents-connect)
+4. [What Roles Do Pub/Sub and Eventarc Play?](#what-roles-do-pubsub-and-eventarc-play)
+5. [Why Do Retries Require Idempotency?](#why-do-retries-require-idempotency)
+6. [How Should Function Code and Runtime State Be Shaped?](#how-should-function-code-and-runtime-state-be-shaped)
+7. [How Do You Deploy, Verify, Secure, and Operate a Function?](#how-do-you-deploy-verify-secure-and-operate-a-function)
+8. [What Happens During a Complete Event-Driven Flow?](#what-happens-during-a-complete-event-driven-flow)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Why Event Work Lives Outside the Main Request
-<!-- section-summary: Cloud Run functions fit bounded work that should run after an event rather than inside a customer request. -->
+Cloud Run functions starts with a common application requirement: something happened, so a piece of code should run. A file upload should produce a thumbnail. A new order should cause a confirmation email. A Pub/Sub message should be processed. A database change should update another system. An HTTP webhook should be validated and handled.
 
-Some work should happen after an event, not inside the main request. A profile page should not wait while your app generates every thumbnail size. A checkout response should not wait while an email provider accepts a receipt. A support upload should not block while a virus scan or metadata extractor runs.
+It is possible to keep a server running forever for each reaction. That server would need a VM, operating system, runtime, process manager, route, and application wrapper around one small handler. Cloud Run functions lets the team provide mainly the code that reacts while Google manages much of the invocation and scaling machinery.
 
-The main request should commit the important user action and hand follow-up work to an event path. Then a smaller piece of code can wake up, do one bounded task, write logs, and finish. **Cloud Run functions** are a good fit for that shape because you write a focused piece of source code while Google Cloud builds and runs it on Cloud Run.
+To see why this model matters, follow a checkout request. The browser sends `POST /checkout`, and the application may validate the basket, charge payment, create the order, send an email, generate an invoice PDF, update analytics, notify the warehouse, and update a CRM. If all of those operations run before the response, a slow CRM makes the customer wait. An unavailable email service raises the question of whether buying should fail. An analytics outage can block a purchase even though analytics is not required to create it.
 
-The important beginner idea is the handoff. The web API should finish the user-facing action first: save the profile change, accept the purchase, or store the uploaded file. After that, an event says, "something useful just happened." A function listens for that event and performs the follow-up work. This keeps the main user path short and gives slower jobs their own retry, logging, and failure handling.
+Keep these questions in view as you work through the lesson:
 
-That separation also makes ownership clearer. The upload API owns accepting the original file. The thumbnail function owns derived image sizes. The receipt function owns email delivery. If email delivery fails, the purchase record can still exist, and the team can retry the receipt function without asking the customer to buy the ticket again.
+1. **Why Does Event Work Leave the Main Request?**
+2. **What Are a Function and Its Handler?**
+3. **How Do Events, Triggers, and CloudEvents Connect?**
+4. **What Roles Do Pub/Sub and Eventarc Play?**
+5. **Why Do Retries Require Idempotency?**
+6. **How Should Function Code and Runtime State Be Shaped?**
+7. **How Do You Deploy, Verify, Secure, and Operate a Function?**
+8. **What Happens During a Complete Event-Driven Flow?**
 
-Two examples help because event work comes in different shapes. The first is thumbnail generation after a user uploads an image to Cloud Storage. The second is a receipt email after a purchase event reaches Pub/Sub. The sections below introduce each needed idea before using it in the examples.
+## Why Does Event Work Leave the Main Request?
+<!-- section-summary: Event-driven work separates actions required for an immediate answer from reactions that can happen after the result exists. -->
 
-## Function
-<!-- section-summary: A function is a small deployable unit of code with one focused job. -->
+The request has mixed two categories of work. The immediate answer usually depends on validating the order, charging the customer, and recording the order. Sending email, updating analytics, notifying the warehouse, and updating the CRM are consequences of the successful result and can often happen later.
 
-A **function** is a small deployable unit of code with one focused job. In Cloud Run functions, you deploy source code and choose an entry point. Google Cloud uses buildpacks and Cloud Build to turn that source into a container image, then runs it on Cloud Run.
+```text
+checkout request
+      |
+critical synchronous work
+      |
+record OrderCreated
+      |
+respond to customer
 
-For thumbnail generation, the function's job is narrow: receive one image-upload event, create the required thumbnail files, store them, and record the result. For receipt email, the function's job is also narrow: receive one purchase event, send one receipt if it has not already been sent, and record the result.
+OrderCreated
+   |-- send email
+   |-- update analytics
+   `-- notify warehouse
+```
 
-Think of the function as one named worker with one inbox. The inbox is the trigger, and the worker's task is the handler code. That shape is different from a full web service with many routes and long-lived business flows. A function should be easy to describe in one sentence: "generate thumbnails for new profile uploads" or "send receipts for completed purchases."
+This separation creates **temporal decoupling**. The checkout system does not require every consumer to be available at exactly the moment the order is recorded. Consumers can react independently after the fact.
 
-This focus helps during operations. If thumbnail generation is slow, the team can inspect thumbnail function logs, retries, runtime identity, and object metadata. If receipt delivery fails, the team can inspect the receipt function, Pub/Sub message, idempotency store, and email provider response. The function boundary tells responders where one piece of asynchronous work starts and ends.
+Background work is not automatically better. If the caller needs a computation's answer before it can proceed, synchronous request and response is usually simpler. The useful distinction is whether the result is needed now. Required immediate results stay on the request path; reactions that can occur later are candidates for events and asynchronous handlers.
 
-That narrow job is the reason functions are useful. The code does not need to own a full web API, route table, or long-running server loop. It owns one task that starts from a specific input.
+## What Are a Function and Its Handler?
+<!-- section-summary: A function is a focused request or event reaction, and the handler is the named entry point the Functions Framework invokes. -->
 
-For AWS readers, Cloud Run functions are closest to Lambda as an authoring pattern. A key GCP detail is that current Cloud Run functions build and run on Cloud Run, so you get function-style source deployment on top of the Cloud Run platform.
+Suppose the entire post-order reaction is a function named `send_confirmation(order)`. Traditionally, the team might wrap it in Linux, Python, a web server, routing code, and a permanently running process. The business concern is much smaller: input reaches code and produces a side effect or result.
 
-## Handler
-<!-- section-summary: A handler is the named entry point Cloud Run invokes for each function run. -->
+That focused unit is a **function**:
 
-A **handler** is the named entry point Cloud Run invokes. In Node.js, the Functions Framework registers the handler name. In Python, the function name or decorator marks the entry point. The deploy command points Cloud Run to that entry point.
+```text
+request or event -> code -> result or side effect
+```
 
-Think of the handler as the one function the platform calls after the event arrives. The platform handles the outer work: receiving the event, starting an instance, loading your code, and invoking the entry point. Your handler handles the business work: validate the event, decide whether the event should be processed, perform the side effect, write logs, and return a clear result.
+A serverless functions platform provides the receiving runtime, routing, and scaling around the code. The team normally does not administer the operating system or process supervisor.
 
-The handler should validate input, perform one side effect, write structured logs, and finish all asynchronous work before returning. Cloud Run treats the function invocation as complete after the handler returns, so unfinished promises, background timers, or open work can create confusing results.
+Modern Cloud Run functions is not an unrelated magical runtime. Deploying function source leads through Cloud Build, buildpacks, the Functions Framework, a container image in Artifact Registry, and a Cloud Run service. The resulting service is built from the function source and hosted on Cloud Run.
 
-For thumbnail generation, the handler receives information about the uploaded object. It checks the bucket and object name, skips files that are already thumbnails, downloads the original, writes thumbnails, and logs the image ID. For receipt email, the handler checks the purchase event, claims the event key, sends the email, records completion, and logs the order ID.
+```text
+source code
+    |
+Cloud Build and buildpacks
+    |
+Functions Framework in a container image
+    |
+Artifact Registry
+    |
+Cloud Run service
+```
 
-A strong handler has a small visible shape:
+This places the product on the wider abstraction ladder. Compute Engine says, “Give me a computer.” A Cloud Run service says, “Run this application or container.” A Cloud Run function says, “Invoke this handler when work arrives.” Each step upward exposes a smaller application unit and hides more infrastructure decisions.
 
-- It rejects events from the wrong bucket, topic, or type.
-- It extracts stable IDs such as object name, generation, order ID, and event ID.
-- It uses those IDs for idempotency before sending email, writing thumbnails, or updating status.
-- It logs the event ID and result without printing secrets or customer payloads.
-- It returns only after required asynchronous work has finished.
+A source project can contain many functions and helpers. The platform therefore needs one named entry point. The **handler**, also called the function entry point, is the piece that receives the invocation.
 
-## Trigger
-<!-- section-summary: A trigger is the rule that decides what starts the handler. -->
+```python
+def order_created(event):
+    ...
+```
 
-A **trigger** is the rule that starts the handler. An HTTP trigger starts a function from a request. An event trigger starts a function after an event source emits a matching event. Cloud Run functions can use triggers for sources such as Pub/Sub messages and Cloud Storage object changes.
+The Functions Framework sits between the Cloud Run environment and the handler. It exposes the expected server interface and calls the selected entry point, so function authors generally do not write a socket accept loop, process manager, or container startup protocol.
 
-The trigger is separate from the handler on purpose. The handler says what the code does. The trigger says which outside signal is allowed to call that code. A thumbnail handler should not run for every object in every bucket. It should run for the upload bucket and the object-finalized event that means a file finished writing.
+Cloud Run functions supports two main handler shapes. An **HTTP function** receives an explicit HTTP request and returns an HTTP response. It suits webhooks, small APIs, callbacks, and direct invocations.
 
-The trigger should match the real job:
+```python
+@functions_framework.http
+def calculate_tax(request):
+    ...
+    return result
+```
 
-| Job | Trigger shape | Why it fits |
-|---|---|---|
-| Generate thumbnails | Cloud Storage object finalized event | The file upload itself starts the work. |
-| Send receipt email | Pub/Sub message event | The application publishes a business event after checkout succeeds. |
-| Clean temp files | Scheduler to Pub/Sub or HTTP | A clock event starts periodic cleanup. |
+A **CloudEvent function** runs because something happened in an event-producing system.
 
-The trigger gives the platform a delivery rule. The handler still needs to protect the business side effect, because delivery can repeat during retries.
+```python
+@functions_framework.cloud_event
+def image_uploaded(cloud_event):
+    ...
+```
 
-Trigger review should answer four questions:
+Pub/Sub message publication, Cloud Storage object creation, Firestore changes, and other Google Cloud events can use this shape. The two signatures answer different causes of execution: someone made a request, or a system reported a fact.
 
-- Which source emits the event?
-- Which event type should match?
-- Which service account or runtime identity receives the event?
-- Which logs prove one test event reached the handler?
+## How Do Events, Triggers, and CloudEvents Connect?
+<!-- section-summary: The event describes a fact, the trigger chooses a destination, and CloudEvents gives delivery a standard outer envelope. -->
 
-Those questions catch a common failure: the function code is correct, but the platform never sends it the event the developer expected.
+A function named `resize_image(event)` contains the reaction, but its code does not inherently mean “run when the `photos` bucket receives an object.” A separate object must connect the condition to the destination. That object is a **trigger**.
 
-## Event
-<!-- section-summary: An event is a record that something happened and carries enough data for the handler to act. -->
+```text
+trigger
+  source: Cloud Storage
+  event type: object finalized
+  bucket: photos
+  destination: resize-image
+```
 
-An **event** is a record that something happened. The event may come from your application, such as `purchase.completed`, or from a Google Cloud service, such as a Cloud Storage object finalized event. The event should contain enough information for the handler to do its job or look up the missing details safely.
+The distinction is foundational: the function describes what should happen; the trigger describes when and where it should be invoked. Cloud Run functions supports direct HTTP invocation and event-driven triggers, with Eventarc routing event-driven functions.
 
-An event is not the same as the work itself. A Cloud Storage event says an object exists. The handler still decides whether that object is a real upload, a thumbnail, a temporary file, or something the function should ignore. A Pub/Sub purchase event says checkout completed. The handler still decides whether the receipt was already sent and which template to use.
+Keeping the objects separate also makes change safer. The handler can be redeployed as a new revision while the trigger continues to describe the source and filters, or routing can change without rewriting the business reaction. Operations can then inspect runnable code and event wiring as two related but independent layers.
 
-For the thumbnail job, the event needs the bucket name, object name, generation, content type, and enough metadata to skip derived thumbnail files. For the receipt job, the event payload needs an order ID, customer email, receipt template, and correlation ID from the checkout request.
+An **event** is a fact stated after it happened: object X was created, order 983 was submitted, message Y was published, or document Z was updated. A command asks a component to do something; an event reports that something already occurred.
 
-Good event payloads are small and stable. They carry identifiers and facts, not huge blobs of data. The thumbnail function can download the original image from Cloud Storage using the object name. The receipt function can load the latest order summary from the database using the order ID.
+That wording affects coupling. A command usually names an intended action and often a responsible receiver: “resize this image.” An event says only that an image was uploaded. Consumers choose their own reactions. A thumbnail generator can resize it, a scanner can inspect it, and a metadata service can index it without the uploader issuing three separate instructions.
 
-The practical design rule is to put the **pointer** in the event and keep the large payload in the system that owns it. Object bytes stay in Cloud Storage. Order records stay in the database. The event carries enough information to find those records and to make retries safe.
+Events also avoid promising that every reaction completes before the producer continues. The producer records or publishes the fact; delivery and consumers progress according to their own availability. That independence is the temporal decoupling introduced by the checkout example, and it is also why delivery status, retries, and durable outcomes need explicit observation.
 
-## CloudEvent
-<!-- section-summary: A CloudEvent is a standard envelope for event-driven function input. -->
+That fact can have several consumers. One `ImageUploaded` event can reach a thumbnail generator, virus scanner, and metadata extractor. The uploader does not need to know each downstream implementation. Producers and consumers are decoupled around the event.
 
-A **CloudEvent** is a standard envelope for event data. Cloud Run functions use the Functions Framework to receive event-driven input as CloudEvents. The envelope includes fields such as `id`, `source`, `type`, `time`, and `data`.
+Every producer can have different event-specific fields. Storage cares about buckets and object names, Pub/Sub has message data, and a database reports document changes. Yet every event system still needs to communicate an identifier, event type, source, time, and payload. **CloudEvents** standardizes that outer envelope.
 
-The useful idea is envelope versus payload. The envelope tells the function where the event came from, what kind of event it is, and how to identify this delivery. The payload tells the function the business or resource details. This split helps libraries, routers, and your own code handle many event sources with one predictable outer shape.
-
-The envelope and the business payload have different jobs:
-
-| CloudEvent field | Thumbnail example | How the handler uses it |
-|---|---|---|
-| **`id`** | `1096437892045551` | Pairs with `source` for duplicate detection. |
-| **`source`** | `//storage.googleapis.com/projects/_/buckets/profile-uploads` | Shows which system emitted the event. |
-| **`type`** | `google.cloud.storage.object.v1.finalized` | Confirms the event kind. |
-| **`time`** | Upload completion timestamp | Helps operators trace timing. |
-| **`data`** | Object metadata | Gives the handler the bucket and object name. |
-
-The CloudEvents specification says the producer should make `source` plus `id` unique for each distinct event. That pair gives the function a strong idempotency key.
-
-For thumbnail generation, the handler can store a processed-event record using `source + id`. A retry with the same pair can return success without creating duplicate thumbnails. For receipt email, the handler may use the order ID plus event ID to make sure the customer does not receive the same receipt twice.
-
-## Pub/Sub and Eventarc
-<!-- section-summary: Pub/Sub carries application messages, while Eventarc routes events from Google Cloud sources to destinations such as Cloud Run functions. -->
-
-**Pub/Sub** is Google Cloud's messaging service for asynchronous communication between independent applications. A publisher sends a message to a topic, and subscribers receive messages from that topic. The receipt function fits Pub/Sub because the checkout application decides that a purchase completed and publishes a business message.
-
-**Eventarc** is Google Cloud's event routing service. It filters events from supported sources and routes them to destinations such as Cloud Run services and functions. The thumbnail function fits Eventarc because Cloud Storage emits the object-finalized event after the upload completes.
-
-The two paths can live side by side:
-
-| Workload | Routing path | Production note |
-|---|---|---|
-| Receipt email | Checkout API publishes to Pub/Sub, function receives the message | The application owns the business event and payload. |
-| Thumbnail generation | Cloud Storage event flows through Eventarc to the function | The platform event starts the work after object creation. |
-| Scheduled cleanup | Cloud Scheduler publishes to Pub/Sub or calls HTTP | The clock starts the work on a predictable interval. |
-
-For AWS readers, Pub/Sub overlaps with SNS and SQS concepts, while Eventarc overlaps with EventBridge-style routing. Cloud Storage object events map to the familiar idea of S3 event notifications feeding Lambda or an event bus.
-
-![Event sources routed through triggers to bounded handlers](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/event-to-handler-path.png)
-*The event source and trigger decide the handler start condition; the handler stays focused on one bounded job.*
-
-## Retry and Idempotency
-<!-- section-summary: Retries help reliability, so handlers need idempotency before customer-visible side effects. -->
-
-**Retry** means the platform may deliver the same event again after a failure or timeout. Pub/Sub and Eventarc delivery can repeat. That is helpful for reliability, but a repeated event can send two receipts or generate the same thumbnail record twice if the handler is careless.
-
-**Idempotency** means repeated attempts leave the same final result as one attempt. The handler should claim a stable event key before it performs a customer-visible side effect. The key can use `source` plus `id` from the CloudEvent envelope.
-
-For receipt email, the handler can insert an event claim into a database with a unique key. The attempt that creates the claim sends the email. A duplicate attempt sees the existing claim and returns success without another email. For thumbnails, the handler can record that the object generation has already been processed before writing derived files.
-
-The flow is simple:
-
-| Step | Handler action | Why |
-|---|---|---|
-| Receive | Get `source`, `id`, `type`, and payload | The handler needs event identity and business data. |
-| Claim | Create a unique `source/id` record | One attempt wins the right to do the side effect. |
-| Act | Send the email or create thumbnails | The side effect happens after the duplicate guard. |
-| Record | Mark the claim complete and log the result | Operators can inspect what happened. |
-| Duplicate | Return success for an existing claim | The platform stops retrying without repeating the side effect. |
-
-![Retry-safe Cloud Run function flow](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/retry-safe-function-loop.png)
-*A retry-safe handler claims the event before the side effect, so duplicate delivery exits cleanly.*
-
-## Code Shape
-<!-- section-summary: A good function validates input, claims the event, performs one side effect, logs the result, and returns after work finishes. -->
-
-Here is a Node.js CloudEvent handler for the receipt path. Firestore is used as the claim store because transactional document creation gives the handler a simple duplicate guard. A SQL table with a primary key can work the same way.
-
-The code shape should read like the operational story. First, reject events that do not belong to this function. Next, build an idempotency key from stable event fields. Then claim the key before doing the side effect. Finally, log the safe identifiers a responder needs. The actual email library and datastore can vary, but this order keeps the handler understandable.
-
-```js
-import { cloudEvent } from "@google-cloud/functions-framework";
-import { Firestore } from "@google-cloud/firestore";
-import { sendReceiptEmail } from "./email.js";
-
-const db = new Firestore();
-
-cloudEvent("sendReceipt", async (event) => {
-  const encoded = event.data?.message?.data;
-  const payload = encoded
-    ? JSON.parse(Buffer.from(encoded, "base64").toString("utf8"))
-    : event.data;
-
-  const eventKey = `${event.source}/${event.id}`;
-  const claimRef = db.collection("function_event_claims").doc(eventKey);
-
-  const claimed = await db.runTransaction(async (tx) => {
-    const existing = await tx.get(claimRef);
-    if (existing.exists) {
-      return false;
-    }
-
-    tx.create(claimRef, {
-      eventKey,
-      eventType: event.type,
-      orderId: payload.orderId,
-      correlationId: payload.correlationId,
-      status: "claimed",
-      claimedAt: new Date().toISOString()
-    });
-
-    return true;
-  });
-
-  if (!claimed) {
-    console.log(JSON.stringify({
-      eventKey,
-      orderId: payload.orderId,
-      duplicate: true
-    }));
-    return;
+```json
+{
+  "specversion": "1.0",
+  "id": "evt-123",
+  "source": "...",
+  "type": "...",
+  "time": "...",
+  "data": {
+    "...": "..."
   }
-
-  await sendReceiptEmail({
-    orderId: payload.orderId,
-    email: payload.customerEmail
-  });
-
-  await claimRef.set({
-    status: "sent",
-    completedAt: new Date().toISOString()
-  }, { merge: true });
-
-  console.log(JSON.stringify({
-    eventKey,
-    orderId: payload.orderId,
-    correlationId: payload.correlationId,
-    status: "sent"
-  }));
-});
+}
 ```
 
-Important parts:
+The CloudEvent is not the real-world event itself. It is a standardized description of the event. Its outer attributes are consistent while `data` carries source-specific information. The Functions Framework turns this representation into the CloudEvent programming model used by the handler.
 
-- `cloudEvent("sendReceipt", ...)` registers the handler entry point.
-- The Pub/Sub message body is decoded from base64 if present.
-- `event.source` and `event.id` create the idempotency key.
-- The claim happens before sending the email.
-- Duplicate delivery logs and returns without throwing.
-- The handler waits for email and status writes before returning.
+Event delivery still uses networking. A bucket does not directly call a Python function by magic. For an Eventarc-triggered function, an event producer surfaces the event, Eventarc routes it, and an HTTP request carrying CloudEvent data reaches the underlying Cloud Run service. The Functions Framework parses the request and calls the handler.
 
-Permanent validation failures should end differently from temporary provider failures. A malformed payload should log a terminal error and avoid a retry loop. A temporary email provider outage can throw so the platform can retry if retry policy allows it.
-
-## Deploy and Verify
-<!-- section-summary: Deployment chooses the handler entry point, runtime, service account, timeout, scaling limit, and trigger route. -->
-
-Cloud Run function deployment from source names the function service, source directory, handler entry point, runtime base image, region, service account, timeout, and scaling limits:
-
-```bash
-gcloud run deploy send-receipt \
-  --project=PROJECT_ID \
-  --source=. \
-  --function=sendReceipt \
-  --base-image=nodejs24 \
-  --region=us-central1 \
-  --service-account=receipt-function-runtime@PROJECT_ID.iam.gserviceaccount.com \
-  --set-env-vars=RECEIPT_FROM=receipts@example.com \
-  --timeout=120s \
-  --max-instances=20
+```text
+event producer
+      |
+Eventarc routing
+      |
+HTTP delivery with CloudEvent
+      |
+Cloud Run service
+      |
+Functions Framework
+      |
+handler
 ```
 
-Important parts:
+The platform hides much of this plumbing, but the packet path remains important when diagnosing a trigger that exists while a handler never runs.
 
-- `--source=.` tells Cloud Run to build from source.
-- `--function=sendReceipt` selects the handler entry point.
-- `--base-image=nodejs24` chooses the runtime base image.
-- `--service-account` attaches the runtime identity.
-- `--timeout` bounds one invocation.
-- `--max-instances` protects downstream systems during spikes.
+## What Roles Do Pub/Sub and Eventarc Play?
+<!-- section-summary: Pub/Sub buffers and distributes messages, while Eventarc filters events and routes matching ones to destinations. -->
 
-Expected output should name the Cloud Run-backed service and revision:
+Suppose a producer creates work faster than one consumer can process it. A direct connection overloads the consumer. A durable mailbox between them lets the producer publish now and the consumer process at its sustainable rate.
 
-```console
-Service [send-receipt] revision [send-receipt-00007-yem] has been deployed.
-Service URL: https://send-receipt-7a2b3c-uc.a.run.app
+**Pub/Sub** provides that messaging role. A publisher sends messages to a topic, and subscribers receive messages associated with the topic. This supplies decoupling, buffering, fan-out, delivery, and redelivery.
+
+```text
+publisher -> Pub/Sub topic
+                  |-- subscriber A
+                  |-- subscriber B
+                  `-- subscriber C
 ```
 
-The event route can connect a Pub/Sub topic through Eventarc:
+**Eventarc** answers a different question. It expresses that events from a selected producer, matching chosen attributes, should go to a destination. A trigger might filter Cloud Storage object-finalized events to one bucket and deliver them to a resize function. Eventarc supports sources including Pub/Sub, Cloud Storage, Firestore, and many events surfaced through Cloud Audit Logs.
 
-```bash
-gcloud eventarc triggers create receipt-pubsub-trigger \
-  --project=PROJECT_ID \
-  --location=us-central1 \
-  --destination-run-service=send-receipt \
-  --destination-run-region=us-central1 \
-  --event-filters="type=google.cloud.pubsub.topic.v1.messagePublished" \
-  --transport-topic=projects/PROJECT_ID/topics/purchase-events \
-  --service-account=receipt-trigger@PROJECT_ID.iam.gserviceaccount.com
+A useful approximation is:
+
+```text
+Pub/Sub -> durable message transport and broker
+Eventarc -> event integration, filtering, and routing
 ```
 
-Important parts:
+The services can work together. A message published to a Pub/Sub topic is itself an event. An Eventarc trigger can route that event to a Cloud Run function. Google documents Pub/Sub triggers for functions as Eventarc triggers, and Eventarc Standard uses Pub/Sub as part of its transport machinery.
 
-- `--event-filters` chooses the Pub/Sub message-published event type.
-- `--transport-topic` names the topic carrying purchase events.
-- `--destination-run-service` points at the Cloud Run service created by the function deploy.
-- The trigger service account needs the permissions required by Eventarc for routing.
+![Event sources reach focused handlers through matching Eventarc triggers](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/event-to-handler-path.png)
 
-Expected output should show the trigger and destination:
+*The source produces work, the trigger selects its destination, and the handler stays focused on one reaction.*
 
-```console
-Created trigger [receipt-pubsub-trigger] in location [us-central1].
-Destination: Cloud Run service [send-receipt]
-Transport topic: projects/PROJECT_ID/topics/purchase-events
+Choosing between them is therefore not a contest. Use the mental models to locate responsibility. Pub/Sub gives producers and consumers a durable messaging boundary. Eventarc connects events from supported sources to destinations according to filters. A Pub/Sub event may pass through both layers before the handler runs.
+
+## Why Do Retries Require Idempotency?
+<!-- section-summary: At-least-once delivery can repeat an event after uncertainty, so handlers must make duplicate execution safe and isolate persistent failures. -->
+
+Imagine an `OrderCreated` handler calls an email provider and the provider times out. The delivery system can discard the event or try again. Retrying is useful for transient failures, but it creates the central duplicate problem.
+
+Suppose the function sends the email successfully and then loses the network connection before it can acknowledge success. The infrastructure cannot prove whether processing completed. Delivering again is safer for reliability, but the second invocation can send a second email. A repeated payment could be much worse.
+
+Distributed systems therefore commonly use **at-least-once delivery**, where a message is delivered one or more times. Eventarc Standard can redeliver events, so duplicate delivery is possible when retries apply. The practical goal is not to assume that infrastructure will execute application logic precisely once. It is to make repeating the work safe.
+
+An operation is **idempotent** when applying it repeatedly does not move the final state beyond one successful application. Marking an order shipped twice still leaves it shipped once. Charging the same payment twice does not have that property.
+
+A common design uses the event identifier. Within a transaction, the handler checks whether event `abc123` has already been processed. If so, it exits safely. If not, it performs the mutation and records the identifier before committing.
+
+```text
+begin transaction
+    |
+has event source + id already succeeded?
+    | yes -> stop safely
+    | no
+    v
+perform mutation
+    |
+record event as processed
+    |
+commit
 ```
 
-The first verification path should publish one test event, describe the trigger, and check logs for exactly one handled invocation. The publish command sends the same kind of business event the checkout API would send after a purchase commits.
+Eventarc recommends idempotent handlers and identifies duplicate CloudEvents by the combination of `source` and `id`. When an external API supports idempotency keys, the same event identifier can be passed to that provider.
 
-```bash
-gcloud eventarc triggers describe receipt-pubsub-trigger \
-  --project=PROJECT_ID \
-  --location=us-central1 \
-  --format="yaml(name,eventFilters,serviceAccount,destination.cloudRun,transport.pubsub.topic)"
+The check and the mutation must be coordinated carefully. If code first checks a `processed_events` table, performs a database update, and crashes before recording success, a retry can perform the update again. When both operations affect the same transactional database, wrapping the mutation and processed-event record in one transaction removes that gap. They either commit together or neither becomes durable.
 
-gcloud pubsub topics publish purchase-events \
-  --project=PROJECT_ID \
-  --message='{"orderId":"ord-test-1042","customerEmail":"alex@example.com","correlationId":"checkout-test-1042"}'
+External side effects need the destination's own guarantees. Sending an event ID as a payment provider's or email provider's idempotency key lets that system recognize the repeated call. When a destination offers no such facility, the application needs another durable record or a business operation whose repeated result is naturally safe. Idempotency is therefore an application design property, not a checkbox that the trigger can add after deployment.
 
-gcloud logging read \
-  'resource.type="cloud_run_revision"
-   resource.labels.service_name="send-receipt"
-   jsonPayload.orderId="ord-test-1042"' \
-  --project=PROJECT_ID \
-  --limit=5 \
-  --format="value(timestamp,jsonPayload.severity,jsonPayload.message,jsonPayload.eventKey,jsonPayload.status,jsonPayload.correlationId)"
+![A retry-safe handler checks an idempotency key before producing one side effect](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/retry-safe-function-loop.png)
+
+*At-least-once delivery may repeat the invocation; the application prevents a repeated business effect.*
+
+Retry behavior is a trigger property rather than a universal function guarantee. Eventarc can use retry and backoff, while a Cloud Run destination can also have one delivery attempt. Current creation paths can have different defaults. Production design therefore asks what this trigger's delivery policy is and records its backoff, maximum attempts, dead-letter handling, idempotency, and alerting.
+
+Retries only help temporary failures. A permanently invalid event can fail forever. A **dead-letter destination** gives persistently failing work somewhere to go after repeated attempts so operators can alert, inspect, repair, or deliberately discard it. The durable rule is simple: transient failures deserve a retry policy; permanent failures need an explicit destination and human or automated recovery path.
+
+## How Should Function Code and Runtime State Be Shaped?
+<!-- section-summary: A small infrastructure-facing handler delegates to ordinary business logic, assumes instances are replaceable, and keeps expensive startup work under control. -->
+
+A handler should act as an adapter between cloud delivery and business logic. It parses and validates the CloudEvent, extracts the domain inputs, and calls ordinary application code.
+
+```python
+@functions_framework.cloud_event
+def on_order_created(event):
+    order_id = extract_order_id(event)
+    process_order(order_id, event["id"])
+
+def process_order(order_id, event_id):
+    ...
 ```
 
-Important parts:
+This design lets tests call `process_order("123", "event-456")` without manufacturing the entire Eventarc delivery path. Infrastructure-specific parsing stays at the edge while billing, SQL, templates, and downstream API calls remain in application modules. “Function” describes a focused invocation boundary; the supporting code can still be substantial.
 
-- `triggers describe` proves the trigger points to the expected function service, region, topic, and routing service account.
-- `topics publish` sends a realistic payload through the event path instead of calling the handler by hand.
-- The log query filters on the test order ID so the reviewer can see the invocation tied to that event.
+Cloud Run may reuse an instance across invocations, but it can also create several instances, remove idle ones, or restart them. Correctness cannot depend on RAM from a previous invocation, a file written only to ephemeral local storage, the next event reaching the same process, or there being exactly one instance. Important shared state belongs in a database, Cloud Storage, Pub/Sub, or another durable system.
 
-Good trigger output should name the Pub/Sub event type and Cloud Run destination:
+This is the serverless meaning of **statelessness**: any invocation can run on a different instance. It does not mean the function cannot read or write durable data.
 
-```yaml
-name: projects/PROJECT_ID/locations/us-central1/triggers/receipt-pubsub-trigger
-eventFilters:
-  - attribute: type
-    value: google.cloud.pubsub.topic.v1.messagePublished
-serviceAccount: receipt-trigger@PROJECT_ID.iam.gserviceaccount.com
-destination:
-  cloudRun:
-    service: send-receipt
-    region: us-central1
-transport:
-  pubsub:
-    topic: projects/PROJECT_ID/topics/purchase-events
+Scaling follows incoming work. Zero events can mean no active instances. A burst of 500 events per second can cause the platform to create more instances, and capacity can shrink when the backlog clears. That removes manual server provisioning from the normal path.
+
+Fresh capacity still needs time to start. A **cold start** creates a runtime or container, loads libraries, initializes the application, and then invokes the handler. Large dependency sets and expensive global initialization increase that delay. Startup logic should perform only the work required before a handler can safely begin.
+
+Function source eventually becomes infrastructure. A project containing `main.py` and `requirements.txt` is uploaded, built with Cloud Build and buildpacks, combined with the Functions Framework into a container image, stored in Artifact Registry, and deployed as a Cloud Run revision. Functions still execute in containers; the platform generates and operates much of that container machinery.
+
+Each deployment creates an immutable runnable revision. Named versions are a stronger operational model than editing `app.py` on a production server and restarting it. Logs, identity, and trigger verification can be tied to the deployed version.
+
+## How Do You Deploy, Verify, Secure, and Operate a Function?
+<!-- section-summary: Verification follows the invocation path, identity separates delivery from downstream access, and operations watch producers, retries, handlers, and dependencies. -->
+
+An HTTP function is verified with an HTTP client. Invoke its service endpoint, then inspect the response status, body, latency, and logs. Cloud Run functions built on the current model have an HTTP service endpoint underneath even when an event trigger is the normal caller.
+
+An event-driven function requires a different proof. Deployment success only shows that runnable code exists. The complete test produces an event, confirms that the trigger matches, confirms delivery to the handler, inspects the logs, and checks the intended side effect.
+
+```text
+producer -> event -> trigger -> delivery -> handler -> side effect
 ```
 
-Good log output should show one accepted side effect:
+For a Pub/Sub path, publish a test message, verify that Eventarc has an active matching trigger, confirm that the function receives the event, and check the database or other destination. Trigger creation can take time to become active, so service deployment and trigger readiness are separate states.
 
-```console
-2026-07-04T10:24:41Z INFO receipt email sent //pubsub.googleapis.com/projects/PROJECT_ID/topics/purchase-events/1096437892045551 sent checkout-test-1042
+A useful test records one correlation value from beginning to end. Put a known identifier in the test message or object name, find that same value in the CloudEvent attributes or data, locate it in handler logs, and then confirm it in the resulting database row or output object. This distinguishes a real end-to-end success from an unrelated healthy invocation that happened at the same time.
+
+The negative paths deserve proof as well. Send the same event identity twice and confirm that the side effect occurs once. Force a temporary dependency failure and verify the configured retry behavior. Use a permanently invalid payload and confirm that attempts stop according to policy and the event reaches its dead-letter destination or alert path. These checks turn retry and idempotency from design claims into observable behavior.
+
+Security has at least two identity directions. First, an event-delivery identity must be allowed to invoke the underlying service. Second, the function's runtime service account must be authorized for the storage, database, Pub/Sub topic, or API it calls after startup. A permission error can therefore occur before the handler starts or inside the handler during downstream access.
+
+The runtime service account supplies short-lived workload credentials to application libraries, and IAM applies least privilege. A thumbnail function can read an input bucket and write an output location without permission to delete the project. Long-lived Google Cloud keys do not need to appear in source.
+
+Third-party systems may still require secret values such as a Stripe key, database password, or vendor token. Those belong in Secret Manager rather than source code, Git, a Dockerfile, or ordinary plain configuration. Authorized Cloud Run instances can receive secrets as mounted files or environment values while Secret Manager owns their lifecycle.
+
+Serverless does not remove operations; it changes the layer being operated. The team still needs to know whether events arrive, how many invocations fail, how long processing takes, whether a backlog grows, whether retries are rising, whether duplicate handling is safe, whether a new revision introduced failures, and whether dependencies are healthy.
+
+Cloud Logging and Cloud Monitoring provide request, application or container, and platform evidence. A complete operational view follows the chain from producer health to delivery health, handler health, and dependency health rather than monitoring only the function box.
+
+That chain helps interpret “the function did not run.” The producer may never have emitted the event. The trigger filter may not match its type or source. Delivery authentication may be denied. The handler may start and reject malformed data. The business logic may succeed while the final dependency fails. Each state needs a different signal and owner, so a dashboard that displays only invocation count leaves large blind spots.
+
+![A production function needs trigger, revision, retry, dead-letter, log, and service-account evidence](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/function-operations-checklist.png)
+
+*Operations cover the whole event route, including work that never reached the handler and work that failed after it started.*
+
+When an operator sees failures, the repair depends on the layer. A missing trigger calls for routing repair. Invocation denial calls for the delivery identity. Downstream denial calls for runtime IAM. A persistent invalid event calls for dead-letter handling. A transient provider error calls for retry and idempotency evidence.
+
+## What Happens During a Complete Event-Driven Flow?
+<!-- section-summary: A photo upload becomes a routed CloudEvent, a retry-safe handler uses workload identity, and durable output proves successful processing. -->
+
+Consider a photo-processing system. A user uploads `photo.jpg` to Cloud Storage, and the application must create a thumbnail without making the upload request wait for image processing.
+
+First, the successful object creation is the fact: `photo.jpg` now exists. Cloud Storage emits event information that identifies the bucket and object. Eventarc has a trigger whose condition selects object-finalized events from the `photos` bucket and whose destination is the `generate-thumbnail` function.
+
+Eventarc packages and delivers a CloudEvent. Its outer fields identify the event ID, source, type, and time, while its data contains the bucket and object names. The Functions Framework receives the underlying HTTP delivery and calls the declared CloudEvent handler.
+
+```python
+@functions_framework.cloud_event
+def generate_thumbnail(event):
+    ...
 ```
 
-The interpretation is specific. The trigger route exists, the test message reached the function through Pub/Sub and Eventarc, and the handler logged one completed receipt for `ord-test-1042`. If a second log line for the same `eventKey` says `duplicate skipped`, the idempotency guard is working during duplicate delivery tests.
+Before producing `thumbnails/photo.jpg`, the application checks its idempotency record or output rule. That protects the business effect if the event is delivered again. The function's service account passes through IAM authorization to read the original and write the thumbnail, so no static Google Cloud key is embedded in source.
 
-Verification should check that the trigger exists, the function logs one test event, duplicates do not repeat the side effect, and the runtime service account has only the required roles.
+If processing succeeds, the handler returns successfully and the delivery is considered handled. If a temporary Storage call fails and the trigger's policy retries, the same event can arrive again. Idempotent logic prevents the retry from becoming a duplicate-output incident. A permanently invalid event eventually follows the configured dead-letter and alert path rather than retrying forever.
 
-## Identity, Secrets, and Operations
-<!-- section-summary: Functions still need narrow identity, secret access, retry policy, logs, metrics, and failure review. -->
-
-Cloud Run functions still run as software identities. The receipt function should use a runtime service account that can read only the email-provider secret, write the event-claim record, and load the order summary it needs. Deployment automation should use a separate identity for broader deploy permissions.
-
-Secrets should come from Secret Manager. The email-provider token should never live in source code, logs, or the container image built from the function source. Environment variables can hold non-sensitive configuration such as sender address, template name, or feature flag values.
-
-Operations evidence should prove the runtime path as well as the source code. A small review can check the Cloud Run service behind the function, the secret policy, and the failed-event path:
-
-```bash
-gcloud run services describe send-receipt \
-  --project=PROJECT_ID \
-  --region=us-central1 \
-  --format="yaml(spec.template.spec.serviceAccountName,spec.template.spec.containers[0].env,status.latestReadyRevisionName)"
-
-gcloud secrets get-iam-policy email-provider-token \
-  --project=PROJECT_ID \
-  --format="yaml(bindings)"
-
-gcloud pubsub topics describe receipt-failures \
-  --project=PROJECT_ID \
-  --format="yaml(name,labels)"
+```text
+user uploads photo
+       |
+Cloud Storage records object-finalized event
+       |
+Eventarc trigger filters and routes it
+       |
+CloudEvent describes what happened
+       |
+Cloud Run service receives HTTP delivery
+       |
+Functions Framework calls handler
+       |
+handler checks idempotency
+       |
+runtime identity reads original and writes thumbnail
+       |
+logs and durable output prove success
 ```
 
-Good evidence should show the runtime service account on the deployed service, the same service account on the secret accessor binding, and a topic or operations queue for terminal failures:
+The same system can use Pub/Sub when durable message buffering belongs between a producer and consumers. IAM controls who may deliver and what the function may access. Secret Manager supplies sensitive external credentials. Retry policy addresses temporary failure. Idempotency addresses duplicates. Dead-letter handling isolates persistent failure. Logging and monitoring reveal whether events are flowing successfully.
 
-```yaml
-spec:
-  template:
-    spec:
-      serviceAccountName: receipt-function-runtime@PROJECT_ID.iam.gserviceaccount.com
-      containers:
-        - env:
-            - name: RECEIPT_FROM
-              value: receipts@example.com
-status:
-  latestReadyRevisionName: send-receipt-00007-yem
----
-bindings:
-  - role: roles/secretmanager.secretAccessor
-    members:
-      - serviceAccount:receipt-function-runtime@PROJECT_ID.iam.gserviceaccount.com
----
-name: projects/PROJECT_ID/topics/receipt-failures
-labels:
-  owner: commerce-ops
-```
+An operator should be able to name the durable evidence at each boundary: the source object or business record, the published message where messaging is used, the trigger configuration and readiness, the CloudEvent identifier, the handler log, the processed-event record, and the thumbnail object. That chain makes it possible to locate one missing reaction without guessing whether the problem began at production, routing, invocation, application logic, or output storage.
 
-The interpretation is the same pattern as a web service. The deployed function runs as `receipt-function-runtime`, and that identity can access the email-provider token. Non-sensitive configuration such as `RECEIPT_FROM` appears in environment variables. The failed-event topic gives operators a place to review payloads that the handler rejects permanently, such as a message missing `orderId`.
+The compact vocabulary is now connected:
 
-Retry evidence should separate temporary failure from terminal failure. A temporary provider outage can throw so Eventarc can retry the event. A malformed payload should log a terminal failure, publish a small review message to `receipt-failures`, and stop the retry loop.
-
-```console
-2026-07-04T10:31:02Z ERROR receipt send failed eventKey=... orderId=ord-8831 retryable=true errorCode=EMAIL_PROVIDER_TIMEOUT
-2026-07-04T10:32:18Z WARN receipt payload rejected eventKey=... orderId=- retryable=false failedTopic=receipt-failures reason=MISSING_ORDER_ID
-```
-
-The first line tells operators that retry is useful because the provider failed temporarily. The second line tells them the event itself is invalid, so the handler recorded a failed-event path for human review and avoided a retry loop.
-
-Operational checks should include:
-
-| Area | What to check |
+| Concept | Plain meaning |
 |---|---|
-| **Trigger health** | Eventarc trigger exists in the expected region and points to the function service. |
-| **Retry behavior** | Temporary failures retry, while permanent validation failures reach a terminal state. |
-| **Idempotency** | Duplicate `source/id` delivery does not repeat email or thumbnail output. |
-| **Logs** | Logs include event key, business ID, correlation ID, and sanitized error reason. |
-| **Metrics** | Invocation count, error count, latency, retry count, and max-instance saturation are visible. |
-| **Dead-letter path** | Repeated failures have a review path such as a dead-letter topic or an operations queue. |
+| **Cloud Run function** | Run a named handler without operating its server. |
+| **Handler** | Receive and adapt incoming work to application logic. |
+| **HTTP function** | Run because a caller made a request. |
+| **CloudEvent function** | Run because a system reported an event. |
+| **Event** | A fact describing something that happened. |
+| **CloudEvent** | A standard outer description of that fact. |
+| **Trigger** | A rule connecting matching events to a destination. |
+| **Pub/Sub** | Durable messaging between producers and consumers. |
+| **Eventarc** | Event-source integration, filtering, and routing. |
+| **Retry** | Attempt delivery again after a failure. |
+| **Idempotency** | Make repeated execution safe. |
+| **Entry point** | Tell the Functions Framework which handler to call. |
+| **Service account** | Give the workload a Google Cloud identity. |
+| **Secret Manager** | Keep sensitive external credentials out of source. |
+| **Revision** | Name one immutable deployed version. |
+| **Observability** | Prove that events arrive and complete successfully. |
 
-![Cloud Run functions operations checklist](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/function-operations-checklist.png)
-*A production function review checks trigger route, retry safety, identity, logs, metrics, and failure handling.*
+The deepest event model is: a producer creates a fact, an event describes it, a trigger decides which destination cares, a CloudEvent transports the description consistently, a function contains the reaction, retry addresses temporary uncertainty, and idempotency makes repetition safe.
 
-## Putting It All Together
-<!-- section-summary: Cloud Run functions fit small event jobs with focused handlers and retry-safe triggers. -->
+## Check Your Answers
 
-Cloud Run functions fit work that should run after an event. The function is the small deployable unit. The handler is the entry point. The trigger starts the handler. The event records what happened. The CloudEvent envelope gives the handler standard metadata. Pub/Sub and Eventarc route messages and platform events. Retry improves reliability, and idempotency protects the side effect.
+:::expand[Why Does Event Work Leave the Main Request?]{kind="recap"}
+Immediate work stays synchronous when the caller needs its result. Reactions such as email, analytics, or warehouse notification can often follow an event, which decouples their availability from the request.
+:::
 
-Thumbnail generation and receipt email both fit this shape because the main request can finish first and the follow-up work can run separately. The production design still needs a narrow service account, secrets, logs, metrics, retry policy, and a way to inspect failed events.
+:::expand[What Are a Function and Its Handler?]{kind="recap"}
+A function is focused code invoked for a request or event. Its handler is the named entry point called by the Functions Framework inside a generated Cloud Run container and service.
+:::
 
-The next article covers GKE, where the question changes from one bounded handler to many services that may need Kubernetes as a shared platform API.
+:::expand[How Do Events, Triggers, and CloudEvents Connect?]{kind="recap"}
+An event states a fact, a trigger maps matching facts to a destination, and CloudEvents supplies a standard envelope that the framework presents to the handler.
+:::
+
+:::expand[What Roles Do Pub/Sub and Eventarc Play?]{kind="recap"}
+Pub/Sub provides durable message transport, buffering, and fan-out. Eventarc integrates event sources, filters events, and routes matches to destinations; the two can be used together.
+:::
+
+:::expand[Why Do Retries Require Idempotency?]{kind="recap"}
+At-least-once delivery can repeat work after an uncertain result. Idempotency prevents a repeated invocation from repeating the business effect, while dead-letter handling isolates permanent failures.
+:::
+
+:::expand[How Should Function Code and Runtime State Be Shaped?]{kind="recap"}
+Keep the handler as an infrastructure adapter around testable business logic. Store important state externally, assume instances are replaceable, and minimize unnecessary cold-start initialization.
+:::
+
+:::expand[How Do You Deploy, Verify, Secure, and Operate a Function?]{kind="recap"}
+Verify the full route, not only deployment. Separate delivery identity from runtime identity, keep secrets external, and observe producers, retries, handlers, revisions, and dependencies.
+:::
+
+:::expand[What Happens During a Complete Event-Driven Flow?]{kind="recap"}
+A producer emits a fact, Eventarc routes its CloudEvent, the framework invokes a retry-safe handler, workload identity authorizes dependencies, and durable output plus logs proves success.
+:::
 
 ## References
 
-- [Deploy Cloud Run functions](https://docs.cloud.google.com/run/docs/deploy-functions) - Official deployment guide for Cloud Run functions and current deploy flags.
-- [Write Cloud Run functions](https://docs.cloud.google.com/run/docs/write-functions) - Official guide for HTTP and event-driven Cloud Run functions and the Functions Framework.
-- [Compare Cloud Run functions](https://docs.cloud.google.com/run/docs/functions/comparison) - Official comparison of Cloud Run functions behavior and configuration.
-- [Eventarc overview](https://docs.cloud.google.com/eventarc/docs/overview) - Official overview of Eventarc event routing.
-- [Pub/Sub overview](https://docs.cloud.google.com/pubsub/docs/overview) - Official overview of asynchronous Pub/Sub messaging.
-- [Publish messages to topics](https://docs.cloud.google.com/pubsub/docs/publisher) - Official Pub/Sub publisher documentation, including delivery behavior.
-- [Retry events in Eventarc](https://docs.cloud.google.com/eventarc/docs/retry-events) - Official Eventarc retry behavior guide.
+- [Cloud Run functions overview](https://docs.cloud.google.com/run/docs/functions/overview?authuser=1) - Official source-build, container, and service model.
+- [Write Cloud Run functions](https://docs.cloud.google.com/run/docs/write-functions?authuser=2) - Official Functions Framework, entry point, HTTP, and CloudEvent signatures.
+- [Cloud Run function triggers](https://docs.cloud.google.com/run/docs/function-triggers) - Official HTTP and Eventarc trigger behavior.
+- [Trigger functions from Pub/Sub with Eventarc](https://docs.cloud.google.com/run/docs/tutorials/pubsub-eventdriven?authuser=2) - Official underlying HTTP and CloudEvent delivery path.
+- [Create Pub/Sub triggers](https://docs.cloud.google.com/run/docs/triggering/pubsub-triggers?hl=en) - Official Pub/Sub-to-Eventarc trigger guidance.
+- [Eventarc retry events](https://docs.cloud.google.com/eventarc/docs/retry-events?authuser=0000) - Official delivery, duplicates, idempotency, retry defaults, and dead-letter guidance.
+- [Cloud Run functions best practices](https://docs.cloud.google.com/run/docs/tips/functions-best-practices?authuser=19) - Official statelessness and cold-start guidance.
+- [Deploy Cloud Run services](https://docs.cloud.google.com/run/docs/deploying) - Official immutable revision deployment behavior.
+- [Configure service identity](https://docs.cloud.google.com/run/docs/configuring/services/service-identity) - Official runtime service-account model.
+- [Configure environment variables and secrets](https://docs.cloud.google.com/run/docs/configuring/services/environment-variables) - Official recommendation to use Secret Manager for sensitive values.
+- [Cloud Run logging](https://docs.cloud.google.com/run/docs/logging) - Official request, application, and system log behavior.

@@ -35,7 +35,7 @@ reusable Kubernetes resources
 
 Kubernetes does not know which fields came from a base, overlay, generator, transformer, or patch. Those are source-organization concepts. The boundary between Kustomize and Kubernetes is the rendered object set.
 
-Seven questions explain that transformation:
+Keep these questions in view as you work through the lesson:
 
 1. **What does Kustomize build from a directory?**
 2. **What belongs in a base, and what belongs in an overlay?**

@@ -9,19 +9,15 @@ id: article-devops-foundation-linux-linux-basics-filesystem-navigation
 
 ## Table of Contents
 
-1. [What the Linux Filesystem Is](#what-the-linux-filesystem-is)
-2. [One Tree Under the Root Directory](#one-tree-under-the-root-directory)
-3. [Find Your Place with `pwd`](#find-your-place-with-pwd)
-4. [Look Around with `ls`](#look-around-with-ls)
-5. [Move with `cd` and Path Names](#move-with-cd-and-path-names)
-6. [Where Linux Puts Important Things](#where-linux-puts-important-things)
-7. [Virtual Filesystems: Live Views from the Kernel](#virtual-filesystems-live-views-from-the-kernel)
-8. [Find Files When You Do Not Know the Path](#find-files-when-you-do-not-know-the-path)
-9. [Disk Space, Inodes, and Mount Points](#disk-space-inodes-and-mount-points)
-10. [References](#references)
-
-## What the Linux Filesystem Is
-<!-- section-summary: The Linux filesystem is one directory tree that gives every file, program, log, device, and mounted disk a path. -->
+1. [What Does the Linux Filesystem Namespace Represent?](#what-does-the-linux-filesystem-namespace-represent)
+2. [How Does One Tree Connect Names, Filesystems, and Storage?](#how-does-one-tree-connect-names-filesystems-and-storage)
+3. [How Do pwd, ls, and cd Resolve Paths?](#how-do-pwd-ls-and-cd-resolve-paths)
+4. [Where Does Linux Put Important Things?](#where-does-linux-put-important-things)
+5. [How Do Virtual Filesystems Expose Live Kernel State?](#how-do-virtual-filesystems-expose-live-kernel-state)
+6. [How Do Links and Mounts Change What a Path Reaches?](#how-do-links-and-mounts-change-what-a-path-reaches)
+7. [How Do You Find Files and Commands?](#how-do-you-find-files-and-commands)
+8. [How Do Space, Inodes, and Open Files Explain Capacity?](#how-do-space-inodes-and-open-files-explain-capacity)
+9. [Check Your Answers](#check-your-answers)
 
 You usually meet the Linux filesystem through a clue from a real server. Nginx says it cannot read `/etc/nginx/nginx.conf`, a deploy script complains about `/srv/web/current`, or a log message points at `/var/log/nginx/error.log`. The server is handing you a path and asking whether you know how to follow it.
 
@@ -31,9 +27,23 @@ A path is a location written as text. `/etc/nginx/nginx.conf` points to a config
 
 That is the beginner version of filesystem work: turn a path in an error message into a real place you can inspect. Before you edit Nginx, restart a service, clean up a full disk, or check a mounted volume, you need to answer a few small questions: where am I, what is nearby, where does Linux usually keep this kind of file, and which path should I inspect next?
 
+Keep these questions in view as you work through the lesson:
+
+1. **What Does the Linux Filesystem Namespace Represent?**
+2. **How Does One Tree Connect Names, Filesystems, and Storage?**
+3. **How Do `pwd`, `ls`, and `cd` Resolve Paths?**
+4. **Where Does Linux Put Important Things?**
+5. **How Do Virtual Filesystems Expose Live Kernel State?**
+6. **How Do Links and Mounts Change What a Path Reaches?**
+7. **How Do You Find Files and Commands?**
+8. **How Do Space, Inodes, and Open Files Explain Capacity?**
+
+## What Does the Linux Filesystem Namespace Represent?
+<!-- section-summary: The Linux filesystem is one directory tree that gives every file, program, log, device, and mounted disk a path. -->
+
 The path through the topic matches the order you would use during an SSH session. The root tree comes first, then `pwd`, `ls`, and `cd` for orientation, then standard directories, virtual filesystems, search commands, and disk tools after the first few commands are not enough.
 
-## One Tree Under the Root Directory
+## How Does One Tree Connect Names, Filesystems, and Storage?
 <!-- section-summary: Files, directories, devices, and mounted storage share one tree rooted at `/`. -->
 
 A deploy fails because it cannot open `/srv/web/current/config.yml`, then the Nginx log points at `/var/log/nginx/error.log`. Those paths look unrelated at first, yet Linux wants you to walk them from the same starting point. The top of that shared tree is the **root directory**, written as `/`. Every normal file, directory, device path, and mounted disk appears somewhere under `/`.
@@ -67,7 +77,7 @@ In production, this one-tree design explains a common surprise. An application m
 
 _The image turns the single Linux tree into a map, so common paths feel connected instead of memorized one by one._
 
-## Find Your Place with `pwd`
+## How Do `pwd`, `ls`, and `cd` Resolve Paths?
 <!-- section-summary: `pwd` prints the current working directory, which is the place relative paths start from. -->
 
 After you know every path starts under `/`, the next question is where your shell is standing right now. Picture an SSH session where a cleanup command is sitting in your terminal history. Before running anything that removes, copies, or edits files, you need to know which directory the shell is using.
@@ -91,7 +101,7 @@ This output says the current directory is `/home/deploy`.
 
 This one command prevents many mistakes. If you plan to remove old build files or copy a release archive, check `pwd` first. A command that is safe in `/srv/web/releases` may be dangerous in `/`.
 
-## Look Around with `ls`
+### How Does `ls` Show the Names Around You?
 <!-- section-summary: `ls` lists files and directories, and long output adds permissions, ownership, size, and timestamps. -->
 
 Once `pwd` tells you where the shell is standing, you need to see what is around you. The `ls` command lists the contents of a directory, so it is usually the next command after `pwd`.
@@ -141,7 +151,7 @@ Notice the two special entries at the top. `.` means the current directory. `..`
 
 Many operators type `ls -lah` by habit because it shows enough detail to catch ownership, permission, and timestamp problems quickly. In the output above, application files belong to `deploy:web`, while the parent directory belongs to `root:root`. That kind of detail often explains why one user can edit a file and another cannot.
 
-## Move with `cd` and Path Names
+### How Does `cd` Change the Starting Point?
 <!-- section-summary: `cd` changes the shell's current directory, and path style decides where Linux starts resolving the name. -->
 
 After listing the current directory, you usually want to move closer to the file from the error message. The shell always has a current directory. Commands such as `ls`, `cat`, `cp`, and `rm` use that location as their starting point whenever a path is not written from `/`. Changing directory moves the shell's attention to the part of the filesystem you are working on.
@@ -211,7 +221,7 @@ One small implementation detail explains why `cd` is special. `cd` is a shell bu
 
 The production symptom is simple: a deploy command works from `/srv/web` and fails from `/home/deploy` with "No such file or directory." That usually means the command used a relative path and the operator ran it from a different directory. The next decision is whether the runbook should `cd` into a known directory first or use absolute paths for important files.
 
-## Where Linux Puts Important Things
+## Where Does Linux Put Important Things?
 <!-- section-summary: The Filesystem Hierarchy Standard gives common locations for configuration, logs, programs, service data, and user files. -->
 
 After `pwd`, `ls`, and `cd` feel familiar, you still need a first guess. During a real debug session, the question is usually practical: where would this server keep the Nginx config, where would it write the error log, and where did the application code land after deploy?
@@ -252,7 +262,7 @@ ls /var/log/nginx
 
 These outputs teach a useful habit. Let the filesystem guide you. You do not need to memorize every file name on day one. Learn the main directory purposes, list the directory, then follow the names.
 
-## Virtual Filesystems: Live Views from the Kernel
+## How Do Virtual Filesystems Expose Live Kernel State?
 <!-- section-summary: Directories such as `/proc`, `/sys`, and `/dev` expose live kernel and device information through file-like paths. -->
 
 Sometimes the normal paths do not answer the question. The config file looks right, the log file is quiet, and the service still misbehaves. At that point, you need to look at state that changes while the machine is running: which process is active, how busy the CPU queue is, how much memory is still available, and which devices the kernel sees.
@@ -353,7 +363,53 @@ The practical next decision is to ask whether a path is saved content or a live 
 
 _The image shows why a mount point can look like an ordinary folder while actually leading to another filesystem._
 
-## Find Files When You Do Not Know the Path
+## How Do Links and Mounts Change What a Path Reaches?
+
+A path is a chain of names, but a name and the underlying object are separate. A directory entry such as `notes.txt` maps that name to a filesystem record called an **inode**. The inode stores metadata and points toward file data. This separation explains why Linux can give one object more than one name and why removing a name does not always remove the underlying data immediately.
+
+A **symbolic link**, or symlink, is a special object whose contents are another pathname. Create one with `ln -s`:
+
+```bash
+ln -s /srv/web/releases/20260825 /srv/web/current
+ls -l /srv/web/current
+
+# Example output:
+# lrwxrwxrwx 1 deploy deploy 26 Aug 25 10:30 /srv/web/current -> /srv/web/releases/20260825
+```
+
+When a program opens `/srv/web/current/config.yml`, Linux reads the symlink target and continues pathname resolution through `/srv/web/releases/20260825/config.yml`. The link can cross filesystem boundaries because it stores a path rather than another reference to the same inode. Removing its target leaves the link **dangling**. `readlink` shows the stored target, while `readlink -f` follows the full chain if every component exists:
+
+```bash
+readlink /srv/web/current
+readlink -f /srv/web/current
+```
+
+A **hard link** works differently. It creates another directory entry pointing to the same inode:
+
+```bash
+printf 'release notes\n' > notes.txt
+ln notes.txt notes-copy.txt
+ls -li notes.txt notes-copy.txt
+
+# Example output:
+# 48291 -rw-r--r-- 2 deploy deploy 14 Aug 25 10:34 notes-copy.txt
+# 48291 -rw-r--r-- 2 deploy deploy 14 Aug 25 10:34 notes.txt
+```
+
+The matching inode number shows that these are two names for one object. The link count is `2`. Editing through either name changes the same file data. Removing one name lowers the link count, but the object remains reachable through the other. Hard links normally cannot cross filesystems because an inode number has meaning only inside the filesystem that owns it, and ordinary users cannot hard-link directories because cycles would make traversal and cleanup difficult to reason about.
+
+This name-versus-object model also explains open deleted files. A running process can hold an open file descriptor to an inode. If an operator removes the pathname, directory lookup can no longer find the name, yet the process can keep reading or writing through its open descriptor. Linux releases the data only after the final directory link and final open reference disappear. That is why `df` may still report used space after a large log is deleted. `lsof +L1` can reveal open files whose link count reached zero.
+
+Mounting changes pathname resolution at a directory boundary. Suppose `/mnt/data` exists on the root filesystem and contains a file. Mounting another filesystem at `/mnt/data` makes lookups below that path enter the mounted filesystem instead. The old directory contents are hidden while the mount is active; they were not erased. Unmounting reveals them again.
+
+```bash
+findmnt /mnt/data
+mountpoint /mnt/data
+```
+
+This is why an application can appear to lose data when a volume is mounted at the wrong path, or can write unexpectedly to the small root filesystem when an expected data mount is missing. A path tells a process how to reach an object. `findmnt` tells an operator which filesystem currently supplies that part of the namespace.
+
+## How Do You Find Files and Commands?
 <!-- section-summary: `find`, `locate`, and `tree` help you discover files when memory or documentation is incomplete. -->
 
 Even after you learn the standard directories, a real server will still surprise you. A deploy script may live in `/opt`, a backup may sit under `/var/backups`, or a team helper may be installed under `/usr/local/bin`. Search commands help when the path is unknown and your memory is not enough.
@@ -448,7 +504,15 @@ find / -name "app.service" 2>/dev/null
 
 The `2>/dev/null` part sends error output to `/dev/null`, so unreadable directories do not fill the screen. Use it deliberately. Cleaner output is helpful, and hidden errors can also explain why a search missed some paths.
 
-## Disk Space, Inodes, and Mount Points
+Finding a command uses the shell's executable search path rather than a whole-filesystem name search. `command -v nginx` reports the command the current shell would execute, while `type -a python` can show aliases, builtins, and every matching executable reachable through `PATH`. This distinction matters when a command works for one user but not another: the binary may exist, yet the two shells may search different directories or resolve different versions.
+
+```bash
+command -v nginx
+type -a python
+printf '%s\n' "$PATH"
+```
+
+## How Do Space, Inodes, and Open Files Explain Capacity?
 <!-- section-summary: `df`, `du`, and mount inspection explain whether storage is full and which path owns the pressure. -->
 
 The last filesystem lesson usually arrives as a strange application error. A service fails to write uploads, Nginx stops logging, or deployments fail while unpacking files. Before chasing application code, check whether the filesystem has free space and free inodes.
@@ -540,7 +604,41 @@ _The image connects filenames, inodes, and open file handles so disk-space surpr
 
 _The summary image gathers the filesystem habits from the article into one quick review map._
 
-## References
+## Check Your Answers
+
+:::expand[What Does the Linux Filesystem Namespace Represent?]{kind="recap"}
+Linux gives every process one hierarchical namespace in which paths connect names to filesystem and kernel objects.
+:::
+
+:::expand[How Does One Tree Connect Names, Filesystems, and Storage?]{kind="recap"}
+The tree starts at `/`; mounted filesystems attach storage to directories without changing the pathname model programs use.
+:::
+
+:::expand[How Do `pwd`, `ls`, and `cd` Resolve Paths?]{kind="recap"}
+`pwd` shows the current starting point, `ls` shows directory entries, and `cd` changes where relative paths begin.
+:::
+
+:::expand[Where Does Linux Put Important Things?]{kind="recap"}
+Standard directories separate configuration, changing data, programs, user homes, temporary files, and runtime state.
+:::
+
+:::expand[How Do Virtual Filesystems Expose Live Kernel State?]{kind="recap"}
+Paths under `/proc`, `/sys`, and `/dev` provide file-like interfaces to processes, devices, and current kernel information.
+:::
+
+:::expand[How Do Links and Mounts Change What a Path Reaches?]{kind="recap"}
+Symlinks redirect pathname resolution, hard links add names for one inode, and mounts replace a directory lookup boundary.
+:::
+
+:::expand[How Do You Find Files and Commands?]{kind="recap"}
+Use live searches for current paths, indexed searches for speed, and shell command lookup for executable resolution.
+:::
+
+:::expand[How Do Space, Inodes, and Open Files Explain Capacity?]{kind="recap"}
+`df`, `du`, inode counts, mount ownership, and deleted-open files explain different forms of storage exhaustion.
+:::
+
+### References
 
 - [Filesystem Hierarchy Standard 3.0](https://refspecs.linuxfoundation.org/FHS_3.0/fhs/index.html) - Defines the purpose of standard Linux directories.
 - [Linux `hier(7)` manual](https://man7.org/linux/man-pages/man7/hier.7.html) - Summarizes the filesystem hierarchy from the Linux manual pages.

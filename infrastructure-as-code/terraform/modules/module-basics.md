@@ -1,7 +1,7 @@
 ---
 title: "Module Basics"
 description: "Terraform modules, why they exist, and how a first reusable module fits into real projects."
-overview: "Terraform modules let teams package related resources into a reusable unit with clear inputs and outputs. This article starts with repeated bucket code, then extracts one folder that dev, staging, and production can all call safely."
+overview: "Terraform modules organize related resources as reusable, parameterized parts of one configuration graph. This article derives a private-bucket module from repeated code, then follows its inputs, outputs, provider context, resource addresses, and state identity."
 tags: ["modules", "reuse", "terraform", "hcl"]
 order: 1
 id: article-iac-terraform-modules-basics
@@ -12,124 +12,162 @@ aliases:
 
 ## Table of Contents
 
-1. [The Copy-Paste Problem](#the-copy-paste-problem)
-2. [What a Module Is](#what-a-module-is)
-3. [Extracting One Private Bucket Module](#extracting-one-private-bucket-module)
-4. [Calling the Module from an Environment](#calling-the-module-from-an-environment)
-5. [How Terraform Tracks Module Resources](#how-terraform-tracks-module-resources)
-6. [Where the Boundary Really Is](#where-the-boundary-really-is)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+1. [Why Does Repeated Terraform Code Become a Problem?](#why-does-repeated-terraform-code-become-a-problem)
+2. [What Is a Terraform Module?](#what-is-a-terraform-module)
+3. [How Do You Extract a Private Bucket Module?](#how-do-you-extract-a-private-bucket-module)
+4. [How Do You Call and Reuse a Module?](#how-do-you-call-and-reuse-a-module)
+5. [How Do Modules Change the Terraform Graph and Addresses?](#how-do-modules-change-the-terraform-graph-and-addresses)
+6. [How Do Root Modules, Providers, and State Fit Together?](#how-do-root-modules-providers-and-state-fit-together)
+7. [What Makes a Useful Module Boundary?](#what-makes-a-useful-module-boundary)
+8. [How Does the Complete Module Model Fit Together?](#how-does-the-complete-module-model-fit-together)
+9. [Check Your Answers](#check-your-answers)
 
-## The Copy-Paste Problem
-<!-- section-summary: Modules remove repeated infrastructure code by letting several root configurations call the same reusable resource pattern. -->
+A module does not replace Terraform's normal mechanism. Terraform still reads desired configuration, builds a dependency graph, uses providers to observe and change infrastructure, and records address-to-object bindings in state. A module organizes and parameterizes one part of that same graph.
 
-A familiar Terraform story starts with the Orders team needing a private S3 bucket in development for build artifacts. The code is simple, so someone copies it into staging. A week later, production needs the same bucket with a longer retention policy, so the team copies it again.
-
-The three folders now look almost the same:
+Start with one development environment and no modules. It needs a private S3 logs bucket:
 
 ```hcl
-resource "aws_s3_bucket" "artifacts" {
-  bucket = "dp-orders-artifacts-dev"
+resource "aws_s3_bucket" "logs" {
+  bucket = "myapp-dev-logs"
 
   tags = {
-    service     = "orders"
-    environment = "dev"
-    managed_by  = "terraform"
+    Environment = "dev"
+    Purpose     = "logs"
   }
+}
+
+resource "aws_s3_bucket_public_access_block" "logs" {
+  bucket = aws_s3_bucket.logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 ```
 
-At first, the copied files look manageable. Then security asks for every artifact bucket to block public access, enable versioning, and declare the bucket's default server-side encryption configuration. Amazon S3 applies default encryption to new objects, and the team still wants the baseline written in Terraform so reviews can see the intended bucket policy clearly. Production gets the fix first. Staging gets it later. Development keeps the old copy because nobody noticed it.
+Terraform sees two managed objects. The reference to `aws_s3_bucket.logs.id` creates a dependency from the bucket to its public-access settings. State binds addresses such as `aws_s3_bucket.logs` to the actual AWS object named `myapp-dev-logs`.
 
-That drift is the problem modules solve. A **Terraform module** lets the team write the bucket pattern once and call it from each environment with different values. The shared structure lives in one folder. The environment-specific choices stay in each root configuration.
+Production needs the same pattern, so the team copies the blocks into another root and changes two values: the bucket name changes to `myapp-prod-logs`, and the environment tag changes to `prod`. The public-access rules remain identical. The repeated resource blocks now leave separate development and production roots that the team must keep aligned by hand.
 
-The module changes where review happens. Reviewers now look at the module once for the shared pattern and look at each environment root for the values passed into that pattern.
+Keep these questions in view as you work through the lesson:
 
-## What a Module Is
-<!-- section-summary: A module is just a Terraform directory with a public interface around the files inside it. -->
+1. **Why Does Repeated Terraform Code Become a Problem?**
+2. **What Is a Terraform Module?**
+3. **How Do You Extract a Private Bucket Module?**
+4. **How Do You Call and Reuse a Module?**
+5. **How Do Modules Change the Terraform Graph and Addresses?**
+6. **How Do Root Modules, Providers, and State Fit Together?**
+7. **What Makes a Useful Module Boundary?**
+8. **How Does the Complete Module Model Fit Together?**
 
-A module is a directory of Terraform files. The directory where you run `terraform plan` is the **root module**. A module called by the root is a **child module**.
+## Why Does Repeated Terraform Code Become a Problem?
+<!-- section-summary: Copying a resource pattern across environments creates multiple implementations that can drift, while a module separates shared rules from values that vary. -->
 
-Terraform accepts any `.tf` filenames, but reusable modules often use this small layout:
+```text
+environments/
+├── dev/
+│   └── main.tf
+└── prod/
+    └── main.tf
+```
 
-- `modules/private-bucket/main.tf` contains the resources the module creates.
-- `modules/private-bucket/variables.tf` declares the inputs callers can set.
-- `modules/private-bucket/outputs.tf` declares the values callers can consume.
+The production copy still contains the same graph:
 
-`variables.tf` declares what callers can pass in. `main.tf` creates the resources. `outputs.tf` returns selected values to the caller. This convention helps reviewers find the module's public interface quickly.
+```hcl
+resource "aws_s3_bucket" "logs" {
+  bucket = "myapp-prod-logs"
 
-The important shift is that callers stop copying resource blocks. They call a folder that owns the reviewed pattern. If the bucket pattern needs one more security control later, the module changes once, and each environment sees the proposed change in its own plan.
+  tags = {
+    Environment = "prod"
+    Purpose     = "logs"
+  }
+}
 
-A reusable module has a small public contract. Inputs are the knobs callers can set. Outputs are the values callers can consume. Everything else inside the module should be treated as an implementation detail, even though Terraform will still show the internal resource addresses in plans and state.
+resource "aws_s3_bucket_public_access_block" "logs" {
+  bucket = aws_s3_bucket.logs.id
 
-## Extracting One Private Bucket Module
-<!-- section-summary: A small private bucket module shows how variables feed resources and outputs return the useful result. -->
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+```
 
-The team starts with a small module. It creates a private artifact bucket, enables versioning, blocks public access, declares default SSE-S3 encryption, and applies consistent tags.
+The duplicated reference still orders the access block after the bucket, and each root can have its own state. The problem is not that Terraform cannot manage the copies. The problem is that humans must now keep two representations of one policy synchronized.
 
-The shape is simple before the details are filled in:
+Copying works once, but it creates two implementations of the same rule. A later correction must reach both roots. If production receives the change and development does not, the supposedly shared bucket policy has drifted. More environments multiply the review and maintenance cost.
 
-- `modules/private-bucket/variables.tf` declares the caller-facing inputs.
-- `modules/private-bucket/main.tf` creates the bucket and the baseline controls.
-- `modules/private-bucket/outputs.tf` returns the values callers can use.
+The repeated code naturally divides into two categories. The invariant implementation is “create a bucket and block every form of public access.” The values that vary are the bucket name, environment, and perhaps additional tags. A module packages the invariant part and turns the variations into inputs.
 
-The interface starts in `variables.tf`. The caller must provide a globally unique bucket name and an environment name. Extra tags stay optional because not every environment has the same ownership or billing tags.
+![Module Reuse Flow](/content-assets/articles/article-iac-terraform-modules-basics/module-reuse-flow.png)
+
+The result is not merely fewer lines. One reviewed implementation expresses what a private application bucket means, while each environment still chooses its own identity values.
+
+## What Is a Terraform Module?
+<!-- section-summary: A module is a directory of Terraform configuration that becomes a parameterized, named subtree inside the caller's graph. -->
+
+At the filesystem level, a Terraform module is a directory containing `.tf` configuration. The directory where you run `terraform plan` is the **root module**. A module block can load another directory as a **child module**.
+
+A conventional reusable-module layout is:
+
+```text
+modules/
+└── private-bucket/
+    ├── main.tf
+    ├── variables.tf
+    └── outputs.tf
+```
+
+The filenames help humans; Terraform reads all `.tf` files in the directory together. The same module could technically use a single `everything.tf`. The three-file convention makes its interface and implementation easier to locate:
+
+```text
+variables → values callers may supply
+resources, locals, and expressions → implementation
+outputs → values the module deliberately returns
+```
+
+This resembles `function(inputs) → outputs`, but the analogy has limits. A module does not run as an isolated function and then disappear. Its resources become nodes in the root configuration's persistent infrastructure graph.
+
+One module source can create multiple module instances. The source directory is the reusable definition; a `module "logs_bucket"` block is one named call. Calling the same source as `module "uploads_bucket"` creates a second instance with a different namespace and potentially different inputs.
+
+Think of the distinction as definition versus instance. `modules/private-bucket` contains the reusable declaration. `module.logs_bucket` is one configured use of that declaration. `module.uploads_bucket` is another. Both expand the same internal resource names, but their module paths keep the resulting instances distinct.
+
+Terraform does not attach special meaning to `main.tf`, `variables.tf`, and `outputs.tf`. It merges the directory's configuration before evaluation. The convention is still valuable because it makes review predictable: interface decisions are visible without scanning every resource, and implementation changes can remain focused in the files that own them.
+
+Inputs and outputs form the public interface. A module can contain many resources, locals, expressions, and data sources while exposing only `bucket_name`, `environment`, `bucket_id`, and `bucket_arn`. Callers depend on that contract instead of the module's internal layout.
+
+## How Do You Extract a Private Bucket Module?
+<!-- section-summary: Extracting a module turns the changing values into variables, keeps the common resources inside, and publishes only useful results as outputs. -->
+
+Create `modules/private-bucket/variables.tf` with the decisions each caller must make:
 
 ```hcl
 variable "bucket_name" {
+  description = "Name of the S3 bucket"
   type        = string
-  description = "Globally unique name for the private artifact bucket."
 }
 
 variable "environment" {
+  description = "Environment that owns the bucket"
   type        = string
-  description = "Environment name used for tags and review."
-}
-
-variable "tags" {
-  type        = map(string)
-  description = "Extra tags applied to resources created by this module."
-  default     = {}
 }
 ```
 
-The first resource in `main.tf` creates the bucket itself and merges the module's standard tags with caller-provided tags. The caller can add ownership details, while the module keeps `service`, `environment`, and `managed_by` consistent.
+The interface can be read as `private_bucket(bucket_name, environment)`. Concrete environmental values no longer appear inside the implementation.
+
+Then move the common resources into `main.tf` and replace literals with input references:
 
 ```hcl
 resource "aws_s3_bucket" "this" {
   bucket = var.bucket_name
 
-  tags = merge(
-    {
-      service     = "orders"
-      environment = var.environment
-      managed_by  = "terraform"
-    },
-    var.tags
-  )
-}
-```
-
-The next resources attach the bucket controls. Each resource uses `aws_s3_bucket.this.id`, so Terraform knows the controls belong to the bucket created by this module.
-
-```hcl
-resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
-  bucket = aws_s3_bucket.this.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
+  tags = {
+    Environment = var.environment
+    Purpose     = "logs"
   }
 }
-```
 
-The encryption resource sets the bucket's default encryption rule to SSE-S3, shown as `AES256` in the AWS and Terraform settings. This example keeps the module small. A production module that needs customer-managed keys can accept a KMS key ARN as an input and switch this resource to SSE-KMS.
-
-Public access blocking is a good example of a baseline the caller should not have to remember. The module always enables the four block settings.
-
-```hcl
 resource "aws_s3_bucket_public_access_block" "this" {
   bucket = aws_s3_bucket.this.id
 
@@ -140,62 +178,56 @@ resource "aws_s3_bucket_public_access_block" "this" {
 }
 ```
 
-Versioning is another baseline for artifact buckets because a bad upload or accidental overwrite should have a recovery path.
+The local resource name `this` is meaningful within the module namespace. The reference between resources still creates the same dependency as before. Parameterization changes where values originate, not Terraform's graph rules.
+
+Finally, `outputs.tf` publishes values callers may need:
 
 ```hcl
-resource "aws_s3_bucket_versioning" "this" {
-  bucket = aws_s3_bucket.this.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-```
-
-The final file, `outputs.tf`, returns the values callers are allowed to use. A bucket name helps humans and scripts. A bucket ARN helps IAM policies grant access without rebuilding the ARN string by hand.
-
-```hcl
-output "bucket_name" {
-  value       = aws_s3_bucket.this.bucket
-  description = "Name of the private bucket created by the module."
+output "bucket_id" {
+  description = "ID of the bucket"
+  value       = aws_s3_bucket.this.id
 }
 
 output "bucket_arn" {
+  description = "ARN of the bucket"
   value       = aws_s3_bucket.this.arn
-  description = "ARN of the private bucket, useful for IAM policies."
 }
 ```
 
-The module interface uses words the caller understands: bucket name, environment, tags, bucket ARN. The internal AWS resources can stay inside the module.
+The module now owns the mechanism: the bucket resource, the public-access resource, their relationship, and the fixed purpose tag. The caller owns the intent that varies: which bucket and environment it needs. Outputs reveal only the stable capabilities another part of the graph should consume.
 
-The module also makes a deliberate safety choice. It always enables public access blocking and versioning. The caller can choose the bucket name and tags, but it cannot accidentally turn off those baseline controls through this first interface. That is one reason teams create internal modules: the repeated pattern can include the organization's safe defaults.
+Its flow can be summarized as:
 
-## Calling the Module from an Environment
-<!-- section-summary: A module block points at the module source and supplies the values declared in the child module's variables. -->
+```text
+bucket_name ─────┐
+environment ─────┼──▶ private-bucket module
+                 │       ├── aws_s3_bucket.this
+                 │       └── aws_s3_bucket_public_access_block.this
+                 │
+                 └────────────▶ bucket_id, bucket_arn
+```
 
-The production root module calls the child module with a `module` block:
+The hard-coded environmental decision `bucket = "myapp-dev-logs"` became `bucket = var.bucket_name`. The fixed public-access rule did not become a caller option because it is part of what “private bucket” promises. Deriving interfaces this way—varying values out, invariant policy in—keeps modules focused.
 
-![Module Reuse Flow](/content-assets/articles/article-iac-terraform-modules-basics/module-reuse-flow.png)
+This is encapsulation, not secrecy. Plans and state still show internal resource addresses. The boundary means the caller talks through a deliberate interface, allowing implementation details to evolve without forcing callers to rebuild identifiers or know every low-level resource.
 
-*The reuse flow shows how one module call can create the same safe pattern for dev and staging with different input values.*
+## How Do You Call and Reuse a Module?
+<!-- section-summary: A module block identifies one source and one named instance, supplies its inputs, and exposes its outputs to the caller. -->
+
+The development root can call the local child module like this:
 
 ```hcl
-module "artifact_bucket" {
+module "logs_bucket" {
   source = "../../modules/private-bucket"
 
-  bucket_name = "dp-orders-artifacts-prod"
-  environment = "prod"
-
-  tags = {
-    owner       = "platform"
-    cost_center = "orders"
-  }
+  bucket_name = "myapp-dev-logs"
+  environment = "dev"
 }
 ```
 
-The `source` argument points to the module folder. The other arguments match variables declared by the child module. If the caller misspells `bucket_name`, Terraform reports an input error during planning.
+Two names have different jobs. `source` answers where the reusable implementation comes from. The label `logs_bucket` names this particular module instance in the current configuration. The label is not decorative; it becomes part of every resource address inside the call.
 
-A fresh checkout needs initialization before planning because Terraform has to load the module source:
+Initialize before planning so Terraform can load module sources:
 
 ```bash
 terraform init
@@ -203,134 +235,343 @@ terraform validate
 terraform plan
 ```
 
-For a local module path, `terraform init` records the module relationship. For a remote module source, it downloads the module into `.terraform/modules/`. A local module init often shows the child module path directly:
+Local paths are discovered from the repository. Remote registry or Git sources are downloaded under `.terraform/modules/`. Validation checks that required inputs are present and correctly shaped. The plan expands the child resources into the complete graph.
+
+A successful local initialization may identify the source directly:
 
 ```console
 Initializing modules...
-- artifact_bucket in ../../modules/private-bucket
+- logs_bucket in ../../modules/private-bucket
 
 Terraform has been successfully initialized!
 ```
 
-`terraform validate` should report success or name the bad input. `terraform plan` should show module-scoped addresses such as `module.artifact_bucket.aws_s3_bucket.this` and a plan summary. Reviewers look there for surprise creates, replacements, or destroys:
+The plan does not stop at one “module object.” It lists the bucket and public-access block using their full module paths. Reviewers can therefore see exactly which provider resources the abstraction will manage and whether the action summary matches the intended call.
 
-```console
-Terraform will perform the following actions:
-
-  # module.artifact_bucket.aws_s3_bucket.this will be created
-  + resource "aws_s3_bucket" "this" {
-      + bucket = "dp-orders-artifacts-prod"
-    }
-
-  # module.artifact_bucket.aws_s3_bucket_public_access_block.this will be created
-  + resource "aws_s3_bucket_public_access_block" "this" {
-      + block_public_acls       = true
-      + block_public_policy     = true
-      + ignore_public_acls      = true
-      + restrict_public_buckets = true
-    }
-
-  # module.artifact_bucket.aws_s3_bucket_server_side_encryption_configuration.this will be created
-  + resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
-      + rule {
-          + apply_server_side_encryption_by_default {
-              + sse_algorithm = "AES256"
-            }
-        }
-    }
-
-  # module.artifact_bucket.aws_s3_bucket_versioning.this will be created
-  + resource "aws_s3_bucket_versioning" "this" {
-      + versioning_configuration {
-          + status = "Enabled"
-        }
-    }
-
-Plan: 4 to add, 0 to change, 0 to destroy.
-```
-
-That plan shows both sides of the boundary. The caller is still one `module "artifact_bucket"` block, while the plan reveals the managed resources Terraform will create inside that child module.
-
-The root can use module outputs with `module.<name>.<output>`. For example, an IAM policy can use the bucket ARN without copying it into a string:
+The same source can be called again:
 
 ```hcl
-resource "aws_iam_policy" "artifact_writer" {
-  name = "orders-artifact-writer"
+module "uploads_bucket" {
+  source = "../../modules/private-bucket"
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "s3:GetObject",
-        "s3:PutObject"
-      ]
-      Resource = "${module.artifact_bucket.bucket_arn}/*"
-    }]
-  })
+  bucket_name = "myapp-dev-uploads"
+  environment = "dev"
 }
 ```
 
-That reference gives Terraform dependency information. The policy needs the module output, and the module output comes from the bucket.
+There is still one definition under `modules/private-bucket`, but now there are two instances: `module.logs_bucket` and `module.uploads_bucket`. Each receives its own inputs and creates its own resource instances.
 
-The caller should use the output rather than rebuilding the ARN string by hand. The output is the module author's promise that this value is stable enough for other code. If the module later changes the internal bucket resource name, the caller can keep using `module.artifact_bucket.bucket_arn`.
+Callers consume an output as `module.<name>.<output>`. A root resource can use the logs bucket ARN without constructing it from copied knowledge:
 
-## How Terraform Tracks Module Resources
-<!-- section-summary: Terraform finds local modules directly and downloads remote modules during init, then gives every child resource a module-scoped address. -->
+```hcl
+resource "some_resource" "example" {
+  destination = module.logs_bucket.bucket_arn
+}
+```
 
-Terraform loads modules during `terraform init`. Local modules come from paths in your repository. Registry and Git modules are downloaded into `.terraform/modules/`.
+That reference is both value flow and dependency flow. Terraform knows the bucket produces the ARN before the consuming resource can use it. The module boundary keeps the graph readable without blocking its edges.
+
+Module calls also support `for_each` and `count`. Several buckets can be created from one source:
+
+```hcl
+module "bucket" {
+  for_each = {
+    logs    = "myapp-dev-logs"
+    uploads = "myapp-dev-uploads"
+    backups = "myapp-dev-backups"
+  }
+
+  source = "../../modules/private-bucket"
+
+  bucket_name = each.value
+  environment = "dev"
+}
+```
+
+The keys become part of instance identity: `module.bucket["logs"]`, `module.bucket["uploads"]`, and `module.bucket["backups"]`.
+
+For each key, Terraform expands two child resource instances. For example, the logs call contains `module.bucket["logs"].aws_s3_bucket.this`, while the uploads call contains `module.bucket["uploads"].aws_s3_bucket.this`. Removing or changing a key can therefore change state identity just as it does for a resource-level `for_each`.
+
+## How Do Modules Change the Terraform Graph and Addresses?
+<!-- section-summary: Child resources join the root graph under module-scoped addresses, so dependencies cross interfaces and module labels become state identity. -->
+
+Terraform does not represent `module "logs_bucket"` as one opaque infrastructure object. It expands the child configuration into the overall graph:
+
+```text
+module.logs_bucket
+├── aws_s3_bucket.this
+└── aws_s3_bucket_public_access_block.this
+```
+
+The full addresses are:
+
+```text
+module.logs_bucket.aws_s3_bucket.this
+module.logs_bucket.aws_s3_bucket_public_access_block.this
+```
+
+The module path is followed by the resource type and local resource name. A second call can contain the same internal `aws_s3_bucket.this` because its module path differs. Modules therefore introduce a hierarchical namespace without creating a separate graph.
 
 ![Root Child State Boundary](/content-assets/articles/article-iac-terraform-modules-basics/root-child-state-boundary.png)
 
-*The state boundary shows that module resources still live in one graph and one state file for the root run.*
+An output gives another node a supported path across the interface:
 
-After loading the child module, Terraform gives each internal resource a full address. The bucket inside the production call is:
-
-```hcl
-module.artifact_bucket.aws_s3_bucket.this
+```text
+module.logs_bucket.aws_s3_bucket.this
+                 │
+                 ▼
+module.logs_bucket.bucket_arn
+                 │
+                 ▼
+some_resource.example
 ```
 
-That address appears in plans, state, and error messages. Another environment can call the same module with the same internal resource name, and the module path keeps the addresses separate.
+This dependency remains implicit because the consumer references the producer's output. The caller does not need to know the child resource's local name to participate in the graph.
 
-If a plan says `module.artifact_bucket.aws_s3_bucket_public_access_block.this` will change, the reviewer knows the change came from the private bucket module. The module call tells which environment values were passed in.
+Addresses also explain why extracting existing resources requires care. Moving text from `main.tf` to another filename does not change an address, so state identity remains stable. Moving `aws_s3_bucket.logs` into a child changes the desired address to `module.logs_bucket.aws_s3_bucket.this`. Terraform cannot infer that these two addresses should keep one bucket binding.
 
-State follows the full module address. If the team later renames the module call from `artifact_bucket` to `orders_artifact_bucket`, Terraform sees a different module path unless the refactor includes a `moved` block. Module names are part of the address, so a rename deserves the same care as a resource rename.
+Record that refactor explicitly:
 
-## Where the Boundary Really Is
-<!-- section-summary: The root module owns the run, backend, and state boundary, while child modules contribute resources to that same run. -->
+```hcl
+moved {
+  from = aws_s3_bucket.logs
+  to   = module.logs_bucket.aws_s3_bucket.this
+}
 
-Modules organize Terraform code. Root modules and backends define the operational boundary.
+moved {
+  from = aws_s3_bucket_public_access_block.logs
+  to   = module.logs_bucket.aws_s3_bucket_public_access_block.this
+}
+```
 
-If `live/prod` calls `module.artifact_bucket`, the bucket belongs to the production root run and production state. If `live/dev` calls the same module source, the development bucket belongs to the development root run and development state.
+A safe plan then moves state identity while keeping the real AWS objects. Without the move declarations, the old addresses appear removed and the new addresses appear new, which can produce destroy-and-create actions.
 
-Provider configuration also starts at the root. A child module usually uses the provider configuration passed by the root. That means a module can be reusable while the environment still controls the account, region, credentials, backend, variables, and approval rules.
+Renaming the module call has the same consequence. `module.logs_bucket.aws_s3_bucket.this` and `module.application_logs.aws_s3_bucket.this` are different addresses. A whole-module `moved` block can preserve the subtree:
 
-This is where beginners sometimes overfill a child module. A bucket module should create the bucket pattern. The root should decide which environment is running, which backend state is used, which provider account is targeted, and which module version or path is called. Keeping that boundary clean gives plan reviewers a direct path from the root call to the managed resources.
+```hcl
+moved {
+  from = module.logs_bucket
+  to   = module.application_logs
+}
+```
 
-This is the beginner habit to keep: **reuse the structure, vary the values, and keep each environment's state separate**.
+Module labels and `for_each` keys are therefore durable identity choices, not presentation-only names.
 
-## Putting It All Together
-<!-- section-summary: A useful module gives teams one reviewed resource pattern while each root configuration keeps its own values, state, and review flow. -->
+Keep three worlds visible during a refactor:
 
-The Orders team replaced three copied bucket files with one module and three module calls. The module owns the repeated pattern: bucket, public access block, default encryption, versioning, tags, and outputs. The environment roots own names, tags, backend state, provider target, and approval flow.
+```text
+configuration → module.logs_bucket and its child resource blocks
+state         → full module-scoped addresses bound to AWS identities
+reality       → the actual S3 bucket and its access configuration
+```
 
-After the platform team improves the module, development can plan and apply first. Staging can follow. Production can wait for its normal review. The shared module gives consistency without forcing every environment to change at the same moment.
+Changing the module structure starts in configuration. A `moved` block tells Terraform how the matching state identities should follow. The AWS objects should remain still. This is why “moving code into a folder” and “moving a managed address” are different operations.
+
+The namespace also helps interpret failures. If a plan reports `module.logs_bucket.aws_s3_bucket_public_access_block.this`, the path identifies the module instance, resource type, and internal name. The source implementation can be shared, but the failing instance and its inputs remain clear.
+
+## How Do Root Modules, Providers, and State Fit Together?
+<!-- section-summary: The root owns execution, provider configuration, backend, and state, while child modules add namespaced resources to that same operational context. -->
+
+If Terraform runs from `environments/dev`, that directory is the root module. It may contain resources and call one or more child modules. A child can call another child, producing nested paths such as `module.application.module.storage.aws_s3_bucket.this`, though a relatively flat tree is often easier to understand.
+
+Default provider configurations also flow from the root into child modules. The development root can configure AWS once:
+
+```hcl
+provider "aws" {
+  region = "eu-west-2"
+}
+
+module "logs_bucket" {
+  source = "../../modules/private-bucket"
+
+  bucket_name = "myapp-dev-logs"
+  environment = "dev"
+}
+```
+
+The child uses AWS resources without declaring a second configured provider. A reusable child should still state which provider source and versions it requires:
+
+```hcl
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+}
+```
+
+The distinction is important. `required_providers` declares a software dependency. A root `provider "aws"` block supplies an actual configured instance, including region and runtime credentials. Reusable modules declare requirements; roots own operational provider context.
+
+A child module also does not automatically gain a separate state, backend, apply, credential, account, lifecycle, or failure domain. If one root calls network, database, and application modules, their resource addresses can all live in the root's single state and participate in the same plan.
+
+Conceptually, the operational shape is one enclosing Terraform run:
+
+```text
+one root configuration
+├── root resources
+├── module.network resources
+├── module.database resources
+└── module.application resources
+
+one backend and state context
+one dependency graph
+one plan and apply workflow
+```
+
+Modules can help humans reason about that graph, but they do not create an independent Terraform process around each subtree.
+
+To give networking an independently authorized and deployed state, create a separate root configuration and backend boundary. Placing resources under `modules/network/` only creates a configuration and interface boundary. It does not create operational isolation.
+
+This produces three distinct concepts:
+
+```text
+module boundary → how configuration is organized and exposed
+state boundary → which resources Terraform manages together
+infrastructure boundary → which account, network, cluster, or system owns objects
+```
+
+They can align, but Terraform does not make them equivalent.
+
+## What Makes a Useful Module Boundary?
+<!-- section-summary: A useful module represents a coherent idea, keeps policy and mechanism inside, and exposes caller intent through a small interface. -->
+
+The first benefit is reuse: change one private-bucket implementation instead of repairing several copies. The deeper benefit is policy. The module can guarantee that public access is blocked and that the expected tags exist. Callers request a private logs bucket rather than assembling low-level AWS objects correctly every time.
+
+Good module interfaces expose intent and hide mechanism. `bucket_name` and `environment` are choices the caller understands. The module decides which resources implement the private-bucket rule. `bucket_arn` is a useful capability to publish; the entire internal resource object is not automatically a good interface.
+
+The distinction is visible in root code. Several low-level bucket resources tell the reader how AWS objects are assembled. A module call named `logs_bucket` tells the reader what the application needs. The internal module then carries the reviewed definition of that idea.
+
+Internal implementation can then evolve. A module might add resources or expressions while retaining compatible inputs and outputs. Callers can receive the improved policy through their normal plans without rewriting how they consume the bucket ARN.
+
+Not every resource deserves a wrapper. A module containing one resource, one pass-through variable for every provider argument, and one output for every attribute may add only indirection:
+
+```text
+caller → module variable → resource argument
+resource attribute → module output → caller
+```
+
+Ask whether the group has a coherent abstraction, shared policy, genuine reuse, or meaningful simplification. Names such as `private-bucket`, `vpc`, `application-service`, `postgres-database`, and `monitoring-stack` describe caller-facing ideas. “Misc resources” and a wrapper for every individual resource do not.
+
+One job per module also does not mean one resource. A private bucket needs both the bucket and the public-access policy to satisfy one promise. The useful boundary follows a reason to change and an idea the caller can understand.
+
+Conversely, a module that owns an entire unrelated production environment is difficult to compose or test, while tiny resource wrappers fragment simple changes. The better question is not “can this become a module?” but “does this infrastructure have one coherent responsibility, interface, and reuse or policy benefit?”
+
+Modules encode configuration boundaries, so dependency and policy design still matter. An output should expose a stable result rather than force callers to know internal names. An input should express a decision rather than leak every mechanism. Provider settings, backend selection, credentials, and environment isolation remain with the root.
+
+## How Does the Complete Module Model Fit Together?
+<!-- section-summary: A module is a reusable, parameterized graph subtree whose interface, namespace, provider context, and state identity remain part of the caller's Terraform run. -->
+
+A complete structure can combine one shared source with separate environment roots:
+
+```text
+terraform/
+├── modules/
+│   └── private-bucket/
+│       ├── main.tf
+│       ├── variables.tf
+│       ├── outputs.tf
+│       └── versions.tf
+└── environments/
+    ├── dev/
+    │   ├── main.tf
+    │   └── providers.tf
+    └── prod/
+        ├── main.tf
+        └── providers.tf
+```
+
+The development and production roots call the same source with different inputs:
+
+```hcl
+module "logs_bucket" {
+  source = "../../modules/private-bucket"
+
+  bucket_name = "myapp-dev-logs"
+  environment = "dev"
+}
+```
+
+```hcl
+module "logs_bucket" {
+  source = "../../modules/private-bucket"
+
+  bucket_name = "myapp-prod-logs"
+  environment = "prod"
+}
+```
+
+Each root supplies provider context and owns a separate state. Inside either root, the module expands into a bucket and public-access resource under a namespaced address. Inputs flow into that subtree, outputs flow out, and references connect it to the larger graph.
 
 ![Module Basics Field Guide](/content-assets/articles/article-iac-terraform-modules-basics/module-basics-field-guide.png)
 
-*The field guide closes the article by separating the caller, the child module, the shared resource pattern, and the state boundary.*
+Keep configuration, state, and reality separate. Source code declares a module call and its child resources. State binds full module-scoped addresses to provider objects. AWS contains the actual bucket. Extracting a module primarily restructures configuration and therefore may change state addresses; it does not create an independent cloud universe.
 
-## What's Next
+The most useful definition is: a module is a parameterized subtree of Terraform's configuration graph with its own namespace and an explicit input/output interface. That model explains reuse, module instances, outputs, provider inheritance, `for_each` keys, refactoring moves, and the difference between module and state boundaries.
 
-The next article zooms in on the module contract: input types, validation rules, outputs, sensitive values, and how one module output feeds another module's input.
+Trace one value through the complete system. The development root passes `bucket_name = "myapp-dev-logs"` to `module.logs_bucket`. Inside the child, `var.bucket_name` becomes the `bucket` argument of `aws_s3_bucket.this`. The provider creates or refreshes the bucket, and state binds the real AWS identity to `module.logs_bucket.aws_s3_bucket.this`. The child output reads the resulting ARN, and a root consumer references `module.logs_bucket.bucket_arn`. Every step is ordinary Terraform value, dependency, provider, and state behavior with a module namespace added.
 
----
+The production root can follow the same flow with `myapp-prod-logs`, yet it is a separate deployment because the root and its state are separate. Sharing source does not share infrastructure identity. Conversely, two calls in one root share the root's operational state even though their module paths differ. This distinction prevents a common mistake: assuming reuse decides lifecycle isolation.
 
-**References**
+Review changes at both levels. At the call site, check the source, instance label, inputs, `for_each` keys, and provider context. In the expanded plan, check the module-scoped resources and action summary. When extracting existing code, map every old address to its new module address and require the plan to show moves rather than replacements. When adding a fresh call, require only the expected creates.
 
-- [Terraform: Modules overview](https://developer.hashicorp.com/terraform/language/modules) - Explains root modules, child modules, and module reuse.
-- [Terraform: Module block](https://developer.hashicorp.com/terraform/language/block/module) - Documents the `module` block arguments callers use.
-- [Terraform: Standard module structure](https://developer.hashicorp.com/terraform/language/modules/develop/structure) - Documents common module file layout and public interface conventions.
-- [Terraform: Module sources](https://developer.hashicorp.com/terraform/language/modules/configuration) - Documents local, registry, Git, and other module source formats.
-- [AWS provider: aws_s3_bucket_server_side_encryption_configuration](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_server_side_encryption_configuration) - Documents the Terraform resource used to configure S3 bucket default encryption.
-- [Amazon S3: Default bucket encryption](https://docs.aws.amazon.com/AmazonS3/latest/userguide/default-bucket-encryption.html) - Documents S3 default encryption behavior and SSE-S3/SSE-KMS choices.
+The interface is also a change-management boundary. Adding an internal access-control resource may preserve every caller input and output while improving the shared implementation. Renaming a required variable or removing an output changes the caller contract. Renaming an internal resource may require a `moved` block even if the public contract stays stable. API compatibility and state-address compatibility are related but distinct responsibilities for the module author.
+
+Provider requirements add another compatibility layer. The child declares which provider it can work with, while the root chooses a compatible version and supplies configuration. The child should not hard-code the root's region or credentials because those values belong to the deployment context. Keeping requirement and configuration separate lets the same source serve development and production without confusing reuse with authority.
+
+Finally, do not measure module quality by the percentage of code placed under `modules/`. Measure whether the boundary makes infrastructure intent clearer, centralizes a real rule, creates a stable contract, and can evolve without spreading provider mechanics across callers. A module is successful when it simplifies the caller's reasoning while remaining honest about the resources, addresses, and lifecycle that Terraform will manage.
+
+That honesty also applies to nested modules. A child may call another child, and the namespace grows with every level. Nesting is valid when one abstraction genuinely contains another, but deep trees make addresses, provider routing, and upgrade effects harder to trace. Prefer a flatter root composition when independent building blocks can be wired directly. The goal is not the shortest root file; it is a graph whose ownership and dependencies remain explainable.
+
+When deciding whether to introduce the first module, compare the expected callers and changes. If several environments need the same private-bucket policy, the abstraction has a clear audience and reason to evolve. If only one simple resource exists and no policy is hidden, direct configuration may remain clearer. Reuse is a benefit when it represents shared intent, not an obligation to add another directory.
+
+A first module extraction should preserve resource identity deliberately. Moving existing resources behind a module changes their configuration addresses even when the remote objects remain the same. Use the source-supported refactoring mechanism and inspect a plan that shows address movement rather than destroy and create. Then run the module from more than one caller to prove the boundary actually removes duplication rather than relocating one root configuration into a folder with hidden environment assumptions.
+
+Calling a module changes the root graph, so the normal lifecycle still applies. `terraform init` obtains referenced module packages, `terraform plan` expands the module calls and exposes their resource addresses, and `terraform apply` executes the approved graph. Reuse does not bypass review; it moves repeated implementation behind a versioned interface that the caller must still understand.
+
+## Check Your Answers
+
+:::expand[Why Does Repeated Terraform Code Become a Problem?]{kind="recap"}
+Copies turn one shared infrastructure rule into several implementations that can drift. A module keeps invariant resources together and makes environmental choices explicit inputs.
+:::
+
+:::expand[What Is a Terraform Module?]{kind="recap"}
+A module is a directory of Terraform configuration loaded as a named, parameterized subtree. Variables, implementation, and outputs form its basic contract.
+:::
+
+:::expand[How Do You Extract a Private Bucket Module?]{kind="recap"}
+Move varying values into variables, keep the bucket and public-access rule inside, and publish only useful results such as the bucket ID and ARN.
+:::
+
+:::expand[How Do You Call and Reuse a Module?]{kind="recap"}
+A module block names one instance, identifies its source, and passes inputs. Multiple calls or `for_each` create distinct module instances with distinct addresses.
+:::
+
+:::expand[How Do Modules Change the Terraform Graph and Addresses?]{kind="recap"}
+Child resources join the root graph under a module path. Outputs carry dependencies across the interface, and address-changing refactors require `moved` blocks to preserve bindings.
+:::
+
+:::expand[How Do Root Modules, Providers, and State Fit Together?]{kind="recap"}
+The root owns execution, configured providers, backend, and state. Child modules declare provider requirements and contribute resources to that same operational context.
+:::
+
+:::expand[What Makes a Useful Module Boundary?]{kind="recap"}
+A good module represents a coherent caller-facing idea, encodes shared policy, hides implementation, and exposes a small intent-based interface instead of wrapping every resource.
+:::
+
+:::expand[How Does the Complete Module Model Fit Together?]{kind="recap"}
+Inputs enter a reusable namespaced graph subtree, resources implement the idea, outputs connect consumers, full addresses enter state, and separate roots provide real environment isolation.
+:::
+
+### References
+
+- [Creating modules](https://developer.hashicorp.com/terraform/language/modules/develop)
+- [Terraform state](https://developer.hashicorp.com/terraform/language/state)
+- [Manage values in modules](https://developer.hashicorp.com/terraform/language/values)
+- [Resource address reference](https://developer.hashicorp.com/terraform/cli/state/resource-addressing)
+- [Use modules in configuration](https://developer.hashicorp.com/terraform/language/modules/configuration)
+- [Modules overview](https://developer.hashicorp.com/terraform/language/modules)
+- [Providers within modules](https://developer.hashicorp.com/terraform/language/modules/develop/providers)
+- [Refactor modules](https://developer.hashicorp.com/terraform/language/modules/develop/refactoring)
+- [`module` block reference](https://developer.hashicorp.com/terraform/language/block/module)

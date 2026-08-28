@@ -24,9 +24,6 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## What Is an AWS Resource?
-<!-- section-summary: A resource is the actual AWS object, with its own identity, configuration, state, lifecycle, permissions, and relationships. -->
-
 AWS is a large collection of service APIs. When an application, command-line tool, console, or Infrastructure as Code system calls those APIs, it creates, reads, changes, and deletes **resources**.
 
 Each service exposes its own resource types:
@@ -55,9 +52,7 @@ relationships  subnet, VPC, EBS volumes, IAM role
 
 The EC2 instance is the thing that exists. Its instance type and security groups describe its configuration. `running` describes its current state. Its lifecycle includes actions that create, stop, start, and terminate it. Policies decide who can perform those actions. Its subnet, storage volumes, and IAM role connect it to other resources.
 
-The same model applies to a Lambda function, an S3 bucket, or an RDS database even though the exact configuration, lifecycle, and relationships differ. The central rule is: **the resource is the actual AWS object. Names, IDs, ARNs, tags, and code addresses are information used to identify, describe, authorize, classify, or manage that object.**
-
-The sections below answer these questions in order:
+Keep these questions in view as you work through the lesson:
 
 1. **What Is an AWS Resource?**
 2. **Why Can One Resource Have Several Identifiers?**
@@ -67,6 +62,11 @@ The sections below answer these questions in order:
 6. **How Should a Team Design Its Tagging Rules?**
 7. **How Does Infrastructure as Code Add Another Identity?**
 8. **How Do You Find and Verify the Exact Resource?**
+
+## What Is an AWS Resource?
+<!-- section-summary: A resource is the actual AWS object, with its own identity, configuration, state, lifecycle, permissions, and relationships. -->
+
+The resource-plus-context model also applies to a Lambda function, an S3 bucket, or an RDS database even though the exact configuration, lifecycle, and relationships differ. The central rule is: **the resource is the actual AWS object. Names, IDs, ARNs, tags, and code addresses are information used to identify, describe, authorize, classify, or manage that object.**
 
 The simplest summary is:
 
@@ -365,7 +365,7 @@ Names and tags should complement one another. Trying to encode every fact in one
 prod-eu-west-2-payments-team7-costcenter487-pci-primary-api-v3
 ```
 
-The name becomes difficult to read, and several embedded facts become stale when the owner, version, or role changes. A cleaner design uses a readable name and structured tags:
+The name is difficult to read, and changes to its owner, version, or role make several embedded facts stale. A cleaner design uses a readable name and structured tags:
 
 ```text
 Name = payments-api

@@ -36,7 +36,7 @@ That short URL hides a chain of Kubernetes decisions:
 
 Each step passes the request to the next. A networking problem appears when one step produces a result that is incompatible with the next. For example, DNS may return the correct Service address while the Service has an empty endpoint list. The name works, and the empty EndpointSlice marks the stopping point.
 
-This article answers seven questions:
+Keep these questions in view as you work through the lesson:
 
 1. **What are you looking for when a request fails?**
 2. **Why should you test from the original caller?**
@@ -309,7 +309,7 @@ NetworkPolicies combine additively. When several policies select one Pod, their 
 
 ### D. Inspect packets after the logical checks agree
 
-Packet capture becomes useful when the name, Service, EndpointSlice, target port, application listener, and policy intent all look correct while the real connection still times out. Capture close to both ends through the debugging method supported by the cluster.
+Use packet capture after the name, Service, EndpointSlice, target port, application listener, and policy intent all look correct but the real connection still times out. Capture close to both ends through the debugging method supported by the cluster.
 
 Use `tcpdump` from a supported Pod or Node debugging environment and keep the capture scoped to the current endpoint, port, and time window.
 

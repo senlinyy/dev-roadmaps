@@ -35,7 +35,9 @@ result:           reject
 
 Keeping every coordinate visible prevents “inside the cluster” from becoming an implicit permission.
 
-Seven questions build that chain:
+A Kubernetes Service maps a name such as `payments.payments.svc.cluster.local` to changing network endpoints. That answers where to send traffic, not whether the selected endpoint is cryptographically `payments` or whether the caller is authorized.
+
+Keep these questions in view as you work through the lesson:
 
 1. **How does a mesh give a workload a cryptographic identity?**
 2. **What does mTLS establish and protect during one service call?**
@@ -47,8 +49,6 @@ Seven questions build that chain:
 
 ## How does a mesh give a workload a cryptographic identity?
 <!-- section-summary: The mesh uses a workload's Kubernetes ServiceAccount evidence to issue a short-lived certificate whose SPIFFE URI can be proven during a connection. -->
-
-A Kubernetes Service maps a name such as `payments.payments.svc.cluster.local` to changing network endpoints. That answers where to send traffic, not whether the selected endpoint is cryptographically `payments` or whether the caller is authorized.
 
 ### Start with five separate security questions
 

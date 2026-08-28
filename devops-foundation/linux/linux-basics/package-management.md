@@ -9,18 +9,15 @@ id: article-devops-foundation-linux-linux-basics-package-management
 
 ## Table of Contents
 
-1. [Why Package Management Matters](#why-package-management-matters)
-2. [What a Package Manager Does](#what-a-package-manager-does)
-3. [APT on Debian and Ubuntu](#apt-on-debian-and-ubuntu)
-4. [DNF on Fedora, RHEL, and Rocky](#dnf-on-fedora-rhel-and-rocky)
-5. [Repositories and Trust](#repositories-and-trust)
-6. [Third-Party Software and Version Pinning](#third-party-software-and-version-pinning)
-7. [Security Updates and Maintenance Windows](#security-updates-and-maintenance-windows)
-8. [Remove, Roll Back, and Audit Packages](#remove-roll-back-and-audit-packages)
-9. [References](#references)
-
-## Why Package Management Matters
-<!-- section-summary: Package management controls how server software is installed, updated, verified, and removed. -->
+1. [Why Should Linux Manage Software as Packages?](#why-should-linux-manage-software-as-packages)
+2. [What Does a Package Manager Record and Resolve?](#what-does-a-package-manager-record-and-resolve)
+3. [How Does APT Manage Debian and Ubuntu Systems?](#how-does-apt-manage-debian-and-ubuntu-systems)
+4. [How Does DNF Manage RPM-Based Systems?](#how-does-dnf-manage-rpm-based-systems)
+5. [How Do Repositories Establish Software Trust?](#how-do-repositories-establish-software-trust)
+6. [How Do Third-Party Sources and Pins Change Risk?](#how-do-third-party-sources-and-pins-change-risk)
+7. [How Do Security Updates Become Running Code?](#how-do-security-updates-become-running-code)
+8. [How Do Removal, Rollback, and Audit Differ?](#how-do-removal-rollback-and-audit-differ)
+9. [Check Your Answers](#check-your-answers)
 
 Sooner or later you SSH into a server and one small missing tool blocks the work. Nginx has to serve traffic, `curl` is missing during a health check, or OpenSSL needs a security fix before the next maintenance window. Copying random files onto the machine can solve the immediate error and leave the next operator with no clear source, version, or update path.
 
@@ -30,9 +27,23 @@ A **package manager** handles software as managed units instead of loose files c
 
 This matters because unmanaged software creates mystery. If someone built a binary on their laptop and copied it into `/usr/local/bin`, the next engineer may not know its version, source, patch status, or removal procedure. Packages give the server an inventory and a repeatable way to change that inventory.
 
+Keep these questions in view as you work through the lesson:
+
+1. **Why Should Linux Manage Software as Packages?**
+2. **What Does a Package Manager Record and Resolve?**
+3. **How Does APT Manage Debian and Ubuntu Systems?**
+4. **How Does DNF Manage RPM-Based Systems?**
+5. **How Do Repositories Establish Software Trust?**
+6. **How Do Third-Party Sources and Pins Change Risk?**
+7. **How Do Security Updates Become Running Code?**
+8. **How Do Removal, Rollback, and Audit Differ?**
+
+## Why Should Linux Manage Software as Packages?
+<!-- section-summary: Package management controls how server software is installed, updated, verified, and removed. -->
+
 For a beginner, the first move is simple: ask the package manager what it knows before you change the machine. That habit keeps installs, upgrades, and removals from turning into guesswork.
 
-## What a Package Manager Does
+## What Does a Package Manager Record and Resolve?
 <!-- section-summary: Package managers install files, resolve dependencies, verify repository metadata, track ownership, and support updates. -->
 
 Suppose a fresh Ubuntu server needs Nginx. If you copy only `/usr/sbin/nginx` onto the server, the binary may exist but the service still lacks the pieces around it: the service file, default directories, shared libraries, log rotation, documentation, and a record of which version was installed. The package manager handles that whole change as one managed operation.
@@ -62,7 +73,7 @@ The production symptom of weak package metadata is mystery. A binary exists at `
 
 _The image shows package management as a controlled pipeline rather than a single install command._
 
-## APT on Debian and Ubuntu
+## How Does APT Manage Debian and Ubuntu Systems?
 <!-- section-summary: APT installs and updates `.deb` packages from configured repositories on Debian-style systems. -->
 
 On an Ubuntu server, the practical task may be simple: install `curl` for health checks and Nginx for the public proxy. Before APT can install the right packages, it needs a current local list of what the configured repositories offer. Think of this as checking the catalog before placing the order.
@@ -180,7 +191,7 @@ sudo less /var/log/apt/term.log
 
 The history log shows which packages changed and when. The terminal log records detailed installation output. Those files help you decide whether to roll back, pin a version, or fix a config prompt that appeared during upgrade.
 
-## DNF on Fedora, RHEL, and Rocky
+## How Does DNF Manage RPM-Based Systems?
 <!-- section-summary: DNF installs and updates `.rpm` packages on Red Hat style systems and keeps transaction history. -->
 
 On a Rocky Linux, Fedora, AlmaLinux, or RHEL-style server, the job is familiar: install the tools the service needs, preview updates before a window, and keep a record of what changed. The command words change from APT words to DNF words. The package format changes from `.deb` to `.rpm`. The careful habit stays the same.
@@ -340,7 +351,7 @@ sudo dnf history undo 42
 
 Treat undo as one recovery tool among several. A package rollback may leave data migrations, config edits, or application-level changes in place. Package rollback should sit beside service health checks, config backups, and release rollback.
 
-## Repositories and Trust
+## How Do Repositories Establish Software Trust?
 <!-- section-summary: Repositories are signed software sources, so adding one extends who can install code on the server. -->
 
 The moment a package install asks you to enable a new source, pause. That prompt is asking for trust along with a download URL. A repository is a publisher that can provide packages, updates, metadata, and install scripts to the server over time.
@@ -391,7 +402,7 @@ The next decision after finding an unknown repository is ownership. Find the rep
 
 _The image makes the trust chain visible, from repository metadata to the package that lands on the server._
 
-## Third-Party Software and Version Pinning
+## How Do Third-Party Sources and Pins Change Risk?
 <!-- section-summary: Third-party repositories and pins can solve version needs, but they require explicit ownership and review. -->
 
 Sometimes the official repository does not have the version your application needs. A Node.js service may require a newer runtime than the OS release ships, or Nginx may need a vendor-supported module. Third-party repositories can solve that version gap while expanding the server's trust boundary.
@@ -490,7 +501,7 @@ _The image ranks common software sources by how much trust and maintenance work 
 
 _The image shows why dependency conflicts are useful warnings, not random package-manager drama._
 
-## Security Updates and Maintenance Windows
+## How Do Security Updates Become Running Code?
 <!-- section-summary: Production updates need preview, backup, health checks, and a rollback path rather than blind upgrades. -->
 
 Security updates usually enter your day as a ticket, an alert, or a maintenance window on the calendar. Libraries such as OpenSSL, glibc, and zlib sit below many programs. Nginx and application runtimes receive fixes over time. Ignoring updates leaves known vulnerabilities on a public server.
@@ -613,7 +624,7 @@ These commands form a safety loop. Check the service first, preview the package 
 
 Some teams enable unattended security updates for low-risk packages and keep manual windows for larger changes. That can work well, but it still needs monitoring. Automatic updates that restart a critical service should be visible in logs and alerts.
 
-## Remove, Roll Back, and Audit Packages
+## How Do Removal, Rollback, and Audit Differ?
 <!-- section-summary: Package management also includes removing unused software, verifying ownership, and investigating change history. -->
 
 After a few release cycles, servers collect leftovers. A Python runtime may remain after the app moved to Node.js. An old helper package may stay installed after a migration. Removing unused packages reduces attack surface and operational noise, and removal still deserves the same preview-and-check habit as installation.
@@ -815,7 +826,45 @@ Package management stays with the server for its whole life. Every installed pac
 
 _The summary image turns the package-management workflow into a checklist for routine server work._
 
-## References
+The local package database is the memory behind these operations. It records installed versions, package ownership, dependency relationships, and configuration-file status. A repository describes what could be installed; the local database describes what this machine believes it has installed. Query that record before manually replacing a package-owned file, because an unmanaged replacement can make the bytes on disk disagree with the manager's inventory.
+
+An updated package is not automatically active everywhere. A new command normally runs the new binary on its next launch, but a long-running process can keep old code or libraries mapped in memory. A kernel package cannot replace the currently running kernel without a reboot. Distribution tools such as `needrestart` on Debian-style systems or `needs-restarting` on RPM-style systems help identify processes and boots that still use old components. The operational sequence is therefore package update, workload impact review, controlled restart or reboot, and verification.
+
+## Check Your Answers
+
+:::expand[Why Should Linux Manage Software as Packages?]{kind="recap"}
+Packages give software a known source, version, file inventory, dependency graph, update path, and removal path.
+:::
+
+:::expand[What Does a Package Manager Record and Resolve?]{kind="recap"}
+The manager solves dependencies, verifies artifacts, changes files, runs package scripts, and records the installed result locally.
+:::
+
+:::expand[How Does APT Manage Debian and Ubuntu Systems?]{kind="recap"}
+APT refreshes repository metadata separately from installing or upgrading `.deb` packages and their dependencies.
+:::
+
+:::expand[How Does DNF Manage RPM-Based Systems?]{kind="recap"}
+DNF applies the same repository, dependency, transaction, and package-database model to RPM-based distributions.
+:::
+
+:::expand[How Do Repositories Establish Software Trust?]{kind="recap"}
+Repository signatures authenticate published metadata and packages, while source governance determines whom the machine trusts to supply code.
+:::
+
+:::expand[How Do Third-Party Sources and Pins Change Risk?]{kind="recap"}
+Extra repositories widen supply-chain authority, and pins trade upgrade movement for an obligation to manage future compatibility and security.
+:::
+
+:::expand[How Do Security Updates Become Running Code?]{kind="recap"}
+Files change during upgrade, but services, libraries, and kernels may need controlled restarts or reboots before fixes are active.
+:::
+
+:::expand[How Do Removal, Rollback, and Audit Differ?]{kind="recap"}
+Removal changes package presence, rollback attempts version recovery, and audit proves versions, ownership, sources, and configuration state.
+:::
+
+### References
 
 - [Debian APT user manual](https://www.debian.org/doc/manuals/apt-guide/) - Official Debian guide to APT usage.
 - [Ubuntu package management documentation](https://documentation.ubuntu.com/server/how-to/software/package-management/) - Ubuntu server package management guidance.

@@ -33,7 +33,7 @@ Long-running API servers, web servers, frontends, and continuous queue consumers
 
 A CronJob adds scheduling above that completion model. The CronJob decides when a new execution should exist. It creates a Job for that scheduled execution. The Job then creates Pod attempts until the work completes or reaches a terminal failure.
 
-The explanation follows seven questions:
+Keep these questions in view as you work through the lesson:
 
 1. **How does a Job turn Pod attempts into a completion result?**
 2. **How do completions, parallelism, and completion mode divide work?**
@@ -496,7 +496,7 @@ kubectl patch cronjob nightly-reconciliation \
   -p '{"spec":{"suspend":false}}'
 ```
 
-Missed occurrences may become eligible when the CronJob resumes, depending on `startingDeadlineSeconds`. Inspect the schedule state before removing suspension.
+Depending on `startingDeadlineSeconds`, the controller may consider missed occurrences after the CronJob resumes. Inspect the schedule state before removing suspension.
 
 Delete one particular Job and its dependent Pods with:
 

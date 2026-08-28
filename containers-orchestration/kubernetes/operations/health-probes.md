@@ -20,7 +20,11 @@ id: article-containers-orchestration-kubernetes-operations-health-probes
 
 A process can be alive, still starting, or temporarily unable to serve traffic. Kubernetes uses three probes because those states call for different actions: startup grants initialization time, readiness controls traffic eligibility, and liveness allows the kubelet to restart a process that has stopped making progress.
 
-Six questions organize the decisions behind those checks:
+A Kubernetes **health probe** is a small diagnostic that the kubelet runs against one container. The result gives Kubernetes enough information to make a specific runtime decision. Readiness controls whether a Pod is eligible for Service traffic. Liveness can restart a container whose process has stopped making progress. Startup gives initialization a separate window before the other two checks begin.
+
+Suppose an application needs a loaded configuration and a working connection pool before requests can succeed. Its process may exist before initialization finishes, it may temporarily be unable to serve traffic, or it may become permanently deadlocked. Those three states need three different responses.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What decisions do health probes give Kubernetes?**
 2. **How does readiness change Service traffic?**
@@ -34,10 +38,6 @@ Six questions organize the decisions behind those checks:
 
 ### Running says only that a process exists
 
-A Kubernetes **health probe** is a small diagnostic that the kubelet runs against one container. The result gives Kubernetes enough information to make a specific runtime decision. Readiness controls whether a Pod is eligible for Service traffic. Liveness can restart a container whose process has stopped making progress. Startup gives initialization a separate window before the other two checks begin.
-
-Suppose an application needs a loaded configuration and a working connection pool before requests can succeed. Its process may exist before initialization finishes, it may temporarily be unable to serve traffic, or it may become permanently deadlocked. Those three states need three different responses.
-
 The **kubelet** is the Kubernetes agent running on the same node as the Pod. It executes the configured HTTP, TCP, gRPC, or command check and records each result. For startup and liveness failures, the kubelet directly controls the container lifecycle. For readiness, it reports container and Pod readiness to the control plane, which updates the endpoint information used by Services.
 
 | Probe | Question answered by the application | Kubernetes response |
@@ -45,7 +45,6 @@ The **kubelet** is the Kubernetes agent running on the same node as the Pod. It 
 | **Startup** | Has this container finished initialization? | Hold readiness and liveness checks; restart the container after the startup budget is exhausted |
 | **Readiness** | Can this replica handle its normal traffic now? | Mark the Pod ready or unready and update its Service endpoint eligibility |
 | **Liveness** | Is this process making progress? | Restart the container after the configured number of failures |
-
 
 This separation gives each symptom an appropriate response. A temporarily busy replica benefits from a pause in traffic. A stuck process benefits from a restart. A healthy process still loading its index benefits from more startup time.
 

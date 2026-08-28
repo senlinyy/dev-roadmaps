@@ -25,23 +25,10 @@ aliases:
 6. [How Do You Instrument an Application With Useful Context?](#how-do-you-instrument-an-application-with-useful-context)
 7. [How Do All the Signals Work Together?](#how-do-all-the-signals-work-together)
 8. [What Does Good Observability Look Like?](#what-does-good-observability-look-like)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 A production system contains state that an operator cannot continuously inspect. Observability gives the operator evidence from which to infer that hidden state. It is not one AWS product or a collection of attractive graphs. It is the connected use of telemetry, context, and reasoning to understand what a running system is actually doing.
-
-The sections below answer these questions in order:
-
-1. **Why Do Running Systems Need Observability?**
-2. **What Does the Example Application Look Like?**
-3. **What Do Logs Tell You?**
-4. **When Should an Alarm Notify Someone?**
-5. **What Do Traces and Correlation IDs Tell You?**
-6. **How Do You Instrument an Application With Useful Context?**
-7. **How Do All the Signals Work Together?**
-8. **What Does Good Observability Look Like?**
-
-## Why Do Running Systems Need Observability?
-<!-- section-summary: Observability lets people infer a system's hidden internal behavior from evidence that the system deliberately emits. -->
 
 Imagine a small checkout path:
 
@@ -57,6 +44,20 @@ Web application
 ```
 
 The user selects **Place order** and expects a confirmation. Instead, the application returns `500 Internal Server Error`. From outside the system, the only certain fact is that the expected outcome did not happen. Internally, the request might have met an overloaded database, a payment timeout, an application exception, a slow network, malformed customer data, or a defect introduced by a recent release. It might even have succeeded after an unacceptable twenty-second delay.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Do Running Systems Need Observability?**
+2. **What Does the Example Application Look Like?**
+3. **What Do Logs Tell You?**
+4. **When Should an Alarm Notify Someone?**
+5. **What Do Traces and Correlation IDs Tell You?**
+6. **How Do You Instrument an Application With Useful Context?**
+7. **How Do All the Signals Work Together?**
+8. **What Does Good Observability Look Like?**
+
+## Why Do Running Systems Need Observability?
+<!-- section-summary: Observability lets people infer a system's hidden internal behavior from evidence that the system deliberately emits. -->
 
 The system knows which operations ran and which state each component held, but a person cannot simply look at every variable inside every process. Cloud workloads make this limitation more obvious because a request may cross load balancers, containers, managed databases, queues, functions, and third-party services.
 
@@ -518,6 +519,8 @@ Changes     -> What moved before the behavior changed?
 ```
 
 Observability turns telemetry into evidence, evidence into hypotheses, and tested hypotheses into an understanding of a running system.
+
+## Check Your Answers
 
 :::expand[Why Do Running Systems Need Observability?]{kind="recap"}
 Observability lets people infer a system's hidden internal behavior from evidence that the system deliberately emits.

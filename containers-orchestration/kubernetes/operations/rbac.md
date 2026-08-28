@@ -22,21 +22,6 @@ id: article-containers-orchestration-kubernetes-operations-rbac
 
 Kubernetes Role-Based Access Control, or RBAC, does not authorize an application in the abstract. It decides whether an authenticated identity may perform one precise API operation. Once a request is reduced to its identity, verb, API group, resource, optional subresource and name, and namespace, RBAC becomes mechanical.
 
-Seven questions build that request model:
-
-1. **What exactly does Kubernetes RBAC evaluate?**
-2. **How do Role rules and bindings create a permission?**
-3. **How does a Pod use a service account identity?**
-4. **How do RoleBinding and ClusterRoleBinding change the scope?**
-5. **How can a rule target the precise action a job needs?**
-6. **How do you prove both intended access and intended denial?**
-7. **Which permissions can quietly open a larger path through the cluster?**
-
-## What exactly does Kubernetes RBAC evaluate?
-<!-- section-summary: RBAC compares an authenticated request tuple with every rule bound to the identity and allows the request when at least one rule matches. -->
-
-### Reduce authorization to a request tuple
-
 For this request:
 
 ```http
@@ -59,6 +44,21 @@ Authentication first determines who made the request. Authorization then decides
 HTTP methods map to authorization verbs: POST normally becomes `create`, PATCH becomes `patch`, and GET can mean `get`, `list`, or `watch` depending on the request. API version is not part of the RBAC resource rule, so the group is `apps`, not `apps/v1`.
 
 RBAC searches the roles reachable through bindings that name the subject. If any rule matches, the request is allowed. Permissions are additive: RBAC has no deny rule that subtracts a grant found elsewhere.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What exactly does Kubernetes RBAC evaluate?**
+2. **How do Role rules and bindings create a permission?**
+3. **How does a Pod use a service account identity?**
+4. **How do RoleBinding and ClusterRoleBinding change the scope?**
+5. **How can a rule target the precise action a job needs?**
+6. **How do you prove both intended access and intended denial?**
+7. **Which permissions can quietly open a larger path through the cluster?**
+
+## What exactly does Kubernetes RBAC evaluate?
+<!-- section-summary: RBAC compares an authenticated request tuple with every rule bound to the identity and allows the request when at least one rule matches. -->
+
+### Reduce authorization to a request tuple
 
 This makes a 403 mechanically investigable. Write down the authenticated subject, verb, API group, resource, optional subresource, object name, and namespace. A rule must match all relevant attributes, but only one matching grant is needed. Omitting a permission from one Role does not revoke the same permission granted by another binding.
 

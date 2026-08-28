@@ -15,28 +15,34 @@ aliases:
 
 ## Table of Contents
 
-1. [The Access Story](#the-access-story)
-2. [The Identity Layer](#the-identity-layer)
-3. [Tenants and Subscriptions](#tenants-and-subscriptions)
-4. [Human Identities](#human-identities)
-5. [Groups and Devices](#groups-and-devices)
-6. [The Software Secret Problem](#the-software-secret-problem)
-7. [App Registrations](#app-registrations)
-8. [Service Principals](#service-principals)
-9. [Managed Identities](#managed-identities)
-10. [Tokens and Claims](#tokens-and-claims)
-11. [Conditional Access](#conditional-access)
-12. [Roles and Authorization](#roles-and-authorization)
-13. [Evidence and Operations](#evidence-and-operations)
-14. [Putting It All Together](#putting-it-all-together)
-15. [What's Next](#whats-next)
-
-## The Access Story
-<!-- section-summary: This article follows one production Orders system so every Microsoft Entra ID concept has a real caller, target, and access decision. -->
+1. [Why Does Azure Need an Identity Layer?](#why-does-azure-need-an-identity-layer)
+2. [How Do Tenants Organize People, Groups, and Devices?](#how-do-tenants-organize-people-groups-and-devices)
+3. [How Do App Registrations and Service Principals Represent Software?](#how-do-app-registrations-and-service-principals-represent-software)
+4. [How Do Managed Identities Remove Stored Credentials?](#how-do-managed-identities-remove-stored-credentials)
+5. [How Do Tokens Prove Identity to a Resource?](#how-do-tokens-prove-identity-to-a-resource)
+6. [How Does Conditional Access Evaluate Sign-In Context?](#how-does-conditional-access-evaluate-sign-in-context)
+7. [How Are Entra Roles, Azure Roles, and Application Roles Different?](#how-are-entra-roles-azure-roles-and-application-roles-different)
+8. [How Do You Trace Human and Workload Identity End to End?](#how-do-you-trace-human-and-workload-identity-end-to-end)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 We are going to build the picture from one production scenario. The Orders team runs `orders-admin-web`, an internal dashboard for support engineers, and `orders-api-prod`, an Azure-hosted API that reads secrets from Key Vault and writes order events to Storage. Maya works on the support team, the deployment pipeline ships the app, and the running API needs to call Azure services during every request.
 
 Those three callers need different kinds of identity. Maya needs a **user** identity because she is a person. The support team needs a **group** because many people share the same job access. Maya's laptop can have a **device** identity because the company cares whether support work happens from a managed machine. The dashboard needs an **app registration** and a **service principal** because Microsoft sign-in and app permissions need a software identity. The API needs a **managed identity** because an Azure-hosted workload should call Key Vault without a password in code.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Does Azure Need an Identity Layer?**
+2. **How Do Tenants Organize People, Groups, and Devices?**
+3. **How Do App Registrations and Service Principals Represent Software?**
+4. **How Do Managed Identities Remove Stored Credentials?**
+5. **How Do Tokens Prove Identity to a Resource?**
+6. **How Does Conditional Access Evaluate Sign-In Context?**
+7. **How Are Entra Roles, Azure Roles, and Application Roles Different?**
+8. **How Do You Trace Human and Workload Identity End to End?**
+
+## Why Does Azure Need an Identity Layer?
+<!-- section-summary: This article follows one production Orders system so every Microsoft Entra ID concept has a real caller, target, and access decision. -->
 
 The access story has a simple order. First, an organization needs a directory, and in Azure that directory is a **Microsoft Entra tenant**. Next, people, apps, devices, and workloads get identity objects inside that tenant. Then Microsoft Entra ID checks sign-in policy and issues tokens. After that, Azure RBAC, Microsoft Entra roles, or the application itself decide what the caller can actually do.
 
@@ -46,12 +52,10 @@ The access story has a simple order. First, an organization needs a directory, a
 
 This structure matters because Microsoft Entra ID can feel like a pile of portal pages at first. Users live in one area, app registrations in another, managed identities show up through Azure resources, and logs sit somewhere else. The Orders story gives each concept a job, so every section can answer the same practical question: which caller needs access, how does that caller prove identity, and where does the final permission decision happen?
 
-## The Identity Layer
+### The Identity Layer
 <!-- section-summary: Microsoft Entra ID is the cloud identity service that Azure and many Microsoft cloud apps trust for authentication, policy checks, and tokens. -->
 
 **Microsoft Entra ID** is Microsoft's cloud identity and access management service. In plain English, it is the trusted identity system that Azure, Microsoft 365, Dynamics, and many custom apps use when they need to know who or what is trying to sign in or call an API. Microsoft describes it as the foundational Microsoft Entra product for authentication, policy enforcement, and protection for users, devices, apps, and resources.
-
-If you come from AWS, Microsoft Entra ID spans several familiar identity areas. It covers workforce sign-in patterns you may associate with IAM Identity Center, workload and application identities you may associate with IAM roles and trust policies, and app or customer identity patterns you may associate with Cognito or external identity systems.
 
 The older name was **Azure Active Directory**, often shortened to Azure AD. Microsoft started the rename to Microsoft Entra ID in 2023, and the old name still appears in many older blog posts, screenshots, package names, portal paths, and scripts. The rename kept existing sign-in URLs, APIs, and tools working, so real production teams still search for both names while they learn and troubleshoot.
 
@@ -61,7 +65,7 @@ For Maya, this means Microsoft Entra ID proves that `maya@devpolaris.com` is the
 
 That identity layer needs a home. The next section gives the Orders team a directory boundary, because every user, app, device, policy, and log record belongs to a tenant.
 
-## Tenants and Subscriptions
+## How Do Tenants Organize People, Groups, and Devices?
 <!-- section-summary: A Microsoft Entra tenant is the organization's identity directory, while Azure subscriptions hold resources and trust one tenant for identity. -->
 
 A **Microsoft Entra tenant** is an isolated identity directory for an organization. It stores users, groups, devices, application registrations, service principals, managed identities, domains, roles, policies, and logs. A new tenant gets an initial domain such as `devpolaris.onmicrosoft.com`, and the organization can add a verified domain such as `devpolaris.com` for everyday sign-in names.
@@ -98,7 +102,7 @@ The tenant boundary also explains a serious migration problem. If a subscription
 
 Now the Orders team has a trusted directory and subscriptions that rely on it. The next concept is the most familiar caller in the directory: a person.
 
-## Human Identities
+### Human Identities
 <!-- section-summary: Users represent people in Microsoft Entra ID, and those user records drive sign-in, lifecycle, access assignment, and audit trails. -->
 
 A **user** is a Microsoft Entra ID object that represents a person. A user has a sign-in name, display name, object ID, authentication methods, group memberships, role assignments, and directory attributes. When Maya signs in as `maya@devpolaris.com`, Microsoft Entra ID starts with that user record and then evaluates the sign-in around it.
@@ -111,7 +115,7 @@ Microsoft Entra ID also supports **guest users** for collaboration. A partner en
 
 Assigning access directly to every person works for a tiny team, and it gets painful as the team grows. The Orders team needs a way to say that support engineers can open the dashboard without copying the same assignment to each individual user. That takes us from users to groups, and the sign-in story also starts caring about devices.
 
-## Groups and Devices
+### Groups and Devices
 <!-- section-summary: Groups organize shared access for people and devices, while device identities give Conditional Access useful evidence about the machine in use. -->
 
 A **group** is a named collection of users, devices, or other supported members that share an access purpose. In production, groups help teams assign app access, Azure RBAC access, licenses, policy targets, and review ownership. The main idea is simple: manage the team membership, then attach access to the team.
@@ -126,7 +130,7 @@ For `orders-admin-web`, the team might require Maya to use MFA and a compliant c
 
 People, groups, and devices cover the human side of the Orders system. The running software has its own access problem, because APIs, deployment jobs, background workers, and scripts also need to prove identity without turning every config file into a secret drawer.
 
-## The Software Secret Problem
+## How Do App Registrations and Service Principals Represent Software?
 <!-- section-summary: Software often starts with client secrets, and production teams reduce those secrets because they leak, age, and complicate rotation. -->
 
 A **client secret** is a password-like value that software can present to Microsoft Entra ID while requesting tokens. A developer can create a secret for an app registration, paste it into a web app setting, and make the first version of an integration work. That early convenience explains why secrets appear so often in demos, prototypes, and old production systems.
@@ -139,7 +143,7 @@ Azure identity gives software better options. **App registrations** describe how
 
 Those options build on each other, so the next stop is the app registration. The dashboard needs Microsoft sign-in first, and Microsoft Entra ID needs to know what kind of software is asking for that sign-in flow.
 
-## App Registrations
+### App Registrations
 <!-- section-summary: An app registration describes how an application integrates with Microsoft Entra ID, including client ID, tenant behavior, redirect URIs, credentials, scopes, and app roles. -->
 
 An **app registration** is the identity configuration for software in Microsoft Entra ID. When a developer registers an app, Microsoft Entra ID creates an application object that describes how the app can participate in sign-in and token flows. The registration can include a client ID, redirect URIs, supported account types, optional secrets or certificates, API permissions, exposed scopes, app roles, and token settings.
@@ -160,7 +164,7 @@ App registrations also shape what an app asks for. If `orders-admin-web` calls a
 
 This is where many learners run into the split between the app registration and the real access object. The app registration describes the software, and the tenant also needs a local principal that can receive permissions, consent, user assignments, and logs. That local principal is the service principal.
 
-## Service Principals
+### Service Principals
 <!-- section-summary: A service principal is the tenant-local identity for an application, and it is the object that receives permissions and appears in operational records. -->
 
 A **service principal** is the local identity for an application in a specific Microsoft Entra tenant. Microsoft describes the application object as the app's template, while the service principal represents that app instance inside a tenant. The service principal is the concrete principal that can receive access, show up under Enterprise applications, appear in sign-in logs, and participate in authorization decisions.
@@ -203,7 +207,7 @@ The output should name the expected dashboard service principal. If the `appId` 
 
 Service principals give software a proper identity, and they can still use secrets or certificates. The Orders API runs inside Azure, so it can use a stronger pattern for many Azure-to-Azure calls. Azure can create and protect the workload identity, and the app can ask for tokens through the hosting environment.
 
-## Managed Identities
+## How Do Managed Identities Remove Stored Credentials?
 <!-- section-summary: A managed identity gives an Azure resource a Microsoft Entra identity whose credential lifecycle Azure manages for the workload. -->
 
 A **managed identity** is a Microsoft Entra identity that Azure manages for an Azure resource. The workload can request Microsoft Entra tokens through its hosting environment, and Azure handles the underlying credential work. Microsoft describes managed identities as a way for applications to access resources that support Microsoft Entra authentication without developers managing credentials in code.
@@ -235,7 +239,7 @@ That gives the Orders pipeline a secretless deployment path. The team reviews th
 
 Now the Orders team has identities for people, software, Azure workloads, and external automation. The next piece is the proof they carry during a real request, because Azure services and apps need something safer than a password on every call.
 
-## Tokens and Claims
+## How Do Tokens Prove Identity to a Resource?
 <!-- section-summary: Microsoft Entra ID issues signed tokens that carry claims, and APIs validate those tokens before making authorization decisions. -->
 
 A **token** is signed data issued by Microsoft Entra ID after a successful authentication and policy process. A token contains **claims**, which are facts about the caller, the tenant, the issuing authority, the target audience, the app, scopes, roles, timestamps, and authentication details. Tokens let apps and Azure services receive proof about a caller without handling the caller's password or long-lived secret on every request.
@@ -268,7 +272,7 @@ The `aud` claim names the API that should accept the token. The `tid` claim name
 
 Tokens give apps and Azure services signed proof, but the sign-in service still needs to decide whether to issue them in the first place. That is where Conditional Access enters the Orders story, because the company's policy may require more evidence than a password and group membership.
 
-## Conditional Access
+## How Does Conditional Access Evaluate Sign-In Context?
 <!-- section-summary: Conditional Access combines signals such as user, app, device, location, and risk, then applies controls such as MFA or compliant-device requirements. -->
 
 **Conditional Access** is the Microsoft Entra policy engine for access decisions during sign-in. It combines signals such as user, group, device, location, application, client type, and risk. It can then require controls such as multifactor authentication, a compliant device, a password change, approved client apps, session limits, or a block decision.
@@ -308,7 +312,7 @@ Healthy output shows the expected application, the expected policy, MFA, and the
 
 At this point the Orders team can identify Maya, check her group, evaluate her device, require MFA, and issue tokens. The remaining access question moves to authorization, because a token that proves Maya signed in still has to meet a permission rule before she can view production data or change Azure resources.
 
-## Roles and Authorization
+## How Are Entra Roles, Azure Roles, and Application Roles Different?
 <!-- section-summary: Microsoft Entra ID authenticates callers, while Microsoft Entra roles, Azure RBAC, and application roles decide different kinds of authorization. -->
 
 **Authorization** means deciding what an authenticated caller may do. Maya may sign in successfully, `orders-admin-web` may receive tokens successfully, and `orders-api-prod` may obtain a managed identity token successfully. Those proofs identify the callers, and separate authorization systems decide which directory settings, Azure resources, or app features each caller can use.
@@ -330,13 +334,15 @@ The Orders API might receive this role assignment so it can read secrets from on
 
 This assignment gives one managed identity secret-read access at one vault scope. Microsoft Entra ID owns the identity and token issuance for `mi-orders-api-prod`. Azure RBAC owns the resource permission binding. Key Vault only returns the secret after the token and the role assignment line up.
 
+Explicit identities make least privilege possible. Instead of sharing one storage administrator key across every application, the Orders API can receive read access to one invoice container while the Billing API receives read and write access to the container it owns. A deployment pipeline can update the app resource without inheriting the runtime's data permissions. Each principal gets the narrow action and scope required by its job, and the logs can name which principal made the request.
+
 Applications can add their own authorization too. `orders-admin-web` might receive a token for Maya and then check for an app role such as `Orders.SupportAgent` before showing support tools. A smaller app role such as `Orders.Viewer` might allow customer lookup while keeping refund overrides hidden.
 
 This separation explains many support tickets. Maya can pass Conditional Access and still lack Reader on `rg-orders-prod`. The deployment service principal can have Contributor on one resource group and still lack permission to edit app registrations. The managed identity can authenticate successfully and still receive an authorization error from Key Vault until Azure RBAC grants the right data-plane role.
 
 Roles make access explicit, and explicit access changes constantly as people join, apps ship, and incidents happen. The team needs evidence so every "why was this allowed" or "why was this denied" question can turn into records instead of guessing.
 
-## Evidence and Operations
+## How Do You Trace Human and Workload Identity End to End?
 <!-- section-summary: Sign-in logs, audit logs, service principal records, and Azure activity records help teams explain access decisions after they happen. -->
 
 Identity work needs evidence because production problems rarely arrive as tidy diagrams. Maya gets blocked from the support dashboard. A deployment pipeline receives `AuthorizationFailed`. A security analyst asks who added a client secret. A reviewer asks why a service principal has a privileged directory role.
@@ -360,7 +366,7 @@ This evidence habit connects the whole identity system back to daily operations.
 
 Now the article has all the pieces. The final section connects the Orders team's human path, runtime path, and deployment path so the full Microsoft Entra ID story sits in one production picture.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: Microsoft Entra ID names every caller, evaluates sign-in policy, issues tokens, and hands resource authorization to Azure RBAC or the application layer. -->
 
 The Orders team's Azure identity setup now has a clear shape. The `devpolaris.com` tenant stores people, groups, devices, applications, service principals, managed identities, policies, roles, and logs. Azure subscriptions trust that tenant for identity, and Azure resources use those tenant principals during authorization.
@@ -379,7 +385,7 @@ Three habits make Microsoft Entra ID practical during real work. First, name the
 
 Microsoft Entra ID is the identity foundation for Azure. It gives people, software, devices, and automation a trusted way to prove who they are. Azure RBAC is the next natural article because it explains how those proven identities receive bounded access to Azure resources.
 
-## What's Next
+### What's Next
 
 The next article goes deeper into Azure RBAC. Microsoft Entra ID explains the caller side of the story, and Azure RBAC explains how Azure grants access through principals, role definitions, scopes, role assignments, conditions, deny assignments, and request-time evaluation.
 
@@ -387,7 +393,41 @@ That next step keeps using the same Orders team. Maya, the support dashboard, th
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[Why Does Azure Need an Identity Layer?]{kind="recap"}
+This article follows one production Orders system so every Microsoft Entra ID concept has a real caller, target, and access decision. Microsoft Entra ID is the cloud identity service that Azure and many Microsoft cloud apps trust for authentication, policy checks, and tokens.
+:::
+
+:::expand[How Do Tenants Organize People, Groups, and Devices?]{kind="recap"}
+A Microsoft Entra tenant is the organization's identity directory, while Azure subscriptions hold resources and trust one tenant for identity. Users represent people in Microsoft Entra ID, and those user records drive sign-in, lifecycle, access assignment, and audit trails. Groups organize shared access for people and devices, while device identities give Conditional Access useful evidence about the machine in use.
+:::
+
+:::expand[How Do App Registrations and Service Principals Represent Software?]{kind="recap"}
+Software often starts with client secrets, and production teams reduce those secrets because they leak, age, and complicate rotation. An app registration describes how an application integrates with Microsoft Entra ID, including client ID, tenant behavior, redirect URIs, credentials, scopes, and app roles. A service principal is the tenant-local identity for an application, and it is the object that receives permissions and appears in operational records.
+:::
+
+:::expand[How Do Managed Identities Remove Stored Credentials?]{kind="recap"}
+A managed identity gives an Azure resource a Microsoft Entra identity whose credential lifecycle Azure manages for the workload.
+:::
+
+:::expand[How Do Tokens Prove Identity to a Resource?]{kind="recap"}
+Microsoft Entra ID issues signed tokens that carry claims, and APIs validate those tokens before making authorization decisions.
+:::
+
+:::expand[How Does Conditional Access Evaluate Sign-In Context?]{kind="recap"}
+Conditional Access combines signals such as user, app, device, location, and risk, then applies controls such as MFA or compliant-device requirements.
+:::
+
+:::expand[How Are Entra Roles, Azure Roles, and Application Roles Different?]{kind="recap"}
+Microsoft Entra ID authenticates callers, while Microsoft Entra roles, Azure RBAC, and application roles decide different kinds of authorization.
+:::
+
+:::expand[How Do You Trace Human and Workload Identity End to End?]{kind="recap"}
+Sign-in logs, audit logs, service principal records, and Azure activity records help teams explain access decisions after they happen. Microsoft Entra ID names every caller, evaluates sign-in policy, issues tokens, and hands resource authorization to Azure RBAC or the application layer.
+:::
+
+## References
 
 - [What is Microsoft Entra?](https://learn.microsoft.com/en-us/entra/fundamentals/what-is-entra) - Defines Microsoft Entra ID as the foundational Entra product for cloud identity, authentication, policy enforcement, and protection for users, devices, apps, and resources.
 - [New name for Azure Active Directory](https://learn.microsoft.com/en-us/entra/fundamentals/new-name) - Explains the Azure Active Directory to Microsoft Entra ID rename, the timing of the name change, and the continuity of URLs, APIs, tooling, and integrations.

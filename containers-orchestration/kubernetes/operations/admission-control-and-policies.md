@@ -24,7 +24,19 @@ aliases:
 
 Kubernetes stores desired state. Every create, update, or delete request therefore proposes a transition from the current cluster state to a new one. Admission control is the checkpoint that examines that proposed transition after access has been granted but before the result is persisted.
 
-Seven questions build that model:
+Let `S` be the cluster state before a request, `R` the request, and `O` the submitted object. Authentication derives the principal from `R`. Authorization decides whether that principal may attempt the verb on the resource. Admission then evaluates the proposed object before Kubernetes commits a new state.
+
+```text
+principal = authenticate(R)
+authorize(principal, R.verb, R.resource) -> allow or deny
+O' = mutate(O)
+validate(O') -> allow or deny
+S' = persist(O')
+```
+
+This model explains why RBAC and admission are not interchangeable. RBAC may allow Alice to create Deployments in `production`; admission can still reject one particular Deployment because it uses `hostNetwork`, requests `64Gi` of memory, uses an unapproved image tag, or lacks an ownership label. Permission answers **who may attempt the transition**. Admission answers **whether this proposed transition preserves the cluster's rules**.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Where does admission sit in a Kubernetes API request?**
 2. **How do mutation and validation work together?**
@@ -38,18 +50,6 @@ Seven questions build that model:
 <!-- section-summary: Admission examines an authorized write after identity and permission checks but before Kubernetes stores the resulting object. -->
 
 ### Treat every write as a proposed state transition
-
-Let `S` be the cluster state before a request, `R` the request, and `O` the submitted object. Authentication derives the principal from `R`. Authorization decides whether that principal may attempt the verb on the resource. Admission then evaluates the proposed object before Kubernetes commits a new state.
-
-```text
-principal = authenticate(R)
-authorize(principal, R.verb, R.resource) -> allow or deny
-O' = mutate(O)
-validate(O') -> allow or deny
-S' = persist(O')
-```
-
-This model explains why RBAC and admission are not interchangeable. RBAC may allow Alice to create Deployments in `production`; admission can still reject one particular Deployment because it uses `hostNetwork`, requests `64Gi` of memory, uses an unapproved image tag, or lacks an ownership label. Permission answers **who may attempt the transition**. Admission answers **whether this proposed transition preserves the cluster's rules**.
 
 Start with this proposed Pod:
 

@@ -20,22 +20,8 @@ aliases:
 6. [How Do You Deploy and Roll Back an EC2 Fleet?](#how-do-you-deploy-and-roll-back-an-ec2-fleet)
 7. [How Do You Investigate an EC2 Incident?](#how-do-you-investigate-an-ec2-incident)
 8. [How Should You Think About EC2 as a Whole?](#how-should-you-think-about-ec2-as-a-whole)
-9. [Check Your Understanding](#check-your-understanding)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-The sections below answer these questions in order:
-
-1. **What Is an EC2 Instance?**
-2. **How Do AMIs, Instance Types, and EBS Work Together?**
-3. **How Does an EC2 Application Get AWS Permissions?**
-4. **How Does a New Instance Become Ready?**
-5. **Why Should Fleet Instances Be Replaceable?**
-6. **How Do You Deploy and Roll Back an EC2 Fleet?**
-7. **How Do You Investigate an EC2 Incident?**
-8. **How Should You Think About EC2 as a Whole?**
-
-## What Is an EC2 Instance?
-<!-- section-summary: EC2 provides a programmable virtual machine with familiar server capabilities and operating-system responsibilities. -->
 
 Start without AWS. An application that runs continuously needs processors to execute instructions, memory for its working data, storage for an operating system and application files, a network interface, and a process that remains alive to handle work. On traditional infrastructure, a team bought a physical server, installed an operating system, connected the machine to a network, copied the application onto it, and maintained everything for the life of that server.
 
@@ -52,6 +38,20 @@ AWS physical server
 │  └──────────┘  └──────────┘  └──────────┘ │
 └─────────────────────────────────────────────┘
 ```
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Is an EC2 Instance?**
+2. **How Do AMIs, Instance Types, and EBS Work Together?**
+3. **How Does an EC2 Application Get AWS Permissions?**
+4. **How Does a New Instance Become Ready?**
+5. **Why Should Fleet Instances Be Replaceable?**
+6. **How Do You Deploy and Roll Back an EC2 Fleet?**
+7. **How Do You Investigate an EC2 Incident?**
+8. **How Should You Think About EC2 as a Whole?**
+
+## What Is an EC2 Instance?
+<!-- section-summary: EC2 provides a programmable virtual machine with familiar server capabilities and operating-system responsibilities. -->
 
 Virtualization isolates the instances and gives each one a machine-like environment. AWS maintains the physical data center, hardware, and virtualization platform. Inside the guest machine, you still meet normal server concepts: users, processes, files, filesystems, ports, package managers, background daemons, scheduled jobs, logs, kernel settings, and network sockets.
 
@@ -550,7 +550,7 @@ The safest containment follows from that evidence: stop the rollout, return the 
 *Each observation narrows the failing layer and points to the next piece of evidence.*
 
 ## How Should You Think About EC2 as a Whole?
-<!-- section-summary: EC2 application hosting becomes manageable when specification, compute, traffic, state, identity, initialization, and supervision remain separate concerns. -->
+<!-- section-summary: Keeping specification, compute, traffic, state, identity, initialization, and supervision separate makes EC2 application hosting manageable. -->
 
 The complete design is easier to reason about as several cooperating systems:
 
@@ -586,7 +586,7 @@ EC2 is therefore not fundamentally a high-level web-hosting product. It provides
 
 The operational leap is from “this particular server is precious” to “this particular server is disposable.” The AMI, launch template, external state, deployment record, and desired fleet are the durable things.
 
-## Check Your Understanding
+## Check Your Answers
 
 :::expand[What Is an EC2 Instance?]{kind="recap"}
 EC2 provides a programmable virtual machine with familiar server capabilities and operating-system responsibilities.
@@ -645,7 +645,7 @@ Follow the request path: DNS and TLS, load-balancer target health, network reach
 :::
 
 :::expand[How Should You Think About EC2 as a Whole?]{kind="recap"}
-EC2 application hosting becomes manageable when specification, compute, traffic, state, identity, initialization, and supervision remain separate concerns.
+Keeping specification, compute, traffic, state, identity, initialization, and supervision separate makes EC2 application hosting manageable.
 :::
 
 ## References

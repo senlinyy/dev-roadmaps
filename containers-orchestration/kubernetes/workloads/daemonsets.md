@@ -19,7 +19,7 @@ id: article-containers-orchestration-kubernetes-workloads-daemonsets
 8. [Check Your Answers](#check-your-answers)
 9. [References](#references)
 
-A DaemonSet becomes much easier to understand when you start with the quantity Kubernetes must control.
+Start with the quantity Kubernetes must control to understand a DaemonSet.
 
 A Deployment begins with a replica count: “I want `N` interchangeable copies of this application somewhere in the cluster.” A DaemonSet begins with a set of machines: “For every node that satisfies these conditions, I want one copy of this Pod on that node.”
 
@@ -42,7 +42,7 @@ each eligible node ↔ its intended DaemonSet Pod
 
 That distinction explains why a disappearing node lowers desired population rather than causing its agent to be recreated elsewhere. The missing machine took its node-local logs, devices, and network context with it; an extra copy on another node cannot represent that state.
 
-The article follows seven questions:
+Keep these questions in view as you work through the lesson:
 
 1. **Why does a node-local agent need a DaemonSet?**
 2. **How does Kubernetes turn each eligible node into one targeted Pod?**

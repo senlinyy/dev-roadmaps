@@ -18,12 +18,16 @@ aliases:
 4. [How Do You Right-Size Logs, Queues, and Background Work?](#how-do-you-right-size-logs-queues-and-background-work)
 5. [How Do You Set Autoscaling Guardrails?](#how-do-you-set-autoscaling-guardrails)
 6. [How Do You Make a Safe Right-Sizing Change?](#how-do-you-make-a-safe-right-sizing-change)
-7. [What Should You Remember?](#what-should-you-remember)
+7. [Check Your Answers](#check-your-answers)
 8. [References](#references)
 
 Right-sizing means providing enough capacity to meet performance and resilience goals without continuously paying for capacity that contributes neither useful work nor justified protection. It is an optimization problem: minimize total cost subject to acceptable service behavior. Total cost includes the cloud bill, latency, failed work, outages, recovery, engineering effort, and complexity created by overly aggressive tuning.
 
-The sections below answer these questions in order:
+Cost visibility has done its first job. The `orders` team now knows the worker service spends too much overnight. Four large ECS tasks run all night, and the SQS queue stays empty most of that time. The bill says the service is expensive, and a dashboard says CPU averages 8 percent.
+
+**Right-sizing** means matching resource size and count to real demand. The target can be a smaller task size, better autoscaling, or more memory that stops retries wasting money elsewhere.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What Does Right-Sizing Actually Optimize?**
 2. **How Do You Right-Size Compute?**
@@ -34,10 +38,6 @@ The sections below answer these questions in order:
 
 ## What Does Right-Sizing Actually Optimize?
 <!-- section-summary: Right-sizing changes resource size or count after checking how the workload actually behaves. -->
-
-Cost visibility has done its first job. The `orders` team now knows the worker service spends too much overnight. Four large ECS tasks run all night, and the SQS queue stays empty most of that time. The bill says the service is expensive, and a dashboard says CPU averages 8 percent.
-
-**Right-sizing** means matching resource size and count to real demand. The target can be a smaller task size, better autoscaling, or more memory that stops retries wasting money elsewhere.
 
 Available capacity must cover three different quantities:
 
@@ -416,7 +416,7 @@ A mature capacity explanation should sound like `18 normal + 4 peak variation + 
 *The change plan shows the safe path from baseline evidence through one small change, a watch window, and a keep-or-rollback decision.*
 
 
-## What Should You Remember?
+## Check Your Answers
 
 :::expand[What Does Right-Sizing Actually Optimize?]{kind="recap"}
 Right-sizing changes resource size or count after checking how the workload actually behaves.

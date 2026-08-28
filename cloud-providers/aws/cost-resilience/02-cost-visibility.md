@@ -20,12 +20,16 @@ aliases:
 4. [How Do Budgets and Anomaly Detection Differ?](#how-do-budgets-and-anomaly-detection-differ)
 5. [How Do You Investigate a Spend Jump?](#how-do-you-investigate-a-spend-jump)
 6. [How Does Visibility Become a Safe Action?](#how-does-visibility-become-a-safe-action)
-7. [What Should You Remember?](#what-should-you-remember)
+7. [Check Your Answers](#check-your-answers)
 8. [References](#references)
 
 Cost visibility answers four connected questions: what is being paid for, who or what caused it, why it changed, and what should happen next. Cloud resources generate metered usage, AWS multiplies each usage quantity by its price, and a single bill aggregates the result. The central challenge is attribution: you cannot control a cost that you cannot connect to purpose and ownership.
 
-The sections below answer these questions in order:
+The operating loop starts with a simple need: the team has to see the cost before it can explain or tune it. The monthly AWS bill says EC2, RDS, S3, CloudWatch, and data transfer all increased. The `orders` team still needs to know which part belongs to their workload, which part belongs to a shared platform, and which part came from a forgotten experiment.
+
+At first principles, each resource or operation creates a meter: EC2 instance-hours, S3 byte-months, Lambda invocations and duration, NAT Gateway processed bytes, or cross-Region transfer. Total cost is the sum of each usage quantity multiplied by its price. AWS performs that aggregation automatically; the organization must add the meaning.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Does One Bill Need Many Ownership Views?**
 2. **How Do Accounts and Tags Attribute Cost?**
@@ -36,10 +40,6 @@ The sections below answer these questions in order:
 
 ## Why Does One Bill Need Many Ownership Views?
 <!-- section-summary: Cost visibility starts by connecting each line of spend to the team and workload that created it. -->
-
-The operating loop starts with a simple need: the team has to see the cost before it can explain or tune it. The monthly AWS bill says EC2, RDS, S3, CloudWatch, and data transfer all increased. The `orders` team still needs to know which part belongs to their workload, which part belongs to a shared platform, and which part came from a forgotten experiment.
-
-At first principles, each resource or operation creates a meter: EC2 instance-hours, S3 byte-months, Lambda invocations and duration, NAT Gateway processed bytes, or cross-Region transfer. Total cost is the sum of each usage quantity multiplied by its price. AWS performs that aggregation automatically; the organization must add the meaning.
 
 **Cost visibility** means turning cloud spend into evidence people can own. The output should answer which service spent money, which workload used it, which environment it served, and who can decide what to change.
 
@@ -137,9 +137,9 @@ resource "aws_s3_bucket" "receipts" {
 
 The variable makes every module receive the same required vocabulary. The S3 bucket resource then attaches those tags at creation time, so the bucket can appear in cost allocation views under the same `Service`, `Environment`, and `Owner` values as the rest of the workload.
 
-![The ownership map shows how a bill becomes useful when account, service, tag, owner, cost center, and untagged spend views line up](/content-assets/articles/article-cloud-iac-finops-resilience-cost-management/cost-ownership-map.png)
+![The ownership map shows how account, service, tag, owner, cost center, and untagged spend views turning a bill into useful evidence](/content-assets/articles/article-cloud-iac-finops-resilience-cost-management/cost-ownership-map.png)
 
-*The ownership map shows how a bill becomes useful when account, service, tag, owner, cost center, and untagged spend views line up.*
+*The ownership map shows how account, service, tag, owner, cost center, and untagged spend views turning a bill into useful evidence.*
 
 
 ## How Does Cost Explorer Turn the Bill Into Questions?
@@ -410,7 +410,7 @@ riskCheck: confirm request_id, error_code, and version fields remain in logs
 
 That kind of note gives finance, engineering, and incident responders the same story. It also prepares the next article: once spend is visible, the team can right-size without cutting away useful protection.
 
-## What Should You Remember?
+## Check Your Answers
 <!-- section-summary: Cost visibility connects metered usage to time, ownership, workload purpose, expected behavior, and a verified engineering decision. -->
 
 The complete model is:

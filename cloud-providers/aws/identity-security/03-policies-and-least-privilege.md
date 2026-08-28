@@ -32,9 +32,6 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## How Does IAM Evaluate One API Request?
-<!-- section-summary: IAM treats authorization as a proof about one principal, action, resource, and request context. -->
-
 Think of AWS IAM as a **proof system**. Every signed AWS API request is asking one question:
 
 > May principal **P** perform action **A** on resource **R**, given context **C**?
@@ -65,17 +62,9 @@ aws s3 cp receipt.pdf s3://company-receipts/
 
 the CLI is not asking for vague “S3 access.” It is making one or more concrete API requests. Depending on the exact operation, those requests can include `s3:PutObject`, `s3:GetObject`, and `s3:ListBucket`.
 
-IAM does not fundamentally understand an organizational sentence such as “Finance administrator,” “can work with receipts,” or “needs S3 access.” It evaluates statements much closer to:
+IAM does not fundamentally understand an organizational sentence such as “Finance administrator,” “can work with receipts,” or “needs S3 access.” It evaluates concrete principals, actions, resources, and conditions.
 
-```text
-s3:GetObject
-on
-arn:aws:s3:::company-receipts/incoming/*
-```
-
-That difference is the foundation of least privilege. Broad thinking asks which service the application uses. Precise thinking asks which API operations it makes, which resources those operations target, and which request circumstances must be true.
-
-The sections below answer these questions in order:
+Keep these questions in view as you work through the lesson:
 
 1. **How Does IAM Evaluate One API Request?**
 2. **What Does a Policy Statement Mean?**
@@ -85,6 +74,17 @@ The sections below answer these questions in order:
 6. **How Do You Build a Least-Privilege Role From Workload Behavior?**
 7. **How Do You Debug AccessDenied With Evidence?**
 8. **How Does the Complete Authorization Design Fit Together?**
+
+## How Does IAM Evaluate One API Request?
+<!-- section-summary: IAM treats authorization as a proof about one principal, action, resource, and request context. -->
+
+```text
+s3:GetObject
+on
+arn:aws:s3:::company-receipts/incoming/*
+```
+
+That difference is the foundation of least privilege. Broad thinking asks which service the application uses. Precise thinking asks which API operations it makes, which resources those operations target, and which request circumstances must be true.
 
 ## What Does a Policy Statement Mean?
 <!-- section-summary: A statement combines an effect, API action, resource set, and optional condition into one authorization rule. -->
@@ -187,7 +187,7 @@ Least privilege keeps reducing the set of requests that would receive `ALLOW` un
 
 ![The policy decision view turns a business request into an action, resource, principal, context, and result](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/request-policy-decision.png)
 
-*A policy becomes reviewable when each field maps to one part of the real request.*
+*Mapping each field to one part of the real request makes a policy reviewable.*
 
 ### Where Do Identity and Resource Policies Apply?
 <!-- section-summary: Identity policies state what a caller may do, while resource policies state which principals a resource owner accepts. -->
@@ -771,7 +771,7 @@ remove unused permissions
 repeat
 ```
 
-CloudTrail, IAM Access Analyzer, access-last-used information, and policy simulation can contribute evidence. Permissions become technical debt when they no longer have a current justification.
+CloudTrail, IAM Access Analyzer, access-last-used information, and policy simulation can contribute evidence. A permission without a current justification is technical debt.
 
 The review must also follow application change. If a later feature moves input from `incoming/*` to `approved/*`, changes the output key, or removes encrypted templates, update the policy with the same change. Otherwise the old prefix and `kms:Decrypt` permission can survive after the code stops using them. A reviewer should be able to connect every surviving statement to a current behavior, resource owner, and failure or recovery path.
 

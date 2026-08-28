@@ -18,12 +18,16 @@ aliases:
 4. [Where Do Cost and Resilience Meet?](#where-do-cost-and-resilience-meet)
 5. [How Do You Distinguish Headroom, Waste, and Unknown Spend?](#how-do-you-distinguish-headroom-waste-and-unknown-spend)
 6. [How Do You Review Cost Without Weakening Resilience?](#how-do-you-review-cost-without-weakening-resilience)
-7. [What Should You Remember?](#what-should-you-remember)
+7. [Check Your Answers](#check-your-answers)
 8. [References](#references)
 
 Cost and resilience are both consequences of how a workload handles uncertainty. Useful work consumes resources and creates cost. Traffic, failures, deployments, and dependencies are not perfectly predictable, so the system also needs spare capacity, redundancy, recovery evidence, and tested procedures. The central question is how much to spend so the service can keep its promise when reality differs from the plan.
 
-The sections below answer these questions in order:
+The `orders` service has a normal week. Customers place orders, workers send receipts, and the API runs on ECS. Then the monthly AWS bill lands 22 percent higher than expected. Nothing dramatic happened, so the team feels a pull toward the biggest number on the bill.
+
+That first reaction makes sense, and it can also create trouble. The largest line might be an RDS standby that protects checkout during an Availability Zone problem. It might be CloudWatch Logs that support customer support investigations. It might be NAT Gateway traffic from a real design issue. The team needs a way to separate **waste**, **headroom**, and **protection** before anyone starts deleting things.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Do Cost and Resilience Belong in One Operating Loop?**
 2. **Why Is Cost a Workload Signal?**
@@ -34,10 +38,6 @@ The sections below answer these questions in order:
 
 ## Why Do Cost and Resilience Belong in One Operating Loop?
 <!-- section-summary: Cost and resilience belong to the same operating loop because spending often buys capacity, evidence, or recovery. -->
-
-The `orders` service has a normal week. Customers place orders, workers send receipts, and the API runs on ECS. Then the monthly AWS bill lands 22 percent higher than expected. Nothing dramatic happened, so the team feels a pull toward the biggest number on the bill.
-
-That first reaction makes sense, and it can also create trouble. The largest line might be an RDS standby that protects checkout during an Availability Zone problem. It might be CloudWatch Logs that support customer support investigations. It might be NAT Gateway traffic from a real design issue. The team needs a way to separate **waste**, **headroom**, and **protection** before anyone starts deleting things.
 
 This module follows one practical loop:
 
@@ -207,7 +207,7 @@ This habit gives the rest of the module a clear path. First the team sees cost. 
 *The review loop shows how spend, ownership tags, reliability promises, headroom, safe changes, and follow-up reviews belong together.*
 
 
-## What Should You Remember?
+## Check Your Answers
 <!-- section-summary: The objective is to deliver the required service promise at the lowest sustainable cost, with useful work, justified protection, and waste kept distinct. -->
 
 The operating loop is `observe -> explain -> decide -> change -> measure again`. When spend rises, separate demand growth, efficiency change, deliberate resilience, and unexplained cost before acting. The three quantities under management are demand, efficiency, and safety margin.

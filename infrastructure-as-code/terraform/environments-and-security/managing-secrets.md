@@ -1,407 +1,369 @@
 ---
 title: "Managing Secrets"
-description: "Secret values outside Terraform code and normal state paths through managed secrets, references, and runtime identity."
-overview: "Terraform can mark values as sensitive, but state still needs strong protection. This article starts with a dev password mistake, then shows safer production patterns: provider-managed secrets, reference-based wiring, runtime identity, CI handling, and state review."
-tags: ["secrets", "security", "vault", "aws secrets manager", "terraform"]
+description: "Learn where secrets can appear in Terraform and how sensitive, ephemeral, write-only, provider-managed, and reference-based designs reduce exposure."
+overview: "Terraform plans changes, passes values through providers, persists state, emits outputs, and commonly runs in CI. This article follows a secret through every boundary and builds a hierarchy from plaintext values to designs where Terraform manages permission without possessing the secret."
+tags: ["terraform", "secrets", "sensitive", "ephemeral", "state-security"]
 order: 4
 id: article-iac-terraform-environments-secrets
 ---
 
 ## Table of Contents
 
-1. [The Small Secret Mistake](#the-small-secret-mistake)
-2. [What sensitive Actually Does](#what-sensitive-actually-does)
-3. [Ephemeral and Write-Only Values](#ephemeral-and-write-only-values)
-4. [Provider-Managed Secrets First](#provider-managed-secrets-first)
-5. [Secret References Instead of Values](#secret-references-instead-of-values)
-6. [Runtime Identity Reads the Secret](#runtime-identity-reads-the-secret)
-7. [CI/CD Secret Handling](#cicd-secret-handling)
-8. [Plan and State Review](#plan-and-state-review)
-9. [Putting It All Together](#putting-it-all-together)
+1. [Where Can a Secret Leak Through Terraform?](#where-can-a-secret-leak-through-terraform)
+2. [What Does sensitive Protect?](#what-does-sensitive-protect)
+3. [How Do Ephemeral and Write-Only Values Reduce Persistence?](#how-do-ephemeral-and-write-only-values-reduce-persistence)
+4. [When Should the Provider Service Manage the Secret?](#when-should-the-provider-service-manage-the-secret)
+5. [Why Are Secret References Safer Than Secret Values?](#why-are-secret-references-safer-than-secret-values)
+6. [How Should Provider and CI Credentials Flow?](#how-should-provider-and-ci-credentials-flow)
+7. [Why Are Plans and State Security Boundaries?](#why-are-plans-and-state-security-boundaries)
+8. [How Do You Choose the Safest Secret Design?](#how-do-you-choose-the-safest-secret-design)
+9. [Check Your Answers](#check-your-answers)
 
-The previous articles separated the Terraform run by identity, folder, backend, variables, and sometimes workspace. Secrets add one more boundary. The safest Terraform design keeps raw secret values away from normal code review, plan review, state access, and CI logs.
+Terraform does more than execute instructions and exit. It evaluates expressions, creates plans, passes arguments to provider plugins, records values in state, exposes outputs, and moves artifacts through CI. Every boundary can expose a secret if the design treats confidential data like an ordinary string.
 
-The running example stays with the billing service. The service needs a database password in production. Terraform should help create the secret location, grant the application permission, and pass a reference such as an ARN or resource ID. The application should read the secret through its own runtime identity after it starts.
-
-## The Small Secret Mistake
-<!-- section-summary: Terraform often touches secret-related infrastructure, but raw secret values can leak through code, plans, logs, and state. -->
-
-The billing team starts with a dev database. Someone needs a password quickly and adds it to `dev.tfvars`:
-
-![Secret Input Boundary](/content-assets/articles/article-iac-terraform-environments-secrets/secret-input-boundary.png)
-
-*The boundary view shows how secret values leak after they enter Terraform as normal variables.*
+The small mistake is easy to recognize:
 
 ```hcl
-database_password = "dev-only-change-me"
+resource "example_database" "main" {
+  engine   = "postgres"
+  username = "admin"
+  password = "SuperSecret123!"
+}
 ```
 
-That single line teaches the wrong habit. A `.tfvars` file can be committed by mistake, copied into CI logs, saved in plan files, or passed into a provider argument that ends up in Terraform state. In production, a real password in a variable file is a serious leak path.
-
-A **secret** is any value that grants access or protects private data: database passwords, API keys, private keys, OAuth client secrets, signing tokens, and certificate private keys. Terraform often creates the infrastructure around secrets, so the safe design avoids moving raw secret values through Terraform if a reference or provider-managed option can work.
-
-The production preference is clear: let a secret manager or provider feature hold the secret value, and let Terraform manage references, permissions, and wiring.
-
-That means Terraform can still be part of secret management. It can create a secret container, grant an application role permission to read it, configure a database to use a provider-managed password, or pass a secret ARN into an application module. The safer design keeps the raw secret value out of normal Terraform inputs and outputs.
-
-The review question is always about the value path. If a password starts in a `.tfvars` file, Terraform may carry it into a plan, a provider request, state, a saved plan artifact, and CI output. If the password starts in a secret manager and Terraform only passes the secret reference, the normal Terraform path carries the name of the secret instead of the secret value.
-
-## What sensitive Actually Does
-<!-- section-summary: sensitive hides CLI display for values, but state and provider behavior still decide where the value is stored. -->
-
-Terraform variables and outputs can be marked `sensitive`:
-
-![Sensitive State Flow](/content-assets/articles/article-iac-terraform-environments-secrets/sensitive-state-flow.png)
-
-*The state flow shows why `sensitive` hides display but still requires protected state and careful downstream handling.*
+The password now exists in the configuration file, repository history, developer clones, review tools, editor backups, and possibly logs. Moving the text into a variable improves reuse but does not automatically improve secrecy:
 
 ```hcl
-variable "bootstrap_token" {
-  type        = string
-  description = "Temporary token used only during bootstrap."
-  sensitive   = true
+resource "example_database" "main" {
+  engine   = "postgres"
+  username = "admin"
+  password = var.database_password
 }
+```
 
-output "bootstrap_token" {
-  value     = var.bootstrap_token
+The value still has to originate somewhere and travel into Terraform. It may enter through a `.tfvars` file, environment variable, CI secret, command line, secret manager data source, or generated value. Terraform may then place it in a plan, provider request, state snapshot, output, debug log, or artifact.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Where Can a Secret Leak Through Terraform?**
+2. **What Does `sensitive` Protect?**
+3. **How Do Ephemeral and Write-Only Values Reduce Persistence?**
+4. **When Should the Provider Service Manage the Secret?**
+5. **Why Are Secret References Safer Than Secret Values?**
+6. **How Should Provider and CI Credentials Flow?**
+7. **Why Are Plans and State Security Boundaries?**
+8. **How Do You Choose the Safest Secret Design?**
+
+## Where Can a Secret Leak Through Terraform?
+<!-- section-summary: Secret review begins by tracing origin, transport, persistence, and consumers rather than focusing only on the source file. -->
+
+Ask four questions for every secret:
+
+| Question | Examples |
+|---|---|
+| Where does it originate? | Secret manager, CI, user, provider service |
+| How does it reach the consumer? | Variable, environment, provider discovery, runtime API |
+| Where can it persist? | Git, plan, state, logs, caches, artifacts |
+| Who truly needs the value? | Terraform, provider, application, database, operator |
+
+The last question often produces the strongest improvement. If the application needs a database password at runtime, Terraform may not need the plaintext at all. Terraform can create a secret location, grant the application's identity permission, and pass only a reference.
+
+Secret management is therefore an information-flow problem:
+
+```text
+secret origin
+    -> transport path
+    -> systems that see plaintext
+    -> persistent copies
+    -> final consumer
+```
+
+Reduce each arrow and copy. A value that never enters Terraform cannot leak through Terraform state. A short-lived value has less exposure time than a permanent one. A reference reveals location or identity but not the protected content.
+
+## What Does `sensitive` Protect?
+<!-- section-summary: sensitive marks presentation so Terraform redacts routine output, but it is not encryption and does not imply that state omits the value. -->
+
+Terraform can mark an input as sensitive:
+
+```hcl
+variable "database_password" {
+  type      = string
   sensitive = true
 }
 ```
 
-The plan hides the value:
+When the value flows into a resource, normal plan and apply output usually redacts it:
 
-```console
-Changes to Outputs:
-  + bootstrap_token = (sensitive value)
+```text
+password = (sensitive value)
 ```
 
-This gives useful display control. It protects terminal output and routine CI logs from casual exposure. State can still contain the underlying value if a provider needs it to compare future configuration with the remote object.
+This protects against casual disclosure in terminal output and routine CI logs. Sensitivity also propagates through expressions in many cases so a derived value remains redacted.
 
-`sensitive` belongs anywhere Terraform must handle a sensitive value. The state backend still needs encryption, access control, audit logs, limited automation permissions, and careful handling of saved plan files.
+The crucial distinction is:
 
-Value-path review follows the value from input to resource argument to output and state. If `var.bootstrap_token` flows into a resource argument, the provider's state behavior matters. If a sensitive output re-exports the token, root-output access matters too. The CLI redaction helps, while backend access remains the stronger control.
+```text
+sensitive = do not normally display this value
 
-The key lesson is practical: `sensitive = true` changes display behavior. Terraform state still needs secret-level protection, and Terraform may still keep the value in artifacts it needs for future comparisons.
+sensitive != do not store this value
+sensitive != encrypt this value
+sensitive != prevent every command from revealing it
+```
 
-## Ephemeral and Write-Only Values
-<!-- section-summary: Terraform can omit some temporary values from state and plans through ephemeral values and provider-supported write-only arguments. -->
+Terraform may need the value in state to compare future configuration with the managed object. Marking it sensitive does not change that persistence requirement. Anyone with sufficient state access may still be able to recover it.
 
-Terraform now has three separate tools that people often mix together: **sensitive values**, **ephemeral values**, and **write-only arguments**. They solve different parts of the secret problem.
+Some commands deliberately produce machine-readable information. `terraform output -raw` or `terraform output -json` can expose a sensitive output, and `terraform show -json` can reveal values represented in state or a plan. Redaction is a user-interface behavior, not an authorization boundary around every representation.
 
-`sensitive = true` redacts display. It keeps a value out of normal CLI output, but the underlying value can still be stored in state or saved plans if Terraform or the provider needs it later.
+`sensitive` is still useful. It states intent, reduces accidental log exposure, and encourages renderers to hide the value. Use it whenever confidential input must pass through Terraform. Just do not stop the threat analysis there.
 
-`ephemeral` values are available in Terraform 1.10 and later. An ephemeral value exists only for the current Terraform operation, so Terraform omits it from state and plan files. This is useful for short-lived tokens, generated passwords, and one-run bootstrap values.
+If a secret has already been committed, adding `sensitive = true` does not erase repository history or revoke the credential. Rotate or invalidate the secret, remove it from active configuration, and handle history according to the repository's incident process.
 
-**Write-only arguments** are available in Terraform 1.11 and later for providers and resources that support them. A write-only argument lets Terraform send a value to a managed resource during the operation without storing that argument value in state or plan files. Provider docs usually mark these arguments with names ending in `_wo`, along with a version argument such as `_wo_version` for later rotations.
+## How Do Ephemeral and Write-Only Values Reduce Persistence?
+<!-- section-summary: Ephemeral values avoid plan and state persistence in allowed contexts, while write-only provider arguments accept a value without reading it back into state. -->
 
-The safest secret designs combine the right tool with the right value path:
-
-| Tool | What it protects | What still needs care |
-|---|---|---|
-| `sensitive = true` | Routine Terraform display and logs | State, saved plans, provider behavior, and anyone who can read artifacts |
-| `ephemeral` value | State and plan persistence for temporary values | Only works in supported contexts and current-run flows |
-| Write-only argument | State and plan persistence for provider-supported resource arguments | Requires Terraform 1.11+ and explicit provider support |
-
-The write-only database password pattern has three pieces: an ephemeral value, a write-only provider argument, and a version number that records rotation intent. The skeleton looks like this:
+An ephemeral input has a stronger property than a sensitive input:
 
 ```hcl
-ephemeral "<ephemeral_type>" "<local_name>" {
-  setting = value
+variable "api_token" {
+  type      = string
+  sensitive = true
+  ephemeral = true
 }
 
-resource "<provider_resource_type>" "<local_name>" {
-  write_only_argument         = ephemeral.<ephemeral_type>.<local_name>.result
-  write_only_argument_version = 1
+provider "example" {
+  token = var.api_token
 }
 ```
 
-The concrete RDS example generates an ephemeral password and passes it to the AWS provider through the `password_wo` argument:
+`sensitive` controls normal display. `ephemeral` means Terraform omits the value from plan and state in contexts that support ephemeral data. That reduces persistence, but it also limits where the value can be used. Terraform cannot place a deliberately non-persisted value into an ordinary argument whose future comparison depends on storing it.
+
+```text
+sensitive
+    presentation property
+
+ephemeral
+    persistence property with usage restrictions
+```
+
+A write-only provider argument completes the pattern. Historically, a provider argument could be sent to the API and then represented in state. A write-only argument accepts the value for a remote write without returning that value to Terraform's persistent data.
+
+A simplified database example is:
 
 ```hcl
-ephemeral "random_password" "db_password" {
-  length           = 20
-  override_special = "!#$%&*()-_=+[]{}<>:?"
-}
+resource "aws_db_instance" "main" {
+  engine   = "postgres"
+  username = "admin"
 
-resource "aws_db_instance" "app" {
-  allocated_storage   = 100
-  engine              = "postgres"
-  instance_class      = "db.r6g.large"
-  db_name             = "billing"
-  username            = "billing_admin"
-  skip_final_snapshot = false
-
-  password_wo         = ephemeral.random_password.db_password.result
+  password_wo         = var.database_password
   password_wo_version = 1
 }
 ```
 
-In this example, the password value exists during the current Terraform operation. Terraform sends it to the provider, then omits that value from the plan and state files. The version number gives Terraform a visible change to apply for a later intentional password rotation.
+The `_wo` field is write-only. The companion version supplies a non-secret change signal. If Terraform does not retain the password, it cannot later compare old and new plaintext to decide whether an update is needed. Incrementing the version tells the provider that the external value should be written again.
 
-The plan should show the resource and the version, while the raw password remains absent:
+An ephemeral resource can create or retrieve a temporary value without persisting it, then feed that value into a supported write-only argument. For example, an ephemeral random password can flow into a database's write-only password input. Terraform coordinates the operation while avoiding a durable plaintext copy in plan or state.
 
-```console
-  # aws_db_instance.app will be created
-  + resource "aws_db_instance" "app" {
-      + db_name             = "billing"
-      + engine              = "postgres"
-      + password_wo_version = 1
-      + username            = "billing_admin"
-    }
+Ephemeral does not mean a value can safely appear anywhere. CI logs, shell tracing, provider debug logs, command arguments, or the remote API can still expose it. The final system must receive the plaintext somewhere. The goal is to narrow the path and remove avoidable persistence, not to claim the value never exists in memory.
 
-Plan: 1 to add, 0 to change, 0 to destroy.
-```
+## When Should the Provider Service Manage the Secret?
+<!-- section-summary: The strongest design often asks the managed service to generate and store its own secret so Terraform handles configuration without seeing plaintext. -->
 
-This is stronger than only marking a normal `password` variable as sensitive because the write-only value is designed to avoid Terraform state persistence. It still needs careful CI handling. Provider debug logs, shell tracing, wrapper scripts, or application-side logging can expose values outside Terraform's normal plan and state path.
-
-## Provider-Managed Secrets First
-<!-- section-summary: Provider-managed secrets let the cloud platform generate or store the secret so Terraform handles references instead of raw values. -->
-
-For databases, many cloud providers offer a way to generate and manage the password. The skeleton is a normal database resource with a provider-managed password setting instead of a password variable:
+If a cloud service can generate and manage a credential itself, prefer that over sending a password through Terraform. The current AWS database provider supports a pattern such as:
 
 ```hcl
-resource "<database_resource_type>" "<local_name>" {
-  username                         = "application_admin"
-  provider_managed_password_option = true
-}
-```
-
-In AWS RDS, one common concrete setting is `manage_master_user_password`:
-
-```hcl
-resource "aws_db_instance" "app" {
-  allocated_storage           = 100
+resource "aws_db_instance" "main" {
   engine                      = "postgres"
-  instance_class              = "db.r6g.large"
-  db_name                     = "billing"
-  username                    = "billing_admin"
+  username                    = "admin"
   manage_master_user_password = true
-  skip_final_snapshot         = false
-}
-
-output "database_endpoint" {
-  description = "Database endpoint used by the application."
-  value       = aws_db_instance.app.address
 }
 ```
 
-Terraform asks AWS to manage the password. The configuration contains a username and database settings while avoiding a `var.database_password` input. The application should receive permission to read the managed secret at runtime through its identity.
+The service generates the password and stores it in its managed secret system. Terraform configures the feature but never needs to supply the plaintext.
 
-The plan shape should show the managed-secret setting rather than a password:
+Compare the flows:
 
-```console
-  # aws_db_instance.app will be created
-  + resource "aws_db_instance" "app" {
-      + db_name                     = "billing"
-      + engine                      = "postgres"
-      + manage_master_user_password = true
-      + username                    = "billing_admin"
-      + master_user_secret          = (known after apply)
-    }
+```text
+Terraform-supplied password
+    CI/user -> Terraform -> plan/provider/state -> database
+
+service-managed password
+    Terraform requests managed secret
+    service generates -> secure store -> authorized runtime consumer
 ```
 
-`manage_master_user_password = true` tells AWS to generate and store the master password. `master_user_secret` appears after apply as provider-managed metadata, so Terraform can connect later IAM permissions to the generated secret without putting the password itself in the configuration.
+The second path removes Terraform, the runner, and the plan from the secret's plaintext lifecycle. It also lets the service integrate rotation and storage with its native controls.
 
-The Terraform output returns only the database endpoint. The password stays in the provider's secret system. The next piece of Terraform work is usually IAM: grant the application task role, instance profile, or workload identity permission to read the generated secret. That keeps deployment automation away from the raw password.
+Service-managed secrets are not automatically sufficient. Operators still need access policies, rotation behavior, recovery procedures, and an application path for reading the credential. The gain is narrower possession: Terraform manages the capability without becoming a copy of the secret database.
 
-This differs from the write-only argument example in the previous section. With `manage_master_user_password = true`, AWS generates and manages the master password in AWS Secrets Manager. Terraform manages the database setting and can read metadata about the generated secret, but the team does not supply the password value. With `password_wo`, the team supplies a password for the current operation, and Terraform avoids persisting that supplied value if the provider supports the write-only argument. For new RDS production databases, the managed password option is often cleaner because AWS owns generation and storage from the start.
+When service-managed generation is unavailable, an ephemeral value plus write-only argument is a strong alternative. When neither is available, a sensitive input may be necessary, and state must be protected as a secret-bearing system. Choose the highest pattern the provider and remote service actually support.
 
-The same idea exists across platforms in different forms: generated passwords, secret manager integrations, managed identities, Key Vault references, Secrets Manager references, Parameter Store references, or Kubernetes external secret operators. The details vary, but the goal stays the same. Terraform wires the access path while the secret system holds the raw value.
+## Why Are Secret References Safer Than Secret Values?
+<!-- section-summary: Terraform can manage a secret's container, reference, and access policy while the application retrieves plaintext directly through its runtime identity. -->
 
-Rotation also belongs in the design. Provider-managed database passwords and secret managers often support rotation workflows. Terraform should create the resources and permissions needed for rotation, then the secret platform should perform routine value changes without a Terraform pull request for every password update.
+Suppose an application needs an API key stored in a secret manager. Reading `secret_string` into Terraform and passing it into another resource gives Terraform possession of the value. A safer boundary is:
 
-## Secret References Instead of Values
-<!-- section-summary: Passing a secret ARN, name, or path is usually safer than passing the raw secret value through Terraform. -->
+```text
+Terraform creates or identifies secret container
+Terraform grants application identity permission
+Terraform passes secret ARN or resource ID
+application retrieves plaintext at runtime
+```
 
-Sometimes the secret already exists. In that case, a reference such as an ARN, resource ID, name, or path is safer than the secret value.
-
-`variables.tf`:
+An ARN, secret name, or resource ID can appear in state without revealing the secret content. Terraform can output that reference:
 
 ```hcl
-variable "database_secret_arn" {
-  type        = string
-  description = "ARN of the database secret the application reads at runtime."
+output "secret_arn" {
+  description = "Reference read by the application at runtime."
+  value       = aws_secretsmanager_secret.api_key.arn
 }
 ```
 
-`main.tf`:
+Terraform can also manage the permission connecting the application identity to that secret. The infrastructure relationship is declarative, reviewable, and auditable, while the application uses its own short-lived runtime credentials to retrieve the content only when needed.
 
-```hcl
-resource "aws_iam_policy" "read_database_secret" {
-  name = "billing-read-database-secret"
+This leads to a useful principle:
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
-        Resource = var.database_secret_arn
-      }
-    ]
-  })
-}
+> Terraform should often manage permission to possess a secret rather than possess the secret itself.
+
+The application identity becomes the consumer boundary. Cloud audit logs can record secret reads, access can be revoked without changing Terraform source, and rotation does not require a new plan if the stable reference remains the same.
+
+Do not confuse a reference with harmless public data. Secret names and ARNs can reveal system structure, environment, or account information. They still deserve normal infrastructure-data protection, but the impact is much lower than disclosing the plaintext credential.
+
+## How Should Provider and CI Credentials Flow?
+<!-- section-summary: Provider credentials should come from short-lived execution identity, and CI should prevent secret values from entering arguments, logs, or durable artifacts. -->
+
+Provider credentials deserve the same “permission, not possession” thinking. Hardcoding cloud keys in a provider block gives Terraform source direct possession of permanent authority. Instead, the execution environment should obtain temporary credentials from an identity system and let the provider discover them.
+
+OIDC-backed automation follows this path:
+
+```text
+CI job identity
+    -> signed OIDC token
+    -> cloud trust policy
+    -> temporary role session
+    -> provider discovery
+    -> API calls
 ```
 
-The plan shows the secret reference while omitting the password:
+Managed Terraform platforms can use dynamic provider credentials through similar OIDC exchanges. The specific platform is less important than the properties: credentials are created for one run, scoped to an approved identity, and discarded or expired afterward.
 
-```console
-  # aws_iam_policy.read_database_secret will be created
-  + resource "aws_iam_policy" "read_database_secret" {
-      + name   = "billing-read-database-secret"
-      + policy = jsonencode(
-            {
-              + Statement = [
-                  + {
-                      + Action   = [
-                          + "secretsmanager:GetSecretValue",
-                        ]
-                      + Effect   = "Allow"
-                      + Resource = "arn:aws:secretsmanager:us-east-1:123456789012:secret:billing/prod/db-AbCdEf"
-                    },
-                ]
-              + Version   = "2012-10-17"
-            }
-        )
-  }
+If a Terraform input secret must enter CI, use the platform's protected secret channel and a supported environment-variable form rather than putting the value directly on a command line. Mark the Terraform variable sensitive and, when its usage supports it, ephemeral. Disable shell tracing around secret-handling steps and avoid printing the environment.
+
+Command-line arguments can appear in process listings and build logs. Temporary `.tfvars` files can remain in workspaces or artifacts. Provider debug logging may include request bodies. Review every delivery mechanism, not just the repository.
+
+CI permissions should separate who can change the workflow, who can release to an environment, and which job can request the deployment identity. A secret store does not help if unreviewed code can simply print its contents. OIDC removes the stored provider key, but protected workflow and environment controls are still necessary.
+
+## Why Are Plans and State Security Boundaries?
+<!-- section-summary: Plans and state can contain secret or sensitive infrastructure data, so their storage, access, transport, and retention require explicit controls. -->
+
+A saved plan is executable deployment input and can include values that ordinary terminal rendering hides. JSON plan output can expose sensitive details. Treat plan files as restricted artifacts: limit who can download them, encrypt storage and transport, keep retention as short as the workflow permits, and never publish them in a public build log.
+
+State is a durable record of managed objects and may contain plaintext secret values when provider schemas require them. Store shared state in an appropriately secured remote backend with encryption, access control, locking, versioning or recovery, audit logs, and separation between environments.
+
+```text
+developer laptop state
+    copied, lost, backed up unpredictably
+
+protected remote state
+    centralized access, encryption, locking, recovery, audit
 ```
 
-The plan shows the policy name and the secret ARN reference while the password stays hidden. That is the intended review shape: reviewers can confirm which secret the role can read without exposing the secret value.
+Remote storage does not remove the sensitivity; it gives the organization better controls. Limit both human and machine access. A plan role may need to read state, while unrelated application developers may not. Production state should not be broadly readable merely because the repository is widely accessible.
 
-The ARN can still reveal naming and account structure, so treat it with reasonable care. It is still much safer than placing the secret value in Terraform variables, outputs, or state.
+Outputs also deserve review. `sensitive = true` reduces normal display, but consumers with state or explicit raw-output access can retrieve the value. Prefer outputting a secret reference rather than the secret. Remove obsolete secret-bearing outputs and rotate any value that was exposed.
 
-Data sources that read secret values need extra review. A data source can pull a secret from a secret manager and pass it into a resource, but that can place the returned value in state. The review question is whether Terraform needs the secret value or only needs to grant runtime permission to read it.
+Backups and old state versions remain part of the exposure surface. Rotating the live secret is essential after disclosure, because deleting one visible value does not guarantee all historical copies disappeared.
 
-For application configuration, the usual production pattern is:
+## How Do You Choose the Safest Secret Design?
+<!-- section-summary: Prefer designs that minimize Terraform's possession and persistence of plaintext, then protect every unavoidable boundary. -->
 
-1. Terraform creates or references the secret location.
-2. Terraform grants the runtime identity permission to read that secret.
-3. The application reads the secret at startup or request time through the cloud SDK, sidecar, or platform integration.
-4. Terraform state stores the reference and IAM policy while the password stays in the secret manager.
+Use this hierarchy from strongest to weakest:
 
-## Runtime Identity Reads the Secret
-<!-- section-summary: The application should use its deployed identity to read secrets at runtime, while Terraform manages the permission path. -->
-
-A **runtime identity** is the cloud identity attached to the running workload. In AWS this might be a Lambda execution role, ECS task role, EC2 instance profile, or EKS pod identity. In Azure it is often a managed identity. In Google Cloud it is commonly a service account, sometimes reached through Workload Identity. The name changes by platform, but the pattern is the same: the running application receives temporary access from the platform and uses that access to read the secret.
-
-Terraform can wire this without carrying the password. The root module passes the secret reference to the application and grants the runtime role permission to read that one secret:
-
-```hcl
-variable "database_secret_arn" {
-  type        = string
-  description = "ARN of the database secret read by the billing service at runtime."
-}
-
-resource "aws_iam_role_policy" "billing_read_database_secret" {
-  name = "billing-read-database-secret"
-  role = aws_iam_role.billing_task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = "secretsmanager:GetSecretValue"
-        Resource = var.database_secret_arn
-      }
-    ]
-  })
-}
+```text
+1. service generates and manages the secret
+2. application retrieves the secret by reference using runtime identity
+3. ephemeral value flows into a write-only argument
+4. sensitive value passes through Terraform and protected state
+5. plaintext value is embedded in code, files, arguments, or logs
 ```
 
-The application configuration receives a reference:
+Levels can combine. A service may generate a database credential, expose a secret reference, and let an application identity read it at runtime. Terraform manages the database, identity, permission, and reference without learning the password.
 
-```hcl
-environment = {
-  DATABASE_SECRET_ARN = var.database_secret_arn
-}
+For an application with PostgreSQL, the desired model is:
+
+```text
+Terraform
+    -> creates database with service-managed password
+    -> receives or identifies secret reference
+    -> grants application identity read permission
+    -> configures application with reference only
+
+Application at runtime
+    -> authenticates with its workload identity
+    -> reads current secret from secret manager
+    -> connects to database
 ```
 
-The running service then calls the secret manager with its runtime identity. Terraform state stores the environment variable value as the secret ARN and stores the IAM policy. The database password stays in the secret manager and moves to the application through the provider's runtime access path.
+Before accepting a design, trace the value:
 
-This pattern also improves rotation. After the secret manager rotates the password, the ARN or secret name can stay stable. The application reads the current version at startup or through a refresh path, and the team avoids a Terraform change for every password update.
-
-## CI/CD Secret Handling
-<!-- section-summary: CI should authenticate to cloud providers with short-lived identity and avoid writing raw secrets into plan files or backend config. -->
-
-Modern Terraform pipelines should use short-lived identity where possible. For example, a CI job can use OIDC to assume a cloud role instead of storing long-lived cloud access keys in repository secrets.
-
-If a pipeline must pass a sensitive Terraform variable, the CI secret store should provide it, the Terraform variable should be marked `sensitive`, and the job should avoid printing the environment. Saved plan files belong in restricted storage because plan files can contain values and backend details.
-
-Backend credentials need the same care. Backend access keys should stay out of `backend.hcl` because backend configuration can be copied into `.terraform/` metadata. Runner identity, managed identity, workload identity, or environment-based credentials should provide backend access.
-
-A safer production pipeline prints context without printing secrets:
-
-```bash
-echo "environment=prod"
-echo "backend_key=infrastructure/billing/prod/terraform.tfstate"
-terraform init -backend-config=backend/prod.s3.hcl
-terraform plan -var-file=env/prod.tfvars -out=tfplan
+```text
+Does plaintext enter source control?
+Does Terraform need it, or only the provider or application?
+Will it be stored in a plan or state?
+Can an ephemeral or write-only interface remove that copy?
+Can the remote service generate it instead?
+Can the consumer receive a reference and fetch it at runtime?
+Who can read plans, state, logs, and old versions?
+How is the secret rotated, revoked, and audited?
 ```
 
-`-backend-config` points Terraform at the production state backend, `-var-file` loads production values, and `-out=tfplan` saves the exact planned actions for later review or apply. The context helps reviewers verify the target. The secrets stay in the identity provider or secret manager, and the saved plan file should have restricted access because it can still contain sensitive values or backend details.
+The key lesson is that redaction is only the first layer. Strong secret design reduces possession. The safest Terraform configuration is often the one that creates the secret system and its authorization relationships while leaving the secret value outside Terraform entirely.
 
-The visible output should look boring:
+Minimize secrets that cross Terraform at all. When a provider can reference an external secret identifier rather than receiving plaintext, state and plan exposure may be reduced. If Terraform must manage the value, assume authorized readers of state can recover it even when CLI output is redacted. Protect backend access, encryption, logs, plan artifacts, variable files, and CI workspaces; use short-lived credentials for the run itself; and rotate any value exposed through history or artifacts rather than only marking it sensitive afterward.
 
-```console
-environment=prod
-backend_key=infrastructure/billing/prod/terraform.tfstate
-Plan: 1 to add, 0 to change, 0 to destroy.
-```
+Plan review is part of the secret boundary, not an exception to it. A redacted terminal display does not prove that a saved plan, machine-readable plan output, provider diagnostic, or state snapshot lacks the underlying value. Protect plan artifacts with the same care as state, keep them short-lived, and avoid passing them through broadly readable CI artifacts or chat transcripts.
 
-The output should name the environment and state target without printing a database password, API key, private key, or token. A debug flag that prints all environment variables should be disabled for Terraform jobs that can see secrets.
+## Check Your Answers
 
-Command-line flags such as `-var="database_password=..."` are a risky path for secrets. Shell history, process listings, CI logs, and wrapper debug output can expose them. If Terraform must receive a secret during bootstrap, the CI secret store or environment variable path is safer than a command-line flag. The variable should be marked sensitive, the plan should stay restricted, and the bootstrap path should be replaced with a secret manager reference afterward.
+:::expand[Where Can a Secret Leak Through Terraform?]{kind="recap"}
+Trace origin, transport, plaintext consumers, and persistence across code, variables, plans, providers, state, outputs, logs, and CI artifacts.
+:::
 
-## Plan and State Review
-<!-- section-summary: Secret-safe review checks both what the plan prints and what the state backend may store. -->
+:::expand[What Does `sensitive` Protect?]{kind="recap"}
+`sensitive` redacts routine presentation. It is not encryption, does not imply omission from state, and cannot erase an already exposed credential.
+:::
 
-A secret-aware review follows the value path from code and variables into resources, outputs, plans, and state.
+:::expand[How Do Ephemeral and Write-Only Values Reduce Persistence?]{kind="recap"}
+Ephemeral values avoid supported plan and state persistence; write-only arguments send values without reading them back. A version field signals later updates.
+:::
 
-A checklist can look like this:
+:::expand[When Should the Provider Service Manage the Secret?]{kind="recap"}
+Prefer native service generation and storage when available so Terraform requests the capability without receiving the plaintext credential.
+:::
 
-1. Do any `.tf` or `.tfvars` files contain a raw password, token, private key, or API key?
-2. Does a variable accept a raw secret where a secret reference would work?
-3. Does the provider offer a managed password or generated secret option?
-4. Does any output expose a secret value?
-5. Are saved plan files stored with restricted access?
-6. Does the state backend have encryption, access control, audit logs, and limited permissions?
+:::expand[Why Are Secret References Safer Than Secret Values?]{kind="recap"}
+Terraform can pass a stable ARN or ID and grant runtime access, while the application retrieves plaintext directly through its own identity.
+:::
 
-The plan hiding a value as `(sensitive value)` is good, but it is only one signal. The state backend may still store the underlying value. Production teams protect state and reduce the number of raw secrets Terraform ever sees.
+:::expand[How Should Provider and CI Credentials Flow?]{kind="recap"}
+Use short-lived execution identities and provider discovery. Protect any unavoidable input secret from command lines, tracing, debug logs, and artifacts.
+:::
 
-A recovery runbook for a leaked Terraform secret should include both Terraform and the secret system:
+:::expand[Why Are Plans and State Security Boundaries?]{kind="recap"}
+Both can expose sensitive values and infrastructure details. Restrict, encrypt, audit, retain briefly, and protect historical versions and outputs.
+:::
 
-1. Revocation or rotation of the leaked secret in the provider or secret manager.
-2. Identification of state, saved plans, CI logs, or local files that received the value.
-3. Restricted access to affected artifacts while the incident is reviewed.
-4. Terraform code updated to pass a reference or use a managed secret option.
-5. A plan that proves Terraform no longer carries the raw value.
-
-State history can retain old secret values through backend versioning. Rotation protects the live system even if old artifacts cannot be fully erased.
-
-## Putting It All Together
-<!-- section-summary: Terraform should manage secret wiring and permissions while secret managers and runtime identities handle the raw secret values. -->
-
-Terraform can manage secret-related infrastructure safely by keeping raw values out of normal configuration. Provider-managed passwords, secret manager references, runtime identity, and narrow IAM policies are the safer default. `sensitive` helps with display control, and state still deserves sensitive-data treatment.
-
-![Secrets Summary](/content-assets/articles/article-iac-terraform-environments-secrets/secrets-summary.png)
-
-*The summary board keeps the secret strategy concrete: pass references, protect state, use runtime identity, and control CI logs.*
-
-The dev password in a `.tfvars` file was a useful warning. It showed the easy path and why production teams choose a different path. Terraform should wire the access. The secret manager should hold the secret. The application should read the secret at runtime through its own identity.
-
-The state backend still deserves strong controls because Terraform state can contain sensitive provider data even with safer configuration patterns. Restrict state access, restrict saved plan artifacts, and keep the raw secret path in the secret manager if the provider gives you that option.
+:::expand[How Do You Choose the Safest Secret Design?]{kind="recap"}
+Prefer service-managed secrets, runtime references, and ephemeral write-only flows before accepting a sensitive value that Terraform must persist.
+:::
 
 ---
 
 **References**
 
-- [Terraform: Manage sensitive data](https://developer.hashicorp.com/terraform/language/manage-sensitive-data) - Explains how sensitive values interact with configuration, state, plans, and outputs.
-- [Terraform: Ephemeral values](https://developer.hashicorp.com/terraform/language/manage-sensitive-data/ephemeral) - Documents ephemeral values and write-only resource arguments for keeping temporary values out of state and plan files.
-- [Terraform: Input variables and sensitive values](https://developer.hashicorp.com/terraform/language/values/variables#suppressing-values-in-cli-output) - Documents `sensitive = true` for variables.
-- [Terraform: State](https://developer.hashicorp.com/terraform/language/state) - Explains the role of state and why state access matters.
-- [Terraform: Backend configuration](https://developer.hashicorp.com/terraform/language/backend) - Documents backend setup for remote state storage.
-- [AWS provider: `aws_db_instance`](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance) - Documents `manage_master_user_password`, `master_user_secret`, and write-only password arguments for RDS instances.
-- [AWS RDS: Managed master user passwords](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html) - Documents RDS integration with AWS Secrets Manager for managed master credentials.
+- [Terraform: Manage sensitive data](https://developer.hashicorp.com/terraform/language/manage-sensitive-data)
+- [Terraform: Sensitive variables](https://developer.hashicorp.com/terraform/language/values/variables#suppressing-values-in-cli-output)
+- [Terraform: Ephemeral values](https://developer.hashicorp.com/terraform/language/manage-sensitive-data/ephemeral)
+- [Terraform: Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral/write-only)
+- [Terraform CLI: Output](https://developer.hashicorp.com/terraform/cli/commands/output)
+- [Terraform CLI: Show](https://developer.hashicorp.com/terraform/cli/commands/show)
+- [HCP Terraform: Dynamic provider credentials](https://developer.hashicorp.com/terraform/cloud-docs/workspaces/dynamic-provider-credentials)

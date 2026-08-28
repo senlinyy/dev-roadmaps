@@ -1,7 +1,7 @@
 ---
 title: "Incident Response and Runbooks"
-description: "Respond to a confirmed suspicious signal with roles, evidence preservation, containment, credential rotation, recovery, and communication."
-overview: "A confirmed suspicious signal turns triage into coordinated response. This article continues the leaked deployment key case through incident roles, communication, decision records, evidence preservation, containment, credential rotation, recovery, and a practical runbook shape."
+description: "Coordinate uncertain security incidents with explicit roles, evidence preservation, capability-focused containment, trusted recovery, and practiced runbooks."
+overview: "Continue the suspicious production deployment credential case through uncertainty, incident command, facts and hypotheses, severity and blast radius, volatile evidence, containment, revocation and rotation, trusted rebuild, recovery verification, communication, runbook design, and tabletop practice."
 tags: ["devsecops", "incident-response", "runbooks", "containment"]
 order: 2
 id: article-devsecops-compliance-incident-readiness-incident-response-and-runbooks
@@ -9,335 +9,441 @@ id: article-devsecops-compliance-incident-readiness-incident-response-and-runboo
 
 ## Table of Contents
 
-1. [A Confirmed Suspicious Signal](#a-confirmed-suspicious-signal)
-2. [The Running Incident](#the-running-incident)
-3. [Roles and Communication](#roles-and-communication)
-4. [Severity and Decision Records](#severity-and-decision-records)
-5. [Evidence Preservation](#evidence-preservation)
-6. [Containment](#containment)
-7. [Credential Rotation](#credential-rotation)
-8. [Recovery and Verification](#recovery-and-verification)
-9. [Communication](#communication)
-10. [A Runbook Shape](#a-runbook-shape)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
-13. [References](#references)
+1. [Why Is Incident Response a Problem of Controlled Uncertainty?](#why-is-incident-response-a-problem-of-controlled-uncertainty)
+2. [How Do Roles, Communication, and Decision Records Coordinate the Response?](#how-do-roles-communication-and-decision-records-coordinate-the-response)
+3. [How Should Evidence Be Preserved While It Is Still Volatile?](#how-should-evidence-be-preserved-while-it-is-still-volatile)
+4. [How Does Containment Break Attacker Capability?](#how-does-containment-break-attacker-capability)
+5. [Why Must Credential Response Include Revocation, Rotation, and Persistence Search?](#why-must-credential-response-include-revocation-rotation-and-persistence-search)
+6. [How Do You Recover to a Trusted and Verified State?](#how-do-you-recover-to-a-trusted-and-verified-state)
+7. [What Makes an Incident Runbook Executable?](#what-makes-an-incident-runbook-executable)
+8. [What Does a Complete Incident Response Loop Look Like?](#what-does-a-complete-incident-response-loop-look-like)
+9. [Check Your Answers](#check-your-answers)
 
-## A Confirmed Suspicious Signal
-<!-- section-summary: A runbook turns incident response from improvised chat into a clear sequence of roles, evidence, actions, checks, and communication. -->
+Incident response begins when the organization believes harmful activity may require coordinated action. It rarely begins with complete truth. An alert provides evidence, not a fully proven story.
 
-The triage analyst has a confirmed suspicious signal. GitHub secret scanning found a production AWS deployment key in a branch, CloudTrail showed the key being used from an unfamiliar IP address, and no matching GitHub Actions workflow run explained the activity. That is enough to start incident response.
+The leaked deployment-credential case can have several explanations:
 
-**Incident response** is coordinated work during a security event. The team preserves evidence, limits damage, removes attacker access, restores trusted service, communicates status, and records decisions. It is part engineering, part investigation, and part calm coordination.
+- the key was exposed but never used;
+- an authorized deployment produced unusual logs;
+- an attacker used the key for discovery;
+- the attacker changed production or created persistence;
+- the telemetry is incomplete or misleading.
 
-A **runbook** is the written path for that work. It names the roles, the first checks, the containment steps, the verification steps, and the communication points. The runbook should be specific enough that an on-call engineer can act under pressure, while still leaving space for incident commander judgment when the facts change.
+Responders must act while deciding among them. Time changes the problem: sessions remain active, data can be copied, attackers create new credentials, short-lived processes disappear, logs roll over, and ordinary automation changes systems.
 
-NIST SP 800-61 Rev. 3 and CISA-style playbooks give DevSecOps teams useful structure for this moment. They connect response to preparation, trained roles, evidence handling, recovery paths, and follow-up that improves the system after the incident. That wider view matches how real teams operate under pressure.
+The objective is not merely to “fix the alert.” It is to:
 
-## The Running Incident
-<!-- section-summary: The leaked deployment key case now has enough evidence for a response bridge, a contained scope, and a first working theory. -->
+1. limit ongoing and future harm;
+2. understand affected identities, systems, data, and time;
+3. preserve enough evidence for reliable decisions;
+4. restore required service to a trustworthy state;
+5. communicate so independent actions do not conflict;
+6. learn enough to reduce recurrence and improve the next response.
 
-Our service is still `checkout-api`. The production deployment workflow uses a long-lived AWS access key stored in GitHub Actions secrets. A developer accidentally committed the key to a branch, and GitHub secret scanning opened an alert. CloudTrail later showed `GetCallerIdentity`, `ListBuckets`, and `ecr:GetAuthorizationToken` from an unfamiliar IP address.
+Keep these questions in view as you work through the lesson:
 
-At this moment, the response team has a **working theory**: a production deployment credential leaked through source control and was used outside the expected GitHub Actions deployment path. A working theory is a short explanation that guides the next checks. It must change when evidence changes.
+1. **Why Is Incident Response a Problem of Controlled Uncertainty?**
+2. **How Do Roles, Communication, and Decision Records Coordinate the Response?**
+3. **How Should Evidence Be Preserved While It Is Still Volatile?**
+4. **How Does Containment Break Attacker Capability?**
+5. **Why Must Credential Response Include Revocation, Rotation, and Persistence Search?**
+6. **How Do You Recover to a Trusted and Verified State?**
+7. **What Makes an Incident Runbook Executable?**
+8. **What Does a Complete Incident Response Loop Look Like?**
 
-The initial scope is also clear enough to act. The involved identity is `deploy-bot-prod`. The likely affected systems are GitHub, AWS IAM, ECR, Lambda deployment paths, CloudWatch Logs, and possibly any Kubernetes or runtime system that trusts the deployment pipeline. The first goal is to stop further use of the key while preserving the evidence needed to understand what happened.
+## Why Is Incident Response a Problem of Controlled Uncertainty?
+<!-- section-summary: Responders begin without complete truth while damage and evidence change over time, so the objective is to reduce harm and uncertainty without making recovery worse. -->
 
-The team should expect two workstreams to run at the same time. One workstream contains the threat by disabling or replacing access. The other workstream scopes impact by reading logs, checking deployments, and identifying touched resources. A runbook keeps those streams aligned.
+Actions can themselves cause damage. Revoking a production deployment key may stop an attacker and break recovery automation. Isolating a workload can preserve systems and interrupt customer payments. Restarting a compromised host can remove malicious processes and destroy volatile evidence.
 
-## Roles and Communication
-<!-- section-summary: Clear response roles reduce duplicate work because each person knows whether they are coordinating, investigating, changing systems, or communicating status. -->
+Response therefore balances urgency, impact, reversibility, evidence, and service. It prefers actions that break dangerous capability while preserving options.
 
-Response gets confusing fast when everyone tries to help in the same channel. A small incident can still involve security, platform, application, legal, support, and leadership. The first runbook step should assign roles so people know how to help.
+Detection remains a hypothesis input. Treat alert rule, source, confidence, and known gaps explicitly. Confirm the primary identity and asset, but do not wait for mathematical certainty while a high-authority session remains active.
 
-The **incident commander** owns coordination. This person tracks severity, decisions, owners, and the next checkpoint. A strong incident commander can be a coordinator with enough technical context to keep the response moving and enough discipline to stop side conversations from hiding important decisions.
+Severity allocates scarce resources under uncertainty. Impact and urgency differ. A large potential impact with an inactive expired credential may be serious but less time-critical than an active session changing production. Blast radius asks which accounts, repositories, clusters, artifacts, data sets, and customers could be reached.
 
-The **security investigator** owns evidence and scoping. This person pulls CloudTrail, GuardDuty, GitHub audit logs, secret scanning details, and runtime logs. They keep track of what is known, what is unknown, and which assumptions need proof.
+The initial declaration should be deliberately small and concrete: suspected production deployment credential misuse beginning at an approximate time, with current evidence and known potential scope. Avoid declaring a complete root cause before investigation. The name should help responders find the right systems without turning a hypothesis into fact.
 
-The **service owner** understands `checkout-api` and the deployment path. This person knows what normal deployment looks like, which releases are safe, which logs prove a successful recovery, and which customers or internal teams depend on the service.
+Time creates competing curves. Attacker opportunity can grow while credential access remains active. Evidence value can decay as containers terminate and logs rotate. Service risk can grow as the team freezes delivery or isolates components. Response decisions should make those curves visible instead of arguing only about whether compromise is “confirmed.”
 
-The **platform responder** makes controlled changes to shared systems. This can include IAM key deactivation, GitHub secret removal, workflow disabling, environment protection changes, or OIDC role setup. The platform responder should write every change into the decision log because response changes often happen outside the normal pull request rhythm.
+Uncertainty has categories. Scope uncertainty asks which systems and identities were touched. Cause uncertainty asks how access began. Impact uncertainty asks what was changed or disclosed. Control uncertainty asks whether containment and logging work. Different evidence and owners reduce each category.
 
-The **scribe** records the timeline, decisions, commands, links, and owners. In smaller teams, the incident commander may also scribe, but the role still matters. A good incident record reduces repeated questions and gives the post-incident review real evidence.
+The incident objective can change. During the first minutes it may be “stop new production changes while preserving identity evidence.” Later it may become “identify persistence and restore deployment through trusted OIDC.” A clear current objective prevents every responder from optimizing a different phase.
+
+Do not make service restoration the only objective. Restoring the same compromised key and mutable artifact can return availability while preserving attacker capability. Likewise, investigating indefinitely without containing an active credential privileges certainty over harm reduction. The commander balances both.
+
+Blast radius should include what the identity could do, what evidence shows it did, and what downstream access those actions created. Mark those sets separately. Potential access guides search and containment; observed access guides confirmed scope; absence of evidence remains conditional on telemetry coverage.
+
+Set a review cadence. During active containment, decisions may be revisited every few minutes. During recovery, the cadence can slow. Time-boxed checkpoints keep assumptions and owners current and give communications a predictable rhythm.
+
+## How Do Roles, Communication, and Decision Records Coordinate the Response?
+<!-- section-summary: Explicit command, technical, communication, and recording roles let people act in parallel while a shared log separates facts, hypotheses, decisions, and actions. -->
+
+Incidents need explicit roles because many people must act simultaneously. Without coordination, two responders can rotate the same secret differently, destroy evidence, make conflicting public statements, or assume someone else owns containment.
+
+An Incident Commander owns coordination and decision flow. The commander does not need to perform every technical action. They maintain objectives, assign work, track risk, resolve conflicts, and decide when the response changes phase.
+
+Other roles can include security investigation, platform or cloud response, application ownership, evidence collection, communications, and a scribe. One person may fill several roles in a small incident, but responsibilities should still be named.
 
 ![Response bridge infographic showing incident commander, security lead, platform responder, and scribe feeding a shared decision log](/content-assets/articles/article-devsecops-compliance-incident-readiness-incident-response-and-runbooks/response-bridge.png)
 
-_The role map keeps the response channel useful because each person owns a different part of coordination, investigation, change, or evidence capture._
+Communication is part of the control system. A clear channel tells responders what is known, which systems are frozen, which actions require approval, and what customers or executives have been told. Silence and fragmented side conversations create operational risk.
 
-## Severity and Decision Records
-<!-- section-summary: Severity guides urgency, while decision records explain what the team changed and why they changed it at that moment. -->
+Separate four record types:
 
-The leaked deployment key starts as a likely SEV2 because a production credential was exposed and used. The team has no confirmed customer data access yet, and there is no evidence of destructive change. The severity can rise if logs show data access, persistence, malware, or customer impact.
+- **Facts:** directly supported observations, such as “access key ending 4XYZ was disabled at 02:24 UTC.”
+- **Hypotheses:** possible explanations, such as “the key may have been copied from a repository.”
+- **Decisions:** chosen direction and reason, such as “freeze deployments because provenance cannot currently be trusted.”
+- **Actions:** completed or assigned work with actor, time, target, and result.
 
-Severity should drive response rhythm. A SEV2 may need a live bridge, a fifteen- or thirty-minute update cadence, service owner involvement, and leadership awareness. A SEV1 usually adds executive, legal, privacy, customer support, and possibly regulator-facing workflows depending on what data and jurisdictions are involved.
+This separation prevents a repeated hypothesis from turning into a false fact. It also lets later reviewers understand why a reasonable decision was made with the evidence available then.
 
-The **decision record** is the response team's memory. It should capture the time, decision, owner, evidence, and expected effect. Containment decisions can be disruptive. Disabling a production deploy key may pause emergency deployments, but leaving a used key active gives the attacker more time.
+Decision records should include alternatives and expected side effects. If the team delays revocation for five minutes to preserve service, record the dependency being protected, compensating restriction, owner, and stop condition. If it revokes immediately, record the recovery path.
 
-Here is a useful decision record shape:
+Internal and external communication differ. Technical responders need detailed identity and evidence. Customers may need verified impact, protective action, and updates without unconfirmed speculation or exposed security detail. Legal, privacy, and regulatory stakeholders may have notification obligations.
 
-| Time | Decision | Evidence | Owner | Verification |
-|---|---|---|---|---|
-| 22:18 UTC | Disable access key ending `7FQ9` | CloudTrail shows use from unfamiliar IP | Platform responder | `ListAccessKeys` shows key is inactive |
-| 22:22 UTC | Disable production deploy workflow temporarily | Workflow still references leaked key | Service owner | GitHub workflow status shows disabled |
-| 22:45 UTC | Replace deployment path with OIDC role | Static key cannot be trusted | Platform responder | Test deployment assumes scoped role |
-| 23:10 UTC | Keep severity at SEV2 | No data reads or resource changes found so far | Incident commander | Next scope check at 23:40 UTC |
+Communications can contain the incident by stopping risky operator activity: freeze deployments, prevent credential reuse, instruct teams not to restart affected systems, and direct all public statements through one path.
 
-The table is simple, and that is the point. During an incident, the decision log should be easy to scan. A future reviewer should be able to see the reasoning without hunting through chat history.
+The Incident Commander should maintain a concise situation view: current objective, severity, affected services, known active capabilities, containment status, top unknowns, workstreams, next decision time, and communication commitments. Technical detail remains linked in evidence records rather than overwhelming the coordination channel.
 
-## Evidence Preservation
-<!-- section-summary: Evidence preservation captures logs and metadata before containment or retention windows remove the details investigators need. -->
+The scribe records time from a normalized source. Chat order is not an incident timeline because messages arrive late and contain recollection. Every key event should carry event time, observation time, and action time when those differ.
 
-Evidence preservation means collecting and protecting the records that explain what happened. The team should do this before destructive cleanup where possible. For a credential incident, useful evidence includes the secret scanning alert, the commit metadata, GitHub audit events, workflow run logs, CloudTrail events, GuardDuty findings, IAM policy details, container registry events, deployment logs, and application access logs.
+Technical leads own investigation quality in their domain, but the commander decides priorities across domains. A cloud investigator may want more session data while the service owner needs a credential decision. Assign explicit deadlines and bring tradeoffs to command rather than allowing silent delay.
 
-The first evidence set should be narrow and fast. The analyst can export a two-hour CloudTrail window around the exposure, save the secret scanning alert URL and metadata, record the affected access key ID, and capture the current IAM policies attached to `deploy-bot-prod`. That gives the response team a stable snapshot before access changes.
+Use separate channels for command, technical investigation, and broad updates when the incident size warrants it. Important decisions must return to the shared log. Side conversations are useful for focused work but dangerous as the only location of scope or containment decisions.
 
-A CloudTrail lookup can create the first event bundle:
+Facts should cite evidence. “Key used at 02:01” should link to the protected audit record and identity. Hypotheses should name confidence and what would test them. Actions should include result, not just intent: “disable requested” differs from “authentication attempt verified denied.”
 
-```bash
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=AKIAEXAMPLEDEPLOYKEY \
-  --start-time 2026-06-22T20:30:00Z \
-  --end-time 2026-06-22T23:30:00Z \
-  --output json > evidence/cloudtrail-deploy-key-2026-06-22.json
+Severity changes should be decisions with reasons. Escalation may bring more responders and leadership attention; de-escalation may release scarce staff. Neither should happen merely because a timer elapsed or alert volume decreased.
+
+Communication must preserve confidentiality. Do not paste active secrets, customer records, or malicious payloads into the main channel. Share access-controlled references and redact only what is unnecessary for the responder's role.
+
+External statements should distinguish confirmed facts, current protective action, customer impact, and next update. Avoid promising a root cause or complete scope before evidence supports it. Trust improves when uncertainty is stated plainly and updates arrive when promised.
+
+## How Should Evidence Be Preserved While It Is Still Volatile?
+<!-- section-summary: Collect the most perishable high-value evidence first, preserve it outside potentially compromised systems, and record provenance and handling so later conclusions remain trustworthy. -->
+
+Evidence preservation supports scope, containment, recovery, and later learning. It should begin early because some evidence disappears quickly.
+
+Volatility helps determine collection priority:
+
+```text
+running processes, memory, active sessions, network connections
+  -> short-lived workload and node state
+  -> centralized identity, cloud, cluster, and pipeline logs
+  -> durable artifacts, source history, and configuration
 ```
 
-`AccessKeyId` ties the export to the leaked credential. The three-hour window includes the secret exposure, the first suspicious cloud calls, and the containment decision. `--output json` keeps the event bundle machine-readable, so the investigator can later filter by source IP, user agent, API name, and Region without rerunning the original search.
+The exact order depends on risk. An active attacker may justify immediate revocation even if it ends a session that responders wanted to inspect. The runbook should name these tradeoffs.
 
-The team should store evidence in a controlled location, such as an incident bucket or case system with restricted access. The storage should have write-once or versioned behavior when available, because responders need confidence that the records were not quietly edited. The incident record should also avoid pasting secret values into chat or tickets.
+For the deployment-key incident, preserve:
 
-Evidence collection should include permissions, because blast radius depends on what the key could do. For an IAM user, that means attached managed policies, inline policies, group memberships, access key metadata, and recent CloudTrail activity. If the identity can assume roles, the trust and permission path matters too.
+- the original alert and raw events;
+- identity issuance and use records;
+- cloud and Kubernetes audit logs;
+- pipeline run, approval, runner, and source-revision data;
+- artifact digests, signatures, and provenance;
+- current workload manifests and runtime inventory;
+- process, network, and filesystem observations where safe;
+- relevant repository and secret-scanning history;
+- decision and action timestamps.
 
-```bash
-aws iam list-attached-user-policies --user-name deploy-bot-prod
-aws iam list-user-policies --user-name deploy-bot-prod
-aws iam list-groups-for-user --user-name deploy-bot-prod
-aws iam list-access-keys --user-name deploy-bot-prod
+Do not trust a compromised system as the only evidence source. An attacker can modify local logs, timestamps, binaries, and configuration. Prefer protected external logs, control-plane records, immutable artifacts, snapshots, or collection through a trusted responder path.
+
+Evidence collection must not spread the incident. Do not copy malware or credentials into ordinary tickets and chat. Use protected storage, restrict readers, and record hashes or immutable identifiers.
+
+Chain of custody records what was collected, from where, by whom, when, how, where it was stored, and any transformation. This supports legal or regulatory use and everyday technical reliability. A later analyst can distinguish an original log export from a filtered summary.
+
+Preserve negative context too. The absence of a matching deployment approval or expected workflow run can be significant, but record how and where the search was performed. “No record exists” is stronger when coverage and retention are known.
+
+Collection needs stop conditions. Imaging every system can delay containment and overwhelm responders. Prioritize evidence that changes decisions about attacker access, scope, persistence, data impact, and trusted recovery.
+
+For active cloud sessions, collect issuance, assumed role, session name, source, user agent, actions, resources, regions, and error responses. An attacker may probe multiple regions or services. Search using stable credential or session identifiers rather than one IP alone.
+
+Pipeline evidence should include workflow definitions at the relevant revision, triggering event, actor, runner identity, inputs, secret access, logs, produced artifact digests, approvals, and deployment result. Preserve the definition before a repair commit changes what later viewers see.
+
+Kubernetes evidence can include audit records, object histories where available, current manifests, Pod status, image digests, Service Account bindings, exec events, admission decisions, and runtime alerts. A recreated Pod may have the same name but a different UID; retain immutable identifiers.
+
+Volatile runtime collection has risk. Executing commands inside a compromised container can change timestamps, processes, network behavior, and attacker awareness. Decide whether the expected evidence value exceeds that cost. Use node or platform telemetry when it provides a safer view.
+
+Snapshots preserve state but can preserve secrets and personal data too. Label sensitivity, restrict access, define retention, and verify snapshot integrity. A snapshot that nobody can decrypt during recovery is not useful; a snapshot broadly shared creates a second incident.
+
+Hash exported files and record collection tooling or queries. If a log export is later filtered or converted, keep the original and document the derived file. This supports repeatable analysis without requiring every reviewer to trust one analyst's summary.
+
+Evidence gaps are findings. If the team cannot determine which artifact a pipeline deployed or which Service Account a Pod used, record the architecture gap for hardening. During response, state how the gap affects confidence and choose containment accordingly.
+
+Protect the evidence store and access logs. An attacker using a production role should not be able to delete the only cloud audit copy or alter the decision record. Response identities should be independent from suspected application and delivery identities.
+
+## How Does Containment Break Attacker Capability?
+<!-- section-summary: Containment reduces the attacker's ability to authenticate, execute, communicate, persist, or affect data while balancing availability, evidence, and reversibility. -->
+
+Containment is not a generic instruction to “lock things down.” It should break a specific attacker capability:
+
+```text
+credential -> authenticate
+network path -> reach target
+permission -> perform action
+process -> execute
+artifact or workload -> persist
 ```
 
-These commands give the investigator a permission inventory that the response team can use while deciding containment and scoping. Attached policies show managed permissions, inline policies show custom permissions, group membership can add inherited access, and access-key metadata shows which keys exist and whether they are active. The full incident still needs timeline review, impact checks, and recovery verification.
+Possible actions include disabling the exposed key, revoking sessions, restricting the deployment role, freezing related pipelines, quarantining an artifact digest, isolating a workload's network, blocking a source, or preventing changes to affected resources.
 
-## Containment
-<!-- section-summary: Containment stops the attacker path while preserving enough service capability for recovery and investigation. -->
+Choose the smallest action that reliably stops harm, then expand as scope becomes clearer. A narrow key revocation can be better than disabling an entire cloud account. If one pipeline is suspect, freeze it without stopping unrelated delivery unless shared infrastructure makes the scope broader.
 
-**Containment** is the work that stops the suspicious access path from continuing. In this incident, the exposed key is the immediate path. The team should deactivate the key, stop workflows that still depend on it, and remove the secret from GitHub so future jobs cannot use it accidentally.
+Containment can be temporary. A network isolation rule buys investigation time. A deployment freeze prevents the attacker or responders from changing evidence. Temporary controls need owners, monitoring, and explicit exit conditions.
 
-The safest first AWS action is usually key deactivation. Deactivation stops API calls that use the key while keeping the key record available for investigation. Deletion can come later after the team finishes evidence collection and verifies the replacement path.
+Containment should account for attacker adaptation. Disabling one key is insufficient if the actor created another key, assumed a role with a live session, installed a workflow token, changed an identity provider, or deployed a persistent workload.
 
-```bash
-aws iam update-access-key \
-  --user-name deploy-bot-prod \
-  --access-key-id AKIAEXAMPLEDEPLOYKEY \
-  --status Inactive
+The action may affect production. Before disabling a key, identify what uses it, how the service continues, and whether an alternative trusted path exists. When time is critical, accept some disruption but record the decision and recovery steps.
 
-aws iam list-access-keys --user-name deploy-bot-prod
-```
+Avoid performing containment through the suspected compromised identity or host. Use an independent trusted administrative path. Otherwise an attacker may observe, block, or imitate responder actions.
 
-`update-access-key` changes the known leaked key to `Inactive`, which blocks new API calls that use it. `list-access-keys` should then show the same key ID with `Status` set to `Inactive`. The team keeps the key record for investigation until the evidence review is complete.
+Verification is part of containment. Confirm the key is rejected, active sessions are invalidated or bounded, the pipeline cannot deploy, the quarantined digest cannot start, and network restrictions apply. Configuration changes alone do not prove capability ended.
 
-The GitHub side should remove the stored secret and pause the workflow that expects it. This prevents the next deployment run from failing in a confusing way or reintroducing a replacement static key under pressure.
+Containment strategies can target identity, execution, communication, data, or deployment. Identity containment revokes keys and sessions. Execution containment stops or isolates workloads. Communication containment blocks network edges. Data containment removes write access or freezes destructive operations. Deployment containment prevents new untrusted state. Combining layers is useful when one mechanism is uncertain.
 
-```bash
-gh secret delete AWS_ACCESS_KEY_ID --repo devpolaris/checkout-api
-gh secret delete AWS_SECRET_ACCESS_KEY --repo devpolaris/checkout-api
-gh workflow disable deploy-production.yml --repo devpolaris/checkout-api
-```
+Sequence matters. Preserve high-value volatile evidence, prepare a trusted responder identity, then revoke the suspected credential. If revocation automatically triggers destructive cleanup or prevents audit access, establish alternatives first. In active destructive behavior, skip lower-value collection and stop capability immediately.
 
-The two `gh secret delete` commands remove the stored AWS key names from the repository. `gh workflow disable` pauses the production deployment workflow that still expects those static secrets. A responder should verify the result with `gh secret list` and `gh workflow list` before marking containment complete.
+Containment should be resistant to the attacker. If the same role can reverse a network block or create a new key, reduce that role's authorization or use an outer organization-level control. Monitor attempts to undo the containment.
 
-Containment also includes checking for persistence. The attacker may have created a new access key, added an IAM policy, changed a role trust policy, created a GitHub deploy key, altered a workflow file, or added a new Kubernetes secret. The response team should search for changes made by `deploy-bot-prod` and by any related GitHub actor around the same time window.
+Quarantining an image digest prevents redeployment of known suspect bytes, but already running copies may continue. Isolate or replace them according to evidence needs. Quarantining a mutable tag is weaker because the artifact identity can move.
 
-The containment step should end with a clear statement: the known leaked key is inactive, the workflow using it is disabled, no replacement static key has been created, and the team is searching for secondary access paths. If any of those statements fails, the incident stays in active containment.
+Freezing deployments protects provenance during investigation but can block emergency fixes. Define who may authorize a trusted emergency deployment, which pipeline and artifact evidence it needs, and how the exception is recorded. Do not reopen the suspected workflow casually.
 
-The responder can turn that statement into evidence with a short verification bundle. The bundle keeps containment tied to records instead of chat memory.
+Containment has human edges. Inform operators not to rotate the same key independently, restart affected Pods, or clean up repository history before evidence capture. Central coordination prevents well-intentioned actions from destroying scope evidence.
 
-```bash
-CASE_ID="IR-2026-0622-checkout-api"
-REPO="devpolaris/checkout-api"
-USER_NAME="deploy-bot-prod"
-ACCESS_KEY_ID="AKIAEXAMPLEDEPLOYKEY"
+Record residual capability after each action. A disabled key may leave sessions. Network isolation may leave local data access. A stopped Pod may leave attacker-created cloud resources. Containment is complete only when remaining paths are known and accepted for the next phase.
 
-mkdir -p "evidence/$CASE_ID/containment"
+## Why Must Credential Response Include Revocation, Rotation, and Persistence Search?
+<!-- section-summary: Replacing a secret does not invalidate old sessions or attacker-created access, so responders must revoke, rotate dependencies safely, and search the full authority graph for persistence. -->
 
-aws iam list-access-keys \
-  --user-name "$USER_NAME" \
-  > "evidence/$CASE_ID/containment/access-keys-after-disable.json"
+Credential rotation is more complicated than changing a password. A credential can have active sessions, derived tokens, cached copies, replicas, dependent services, and authority to create replacements.
 
-aws iam get-access-key-last-used \
-  --access-key-id "$ACCESS_KEY_ID" \
-  > "evidence/$CASE_ID/containment/access-key-last-used.json"
+Revocation comes before or alongside replacement because issuing a new credential does not make the old one stop working. Disable the exposed access key, revoke or expire sessions where the platform permits, remove it from CI and Secret stores, and confirm authentication fails.
 
-gh secret list \
-  --repo "$REPO" \
-  > "evidence/$CASE_ID/containment/github-actions-secrets-after-delete.txt"
+Then create or enable the replacement through a trusted path. Update legitimate consumers, verify service, and remove the transitional credential. Do not leave both active indefinitely because migration was successful.
 
-gh workflow list \
-  --repo "$REPO" \
-  > "evidence/$CASE_ID/containment/github-workflows-after-pause.txt"
-```
+Search for persistence:
 
-The incident commander can attach these files to the case and write one sentence: "The exposed key is inactive, the old GitHub secrets are absent, and the production workflow is paused while replacement credentials are tested." The evidence makes that sentence reviewable.
+- new access keys, tokens, certificates, or SSH keys;
+- new users, roles, groups, bindings, or trust relationships;
+- changed identity-provider or OIDC configuration;
+- new workflows, runners, webhooks, or repository deploy keys;
+- changed cloud functions, scheduled tasks, images, workloads, or startup configuration;
+- disabled logging or monitoring;
+- altered recovery or backup controls.
 
-## Credential Rotation
-<!-- section-summary: Rotation replaces the unsafe access path with a trusted path, and modern deployment workflows should move from long-lived keys to short-lived OIDC sessions. -->
+Assume the attacker may have used the original authority to create another path. Search the whole permission and activity graph, not only the credential record.
 
-**Credential rotation** means replacing secret material that may have been exposed. For static access keys, rotation often means creating a new key, updating consumers, verifying the new key, and deleting the old key. During a confirmed exposure, the team should prefer removing the static-key pattern entirely when the platform supports it.
-
-For GitHub Actions deploying to AWS, **OpenID Connect**, usually shortened to OIDC, is the better deployment path. OIDC lets a workflow request a short-lived identity token from GitHub. AWS trusts that token through an IAM role, and AWS STS returns temporary credentials for that one job. The workflow receives credentials for minutes or hours instead of storing a long-lived key in GitHub secrets.
-
-A production workflow shape can look like this:
-
-```yaml
-name: deploy-production
-
-on:
-  workflow_dispatch:
-
-permissions:
-  id-token: write
-  contents: read
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: arn:aws:iam::123456789012:role/checkout-api-production-deploy
-          aws-region: us-east-1
-      - run: ./scripts/deploy-production.sh
-```
-
-The `id-token: write` permission is important because GitHub only issues the OIDC token to jobs that request that permission. The AWS role trust policy then checks which repository, branch, or environment is allowed to assume the role. The production environment gives the workflow an approval boundary before the role can be used.
-
-The rotation plan should also narrow permissions. The old key may have broad rights because it grew over time. The new role should start with the actions the deployment actually needs, such as pushing to one ECR repository, updating one Lambda function or ECS service, and reading only the logs needed for verification.
-
-## Recovery and Verification
-<!-- section-summary: Recovery restores the deployment path only after containment, replacement credentials, and service checks prove the system is trusted again. -->
-
-**Recovery** means returning the service and deployment process to a trusted operating state. For `checkout-api`, recovery is more than turning the workflow back on. The team needs to prove the new deployment path works, the old key cannot be used, the deployed artifact is expected, and no suspicious changes remain.
-
-The service owner should verify the production application first. That includes health checks, error rates, latency, authentication behavior, recent deployment version, and customer-facing workflows. If the attacker had permission to update code or images, the team should compare the running artifact digest or Lambda version with the expected release artifact.
-
-The platform responder should verify the credential path:
-
-```bash
-aws iam get-access-key-last-used --access-key-id AKIAEXAMPLEDEPLOYKEY
-aws iam list-access-keys --user-name deploy-bot-prod
-aws sts get-caller-identity
-```
-
-The first command helps check the last recorded use of the old key. The second confirms the key status. The third should be run inside the recovered workflow or deployment environment. A healthy result should show the assumed role ARN for `checkout-api-production-deploy`, which proves the job is using the intended role identity instead of a leftover static key.
-
-The team should run one controlled deployment through the new path. A small no-op or safe patch release is useful because it tests GitHub environment approval, OIDC token issuance, AWS role assumption, deployment permissions, and post-deploy verification. The run ID, commit SHA, role session name, and CloudTrail events should go into the incident record.
-
-Recovery also includes monitoring after the change. The team can keep temporary high-signal alerts active for the next 24 to 72 hours: any use attempt for the old access key, any `deploy-bot-prod` activity, any failed `AssumeRoleWithWebIdentity`, any production deploy outside the environment path, and any data access from the unfamiliar IP.
+Prefer replacing long-lived deployment keys with workload identity and short-lived sessions during hardening, but do not redesign the entire platform during unstable containment unless required. First restore trustworthy operation; then complete durable architecture change through controlled work.
 
 ![Contain rotate recover infographic showing evidence preservation, key deactivation, secret removal, OIDC role migration, and deploy verification](/content-assets/articles/article-devsecops-compliance-incident-readiness-incident-response-and-runbooks/contain-rotate-recover.png)
 
-_The path shows why containment and recovery belong together: the unsafe key leaves, the trusted deployment path replaces it, and verification proves the service can operate again._
+Credential response should include downstream secrets the compromised identity could read. If the deployment role accessed a database password or registry token, assume exposure until evidence and architecture support a narrower conclusion. Rotate in dependency order so services remain manageable.
 
-## Communication
-<!-- section-summary: Incident communication gives each audience the right facts, uncertainty, owner, and next update without exposing secrets or speculation. -->
+Inventory credential forms before rotation: access key pairs, temporary role sessions, personal tokens, deploy keys, signing keys, registry credentials, Kubernetes tokens, database passwords, certificates, and secrets copied into applications. The exposed key may only be the first visible link.
 
-Communication during incident response should be factual and audience-specific. Engineers need commands, logs, owners, and decisions. Leaders need severity, user impact, risk, timeline, and next update time. Support teams need customer-facing status if customers may notice an effect. Legal and privacy teams need early awareness if sensitive data may have been accessed.
+Revocation semantics differ. Disabling a long-lived access key can be immediate for new requests, while previously issued temporary sessions may remain valid. Changing a password may not terminate existing connections. Rotating a signing key requires verifiers to distrust the old issuer where appropriate. The runbook should know each platform's behavior.
 
-For the running case, an internal update could say that a production deployment credential was exposed in source control, suspicious cloud API calls were observed, the key has been deactivated, the production deploy workflow is temporarily paused, and scoping is underway. That update gives real facts without publishing secret values or naming an attacker before the team has evidence.
+Dependency mapping prevents accidental lockout. Identify every legitimate consumer, but do not trust configuration inventory alone; compare recent usage and owner confirmation. Unknown use is evidence of architecture debt and may justify a staged restriction with close monitoring.
 
-A useful update format is:
+Use a replacement generated and delivered through a trusted system. If the original CI environment may be compromised, creating the new key there repeats the exposure. Prefer a different protected runner or workload-identity path with independently verified configuration.
 
-```markdown
-Incident: checkout-api leaked deployment credential
-Severity: SEV2
-Current status: Contained known key, scoping for secondary access and impact
-Customer impact: No confirmed customer impact at this checkpoint
-Actions completed: Key deactivated, GitHub secrets removed, workflow paused, CloudTrail evidence preserved
-Current work: IAM change review, deployment artifact verification, OIDC replacement path
-Next update: 23:30 UTC
-```
+Rotate high-risk downstream credentials the attacker could obtain, not every organizational secret indiscriminately. Broad emergency rotation can overwhelm teams, cause outages, and hide which values were actually secured. Prioritize by reachable authority and evidence.
 
-External communication requires extra care. A team should involve legal, privacy, communications, and customer support before sending customer-facing statements. The response channel can prepare the facts, but notification obligations depend on data type, contract terms, jurisdiction, and confirmed impact.
+Persistence search should include trust policies and policy attachments, not only credential objects. An attacker can grant an existing identity new permission, add itself to a group, alter an OIDC subject condition, or create a workload that continually obtains fresh tokens.
 
-## A Runbook Shape
-<!-- section-summary: A practical runbook names triggers, owners, containment actions, recovery checks, communication points, and exit criteria. -->
+Continue watching the old identity after revocation. Authentication attempts can reveal attacker persistence or automation that still holds the value. Alert on use of replacement credentials from unexpected sources as well, because migration can expose them.
 
-A runbook should be short enough to use during pressure and specific enough to avoid guesswork. For a leaked deployment credential, the runbook can be written around the exact systems involved: GitHub, AWS IAM, CloudTrail, GuardDuty, deployment workflows, and the application runtime.
+Document completed lineage: compromised credential, sessions issued, resources reached, new access created, replacements delivered, old access invalidated, and evidence of denial. This lets recovery and post-incident work verify that every branch closed.
 
-Here is a production-ready shape the team could keep in the incident repository or response platform:
+## How Do You Recover to a Trusted and Verified State?
+<!-- section-summary: Recovery restores service from known-good source, artifacts, identities, and configuration, then verifies absence of persistence and correct behavior before restrictions are removed. -->
 
-```markdown
-# Runbook: Leaked Deployment Credential
+Recovery is not “turn everything back on.” It establishes a trustworthy operating state after containment.
 
-## Trigger
-- Secret scanning alert for a production deployment credential
-- CloudTrail or SIEM evidence that the credential was used outside expected automation
-- Manual report that a deployment secret appeared in source, logs, chat, or an artifact
+Prefer rebuilding over repairing compromised infrastructure. A host or container changed by an attacker can retain hidden persistence. Recreate from reviewed source, known-good images, controlled infrastructure definitions, and newly trusted credentials.
 
-## First roles
-- Incident commander
-- Security investigator
-- Service owner
-- Platform responder
-- Scribe
+For the Payments Portal:
 
-## First evidence
-- Secret scanning alert metadata
-- Commit, branch, actor, and file path
-- CloudTrail events for the access key or role session
-- GitHub audit events and workflow runs
-- Current IAM permissions and key metadata
+1. confirm the reviewed source revision;
+2. verify or rebuild the artifact in a protected pipeline;
+3. publish and approve a new immutable digest;
+4. repair deployment identity and remove exposed static material;
+5. redeploy through the trusted path;
+6. verify workloads, configuration, network, and identities;
+7. monitor for repeated suspicious behavior;
+8. restore paused delivery only after exit criteria pass.
 
-## Containment
-- Deactivate the exposed access key
-- Remove GitHub secrets that store the key
-- Disable workflows that still require the static key
-- Search for new keys, policy changes, deploy keys, workflow changes, and role trust changes
+Verification should be adversarial. Do not ask only whether customer requests succeed. Ask whether old credentials fail, unauthorized sessions are gone, unexpected roles or workloads are absent, the deployed digest matches evidence, logging works, and negative security tests pass.
 
-## Recovery
-- Replace static key use with an OIDC role or another short-lived credential path
-- Run a controlled deployment through the trusted path
-- Verify service health, deployed artifact identity, and CloudTrail role session events
-- Keep temporary detections for old-key use and unusual deployment actions
+Recovery may expose architectural weakness: missing artifact retention, unknown key consumers, manual infrastructure, no identity inventory, unreliable backups, or inability to trace a deployment to source. Record these as hardening work rather than hiding them with heroic manual repair.
 
-## Exit criteria
-- Known leaked key is inactive or deleted after evidence preservation
-- No unexplained production changes remain
-- Deployment path works through trusted short-lived credentials
-- Impact assessment is documented
-- Post-incident hardening actions have owners and dates
-```
+Exit criteria define when the incident can leave active response. They can include contained attacker capability, known scope with acceptable uncertainty, restored critical service, rotated or revoked credentials, trusted artifact and infrastructure, preserved evidence, active monitoring, assigned follow-up work, and communication completed.
 
-The runbook gives responders a safe default path while preserving room for judgment. During a real incident, the incident commander can skip, add, or reorder steps when the evidence demands it, and every change should land in the decision record.
+An incident is not over merely because alerts stop. The attacker may be quiet, telemetry may be impaired, or containment may have suppressed the signal. Verify control health and run targeted searches through an observation window.
 
-## Putting It All Together
-<!-- section-summary: Response succeeds when the team coordinates roles, preserves evidence, contains access, restores trust, and records every important decision. -->
+Known-good reconstruction depends on retained inputs. Source revision, dependency locks, base image digest, build environment, infrastructure configuration, policy, and deployment record should all be available. If the original artifact is trustworthy and retained, redeploying the same digest can be safer than an uncontrolled rebuild; if build integrity is in doubt, rebuild through a repaired trusted path and create new provenance.
 
-The leaked deployment key started as a triage case and turned into a response because the evidence showed real use. The runbook gave the team a path: assign roles, set severity, preserve logs, deactivate the key, remove GitHub secrets, pause the unsafe workflow, replace the credential path, verify recovery, and communicate status.
+Eradication removes attacker-created state and the exploited access path. Delete unauthorized identities, workloads, keys, webhooks, scheduled actions, and changed configuration after preserving evidence. Repair the source, workflow, runner, or trust policy that allowed the compromise. Removing only visible malware without closing the entry path invites recurrence.
 
-This flow is practical DevSecOps work. It connects security evidence to engineering action. It respects production risk because containment can affect deployments, and it respects investigation quality because evidence can disappear after cleanup.
+Recovery order should protect dependencies. Restore identity and logging before enabling deployment. Restore core service with minimal traffic, validate data integrity, then expand. Keep temporary containment until the replacement path has proven normal behavior.
 
-The strongest response habit is to keep every important action tied to evidence and verification. If the key was disabled, the team records the command and confirms the key state. If the workflow moved to OIDC, the team records the run ID and confirms the CloudTrail role session. If severity stays at SEV2, the team records why the current evidence supports that decision.
+Data verification may require comparing protected records, transaction histories, backups, or external systems. A healthy API response does not prove the attacker did not alter data. Identify authoritative sources and reconciliation procedures before declaring integrity restored.
+
+Backups are useful only if they predate malicious change, can be restored, and do not reintroduce compromised identities or configuration. Test restore in an isolated environment, scan recovered artifacts, and apply repaired access controls before reconnecting production.
+
+Monitor the recovery for old indicators and new anomalies. Compare process, identity, network, deployment, and business behavior with the baseline. An attacker may wait for services to return or use a persistence path missed during initial scope.
+
+Exit criteria should have evidence and owners. “Keys rotated” should identify each key and denial test. “Systems clean” should identify reconstruction source and verification. “Logging restored” should show fresh records arriving. This keeps closure from depending on optimistic language.
+
+After active response, transfer unresolved uncertainty and hardening actions formally. Some questions may remain unanswerable because evidence never existed. Record the limitation, residual risk, and owner rather than keeping the incident open indefinitely or pretending certainty.
+
+## What Makes an Incident Runbook Executable?
+<!-- section-summary: A runbook precomputes roles, evidence, decision points, containment, investigation, recovery, exit criteria, stop conditions, and communication without pretending human judgment can be replaced by one script. -->
+
+Runbooks exist because humans perform worse under stress and similar incidents recur. They preserve reasoning before the incident consumes attention.
+
+A runbook is not a shell script. It can contain automation, but it must also describe decisions, dependencies, risk, and escalation. A command such as “delete the key” is unsafe without identifying the key, consumers, evidence needs, rollback, and verification.
+
+A useful shape is:
+
+1. **Trigger:** which alert or condition starts the runbook, and what may be false?
+2. **First roles:** Incident Commander, investigator, platform responder, service owner, scribe, and communications.
+3. **First evidence:** identity, audit, pipeline, artifact, workload, network, and repository records.
+4. **Containment:** capability-focused options, authority, side effects, and verification.
+5. **Investigation:** scope, timeline, persistence, data impact, and hypotheses.
+6. **Recovery:** trusted rebuild, credential migration, service validation, and monitoring.
+7. **Exit criteria:** conditions for containment, recovery, closure, and follow-up.
 
 ![Runbook shape infographic showing trigger, roles, evidence, containment, recovery, and exit criteria between alert and trusted state](/content-assets/articles/article-devsecops-compliance-incident-readiness-incident-response-and-runbooks/runbook-shape.png)
 
-_The summary runbook gives responders a safe default path while still leaving room for evidence-driven judgment during the incident._
+Runbooks need stop conditions. Examples: stop evidence collection and revoke immediately if destructive activity continues; stop a rotation if the only trusted recovery path would be lost; stop automated isolation if it affects an unrelated safety-critical service; escalate when scope exceeds the incident team's authority.
 
-## What's Next
-<!-- section-summary: The next article uses the same incident record to turn recovery lessons into durable controls, detections, reviews, and practice. -->
+Include decision records and communications. State who can freeze production, revoke identities, contact external providers, authorize customer messaging, or accept temporary service disruption.
 
-Recovery closes the urgent part of the incident. The same incident still showed weaknesses in credential design, secret prevention, deployment permissions, log correlation, and response readiness. The team turns those weaknesses into the hardening backlog.
+Automation is best for repeatable bounded actions: collect identified logs, snapshot configuration, disable one key, isolate one workload, open a case, or verify a known condition. Human judgment remains necessary for scope, proportionality, legal impact, uncertain evidence, and competing service risk.
 
-The next article turns the incident record into hardening work. We will take the timeline, root causes, and decisions from this leaked deployment key case and convert them into preventive controls, detection rules, access reviews, verification checks, and tabletop practice.
+The runbook should be executable by someone who did not write it. Use clear prerequisites, safe commands or interfaces, expected outputs, failure paths, ownership, and verification. Avoid undocumented tribal knowledge.
 
-## References
+Triggers should include both event and threshold. “Secret scanner finds a cloud key in a repository reachable by others” is clearer than “credential issue.” State when to begin triage, when to declare an incident, and when active use or production scope requires immediate containment.
 
-- [NIST SP 800-61 Rev. 3: Incident Response Recommendations and Considerations for Cybersecurity Risk Management](https://csrc.nist.gov/pubs/sp/800/61/r3/final) - Provides current NIST incident response recommendations aligned with CSF 2.0.
-- [NIST Cybersecurity Framework 2.0](https://www.nist.gov/cyberframework) - Organizes incident work across Detect, Respond, and Recover outcomes.
-- [CISA Federal Government Cybersecurity Incident and Vulnerability Response Playbooks](https://www.cisa.gov/resources-tools/resources/federal-government-cybersecurity-incident-and-vulnerability-response-playbooks) - Describes standardized incident and vulnerability response procedures.
-- [AWS CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Documents AWS account activity records and event history.
-- [Manage access keys for IAM users](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html) - Explains IAM access keys, monitoring recommendations, and key management.
-- [Temporary security credentials in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html) - Explains AWS STS temporary credentials.
-- [Configuring OpenID Connect in Amazon Web Services](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) - Shows how GitHub Actions can access AWS through OIDC without long-lived AWS secrets.
-- [GitHub secret scanning REST API](https://docs.github.com/en/rest/secret-scanning/secret-scanning) - Documents API workflows for retrieving and updating secret scanning alerts.
-- [Amazon GuardDuty User Guide](https://docs.aws.amazon.com/guardduty/latest/ug/what-is-guardduty.html) - Describes AWS threat detection signals used during response.
+The first evidence list should be bounded and ordered. Name exact log systems and queries, identity identifiers, pipeline records, artifact evidence, and current configuration. Include how to preserve them and whom to call when access fails.
+
+Containment steps should offer branches. If the credential has no active legitimate use, revoke immediately. If it is the only production path, freeze its permission, prepare a trusted replacement, and use a time-bounded decision checkpoint. Branches encode real operational constraints without turning into vague judgment.
+
+Investigation questions should follow capability: who could read the credential, where it was used, which actions succeeded, what those actions could create, what data was reachable, which persistence paths exist, and what evidence is missing. A generic instruction to “check logs” is not enough.
+
+Recovery steps should name authoritative sources and verification. Rebuild from identified configuration, deploy a digest with known provenance, restore secrets through a trusted path, reconcile data, and test old credentials and unauthorized artifacts negatively.
+
+Stop conditions protect against automation running past uncertainty. A collection script should stop if it changes the target or exposes secrets. An isolation workflow should stop if it affects safety-critical dependencies. A rotation workflow should stop if the replacement is unverified and revocation would eliminate all recovery access.
+
+Runbooks need version, owner, last exercise, supported environments, required permissions, and linked systems. A correct procedure for an old cloud account or renamed pipeline can be worse than no procedure under pressure.
+
+After every use, compare the documented path with what responders actually did. Missing steps can indicate improvisation, environment drift, or a better method. Update and retest rather than appending an unstructured incident narrative.
+
+## What Does a Complete Incident Response Loop Look Like?
+<!-- section-summary: The complete loop moves from evidence through coordination, containment, scope, trusted recovery, verification, communication, and learning, while practiced runbooks surround and improve every phase. -->
+
+Tabletop exercises test the runbook without waiting for a real compromise. Present a production key found in a repository and used from an unusual source. Ask who declares the incident, what evidence is collected first, whether the key is revoked immediately, which systems it can reach, how deployment continues, and who communicates.
+
+Exercises reveal missing contacts, permissions, logs, backups, artifact history, revocation APIs, and decision authority. Update the runbook and architecture after each exercise.
+
+Incident response is an architectural quality. Compare two systems:
+
+```text
+System A
+  manual deployment
+  long-lived shared keys
+  mutable artifacts
+  local short-lived logs
+  unknown ownership
+
+System B
+  protected automated deployment
+  short-lived workload identity
+  immutable traceable artifacts
+  centralized audit and runtime evidence
+  tested recovery and named owners
+```
+
+System B is not immune to incidents. It is easier to investigate, contain, rebuild, and verify. Observability and identity architecture become security infrastructure.
+
+The response loop is:
+
+```text
+detect evidence
+  -> declare and coordinate
+  -> preserve volatile evidence
+  -> contain attacker capability
+  -> investigate scope and persistence
+  -> eradicate compromised access and state
+  -> recover from known-good sources
+  -> verify adversarially
+  -> communicate and close
+  -> harden systems and runbooks
+```
+
+The runbook surrounds the loop with prepared roles, evidence paths, decisions, safe actions, stop conditions, and exit criteria.
+
+Eight constraints explain why this structure exists:
+
+1. Complete truth is not initially available.
+2. Damage may increase with time.
+3. Response actions can create damage.
+4. Many people must act simultaneously.
+5. Evidence disappears.
+6. Compromised systems cannot be fully trusted.
+7. Humans perform worse under stress.
+8. Similar failures recur.
+
+The deepest model is controlled learning under pressure: reduce harmful capability and uncertainty fast enough to protect the organization, while preserving enough trustworthy evidence and coordination to recover correctly.
+
+The complete loop needs prepared authority. Responders must be able to read protected logs, revoke identities, freeze deployment, isolate workloads, quarantine artifacts, access backups, and communicate without using the suspected credential. Test this access regularly and keep it outside ordinary application roles.
+
+Observability quality determines which decisions are possible. If the team can link identity session to workflow, artifact, deployment, process, network, and data action, scope can be precise. If those links are missing, containment must be broader and recovery less certain. Investing in evidence before an incident reduces both harm and downtime.
+
+Identity architecture likewise determines containment cost. A dedicated short-lived deployment identity can be revoked without affecting unrelated services. A shared long-lived administrator key forces a choice between continued attacker access and widespread outage. Least privilege is incident-response design.
+
+Artifact and infrastructure immutability determine recovery quality. A retained signed digest and declarative environment can be reconstructed and compared. A manually modified server with an unknown binary must be repaired through guesswork or replaced with more disruption.
+
+Tabletops should vary assumptions: the key is exposed but unused; active destructive API calls continue; audit logging is missing; the pipeline is compromised; customer data may be affected; the identity is shared by several services. Different branches reveal whether the runbook contains reasoning rather than one happy path.
+
+Measure response capabilities: time to declare, time to preserve key evidence, time to break attacker capability, time to establish scope, time to recover trusted service, completeness of decision records, and follow-up completion. Do not optimize one timer by skipping evidence or verification.
+
+Finally, practice communication failures. The service owner may be unavailable, an external provider may respond slowly, or customer updates may be required before complete scope. Delegates, contact paths, preapproved language, and decision authority make the control system resilient to human absence.
+
+## Check Your Answers
+
+:::expand[Why Is Incident Response a Problem of Controlled Uncertainty?]{kind="recap"}
+Responders begin with incomplete truth while damage and evidence change over time, so they must reduce harm and uncertainty without destroying recovery options.
+:::
+
+:::expand[How Do Roles, Communication, and Decision Records Coordinate the Response?]{kind="recap"}
+Named command, technical, communication, and recording roles coordinate parallel work, while facts, hypotheses, decisions, and actions remain explicitly separate.
+:::
+
+:::expand[How Should Evidence Be Preserved While It Is Still Volatile?]{kind="recap"}
+Collect perishable decision-changing evidence first, store it outside compromised systems, preserve source and handling, and avoid spreading credentials or malware.
+:::
+
+:::expand[How Does Containment Break Attacker Capability?]{kind="recap"}
+Containment should remove a specific ability to authenticate, execute, communicate, persist, or affect data, then verify that the ability truly ended.
+:::
+
+:::expand[Why Must Credential Response Include Revocation, Rotation, and Persistence Search?]{kind="recap"}
+Replacement alone does not invalidate old sessions or attacker-created access, so revoke, migrate legitimate consumers, and search the full identity and persistence graph.
+:::
+
+:::expand[How Do You Recover to a Trusted and Verified State?]{kind="recap"}
+Rebuild from reviewed source and immutable artifacts with trusted identities, then verify service, negative security properties, control health, and observation before ending response.
+:::
+
+:::expand[What Makes an Incident Runbook Executable?]{kind="recap"}
+A useful runbook precomputes triggers, roles, evidence, decision points, safe containment, investigation, recovery, stop conditions, communications, and exit criteria.
+:::
+
+:::expand[What Does a Complete Incident Response Loop Look Like?]{kind="recap"}
+Coordinate from detection through volatile evidence, capability containment, scope, trusted recovery, adversarial verification, communication, and hardening, then exercise the runbook again.
+:::

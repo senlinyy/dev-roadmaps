@@ -12,383 +12,388 @@ aliases:
 
 ## Table of Contents
 
-1. [Why Some Software Expects a Server](#why-some-software-expects-a-server)
-2. [Virtual Machine](#virtual-machine)
-3. [Image](#image)
-4. [Machine Type](#machine-type)
-5. [Disk](#disk)
-6. [Zone](#zone)
-7. [Startup Script](#startup-script)
-8. [systemd](#systemd)
-9. [Identity, Network, and Repeatability](#identity-network-and-repeatability)
-10. [Operations Runbook](#operations-runbook)
-11. [Putting It All Together](#putting-it-all-together)
-12. [References](#references)
+1. [Why Does Some Software Need a Server?](#why-does-some-software-need-a-server)
+2. [What Does a Virtual Machine Give You?](#what-does-a-virtual-machine-give-you)
+3. [How Do Images, Machine Types, Disks, and Zones Define a VM?](#how-do-images-machine-types-disks-and-zones-define-a-vm)
+4. [How Does a Fresh VM Become an Application Server?](#how-does-a-fresh-vm-become-an-application-server)
+5. [Who Keeps the Application Running?](#who-keeps-the-application-running)
+6. [How Do Networking and Identity Control the VM?](#how-do-networking-and-identity-control-the-vm)
+7. [How Do You Make VMs Replaceable and Operable?](#how-do-you-make-vms-replaceable-and-operable)
+8. [What Does the Complete Compute Engine Path Look Like?](#what-does-the-complete-compute-engine-path-look-like)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Why Some Software Expects a Server
-<!-- section-summary: Compute Engine fits software that needs the operating system and long-running server behavior as part of the runtime. -->
+Begin with an ordinary network program. It waits for a request, does some work, sends a response, and waits again. The program needs instructions executed by a CPU, temporary working data held in RAM, durable files on storage, a network path to other computers, an operating system that supplies the environment, an identity that grants permissions, and operational machinery that recovers it after failure.
 
-Some software expects a server. An invoice renderer may need a licensed native PDF package, a long-running Linux daemon, a local spool directory, a mounted disk, and process supervision from the operating system. The team may want to rewrite it later, but the safe first cloud step is to keep the server shape and make that server reproducible.
+Your laptop can provide all of those things during development. It is still a poor production host. Closing the lid can stop the program, Wi-Fi can disappear, the machine can reboot, and its public address can change. A production application needs a computer that remains powered, has predictable networking, stores its files, runs the required operating system, restarts its processes, and can be administered remotely.
 
-**Compute Engine** is Google Cloud's virtual machine service. It gives your team cloud servers while Google operates the physical hardware and virtualization layer. Your team still owns the guest operating system, packages, patching, startup behavior, process manager, disks, network exposure, and application health inside the server.
+Before cloud APIs, an organization might buy a physical server and place it in a data centre. Compute Engine changes the acquisition model. Instead of ordering hardware, waiting for delivery, and installing it in a rack, you request a computer-like execution environment through Google Cloud. Google classifies this service as Infrastructure as a Service, or IaaS, because the unit you receive is infrastructure shaped like a machine rather than only an application runtime.
 
-The invoice renderer gives us a concrete job. It polls for approved invoices, renders PDF files with a vendor library, stores finished files, records status, and writes logs for finance support. It has no reason to receive public web traffic. It does need host-level control.
+Keep these questions in view as you work through the lesson:
 
-For AWS readers, Compute Engine maps closely to EC2. Images map to AMIs, Persistent Disk maps to EBS, and startup scripts play a role similar to user data. The IAM, metadata, disk, and networking details are GCP-specific, so the operating habit transfers while the exact controls need GCP review.
+1. **Why Does Some Software Need a Server?**
+2. **What Does a Virtual Machine Give You?**
+3. **How Do Images, Machine Types, Disks, and Zones Define a VM?**
+4. **How Does a Fresh VM Become an Application Server?**
+5. **Who Keeps the Application Running?**
+6. **How Do Networking and Identity Control the VM?**
+7. **How Do You Make VMs Replaceable and Operable?**
+8. **What Does the Complete Compute Engine Path Look Like?**
 
-![Invoice worker reasons for choosing a VM](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/invoice-worker-vm-fit.png)
-*The invoice renderer fits a VM because the operating system, daemon model, disk behavior, and patch plan are part of the workload.*
+## Why Does Some Software Need a Server?
+<!-- section-summary: Compute Engine fits software that needs a continuously running operating system and direct control over the machine environment. -->
 
-## Virtual Machine
-<!-- section-summary: A VM is a software-defined server with an operating system and server responsibilities your team still owns. -->
+The virtual-machine shape matters because many programs expect more than a single input-and-output function. A traditional server program may listen on port `8080` continuously, write under `/var/lib/myapp`, start child processes, run scheduled tasks, install native packages, retain an in-memory cache for hours, respond to Unix signals, rely on a kernel feature, or coordinate several local processes. PostgreSQL, Nginx, Redis, older Java servers, game servers, vendor appliances, and custom enterprise systems can all carry assumptions like these.
 
-A **virtual machine**, or **VM**, is a software-defined server. It runs an operating system such as Debian, Ubuntu, Red Hat Enterprise Linux, or Windows Server on Google-managed infrastructure. The VM has CPU, memory, a boot disk, a network interface, metadata, a service account, and a location.
+A higher-level platform usually asks for the application and chooses much of the surrounding runtime. Compute Engine gives your team the machine and lets the team configure what belongs inside it. That is why virtual machines remain valuable: software that expects an ordinary Linux or Windows server can keep those semantics without your organization owning the physical hardware.
 
-For the invoice renderer, the VM is the place where the vendor PDF package and long-running worker process live. The server can run a Linux service, write temporary files to a known path, and expose no public IP address. That is a good fit for workloads that depend on the operating system instead of only on an HTTP container contract.
+The first decision is therefore about the application's requirements. If the operating system, installed packages, daemon layout, local disk behavior, or machine-level networking are part of the design, a VM is a natural abstraction. If the only requirement is to receive an HTTP request and run a container, a more managed runtime may remove work that the application does not need.
 
-The first design sketch is small:
+## What Does a Virtual Machine Give You?
+<!-- section-summary: A VM behaves like an independent computer while Google owns the data centre, hardware, and virtualization underneath it. -->
 
-| Runtime piece | Invoice renderer choice | Why it exists |
-|---|---|---|
-| **VM name** | `invoice-renderer-prod-01` | Operators need a clear server identity. |
-| **Operating system** | Debian 12 or a hardened custom image | The renderer needs approved Linux packages and baseline security settings. |
-| **Process model** | Linux service manager | The worker needs restart behavior and process logs. |
-| **Network path** | Internal IP only | The worker talks to private services and should not expose SSH or HTTP publicly. |
-| **Runtime identity** | `invoice-renderer-runtime@...` | The process needs narrow access to artifacts, secrets, logs, and storage. |
+Suppose one Google-owned physical server contains dozens of CPU cores, hundreds of gigabytes of memory, network interfaces, and storage connections. Assigning that entire host to a small application would waste much of its capacity. A **hypervisor** divides the physical resources into several isolated, computer-like environments.
 
-The VM definition leads to the boot image, because every replacement server needs to know what operating system and baseline files it starts from.
-
-## Image
-<!-- section-summary: An image is the boot template that supplies the operating system and baseline files for a VM. -->
-
-An **image** is the boot disk template for a VM. Public images are maintained by Google, operating-system projects, or vendors. A **custom image** belongs to your project or organization and can include approved packages, agents, certificates, security settings, and baseline configuration.
-
-Think of the image as the starting recipe for a new server. If the VM disappears, the image is the first thing the replacement VM uses to rebuild the operating-system layer. A public Debian image gives you a clean operating system. A custom image can give you the clean operating system plus the approved monitoring agent, security baseline, and vendor package already installed.
-
-The invoice renderer can use a public Debian image plus a startup script for the first migration. After the migration settles, the team may build a custom image with Packer or an image pipeline so the vendor package and agents are already present. The image should avoid secrets because images are copied and reused; secrets belong in Secret Manager or another runtime access path.
-
-The image choice answers a simple recovery question: if this server disappears, can a new server boot from a known baseline? A public image plus deterministic startup may be enough. A custom image may reduce boot time and reduce package-install risk for sensitive vendor dependencies.
-
-The useful split is baseline versus runtime. The image should contain stable baseline items that many VMs share. Runtime values such as database passwords, API tokens, feature flags, and per-environment settings should come from metadata, Secret Manager, or configuration management during boot.
-
-## Machine Type
-<!-- section-summary: A machine type chooses the CPU and memory shape for the VM. -->
-
-A **machine type** is the concrete CPU and memory shape of the VM, such as `e2-standard-2`, `n2-standard-4`, or a memory-optimized type. Google Cloud groups machine types into families and series for different workload needs.
-
-The invoice renderer can use a general-purpose machine because PDF rendering and database polling need moderate CPU and memory. The team should size from evidence: render duration, CPU saturation, memory pressure, disk throughput, and backlog age. A month-end batch that misses the finance window may justify a larger machine type or more workers through a managed instance group.
-
-Useful sizing signals:
-
-| Signal | What it means | Possible response |
-|---|---|---|
-| **CPU near saturation** | PDF rendering uses most available CPU for long periods. | Test a larger general-purpose type or a compute-optimized type. |
-| **Memory pressure** | The process swaps or exits during large invoice batches. | Increase memory or split work into smaller batches. |
-| **Disk wait** | The worker waits on local file writes. | Use a better disk type, resize the disk, or move finished files to Cloud Storage sooner. |
-| **Backlog age** | Invoices wait too long before rendering. | Add capacity if the job is safe to run concurrently. |
-
-The machine type should live in Terraform, an instance template, or another reviewed path. A production sizing change deserves the same review trail as an application deploy.
-
-## Disk
-<!-- section-summary: A disk gives the VM block storage for the operating system and any local data the workload needs. -->
-
-A **disk** is block storage attached to the VM. The boot disk holds the operating system. Additional Persistent Disks can hold local application data, spool files, or large working directories. Persistent Disk data survives VM stop and restart, and snapshots can help with backup and recovery.
-
-Think of the VM as the computer and the disk as the drive attached to it. The boot disk is the drive the operating system starts from. A data disk is a separate drive for application files. Keeping application data on a separate disk gives the team more choices during repair: replace the VM, reattach the disk, restore from a snapshot, or inspect files without rebuilding the whole host.
-
-The disk is still a server responsibility. A disk can fill up, use the wrong filesystem, miss a snapshot schedule, or hold hidden state that no other system can recreate. A good VM design says which data is allowed to live on the disk and which data must move to Cloud Storage, Cloud SQL, or another durable service.
-
-For the invoice renderer, split data by purpose:
-
-| Data | Good home | Reason |
-|---|---|---|
-| Operating system and baseline packages | Boot disk from image | A replacement VM can recreate the host. |
-| Temporary render spool | Separate Persistent Disk or clearly managed temp path | In-flight work may need controlled cleanup or recovery. |
-| Finished invoice PDFs | Cloud Storage | Finished files need object storage, lifecycle rules, and downstream access. |
-| Invoice state | Database | The worker should not rely on a local file as the source of truth. |
-
-A separate data disk can help during recovery because the disk lifecycle is not tied as tightly to one VM object. The team still needs a clear rule for stuck spool files, retries, and cleanup so the disk does not turn into hidden application state.
-
-## Zone
-<!-- section-summary: A zone is the location and failure boundary for a VM. -->
-
-A **zone** is a deployment location inside a region, such as `us-central1-a`. A Compute Engine VM is a zonal resource. If the zone has an outage, a single VM in that zone is affected.
-
-For a development renderer, one zone may be fine. For production finance work, the team should document what happens if the VM or zone is unavailable. A queue-backed renderer can run replacement workers in another zone if the database or message queue preserves the work list. A managed instance group can recreate VMs from a template. Finished PDFs should land in Cloud Storage rather than only on the VM disk.
-
-Here is a compact VM creation command that shows VM, image, machine type, disk, zone, network, identity, and startup input together:
-
-```bash
-gcloud compute instances create invoice-renderer-prod-01 \
-  --project=PROJECT_ID \
-  --zone=us-central1-a \
-  --machine-type=e2-standard-2 \
-  --image-family=debian-12 \
-  --image-project=debian-cloud \
-  --boot-disk-size=50GB \
-  --boot-disk-type=pd-balanced \
-  --subnet=apps-us-central1 \
-  --no-address \
-  --service-account=invoice-renderer-runtime@PROJECT_ID.iam.gserviceaccount.com \
-  --scopes=https://www.googleapis.com/auth/cloud-platform \
-  --metadata=app-version=2026.07.04 \
-  --metadata-from-file=startup-script=startup-invoice-renderer.sh
+```text
+                  physical server
+                         |
+                    hypervisor
+              +----------+----------+
+              |          |          |
+            VM A       VM B       VM C
+            Linux      Linux     Windows
 ```
 
-Important parts:
+Each **virtual machine**, or VM, sees virtual CPUs, RAM, disks, network interfaces, firmware, and an operating system environment. Those resources ultimately come from Google's infrastructure, but ordinary operating systems and server software can run as though the VM were a separate computer. Compute Engine's normal VM offering uses KVM-based virtualization.
 
-- `--zone` places the VM in one zonal failure boundary.
-- `--machine-type` chooses CPU and memory.
-- `--image-family` and `--image-project` choose the boot image.
-- `--boot-disk-*` chooses boot disk size and type.
-- `--no-address` avoids a public external IP.
-- `--service-account` attaches the runtime identity.
-- `--scopes=https://www.googleapis.com/auth/cloud-platform` lets the VM request Google Cloud API tokens; IAM roles on the service account still decide which API actions are allowed.
-- `--metadata` and `--metadata-from-file` pass startup inputs to the VM.
+That computer-like behavior is the key abstraction. On a Linux VM, an administrator can connect with SSH, install packages, create users, edit files under `/etc`, compile software, run containers, start a database, and configure services. The VM gives substantially more machine control than an application platform that accepts only source or a container image.
 
-Expected output should show an internal IP and no external IP:
+Control also moves responsibility to the team using it. Google operates the data centre, the physical servers, and the virtualization layer. Your team largely operates the guest operating system, installed packages, language runtime, application, configuration, patching approach, process supervision, and much of backup and recovery. A healthy physical host does not patch your Linux packages or restart an application process that your own service definition omitted.
 
-```console
-Created [https://www.googleapis.com/compute/v1/projects/PROJECT_ID/zones/us-central1-a/instances/invoice-renderer-prod-01].
-NAME                      ZONE           MACHINE_TYPE   INTERNAL_IP  EXTERNAL_IP  STATUS
-invoice-renderer-prod-01  us-central1-a  e2-standard-2  10.40.2.15               RUNNING
-```
+It helps to stop treating a VM instance as one indivisible object. Creating an instance combines several distinct choices:
 
-## Startup Script
-<!-- section-summary: A startup script turns a fresh VM boot into a ready application host. -->
-
-A **startup script** is a file of commands that runs during VM boot. Compute Engine supplies startup scripts through metadata. The script gives a fresh VM a repeatable path from generic server to ready invoice renderer host.
-
-The startup script is the handoff between "the server exists" and "the application is ready." A VM can be running at the infrastructure level while the renderer service is still missing packages, config, directories, or permissions. The script closes that gap by doing the same setup on every boot or replacement.
-
-The startup script should be deterministic. It should fetch a pinned app version, create users and directories, write config, place the service manager file, and fail clearly if an input is missing. If a human fixes a server only through SSH, the replacement server misses that fix.
-
-Treat the startup script like production code. It should be versioned, reviewed, tested on a disposable VM, and written so repeated runs do not damage the host. A script that only works once can make recovery harder during an incident.
-
-Here is a small startup script shape:
-
-```bash
-set -euo pipefail
-
-APP_VERSION="$(curl -fsS -H "Metadata-Flavor: Google" \
-  "http://metadata.google.internal/computeMetadata/v1/instance/attributes/app-version")"
-
-useradd --system --home /opt/invoice-renderer --shell /usr/sbin/nologin invoice-renderer || true
-mkdir -p /opt/invoice-renderer /etc/invoice-renderer /var/lib/invoice-renderer
-
-gcloud storage cp "gs://billing-artifacts/invoice-renderer/${APP_VERSION}/renderer.tar.gz" /tmp/renderer.tar.gz
-tar -xzf /tmp/renderer.tar.gz -C /opt/invoice-renderer
-chown -R invoice-renderer:invoice-renderer /opt/invoice-renderer /var/lib/invoice-renderer
-
-cat >/etc/invoice-renderer/env <<ENV
-PROJECT_ID=PROJECT_ID
-DATABASE_HOST=10.40.0.12
-SPOOL_DIR=/var/lib/invoice-renderer
-ENV
-
-install -m 0644 /opt/invoice-renderer/service/invoice-renderer.service /tmp/invoice-renderer.service
-```
-
-Important parts:
-
-- The script reads `app-version` from the metadata server.
-- The artifact path includes the exact app version, which supports rollback.
-- A dedicated Linux user runs the worker.
-- Local config lives in `/etc/invoice-renderer/env`.
-- The service manager file is staged for the next step, where the long-running process is installed and started.
-
-## systemd
-<!-- section-summary: systemd keeps the long-running process supervised after startup completes. -->
-
-**systemd** is the service manager used by many Linux distributions. It starts services during boot, restarts them after failures, sends logs to the journal, and exposes status through tools such as `systemctl` and `journalctl`.
-
-For the invoice renderer, startup prepares the host and systemd owns the worker process. A useful service unit makes the runtime contract visible:
-
-![Compute Engine metadata, startup script, and systemd bootstrap path](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/vm-bootstrap-path.png)
-*Metadata supplies inputs, the startup script prepares the host, and systemd owns the long-running invoice process.*
-
-```ini
-[Unit]
-Description=Invoice renderer worker
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=invoice-renderer
-Group=invoice-renderer
-WorkingDirectory=/opt/invoice-renderer
-EnvironmentFile=/etc/invoice-renderer/env
-ExecStart=/usr/bin/node /opt/invoice-renderer/dist/worker.js
-Restart=on-failure
-RestartSec=10
-TimeoutStopSec=30
-KillSignal=SIGTERM
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Important parts:
-
-- The process runs as `invoice-renderer`, not root.
-- `EnvironmentFile` keeps runtime configuration outside the app binary.
-- `Restart=on-failure` restarts after ordinary crashes.
-- `TimeoutStopSec=30` gives the worker time to stop cleanly.
-- Journal output can be collected by the Ops Agent for Cloud Logging.
-
-The worker should handle `SIGTERM` safely. If it is rendering one invoice, it can finish the file or mark the invoice for retry before exiting. That behavior protects patching, VM replacement, and controlled restarts.
-
-The startup path can install and start the unit after the file exists:
-
-```bash
-cp /tmp/invoice-renderer.service /etc/systemd/system/invoice-renderer.service
-systemctl daemon-reload
-systemctl enable --now invoice-renderer.service
-```
-
-Important parts:
-
-- `cp` places the unit where systemd reads service definitions.
-- `systemctl daemon-reload` refreshes systemd after the new unit file appears.
-- `systemctl enable --now` enables the service at boot and starts it immediately.
-
-## Identity, Network, and Repeatability
-<!-- section-summary: A production VM still needs narrow IAM, private network design, and a reproducible replacement path. -->
-
-The VM's **service account** is the identity the renderer uses for Google Cloud API calls. It might read one Secret Manager secret, download one artifact path, write finished PDFs to one bucket, and send logs. It should not receive broad project administration roles.
-
-Network design should match the job. The invoice renderer does not serve browser traffic, so an internal IP and no public IP is a good default. Firewall rules can target the service account or network tags so only required internal paths are open. SSH access should use controlled administrative paths such as Identity-Aware Proxy or a bastion pattern if the organization requires SSH at all.
-
-Repeatability is the part that separates a managed VM from a hand-built server. The image, machine type, disk, zone, metadata, startup script, service account, firewall rule, and service unit should be represented in infrastructure as code or an instance template. That lets the team replace a failed server without reconstructing it from memory.
-
-An evidence bundle for `invoice-renderer-prod-01` should prove three things: the VM runs with the intended identity, the network posture matches a private worker, and the replacement source exists.
-
-```bash
-gcloud compute instances describe invoice-renderer-prod-01 \
-  --zone=us-central1-a \
-  --format="yaml(serviceAccounts,networkInterfaces,tags.items,metadata.items)"
-
-gcloud projects get-iam-policy PROJECT_ID \
-  --flatten="bindings[].members" \
-  --filter="bindings.members:invoice-renderer-runtime@PROJECT_ID.iam.gserviceaccount.com" \
-  --format="table(bindings.role)"
-
-gcloud compute firewall-rules list \
-  --filter='targetServiceAccounts:invoice-renderer-runtime@PROJECT_ID.iam.gserviceaccount.com OR targetTags:invoice-renderer' \
-  --format="table(name,direction,allowed,sourceRanges,targetServiceAccounts,targetTags)"
-
-gcloud compute instance-templates describe invoice-renderer-template-v7 \
-  --format="yaml(properties.machineType,properties.disks,properties.serviceAccounts,properties.metadata.items)"
-```
-
-Important parts:
-
-- The instance describe output shows the service account, OAuth scopes, internal IP, public access configuration, tags, and startup metadata.
-- The IAM policy output shows which roles the runtime service account can use.
-- The firewall output shows which paths can reach the VM.
-- The instance template output proves the team has a reusable source for replacement.
-
-Good evidence might look like this:
-
-```yaml
-serviceAccounts:
-  - email: invoice-renderer-runtime@PROJECT_ID.iam.gserviceaccount.com
-    scopes:
-      - https://www.googleapis.com/auth/cloud-platform
-networkInterfaces:
-  - networkIP: 10.40.2.15
-    subnetwork: projects/PROJECT_ID/regions/us-central1/subnetworks/private-workers
-tags:
-  items:
-    - invoice-renderer
-metadata:
-  items:
-    - key: startup-script-url
-      value: gs://platform-startup/invoice-renderer/startup-v7.sh
-```
-
-The service account line names the workload identity. The `cloud-platform` access scope allows the VM to request Google Cloud API tokens, while IAM roles still decide what those tokens can do. The IAM evidence should be narrow, for example `roles/logging.logWriter`, a Secret Manager accessor grant for the renderer secret, and a bucket-specific write path for finished PDFs. Broad roles such as project editor would fail the review because the worker only renders invoices.
-
-For the network side, the useful signal is the missing `accessConfigs` block in `networkInterfaces`. That means the instance has an internal IP without a direct external NAT IP. Firewall evidence should show inbound access only from approved administrative or worker paths:
-
-```console
-NAME                         DIRECTION  ALLOW      SOURCE_RANGES  TARGET_SERVICE_ACCOUNTS
-allow-iap-ssh-renderers      INGRESS    tcp:22     35.235.240.0/20 invoice-renderer-runtime@PROJECT_ID.iam.gserviceaccount.com
-allow-queue-to-renderer      INGRESS    tcp:8080   10.40.0.0/16   invoice-renderer-runtime@PROJECT_ID.iam.gserviceaccount.com
-```
-
-The interpretation is practical. SSH, if allowed, comes through an approved Identity-Aware Proxy range. Application traffic comes from the private network. The review should find narrow source ranges instead of a broad `0.0.0.0/0` inbound rule aimed at the renderer service account or tag.
-
-The replacement source should point to a reviewed template or IaC file. A release note can record `invoice-renderer-template-v7`, the image family, startup script URL, systemd unit version, and the Terraform file such as `infra/compute/invoice-renderer.tf`. If the VM is deleted during recovery, the team should be able to recreate it from that source and verify the same service account, private subnet, metadata, disk, and startup behavior.
-
-An **instance template** stores VM configuration for reuse. A **managed instance group** can create and replace VMs from a template. For a renderer that is safe to run concurrently, a managed instance group can give replacement behavior and more capacity. The application still needs a queue or database claim pattern so two workers do not render the same invoice.
-
-## Operations Runbook
-<!-- section-summary: VM operations need checks for instance health, process health, startup evidence, disk pressure, patches, and backups. -->
-
-A VM runbook should separate server health from application health. A VM can be running while the invoice renderer is stopped. A renderer can run while it fails every invoice because the vendor license expired. Operators need checks at both layers.
-
-Useful first checks:
-
-```bash
-gcloud compute instances describe invoice-renderer-prod-01 \
-  --zone=us-central1-a \
-  --format="value(status,networkInterfaces[0].networkIP,serviceAccounts[0].email)"
-
-gcloud compute instances get-serial-port-output invoice-renderer-prod-01 \
-  --zone=us-central1-a
-
-systemctl status invoice-renderer.service
-journalctl -u invoice-renderer.service --since "30 minutes ago"
-```
-
-Important parts:
-
-- The first command confirms VM status, internal IP, and runtime service account.
-- Serial port output helps with boot and startup-script failures.
-- `systemctl` confirms whether the Linux service is active.
-- `journalctl` shows recent worker logs on the VM.
-
-Healthy output should include a running instance and an active service:
-
-```console
-RUNNING    10.40.2.15    invoice-renderer-runtime@PROJECT_ID.iam.gserviceaccount.com
-
-invoice-renderer.service - Invoice renderer worker
-   Loaded: loaded (/etc/systemd/system/invoice-renderer.service; enabled)
-   Active: active (running)
-```
-
-The runbook should also cover patching and recovery:
-
-| Area | Practical check |
+| Question | Compute Engine concept |
 |---|---|
-| **OS patches** | Define patch windows or replacement-image rollout through templates. |
-| **Disk backups** | Snapshot any disk that holds recoverable local work. |
-| **Artifact rollback** | Keep the previous app version available in the artifact bucket. |
-| **Log review** | Alert on repeated renderer failures, license errors, and backlog age. |
-| **Capacity** | Watch CPU, memory, disk, and render duration during finance peaks. |
-| **Replacement** | Prove a new VM can boot from image, metadata, startup script, and service account alone. |
+| Where should the machine run? | **Zone** |
+| How much CPU and memory should it have? | **Machine type** |
+| What starting software should it contain? | **Image** |
+| Where should ongoing files live? | **Disk** |
+| What Google Cloud permissions should the workload have? | **Service account** |
+| Which network paths can reach it? | **VPC and firewall rules** |
+| What should happen during boot? | **Startup configuration** |
 
-![Compute Engine VM operations evidence board](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/vm-operations-evidence.png)
-*A useful VM review checks both layers: cloud instance state and the application process inside the guest OS.*
+These choices can change independently. Increasing memory does not replace Debian with Windows. Rebuilding a disk from a newer image does not move the VM to another zone. Attaching a different service account changes permissions rather than network reachability. Separating the concepts makes both design and debugging easier.
 
-## Putting It All Together
-<!-- section-summary: Compute Engine is the right choice for workloads that require server control and a team ready to own the operating work. -->
+## How Do Images, Machine Types, Disks, and Zones Define a VM?
+<!-- section-summary: An image supplies the starting software, a machine type supplies CPU and RAM, disks preserve ongoing state, and the zone chooses the failure domain. -->
 
-Compute Engine fits the invoice renderer because the software needs a server-shaped runtime. The VM gives OS control, packages, disk behavior, startup scripts, and `systemd` supervision. The same choice also gives the team guest OS patching, process health, disk care, network rules, and replacement planning.
+An **image** answers what the machine should contain at the beginning. Imagine receiving a blank laptop: before it can boot, it needs disk contents that include an operating system. Compute Engine can use a public Debian, Ubuntu, Rocky Linux, or Windows Server image, or a customized image that already includes a runtime, dependencies, security configuration, and monitoring software.
 
-The practical design path is direct: define the VM, choose the image, choose the machine type, design the disk, choose the zone, automate startup, hand the process to `systemd`, attach a narrow service account, keep the network private, and write a runbook that proves the server can be replaced.
+The image starts a chain:
 
-The next article moves to work that should happen after an event, where keeping a whole server around is usually unnecessary.
+```text
+image template
+      |
+      v
+new boot disk
+      |
+      v
+VM boots from that disk
+      |
+      v
+running operating system
+```
+
+An image is a master disk template, not a running machine. It does not contain the VM's live processes or RAM. Ten VMs created from one image begin with similar disk contents, but their disks can diverge after packages, logs, configuration, and application data change.
+
+A **machine type** answers a different question: how much computer should the software receive? It determines the VM's compute resources, especially its virtual CPUs and memory. Google offers machine families, series, predefined shapes, and custom configurations in supported cases. Moving from two vCPUs and 4 GB of RAM to eight vCPUs and 32 GB of RAM resizes the execution capacity. It does not redefine the operating system stored on the boot disk.
+
+This is the useful separation:
+
+```text
+image        -> starting software environment
+machine type -> CPU and RAM capacity
+```
+
+RAM and disk also have different jobs. RAM holds fast working state while the program runs. That state disappears when power is removed. A **disk** stores block data that can persist beyond the lifetime of one process and, depending on its lifecycle settings, beyond a VM restart or replacement. The boot disk normally contains Linux or Windows, installed packages, configuration, application files, and local logs. Additional data disks can hold application data. Compute Engine provides durable block-storage options including Persistent Disk and Hyperdisk, and a disk can be used for boot or application data.
+
+An image and a disk are easy to confuse because an image initializes a disk. After a month, the running VM's disk may include updates, changed configuration, temporary files, logs, and uploads. None of those changes automatically update the original image. The compact model is: **the image describes the starting state; the disk carries the ongoing state.**
+
+The fourth defining choice is geography. Cloud infrastructure still occupies physical places. Google Cloud organizes locations into regions and zones, and a normal Compute Engine VM is a zonal resource. A zone acts as a failure domain within a region. Selecting one is therefore part of reliability design, not merely choosing a nearby label in a form.
+
+One VM creates one failure point. Two VMs can protect against the loss of one instance, and placing those instances in different zones adds protection against failures that affect an entire zone. A load balancer can send requests to healthy instances across those locations.
+
+```text
+                 users
+                   |
+             load balancer
+              /          \
+             v            v
+          Zone A        Zone B
+            VM            VM
+```
+
+The image, machine type, disks, and zone together answer four independent questions: what begins on the computer, how much execution capacity it receives, what data remains, and which failure domain contains it.
+
+## How Does a Fresh VM Become an Application Server?
+<!-- section-summary: Startup automation turns a generic operating-system VM into a configured server and should be safe to run more than once. -->
+
+Creating an Ubuntu VM with two vCPUs, 4 GB of RAM, and a boot disk does not make the application appear. Ubuntu does not know that the team wanted Python, a particular release, configuration files, directories, and a listening service. Someone must install packages, obtain the application, install dependencies, write configuration, create users and directories, and start the right service.
+
+Doing that through an interactive SSH session can work for the first machine. Repeating that manual process is unreliable. Configuring a hundred servers by hand creates a hundred opportunities for a missed command or a one-off change. Operators eventually own machines whose true configuration exists only in a person's memory.
+
+A **startup script** moves that work into executable boot automation. Compute Engine runs a Linux startup script during VM startup after networking is available, and the script runs as `root`. It can install packages, create an application user, download a release, prepare directories, write configuration, register monitoring, and install operating-system service definitions.
+
+```text
+create VM
+   |
+Linux boots
+   |
+startup script runs
+   |
+machine receives application configuration
+   |
+application service becomes usable
+```
+
+Root execution makes the script powerful enough to configure the whole machine. It also means a mistake can change almost anything on that machine, so startup logic should be reviewed and kept predictable.
+
+Boot automation must also account for repeated execution. A command that creates `/opt/myapp` only when it does not already exist works on both the first and a later boot. A command that fails whenever the directory already exists can leave a restarted VM half-configured. The property of producing the same desired result after repeated runs is **idempotence**.
+
+The desired pattern is:
+
+```text
+first run  -> configured machine
+second run -> configured machine
+later run  -> configured machine
+```
+
+That is more reliable than a sequence that works once but fails or becomes mysterious on later runs. Idempotent startup automation supports a larger operational rule: a production system should not depend on remembering the manual history of one special server.
+
+![Compute Engine startup automation prepares a fresh VM and installs a systemd-managed service](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/vm-bootstrap-path.png)
+
+*The startup phase prepares the machine; the long-running service manager takes over after configuration finishes.*
+
+Startup scripts prepare the machine, but preparation alone does not supervise a process for months. That leads to the next layer: the operating system needs a component that starts the application at boot and responds if it later crashes.
+
+## Who Keeps the Application Running?
+<!-- section-summary: systemd supervises long-running Linux processes, while network-path checks prove whether a healthy process is reachable. -->
+
+Suppose the startup script simply runs `python app.py`. The process begins successfully and then crashes five hours later. The VM can remain healthy while the application is unavailable. VM uptime and application uptime describe different layers.
+
+On most modern Linux distributions, **systemd** manages long-running operating-system services. A service definition can tell it which command starts the application, which user should run it, whether it starts during boot, what it depends on, how it handles crashes, and where its standard logs go. The same system supervises services such as `sshd`, Nginx, monitoring agents, and the application.
+
+```text
+Linux
+  |
+systemd
+  |-- sshd
+  |-- nginx
+  |-- monitoring-agent
+  `-- myapp.service
+```
+
+This creates a clean ownership boundary. Startup automation installs and configures the machine. systemd remains active and manages the long-lived process. A typical boot path is VM start, Linux boot, startup configuration, systemd service start, and the application listening on its configured port. If the process crashes, its service policy can restart it without rebooting the whole VM.
+
+A running process is still only one part of availability. If the application reports that it listens on `0.0.0.0:8080`, a public caller must cross several other layers:
+
+```text
+caller
+  |
+DNS
+  |
+public endpoint or load balancer
+  |
+Google Cloud network and firewall
+  |
+VM network interface
+  |
+Linux network stack
+  |
+port 8080
+  |
+systemd-managed process
+```
+
+Any break in that chain can appear to the user as the same symptom: the site is unavailable. The process might answer successfully from inside the VM while a firewall blocks the remote caller. Conversely, the network path can be open while systemd reports a crashed service.
+
+That is why operational checks should move through layers. First ask whether the instance is running. Then ask whether the service is active, whether the application is listening on the expected interface and port, and whether a local request succeeds. Only then follow the remote path through firewall rules, load balancing, and DNS. Separating those questions narrows the fault rather than treating every outage as an application bug.
+
+## How Do Networking and Identity Control the VM?
+<!-- section-summary: VPC and firewall controls decide who can communicate with a VM, while its service account decides what the workload may do. -->
+
+Compute Engine instances attach to a **Virtual Private Cloud**, or VPC, network. At a simplified level, each VM receives a virtual network interface and an internal IP address. Other VMs and managed resources can occupy the same private network, while firewall rules decide which traffic is allowed.
+
+```text
+VPC
+|-- VM A       10.x.x.x
+|-- VM B       10.x.x.x
+`-- database   10.x.x.x
+```
+
+The rules can allow public HTTPS, restrict SSH to approved sources, block direct public database access, and allow an application tier to reach a database privately. This makes two checks explicit: is the process listening, and may this caller reach that listener? A `LISTEN` state inside Linux does not override a cloud firewall, and an open firewall cannot start a missing process.
+
+Network authorization answers who can communicate with the machine. **Identity and Access Management**, or IAM, answers what the workload is allowed to do after it runs. Suppose the application must read one Cloud Storage bucket and write application logs. Embedding a long-lived Google credential in `config.json` would create a new secret that has to be distributed, protected, and rotated.
+
+Instead, a Compute Engine VM can have a **service account** attached. Code uses Google's workload authentication mechanisms, including Application Default Credentials and the metadata server, to obtain credentials for that attached identity. IAM roles then grant the service account only the operations the application requires.
+
+```text
+application on VM
+       |
+runs with attached service account
+       |
+IAM authorization
+       |
+Cloud Storage or another Google API
+```
+
+The workload identity belongs to the application environment rather than the developer who logged in or the particular physical server underneath it. A narrow service account might read a named bucket and write logs while lacking permission to administer the project.
+
+Keep the two security directions separate:
+
+```text
+VPC and firewall rules -> who can exchange packets with the VM
+service account and IAM -> which Google Cloud actions the workload may perform
+```
+
+A remote request can fail because the packet is blocked. A local application call to Cloud Storage can fail because IAM denies the service account. The remedies differ, so debugging begins by identifying which question failed.
+
+## How Do You Make VMs Replaceable and Operable?
+<!-- section-summary: Images, templates, startup automation, managed groups, and runbooks turn one manually maintained server into repeatable infrastructure. -->
+
+Imagine a server fails during the night. In one operating model, the team needs that exact machine restored because somebody configured it months ago and no one knows every change. In the other, the team creates a replacement from a declared image or template, boot automation installs the current release, identity and networking attach predictably, and traffic moves to the healthy replacement.
+
+The second model changes the goal. The team no longer tries to preserve one named machine forever. It makes replacement cheap and dependable. This direction is sometimes summarized as treating servers as cattle rather than pets, but the practical idea matters more than the phrase: manual history becomes executable configuration.
+
+Compute Engine supplies building blocks for repeatability, including images, instance templates, managed instance groups, startup scripts, and APIs. Infrastructure-as-code tools such as Terraform can declare those resources as well. A managed instance group can use a shared instance template, recreate failed VMs, and adjust the number of machines. Regardless of tool, the important sequence is:
+
+```text
+manual knowledge
+      |
+executable configuration
+      |
+repeatable and replaceable infrastructure
+```
+
+Replacement does not eliminate operations. Unexpected behavior still needs a human response, and a **runbook** records what an operator should check and which actions are safe. A useful Compute Engine runbook covers several layers:
+
+- Confirm that the instance exists and is running, then inspect CPU, memory, and disk pressure.
+- Check the systemd service state and application logs.
+- Verify that the process listens on the expected address and port.
+- Follow VPC, firewall, load-balancer, and DNS paths when local health is good but remote access fails.
+- Test important dependencies such as databases and external APIs.
+- Distinguish a safe application restart from a full VM restart.
+- Describe how to replace the VM from declared configuration instead of repairing drift indefinitely.
+- Record backup, restore, rollback, escalation, and recovery procedures.
+
+The runbook is created by the team operating the application; it is not a Compute Engine feature that appears automatically. It connects the platform's machine controls to the real decisions an operator must make during an incident.
+
+Repeatability and runbooks serve different failure moments. Automation recreates the expected system. The runbook helps a person identify whether the fault is the machine, process, packet path, dependency, or data, then choose a safe repair or replacement action.
+
+## What Does the Complete Compute Engine Path Look Like?
+<!-- section-summary: A hosted application combines location, capacity, software, storage, networking, identity, boot automation, process supervision, and an end-to-end request path. -->
+
+Consider a Python API for `example.com` whose requirements include full Linux control. The design can be derived in a clear sequence.
+
+First, choose the region and zone. That places the VM in a real Google Cloud failure domain. Second, select a machine type, perhaps two vCPUs and 4 GB of RAM, to provide the CPU and memory capacity. Third, choose a Debian image to define the starting operating-system contents. Fourth, create a boot disk from that image and attach any additional durable data disks the workload requires.
+
+Fifth, connect the VM to a VPC, give it an internal address, and declare firewall rules. A public HTTPS load balancer can expose the application while the VM itself remains privately addressed or otherwise restricted. Sixth, attach a service account that grants the API permission to read only the storage resources it needs.
+
+Seventh, let startup automation install Python, create a `myapp` operating-system user, download the current release, write configuration, install a systemd unit, and enable it. Eighth, let systemd run `python /opt/myapp/app.py` and supervise the process on port `8080`.
+
+The resulting request path is:
+
+```text
+browser
+   |
+example.com and DNS
+   |
+HTTPS load balancer or public endpoint
+   |
+VPC and firewall policy
+   |
+VM network interface
+   |
+Linux TCP stack on port 8080
+   |
+systemd-managed Python process
+   |
+application logic
+```
+
+When the same program calls a Google Cloud API, a second path applies:
+
+```text
+application
+   |
+attached VM service-account identity
+   |
+IAM authorization
+   |
+Google Cloud API
+```
+
+The concepts now form one coherent machine model:
+
+| Concept | Question it answers |
+|---|---|
+| **Compute Engine** | Where can the team obtain a computer without buying hardware? |
+| **VM** | Which computer-like environment runs the operating system? |
+| **Image** | What should the new boot disk initially contain? |
+| **Machine type** | How much CPU and RAM should the VM receive? |
+| **Disk** | Which state should persist beyond a process or reboot? |
+| **Zone** | Where does the machine run, and which failure domain contains it? |
+| **Startup script** | How does a fresh machine configure itself? |
+| **systemd** | Which component supervises the long-running Linux process? |
+| **Service account** | Which Google Cloud identity does the workload use? |
+| **VPC and firewall** | Which callers may communicate with the machine? |
+| **Templates and automation** | Can the team reproduce the server instead of hand-repairing it? |
+| **Runbook** | What should an operator do when automation is not enough? |
+
+Compute Engine is the right fit when the machine is genuinely part of the application architecture: the workload needs root or OS control, specific system packages, long-running daemons, legacy installers, custom agents, unusual runtimes, specialized networking, or normal-server behavior.
+
+That flexibility carries the machine's operating work. If the application only needs a managed HTTP runtime, then patching Linux, supervising systemd, caring for disks, replacing VMs, and planning capacity may be unnecessary. The final tradeoff is direct: Compute Engine supplies more machine control and leaves more machine responsibility with your team. Higher-level hosting hides more of the server and therefore limits some low-level choices.
+
+## Check Your Answers
+
+:::expand[Why Does Some Software Need a Server?]{kind="recap"}
+Some programs assume a continuously running operating system, installed packages, daemons, local files, process signals, or machine-level networking. Compute Engine preserves those server semantics while Google owns the physical infrastructure.
+:::
+
+:::expand[What Does a Virtual Machine Give You?]{kind="recap"}
+A VM supplies a computer-like environment with virtual CPU, memory, disks, networking, and an operating system. Google manages the data centre and virtualization; your team largely manages the guest OS and software inside it.
+:::
+
+:::expand[How Do Images, Machine Types, Disks, and Zones Define a VM?]{kind="recap"}
+The image supplies starting software, the machine type supplies CPU and RAM, disks carry ongoing state, and the zone chooses the machine's location and failure domain.
+:::
+
+:::expand[How Does a Fresh VM Become an Application Server?]{kind="recap"}
+A root-level startup script installs and configures the application during boot. Making that automation idempotent lets it reach the same desired configuration after repeated runs.
+:::
+
+:::expand[Who Keeps the Application Running?]{kind="recap"}
+systemd starts and supervises the long-running Linux process. Operators still verify the process, listening port, and complete remote network path separately.
+:::
+
+:::expand[How Do Networking and Identity Control the VM?]{kind="recap"}
+VPC and firewall controls decide who can exchange packets with the VM. The attached service account and IAM roles decide what the running workload may do in Google Cloud.
+:::
+
+:::expand[How Do You Make VMs Replaceable and Operable?]{kind="recap"}
+Images, templates, startup automation, groups, and APIs make machines reproducible. A runbook tells operators how to diagnose, restart, replace, restore, or escalate when the system misbehaves.
+:::
+
+:::expand[What Does the Complete Compute Engine Path Look Like?]{kind="recap"}
+A complete deployment combines zone, machine type, image, disks, VPC, firewall, service account, startup automation, systemd, and an end-to-end request path. Choose it when the application truly needs machine-level control.
+:::
 
 ## References
 
-- [Create and start a Compute Engine instance](https://docs.cloud.google.com/compute/docs/instances/create-start-instance) - Official guide for creating VM instances.
-- [OS images](https://docs.cloud.google.com/compute/docs/images) - Official documentation for public and custom images.
-- [Machine families resource and comparison guide](https://docs.cloud.google.com/compute/docs/machine-resource) - Official guide for machine families, series, and machine types.
-- [About startup scripts](https://docs.cloud.google.com/compute/docs/instances/startup-scripts) - Official overview of startup scripts for VM boot behavior.
-- [Instance templates](https://docs.cloud.google.com/compute/docs/instance-templates) - Official documentation for reusable VM configuration and managed instance groups.
+- [Compute Engine overview](https://docs.cloud.google.com/compute/docs/overview?authuser=1) - Official overview of Compute Engine's IaaS and virtual machine model.
+- [Create Compute Engine instances](https://docs.cloud.google.com/compute/docs/instances/instance-creation-overview?hl=en) - Official guide to images, disks, and the instance creation path.
+- [Machine families and resource comparison](https://docs.cloud.google.com/compute/docs/machine-resource?authuser=0) - Official machine type and resource guidance.
+- [Compute Engine disks API](https://docs.cloud.google.com/compute/docs/reference/rest/v1/disks) - Official reference for boot and data disks.
+- [Regions, zones, and resource scope](https://docs.cloud.google.com/compute/docs/regions-zones/global-regional-zonal-resources?hl=en) - Official location and failure-domain model.
+- [Linux startup scripts](https://docs.cloud.google.com/compute/docs/instances/startup-scripts/linux) - Official behavior and requirements for startup automation.
+- [Authenticate Compute Engine workloads](https://docs.cloud.google.com/compute/docs/access/authenticate-workloads) - Official service account, Application Default Credentials, and metadata-server guidance.

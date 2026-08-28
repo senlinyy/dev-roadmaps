@@ -1,265 +1,460 @@
 ---
-title: "Targeting Host Patterns"
-description: "Use host patterns and limits to keep an Ansible run inside the intended target set."
-overview: "After inventory defines the map, each Ansible run still needs a precise target."
-tags: ["ansible", "patterns", "limits", "rollouts"]
+title: "Patterns, Limits, and Canary Targets"
+description: "Learn how Ansible host patterns form sets, how command-line limits intersect those sets, and how targeting supports safe canary rollouts."
+overview: "Inventory defines the possible hosts, a play pattern defines its authorized domain, and --limit narrows one execution. This article treats patterns as set algebra, separates hosts from task tags and batch size, and builds a verify-first canary workflow."
+tags: ["ansible", "patterns", "limit", "canary", "inventory"]
 order: 4
 id: article-infrastructure-as-code-ansible-patterns-limits-canaries
 ---
 
 ## Table of Contents
 
-1. [Why Targeting Needs Two Layers](#why-targeting-needs-two-layers)
-2. [Host Patterns in Playbooks](#host-patterns-in-playbooks)
-3. [Runtime Limits](#runtime-limits)
-4. [Canary Runs](#canary-runs)
-5. [Batches, Serial, and Failure Stops](#batches-serial-and-failure-stops)
-6. [Tags Choose Tasks](#tags-choose-tasks)
-7. [Verifying the Target Set](#verifying-the-target-set)
-8. [Failure Reading and Rollback](#failure-reading-and-rollback)
-9. [Putting It All Together](#putting-it-all-together)
-10. [References](#references)
+1. [How Does Inventory Define the Host Universe?](#how-does-inventory-define-the-host-universe)
+2. [How Do Pattern Operators Build Host Sets?](#how-do-pattern-operators-build-host-sets)
+3. [Why Are hosts: and --limit Separate Layers?](#why-are-hosts-and---limit-separate-layers)
+4. [How Do Canary Runs Follow from Set Intersection?](#how-do-canary-runs-follow-from-set-intersection)
+5. [How Do Wildcards, Regexes, and Positions Select Hosts?](#how-do-wildcards-regexes-and-positions-select-hosts)
+6. [Why Are Tags and serial Different from Targeting?](#why-are-tags-and-serial-different-from-targeting)
+7. [How Do You Verify Hosts and Tasks Before a Run?](#how-do-you-verify-hosts-and-tasks-before-a-run)
+8. [What Is the Safest Targeting Workflow?](#what-is-the-safest-targeting-workflow)
+9. [Check Your Answers](#check-your-answers)
 
-## Why Targeting Needs Two Layers
-<!-- section-summary: Patterns choose the normal host set, and limits narrow a specific run so the blast radius stays visible. -->
+Ansible targeting is easier to reason about when every host expression is treated as a set. Inventory defines the universe. A play's `hosts:` expression chooses the domain in which that play is allowed to operate. A command-line limit intersects the play domain for this run. Tags filter work along a separate axis.
 
-Inventory answers which machines exist. A **host pattern** answers which of those machines a playbook normally manages. A **runtime limit** narrows that normal set for one run, so an operator or pipeline can start with a canary, a region, or a single broken host.
+Suppose inventory resolves to:
 
+```ini
+[web]
+web01.example.com
+web02.example.com
+web03.example.com
 
-![Targeting Two Layer Map](/content-assets/articles/article-infrastructure-as-code-ansible-patterns-limits-canaries/targeting-two-layer-map.png)
+[database]
+db01.example.com
+db02.example.com
 
-*The targeting map shows the difference between the playbook host pattern and the runtime limit that narrows a real run.*
+[production:children]
+web
+database
 
-For the orders platform, the web deploy playbook should normally manage `prod_web`. That is the real service group. During a first production rollout, the team should narrow the run to `orders-web-01`, watch the service, and then continue to the rest of `prod_web`.
-
-This two-layer habit keeps the playbook honest. The playbook says the broad operational intent, while the command line or job template says the rollout slice for today. A targeting mistake can hurt even when every task is correct, so the target set deserves its own review before any production change starts.
-
-With this inventory, the examples have visible boundaries:
-
-```yaml
-all:
-  children:
-    prod_web:
-      hosts:
-        orders-web-01:
-        orders-web-02:
-        orders-web-03:
-    prod_workers:
-      hosts:
-        orders-worker-01:
+[canary]
+web01.example.com
 ```
 
-`hosts: prod_web` selects the normal web fleet. `--limit orders-web-01` narrows that selection to one host. A limit cannot turn a worker host into a web host for that play because the runtime limit intersects with the play's host pattern.
+Inventory answers which automation identities exist and how they are classified. Static files, dynamic plugins, and constructed groups may all contribute to the resolved graph. A pattern cannot select a name that is absent from that universe.
 
-## Host Patterns in Playbooks
-<!-- section-summary: The hosts field is a pattern that can select groups, hosts, intersections, exclusions, and all hosts. -->
-
-A **pattern** is Ansible's expression for selecting hosts from inventory. In a playbook, the `hosts` field is a pattern. It can name one host, one group, all hosts, or a combination of groups and hosts.
+A play declares a pattern:
 
 ```yaml
-- name: Deploy orders web application
-  hosts: prod_web
-  become: true
+- name: Configure web servers
+  hosts: web
   tasks:
-    - name: Install the selected orders package
+    - name: Keep Nginx installed
       ansible.builtin.package:
-        name: "orders-web-{{ orders_package_version }}"
+        name: nginx
         state: present
 ```
 
-This play targets `prod_web` because the playbook manages production web hosts. The playbook should usually use a stable group that matches the service boundary. That way, adding `orders-web-03` to the inventory automatically brings it into the normal web deploy path after review.
+Keep these questions in view as you work through the lesson:
 
-Patterns can also express combinations. A union selects either side, an intersection requires both sides, and an exclusion removes a subset. Shell quoting matters because characters such as `!` and `&` can have meaning before Ansible receives them.
+1. **How Does Inventory Define the Host Universe?**
+2. **How Do Pattern Operators Build Host Sets?**
+3. **Why Are `hosts:` and `--limit` Separate Layers?**
+4. **How Do Canary Runs Follow from Set Intersection?**
+5. **How Do Wildcards, Regexes, and Positions Select Hosts?**
+6. **Why Are Tags and `serial` Different from Targeting?**
+7. **How Do You Verify Hosts and Tasks Before a Run?**
+8. **What Is the Safest Targeting Workflow?**
 
-```bash
-ansible-playbook -i inventories/prod deploy-orders-web.yml --limit 'prod_web:&region_us_east_1'
-ansible-playbook -i inventories/prod deploy-orders-web.yml --limit 'prod_web:!orders-web-02'
-ansible-playbook -i inventories/prod baseline.yml --limit 'prod:!prod_reporting'
-```
+## How Does Inventory Define the Host Universe?
+<!-- section-summary: Patterns can select only names and groups present in the resolved inventory, so inventory is the universe for targeting. -->
 
-Those examples all use the playbook's normal target and then narrow it at runtime. The first reaches production web hosts in one region, the second reaches production web hosts except one host, and the third runs a baseline across production while leaving reporting alone.
+`hosts: web` means this play's domain is the set of hosts in `web`. It is not a loop over a hardcoded list. If inventory later adds `web04.example.com` to the group, the same play includes it.
 
-## Runtime Limits
-<!-- section-summary: --limit narrows the playbook's selected hosts without editing hosts in the playbook. -->
+This is why inventory changes are deployment changes. Adding a host to a group grants it membership in every play targeting that group. Dynamic inventory makes cloud tags or CMDB classification part of the same boundary.
 
-The `--limit` option narrows the host set selected by the playbook. This is useful because the playbook should describe the service it manages, while the run command describes how far this particular rollout should go.
-
-For the orders web deploy, the first production run can limit to one host:
-
-```bash
-ansible-playbook -i inventories/prod deploy-orders-web.yml --limit orders-web-01
-```
-
-After the canary passes, the next run can target the rest of the group with an exclusion:
+Inspect the universe first:
 
 ```bash
-ansible-playbook -i inventories/prod deploy-orders-web.yml --limit 'prod_web:!orders-web-01'
+ansible-inventory -i inventory.ini --graph
 ```
 
-This avoids editing `hosts:` from `prod_web` to one host and then trying to remember to change it back. The playbook keeps the normal service boundary, and the deployment record shows exactly which slice was used for each run.
+Then reason about patterns over the displayed names. Do not assume a hostname's DNS form or IP is the inventory identity; pattern matching normally uses inventory names.
 
-Automation Controller and CI systems use the same idea. A job template can carry the inventory, credential, and playbook, while a prompted limit or pipeline parameter supplies `orders-web-01` for the canary. Larger teams often make the limit visible in approval screens because the target set is part of the change request.
+## How Do Pattern Operators Build Host Sets?
+<!-- section-summary: Union, intersection, and exclusion combine inventory groups and hosts into precise target sets. -->
 
-## Canary Runs
-<!-- section-summary: A canary changes one representative host first, then uses health checks before the rollout widens. -->
+Ansible patterns resemble set algebra.
 
-A **canary** is a small representative target that receives the change first. The goal is to observe real behavior with a small blast radius. Check mode can preview supported changes, and a canary then proves the actual package install, template render, service restart, health check, and traffic path on a real host.
+**Union** selects members of either set:
 
-For the orders platform, `orders-web-01` can leave the load balancer pool, receive the new package, restart the service, pass local health checks, and then rejoin the pool. If the service fails to start or error rates rise, the team stops with one web host affected.
+```text
+web:database
+```
 
-A practical canary run might look like this:
+Conceptually:
+
+```text
+web union database
+```
+
+**Intersection** selects members present in both sets:
+
+```text
+web:&production
+```
+
+This asks for hosts classified as both web and production.
+
+**Exclusion** removes a set:
+
+```text
+production:!database
+```
+
+This begins with production and removes database hosts.
+
+Operators can combine:
+
+```text
+web:&production:!maintenance
+```
+
+The result is production web hosts excluding those currently in maintenance. Quote shell arguments containing `!`, `&`, wildcards, or other metacharacters so the shell does not transform them before Ansible receives the pattern:
 
 ```bash
-ansible-playbook -i inventories/prod deploy-orders-web.yml \
-  --limit orders-web-01 \
-  --check --diff
-
-ansible-playbook -i inventories/prod deploy-orders-web.yml \
-  --limit orders-web-01
-
-curl -fsS https://orders.example.com/health
+ansible-playbook -i inventory.ini site.yml \
+  --limit 'web:&production:!maintenance'
 ```
 
-The best canary is a normal member of the group. A host with a known special `host_vars` override may test the exception path while the usual path remains untested. A forgotten low-traffic host may hide performance problems that show up on normal traffic, so teams usually choose a representative host and record the choice in the deployment notes.
+Set reasoning prevents ambiguous prose such as “all production except databases, but only in web.” Write the base set, apply intersections, then remove exceptions. Verify the actual result rather than trusting mental operator precedence for a complex expression.
 
-## Batches, Serial, and Failure Stops
-<!-- section-summary: serial and failure controls let a playbook widen gradually after the first host succeeds. -->
+Host groups can overlap. A host may belong to `web`, `production`, `eu_west`, and `canary` simultaneously. Intersection uses that membership deliberately; it does not create a new persistent group.
 
-`--limit` controls which hosts are eligible for a run. **Serial** controls how many of those hosts Ansible processes at a time inside the play. This is useful after the canary, because the team may want to update the remaining web servers in small batches instead of all at once.
+Patterns are evaluated against resolved inventory at run time. When dynamic membership changes, the same expression can select a different set. Keep the resolved host list as deployment evidence.
 
+## Why Are `hosts:` and `--limit` Separate Layers?
+<!-- section-summary: The play declares its intended host domain, while a limit narrows the current execution and cannot expand beyond that domain. -->
 
-![Canary Batch Rollout Flow](/content-assets/articles/article-infrastructure-as-code-ansible-patterns-limits-canaries/canary-batch-rollout-flow.png)
-
-*The rollout flow shows one canary, a small batch, a health gate, and the decision to continue or stop before the full fleet changes.*
+Suppose a play says:
 
 ```yaml
-- name: Deploy orders web application
-  hosts: prod_web
-  serial:
-    - 1
-    - 50%
-    - 100%
-  max_fail_percentage: 20
-  become: true
-  tasks:
-    - name: Install the selected orders package
-      ansible.builtin.package:
-        name: "orders-web-{{ orders_package_version }}"
-        state: present
+- name: Deploy web application
+  hosts: web
 ```
 
-With this shape, Ansible starts with one host, then moves to half of the remaining selected hosts, then finishes the rest. `max_fail_percentage` can stop the play when too many hosts fail in a batch. Teams also use `any_errors_fatal: true` for operations where one host failure should stop the whole play immediately.
-
-Serial batches help production safety, and they still rely on a correct target set. If the playbook says `hosts: all`, serial will carefully roll through the wrong boundary. Start with the pattern and limit, then use serial to control the pace.
-
-## Tags Choose Tasks
-<!-- section-summary: Tags choose which tasks run, while patterns and limits choose where those tasks run. -->
-
-**Tags** select tasks inside the hosts already chosen by `hosts` and `--limit`. They solve a different problem from host targeting. Patterns and limits choose where work runs; tags choose which pieces of work run there.
-
-```yaml
-- name: Render orders config
-  ansible.builtin.template:
-    src: orders.yml.j2
-    dest: /etc/orders/orders.yml
-    mode: "0640"
-  tags: [config]
-  become: true
-
-- name: Restart orders service
-  ansible.builtin.service:
-    name: orders-web
-    state: restarted
-  tags: [restart]
-  become: true
-```
-
-Running with `--tags config` still targets every host selected by the playbook and limit. It only narrows the task list. That distinction matters during incidents because a command such as `--tags restart` can restart the service on every selected host if the limit is broad.
-
-Use tags after the host boundary is already correct. A config-only canary should include both the host and the tag, because the tag changes the task list while the limit keeps the host boundary small. The command should show both choices together:
+and the command uses:
 
 ```bash
-ansible-playbook -i inventories/prod deploy-orders-web.yml \
-  --limit orders-web-01 \
+ansible-playbook -i inventory.ini deploy.yml \
+  --limit web01.example.com
+```
+
+The effective hosts are:
+
+```text
+play domain intersect command limit
+    web intersect {web01.example.com}
+    = {web01.example.com}
+```
+
+If the same command limits to `db01.example.com`, the result is empty because that database host is not inside `hosts: web`. A limit does not replace the play pattern and cannot broaden its authorization domain.
+
+This two-layer design is useful. The playbook records durable intent: this deployment belongs to web hosts. The operator or pipeline chooses the smaller execution slice: one canary, one region, or all eligible hosts except a known problem.
+
+Common limits include:
+
+```text
+web
+web01.example.com
+web:&production
+web:&production:!web03.example.com
+```
+
+Limits are patterns too, so they accept group operations. Their scope applies across plays in the playbook. A multi-play run may target web hosts in one play and database hosts in another; one limit intersects each play separately. A `--limit web01` can make the database play match zero hosts.
+
+An empty match should be treated deliberately. In a deployment pipeline, matching zero hosts can look green while doing nothing. Verify the list and fail the workflow if the intended target set is empty.
+
+## How Do Canary Runs Follow from Set Intersection?
+<!-- section-summary: A canary is a narrow first intersection of an unchanged production play, followed by a verified expansion to the remaining eligible hosts. -->
+
+A canary does not require a separate copy of the playbook. Keep the production play domain and narrow the first run:
+
+```bash
+ansible-playbook -i inventory.ini deploy.yml \
+  --limit 'web:&production:&canary'
+```
+
+The play still says `hosts: web`. Inventory classifies production and canary membership. The command chooses their intersection for this execution.
+
+After real mutation, verify the canary's configuration, service health, load-balancer status, metrics, and change reporting. Then target the remaining production web set:
+
+```bash
+ansible-playbook -i inventory.ini deploy.yml \
+  --limit 'web:&production:!canary'
+```
+
+This flow naturally separates:
+
+```text
+same desired procedure
+    + first narrow host set
+    + health decision
+    + remaining host set
+```
+
+Choose the canary intentionally. A designated group makes selection visible and stable. A one-off exact hostname can work when recorded by the release system. The host should represent normal production dependencies and have enough observation to reveal problems.
+
+Canary targeting limits blast radius, not task scope. The play still runs all applicable tasks on that host. If only configuration should be tested, use tags or a separate check-mode preview as an independent task filter.
+
+Inventory can change between stages. Resolve and record both target lists, and ensure hosts are neither skipped nor deployed twice unintentionally. A new dynamic host appearing after the canary may need a policy about whether it joins this release.
+
+## How Do Wildcards, Regexes, and Positions Select Hosts?
+<!-- section-summary: Additional pattern generators can select names or group positions, but their safety depends on stable inventory identity and verified resolution. -->
+
+Wildcards can select inventory names:
+
+```text
+web*.example.com
+```
+
+Regular-expression patterns can express more complex name rules. They remain set generators over inventory; they do not query DNS or discover arbitrary machines.
+
+Name matching has a subtle boundary. A host can be declared as:
+
+```yaml
+web01:
+  ansible_host: 10.20.1.11
+```
+
+The inventory identity is `web01`. A pattern for `10.20.1.11` does not necessarily match it merely because that is the connection endpoint. Use `ansible_host` for routing and `inventory_hostname` for targeting identity.
+
+Ansible can select hosts by position in a group, such as the first member. This can make a quick canary:
+
+```text
+web[0]
+```
+
+Position is only safe if inventory ordering is defined and stable. Dynamic inventory can reorder results, and “first” may not be representative. A named canary group is more reviewable for production.
+
+Ranges can select group slices. They are convenient for batching experiments but can hide which concrete hosts receive the change. Always render the selected list before execution.
+
+Wildcards and regexes can broaden unexpectedly when new hosts are added. A pattern based on explicit environment and role groups usually expresses intent better than a naming convention alone. Prefer classifications that inventory owners review.
+
+## Why Are Tags and `serial` Different from Targeting?
+<!-- section-summary: Host patterns select rows, tags select task columns, and serial controls how many selected hosts enter one execution batch. -->
+
+Think of execution as a matrix:
+
+```text
+                 tasks
+hosts       preflight  config  deploy  verify
+web01           x        x       x       x
+web02           x        x       x       x
+web03           x        x       x       x
+```
+
+Host patterns and limits select rows. Tags select columns:
+
+```bash
+ansible-playbook -i inventory.ini site.yml \
+  --limit 'web:&production' \
   --tags config
 ```
 
-Preview the task side the same way you preview the host side:
+This runs config-tagged tasks only on production web hosts. Tags do not change inventory membership or the play domain.
 
-```bash
-ansible-playbook -i inventories/prod deploy-orders-web.yml --tags config --list-tasks
-ansible-playbook -i inventories/prod deploy-orders-web.yml --list-tags
+Tags can skip prerequisites, handlers, or verification. Use `--list-tags` and design independently callable task groups with clear assertions. A task tagged `always` has special behavior; a `never` task requires explicit selection.
+
+`serial` changes batch size after host selection:
+
+```yaml
+- name: Roll web fleet
+  hosts: web
+  serial: 2
 ```
 
-Those commands help reviewers catch tag designs that select half of a dependency chain. If `--tags config` renders a file but skips the validation task that protects it, the tag set needs cleanup before teams use it as a production shortcut.
+The host set is still `web` intersected with any limit. Ansible processes two selected hosts per batch. `serial` does not choose which environment or role belongs in the play; it controls rollout concurrency.
 
-## Verifying the Target Set
-<!-- section-summary: --list-hosts and inventory graph checks make the selected hosts visible before tasks run. -->
+The four dimensions are:
 
-Before a production run, make the target set visible. `--list-hosts` shows which hosts the playbook would affect after applying `hosts` and `--limit`. It is one of the simplest safety checks in Ansible work.
+```text
+inventory
+    what host identities and groups exist
 
-```bash
-ansible-playbook -i inventories/prod deploy-orders-web.yml --list-hosts
-ansible-playbook -i inventories/prod deploy-orders-web.yml --limit orders-web-01 --list-hosts
-ansible-playbook -i inventories/prod deploy-orders-web.yml --limit 'prod_web:!orders-web-01' --list-hosts
+hosts pattern
+    the play's allowed domain
+
+limit
+    this run's narrowed host subset
+
+tags
+    this run's selected task subset
+
+serial
+    batch shape over selected hosts
 ```
 
-The inventory graph is also useful when a pattern feels confusing. It shows group membership before the playbook layer gets involved.
+Keeping them separate makes command review possible.
+
+## How Do You Verify Hosts and Tasks Before a Run?
+<!-- section-summary: Listing and independently testing patterns proves the concrete host and task sets before a mutating command uses them. -->
+
+List the play's hosts:
 
 ```bash
-ansible-inventory -i inventories/prod --graph prod_web
+ansible-playbook -i inventory.ini deploy.yml --list-hosts
 ```
 
-In a pipeline, make these outputs easy to see before the approval gate. A human should be able to answer: which playbook, which inventory, which limit, and which hosts? That check catches many mistakes before Ansible reaches the first task.
-
-## Failure Reading and Rollback
-<!-- section-summary: Targeting failures usually come from empty intersections, shell quoting, broad tags, or unclear rollback limits. -->
-
-An empty or surprising target list usually points to the pattern. If Ansible warns that it could not match a supplied host pattern, check spelling, group names, dynamic inventory output, and whether the limit intersects with the playbook's `hosts` value. A host outside `prod_web` is skipped in a play that targets `prod_web`, even if the runtime limit names that host.
-
-Shell quoting can also change the command before Ansible sees it. Quote patterns that contain `!`, `&`, commas, or colons. This is especially important in CI scripts because a shell option or environment can make a command behave differently from a local terminal.
-
-Rollback should be targeted with the same discipline as rollout. A failed canary should roll back on the canary host first, and the command should make that small boundary visible. The rollback command should be as specific as the deploy command:
+Add the exact limit:
 
 ```bash
-ansible-playbook -i inventories/prod rollback-orders-web.yml --limit orders-web-01
-```
-
-For a failed batch, start from the recap. Write down which hosts reported `changed`, which hosts failed, and which hosts stayed untouched. Revert the Git change or restore the previous release value, run `--list-hosts` for the changed host set, roll back one host, verify service status and load balancer health, then widen across only the hosts that received the bad change.
-
-If the wider rollout already reached several hosts, use the deployment record and `--list-hosts` to confirm the rollback target before starting. Tags can help select rollback tasks, and a clear limit still owns the host boundary.
-
-```bash
-ansible-playbook -i inventories/prod deploy-orders-web.yml \
-  --limit 'orders-web-01,orders-web-02' \
-  --tags rollback \
+ansible-playbook -i inventory.ini deploy.yml \
+  --limit 'web:&production:!maintenance' \
   --list-hosts
 ```
 
-That preview matters because emergency commands are still production commands. The pressure is higher, so the target set should be extra visible before the rollback starts.
+Test a pattern independently with an ad-hoc command:
 
-## Putting It All Together
-<!-- section-summary: Safe Ansible targeting uses a stable playbook pattern, visible runtime limit, canary, batches, and explicit rollback boundary. -->
+```bash
+ansible -i inventory.ini \
+  'web:&production:!maintenance' \
+  --list-hosts
+```
 
-The orders team now has a full targeting workflow. The playbook targets `prod_web` because that is the normal service boundary. The first production run uses `--limit orders-web-01` as a canary, and `--list-hosts` makes the selected host visible before any task runs.
+The output is the actual execution set. Count it, compare it with the expected inventory cohort, and store it with the deployment evidence.
 
+Verify tasks separately:
 
-![Targeting Summary](/content-assets/articles/article-infrastructure-as-code-ansible-patterns-limits-canaries/targeting-summary.png)
+```bash
+ansible-playbook -i inventory.ini deploy.yml --list-tasks
+ansible-playbook -i inventory.ini deploy.yml --list-tags
+```
 
-*The summary links patterns, limits, serial batches, tags, verification, and rollback into one targeting checklist.*
+Then combine the command's host and tag filters and run `--check --diff` where safe and supported. Preview does not prove real execution, but it can expose a target or task-filter mistake before mutation.
 
-After the canary passes, the team runs the remaining web hosts with an exclusion pattern or with serial batches. Tags can narrow the task list, and the host boundary still comes from `hosts` and `--limit`. Rollback uses the same targeting checks as rollout.
+Quote patterns in the shell. Exclamation marks, ampersands, brackets, and wildcards can have shell meanings. If CI builds a pattern from inputs, validate against an allowlist rather than concatenating arbitrary user text.
 
-This is the point where inventory, variables, connection settings, and targeting connect. Inventory names the hosts, variables describe them, connection settings let Ansible reach them, and patterns decide which ones receive a change. A safe Ansible run is the result of all four pieces lining up in the open.
+Verbose output can help show pattern decisions but may expose variables. Use it in a protected setting and do not print secret-bearing inventory values merely to prove scope.
+
+## What Is the Safest Targeting Workflow?
+<!-- section-summary: Safe targeting starts from reviewed inventory, proves play and run intersections, previews both host and task axes, and expands only after canary health. -->
+
+A practical workflow is:
+
+```text
+1. Inspect resolved inventory graph.
+2. State the play's intended hosts pattern.
+3. Construct the narrow run limit as a set expression.
+4. List the concrete host result.
+5. List tasks and tags if task filtering is used.
+6. Run syntax and supported check/diff preview.
+7. Execute one representative canary.
+8. Verify the actual service.
+9. Resolve and record the remaining host set.
+10. Widen through serial batches and health gates.
+11. Verify that every intended host participated.
+```
+
+For staging configuration only:
+
+```bash
+ansible-playbook -i inventory.ini site.yml \
+  --limit 'web:&staging' \
+  --tags config \
+  --check --diff
+```
+
+For the production canary:
+
+```bash
+ansible-playbook -i inventory.ini deploy.yml \
+  --limit 'web:&production:&canary'
+```
+
+For the remainder:
+
+```bash
+ansible-playbook -i inventory.ini deploy.yml \
+  --limit 'web:&production:!canary'
+```
+
+For production configuration without deployment tasks:
+
+```bash
+ansible-playbook -i inventory.ini site.yml \
+  --limit 'web:&production' \
+  --tags config
+```
+
+The model to remember is:
+
+```text
+inventory defines what exists
+hosts defines the play's domain
+limit narrows the current execution
+tags filter work on selected hosts
+serial divides selected hosts into batches
+```
+
+Every explicit targeting and filtering layer should be clearly visible in the durable run record. Safe production infrastructure host targeting is not a clever pattern; it is the ability to prove exactly which hosts and tasks receive authority before the command changes them.
+
+Multiple plays make the intersection especially important. A deployment file may have one play on `load_balancers`, one on `web`, and one on `monitoring`. A hostname-only limit can cause the supporting plays to match nothing. If the procedure requires all three boundaries, use a limit containing the needed groups or design the orchestration so the control-plane steps are delegated from the current web host. Always inspect `--list-hosts` for every play, not only the headline application play.
+
+Pattern syntax should remain readable to the next operator. A very dense regular expression may be correct but difficult to audit during an incident. If a set has lasting operational meaning, create a reviewed inventory group such as `production_canary` or `maintenance_excluded` and let the pattern express the relationship between named classes.
+
+Target proof also needs time context. Dynamic inventory can cache results, and two commands may see different membership when instances start or stop. Use one controlled inventory refresh policy for the run, record the resolved hosts, and decide whether newly appearing hosts join this deployment or wait for the next one.
+
+Finally, compare the final recap with the initial resolved set. A host can become unreachable, fail early, or skip every tagged task. Count successful and failed participation rather than treating the job's overall exit label as proof that all selected machines reached the intended condition. Targeting begins with set selection and ends with accounting for every member of that set.
+
+For emergency repair, narrow targeting remains useful but still requires verification. Select the one drifted host, list the tasks, run check and diff where supported, apply the normal idempotent role, and confirm service health. Avoid creating a permanent one-host fork of the playbook: the repair should restore the machine to its class so the next full run stays consistent. Record exclusions too, because a host repeatedly omitted from fleet runs becomes unmanaged drift rather than a temporary exception.
+
+Save the resolved host list with the deployment record. Inventory membership can change after a dynamic refresh, so the pattern string alone may not reconstruct which nodes were eligible at run time. A recorded list connects the reviewed expression to the concrete canary and later batches that received the change.
+
+Pattern safety improves when group dimensions are positive and explicit. Selecting `prod:&web` states both required properties; selecting `all:!staging` assumes every non-staging host is production-ready. Exclusions are useful, but positive intersections usually make the intended boundary easier to review and less sensitive to newly added groups.
+
+Targeting chooses hosts, not task semantics. A pattern can select Debian and Red Hat hosts together while `ansible_os_family` conditions choose different package work, and the same target set can run `ansible.builtin.template` before notifying `ansible.builtin.service`. Prove the host set first, then inspect conditions and tags separately; a correct `--limit` cannot compensate for a task condition that selects the wrong work.
+
+## Check Your Answers
+
+:::expand[How Does Inventory Define the Host Universe?]{kind="recap"}
+Inventory supplies stable host identities and group membership. Patterns can select only from that resolved universe, whose changes alter automation scope.
+:::
+
+:::expand[How Do Pattern Operators Build Host Sets?]{kind="recap"}
+Use union, intersection, and exclusion to express host membership precisely, quote the expression, and verify it against current inventory.
+:::
+
+:::expand[Why Are `hosts:` and `--limit` Separate Layers?]{kind="recap"}
+`hosts:` records the durable play domain. `--limit` intersects it for one run and cannot add hosts outside that authorized domain.
+:::
+
+:::expand[How Do Canary Runs Follow from Set Intersection?]{kind="recap"}
+Run the unchanged production play against a narrow representative intersection, verify it, then select the remaining eligible set.
+:::
+
+:::expand[How Do Wildcards, Regexes, and Positions Select Hosts?]{kind="recap"}
+They generate sets from inventory identities. Ordering and naming can change, so explicit groups and resolved-list review are safer for production.
+:::
+
+:::expand[Why Are Tags and `serial` Different from Targeting?]{kind="recap"}
+Patterns select hosts, tags select tasks, and `serial` controls batches over the already selected hosts. Each is an independent execution axis.
+:::
+
+:::expand[How Do You Verify Hosts and Tasks Before a Run?]{kind="recap"}
+Use inventory graph, list-hosts, independent pattern tests, list-tasks, list-tags, and a protected preview to expose the concrete execution matrix.
+:::
+
+:::expand[What Is the Safest Targeting Workflow?]{kind="recap"}
+Prove inventory, play domain, limit, tasks, and preview; mutate one canary; verify service health; then widen through recorded batches.
+:::
 
 ---
 
 **References**
 
-- [Patterns: targeting hosts and groups](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_patterns.html)
-- [ansible-playbook command](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html)
-- [Controlling playbook execution: strategies and more](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html)
-- [Error handling in playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html)
-- [Tags](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_tags.html)
-- [ansible-inventory command](https://docs.ansible.com/projects/ansible/latest/cli/ansible-inventory.html)
-- [Red Hat Ansible Automation Platform job templates](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.5/html/using_automation_execution/controller-job-templates)
+- [Ansible: Patterns](https://docs.ansible.com/ansible/latest/inventory_guide/intro_patterns.html)
+- [Ansible: Inventory](https://docs.ansible.com/ansible/latest/inventory_guide/intro_inventory.html)
+- [Ansible: Controlling playbook execution](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_startnstep.html)
+- [Ansible: Tags](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_tags.html)
+- [Ansible: Delegation and rolling updates](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_delegation.html)

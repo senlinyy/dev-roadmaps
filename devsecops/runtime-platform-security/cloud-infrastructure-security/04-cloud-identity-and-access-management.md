@@ -1,8 +1,8 @@
 ---
 title: "Cloud Identity and Access Management"
-description: "Design cloud IAM paths for humans, workloads, CI/CD, deployment roles, guardrails, emergency elevation, and access reviews."
-overview: "Start with the caller behind every cloud change, then map human federation, workload identity, CI/CD OIDC, least-privilege deployment roles, permission guardrails, temporary elevation, and recurring access reviews into one DevSecOps operating loop."
-tags: ["devsecops", "iam", "cloud", "break-glass"]
+description: "Learn how human federation, workload identity, CI OIDC, least-privilege roles, permission boundaries, explicit deny, temporary elevation, break-glass, and access reviews control cloud authority."
+overview: "Start with the caller behind every cloud API action. Separate authentication from authorization, map capabilities and production roles, federate humans through groups, give workloads and CI contextual short-lived identities, constrain delegation and escalation paths, keep control-plane and data-plane authority distinct, test emergency access, and use identity-quality audit evidence to remove stale relationships."
+tags: ["devsecops", "cloud-security", "iam", "least-privilege"]
 order: 4
 id: article-devsecops-cloud-infrastructure-security-cloud-identity-and-access
 aliases:
@@ -19,439 +19,365 @@ aliases:
 
 ## Table of Contents
 
-1. [Every Cloud Change Has a Caller](#every-cloud-change-has-a-caller)
-2. [The Production Access Map](#the-production-access-map)
-3. [Human Federation](#human-federation)
-4. [Workload Identity](#workload-identity)
-5. [CI/CD OIDC Federation](#cicd-oidc-federation)
-6. [Least-Privilege Deployment Roles](#least-privilege-deployment-roles)
-7. [Guardrails and Permission Boundaries](#guardrails-and-permission-boundaries)
-8. [Temporary Elevation and Break-Glass Access](#temporary-elevation-and-break-glass-access)
-9. [Access Reviews and Evidence](#access-reviews-and-evidence)
-10. [Putting It All Together](#putting-it-all-together)
-11. [References](#references)
+1. [Why Does Every Cloud Change Need a Clear Caller?](#why-does-every-cloud-change-need-a-clear-caller)
+2. [How Do You Map Capabilities and Least Privilege?](#how-do-you-map-capabilities-and-least-privilege)
+3. [How Should Human Federation, Groups, and Roles Work?](#how-should-human-federation-groups-and-roles-work)
+4. [How Do Workload Identity and CI OIDC Remove Bootstrap Secrets?](#how-do-workload-identity-and-ci-oidc-remove-bootstrap-secrets)
+5. [How Do Permission Boundaries and Explicit Deny Constrain Escalation?](#how-do-permission-boundaries-and-explicit-deny-constrain-escalation)
+6. [Why Must Build, Deployment, Runtime, and Environment Identities Differ?](#why-must-build-deployment-runtime-and-environment-identities-differ)
+7. [How Should Temporary Elevation and Break-Glass Access Work?](#how-should-temporary-elevation-and-break-glass-access-work)
+8. [How Do Access Reviews and Audit Evidence Keep IAM Accurate?](#how-do-access-reviews-and-audit-evidence-keep-iam-accurate)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Every Cloud Change Has a Caller
-<!-- section-summary: Cloud IAM explains which human, workload, pipeline, or emergency role can call each cloud API. -->
+Every cloud action has a caller. A human opens a console, a CI job applies infrastructure, a deployment workflow updates a service, an application reads storage, or a managed service calls another API. Cloud IAM determines how that caller proves identity and which actions the provider permits.
 
-Every cloud change has a caller. A Terraform apply that creates a subnet has a caller. A console edit that opens a security group has a caller. A container that reads a secret has a caller. A CI job that deploys a service has a caller. During an incident, the emergency role has a caller too.
+**Authentication** answers “Who or what is this caller?” Passwords, federated sessions, workload tokens, certificates, access keys, and signed requests can establish identity.
 
-**Cloud Identity and Access Management**, usually shortened to **cloud IAM**, controls those callers. It answers four plain questions: who or what is calling, what action can it perform, which resource can it touch, and which conditions must be true?
+**Authorization** answers “What may this authenticated identity do?” Policies evaluate action, resource, environment, conditions, and explicit constraints.
 
-A beginner can read most IAM decisions with these four words:
-
-| IAM word | Plain-English meaning | Example |
-|---|---|---|
-| Principal | The caller | A human role session, workload identity, service account, managed identity, or CI workflow |
-| Action | The API operation | `s3:PutObject`, `ec2:AuthorizeSecurityGroupIngress`, `Microsoft.Authorization/roleAssignments/write`, `compute.firewalls.patch` |
-| Resource | The target | A bucket, role, subnet, database, project, subscription, or log workspace |
-| Condition | Extra context for the decision | MFA, repository, branch, environment, source IP, region, session tag, or ticket ID |
-
-The previous article followed a drift incident where a production database rule opened after review. The resource question was clear: port `5432` accepted traffic from `0.0.0.0/0`. The next question is identity: which caller could make that change, and should that caller have had that permission?
-
-This article follows the Northstar customer portal again. The team has engineers, deployment workflows, application containers, receipt workers, security reviewers, and emergency responders. Each caller needs a narrow path, a short session where possible, and evidence that explains why the access existed.
-
-## The Production Access Map
-<!-- section-summary: Separate access paths keep planning, deploying, runtime work, incident investigation, auditing, and emergency recovery clear. -->
-
-Northstar runs a web API, a background receipt worker, a receipt storage bucket, and a private database. Terraform manages the infrastructure. GitHub Actions runs speculative plans on pull requests and applies approved changes from a protected production environment. Engineers investigate incidents through workforce sign-in. Security reviewers need read access to IAM and logs. A small emergency group can recover production when normal automation fails.
-
-The first IAM design move is **role separation**. Role separation means each job gets its own access path. A pull request plan job can read enough to build a plan. A deploy job can apply reviewed changes. A runtime container can read its own secret and write its own objects. An incident responder can read logs and resource state. An emergency responder can perform rare recovery actions with strong evidence.
-
-Here is Northstar's starter access map:
-
-| Role | Who or what assumes it | Duration | Main purpose | Evidence |
-|---|---|---:|---|---|
-| `northstar-prod-terraform-plan` | Pull request workflow | 30 minutes | Read state and build a speculative plan | PR number, commit SHA, workflow run ID |
-| `northstar-prod-terraform-deploy` | Protected deploy workflow | 45 minutes | Apply approved Terraform changes | Approved PR, environment approval, workflow run ID |
-| `northstar-prod-api-runtime` | Customer portal API container | Platform-managed session | Read needed secrets, write logs, use receipt storage | Task identity, service name, deployment version |
-| `northstar-prod-worker-runtime` | Receipt worker container | Platform-managed session | Write receipt files and read queue messages | Task identity, service name, deployment version |
-| `northstar-prod-incident-readonly` | On-call engineer through federation | 2 hours | Read logs, metrics, traces, and resource state | Incident ticket, human identity, MFA |
-| `northstar-prod-security-audit` | Security reviewer through federation | 4 hours | Review IAM, CloudTrail, policy findings, and exceptions | Review ticket, reviewer, date |
-| `northstar-prod-emergency-recovery` | Approved responder during serious outage | 45 minutes | Restore service when normal paths fail | Incident ticket, peer approval, audit query |
-
-The table gives each caller a job and evidence trail. The deployment workflow receives deployment access. The runtime receives runtime access. The incident responder receives read-only investigation access. Stronger access requires a stronger reason and a shorter window.
-
-![Production access map showing separate plan, deploy, runtime, read-only incident, security audit, and emergency recovery roles with evidence trails](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/production-access-map.png)
-
-*The map separates the major production access paths so plan, deploy, runtime, read-only, and emergency sessions do not blur into one broad role.*
-
-People need the first access path.
-
-## Human Federation
-<!-- section-summary: Human federation gives people temporary cloud sessions through the company identity provider instead of daily static cloud users. -->
-
-**Human federation** means people sign in through a central identity provider, then receive temporary cloud access based on group membership, MFA, device posture, approval state, or role assignment. The identity provider might be Microsoft Entra ID, Okta, Google Workspace, IAM Identity Center, or another workforce identity system.
-
-Federation replaces a risky older pattern: every engineer has a cloud-local user and long-lived access keys. Long-lived keys can sit in `~/.aws/credentials`, old CI secrets, shell history, build logs, password managers, and forgotten laptops. Federation gives the team a daily path with temporary sessions and central offboarding.
-
-For Northstar, normal production human access stays read-oriented:
-
-| Workforce group | Production access | Write access | Use case |
-|---|---|---:|---|
-| `Engineering` | Dashboards and documentation | No | Understand production behavior |
-| `SRE-OnCall` | `northstar-prod-incident-readonly` | No | Investigate alerts and read logs |
-| `Security-Reviewers` | `northstar-prod-security-audit` | No | Review IAM, policy results, and audit logs |
-| `Release-Managers` | Approve deployment environment | No direct console write | Approve production workflow runs |
-| `Emergency-Responders` | Eligible for emergency role | Yes, after approval | Recover serious incidents |
-
-This setup keeps normal production changes inside Git and deployment automation. A release manager approves a workflow, and the workflow performs the change with a deployment role. The release manager does not need a standing administrator role in the cloud console.
-
-Provider commands differ, but the pattern is similar:
-
-```bash
-aws sso login --profile northstar-prod-readonly
-az login --tenant 11111111-2222-3333-4444-555555555555
-gcloud auth login
+```text
+identity proof -> authentication
+policy decision -> authorization
 ```
 
-`aws sso login` starts an AWS IAM Identity Center session for a named profile. `az login` starts an Azure CLI session against a tenant. `gcloud auth login` starts a Google Cloud user login. The access behind those sessions should map to groups, roles, MFA, and approval rules rather than permanent personal admin keys.
+A successful authentication does not imply permission. A denied API call from a valid identity can be valuable evidence that the boundary works.
 
-Human federation handles people. Software needs its own identity path.
+IAM is fundamentally about capabilities. Rather than asking whether Alice, CI, or `payments-api` “has cloud access,” ask whether the identity can read object X, decrypt key Y, update service Z, create roles, change logging, or assume another identity.
 
-## Workload Identity
-<!-- section-summary: Workload identity gives applications temporary cloud credentials without storing permanent secrets in code, images, or config files. -->
+Keep these questions in view as you work through the lesson:
 
-**Workload identity** means an application, function, virtual machine, Kubernetes service account, container task, or batch job receives its own cloud identity. The workload uses that identity to call cloud APIs. The application does not need a permanent cloud key baked into a container image or config file.
+1. **Why Does Every Cloud Change Need a Clear Caller?**
+2. **How Do You Map Capabilities and Least Privilege?**
+3. **How Should Human Federation, Groups, and Roles Work?**
+4. **How Do Workload Identity and CI OIDC Remove Bootstrap Secrets?**
+5. **How Do Permission Boundaries and Explicit Deny Constrain Escalation?**
+6. **Why Must Build, Deployment, Runtime, and Environment Identities Differ?**
+7. **How Should Temporary Elevation and Break-Glass Access Work?**
+8. **How Do Access Reviews and Audit Evidence Keep IAM Accurate?**
 
-For Northstar, the API runtime might read one database connection secret, write logs, and read a few receipt objects. The background worker might read queue messages and write receipt PDFs. Those workloads should avoid IAM changes, network changes, infrastructure deployment, and unrelated secrets.
+## Why Does Every Cloud Change Need a Clear Caller?
+<!-- section-summary: Every cloud data or control-plane operation is performed by a human or workload identity whose authentication context and authorized capabilities should be explicit. -->
 
-Cloud platforms provide workload identity in different ways. AWS ECS task roles, EC2 instance profiles, and Lambda execution roles provide temporary credentials to workloads. Azure managed identities let Azure resources request tokens from Microsoft Entra ID. Google Cloud service accounts and Workload Identity Federation patterns give workloads cloud identities. Kubernetes platforms often map Kubernetes service accounts to cloud identities.
+A useful capability model includes:
 
-Here is a narrow AWS policy for a receipt worker:
+- **Action:** read, write, deploy, delete, decrypt, impersonate, administer.
+- **Resource:** exact service, bucket, key, role, project, account, or namespace.
+- **Conditions:** environment, source network, workload claims, tags, time, approval.
+- **Duration:** standing grant or temporary session.
+- **Delegation:** roles or service identities the caller can become.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ListReceiptBucket",
-      "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::northstar-payment-receipts-prod",
-      "Condition": {
-        "StringLike": {
-          "s3:prefix": [
-            "receipts/*"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "WriteAndReadReceiptObjects",
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject"
-      ],
-      "Resource": "arn:aws:s3:::northstar-payment-receipts-prod/receipts/*"
-    }
-  ]
-}
+The goal is not “nobody has access.” Production must operate, deploy, recover, and be investigated. The goal is that every necessary path has a purpose, bounded capability, responsible owner, strong identity, time model, and evidence.
+
+Build a production access map before writing policies. Include deployment, runtime, plan, read-only incident, security audit, backup, managed-service, and emergency recovery identities. A list of users misses workload and delegation paths.
+
+For each relationship, record the identity provider or platform, role, permitted actions, resource scope, conditions, session duration, owner, approval, and logs. This map exposes overlaps such as a CI role that can both deploy an application and edit the role it assumes.
+
+Every cloud change includes a control-plane caller even when it originates from declarative code. Terraform, a managed deployment service, and a Kubernetes controller eventually authenticate to provider APIs. “Automation changed it” is not enough; the automation should use a distinct identity that can be traced to a repository, workflow, run, and approved input.
+
+Data-plane calls also deserve identity. An application reading storage as a shared node role weakens attribution and gives sibling workloads the same capability. A service-specific identity makes both permission and audit records align with the actual workload.
+
+Identity boundaries support incident containment. If one application identity is compromised, responders can enumerate its allowed actions, revoke or block the role, and distinguish its events. A shared account forces investigation across every service that used the credential.
+
+![Production access map separates plan, deploy, runtime, incident-read, security-audit, and emergency roles with evidence trails](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/production-access-map.png)
+
+_IAM review begins with relationships between callers and capabilities, not a flat list of account members._
+
+## How Do You Map Capabilities and Least Privilege?
+<!-- section-summary: Least privilege grants one identity only the capabilities, resource scope, conditions, and time needed for its current job, then verifies actual use and expected denials. -->
+
+Least privilege limits blast radius. An overprivileged CI identity that can administer every resource turns workflow compromise into account compromise. A deployment identity restricted to updating one service limits what the same attacker can change.
+
+Start from the job:
+
+```text
+identity: parcelpulse-production-deployer
+action: update service deployment
+resource: parcelpulse production service only
+conditions: approved workflow and production environment
+duration: short role session
 ```
 
-`ListReceiptBucket` allows listing only the `receipts/` prefix in the bucket. `WriteAndReadReceiptObjects` allows reads and writes only for objects under that prefix. The bucket ARN controls listing, while the object ARN controls files inside the bucket.
+Avoid designing from a convenient administrator policy and subtracting a few actions. List the exact API operations used by a normal run, grant them narrowly, and investigate denials rather than automatically broadening permission.
 
-Workload identity also helps incident response. If an audit log shows `northstar-prod-api-runtime` changing a security group, responders know something is wrong because that identity should never have network administration permissions.
+Resource scope matters. `storage:*` on every bucket is broader than reading one configuration object. Action scope matters. Updating a service does not require creating IAM roles. Time matters. A permanent grant exists during every compromise window; a short session exists only when the job runs.
 
-The next caller is the deployment pipeline.
+Least privilege is a loop:
 
-## CI/CD OIDC Federation
-<!-- section-summary: OIDC federation lets CI workflows exchange signed run tokens for short-lived cloud credentials. -->
-
-**OpenID Connect**, usually shortened to **OIDC**, is a standard for signed identity tokens. In CI/CD, a workflow can request a short-lived OIDC token from the CI platform. The cloud provider verifies the token and exchanges it for temporary cloud credentials when the token matches the role trust rules.
-
-This replaces static deployment keys stored in CI secrets. A static key can leak through logs, compromised runners, backups, overly broad secret access, or old copies. An OIDC token is tied to one workflow run and expires quickly. The cloud role can inspect token claims such as repository, branch, environment, workflow, and audience.
-
-For GitHub Actions deploying to AWS, the trust policy can require the expected repository and protected production environment:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "GitHubProductionDeployOnly",
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:northstar/customer-portal:environment:production"
-        }
-      }
-    }
-  ]
-}
+```text
+grant narrowly -> observe use -> remove unused capability -> test -> repeat
 ```
 
-`Principal.Federated` names GitHub's OIDC provider in the AWS account. `Action` allows web identity federation into the role. The `aud` condition expects AWS STS. The `sub` condition accepts only the Northstar repository's production environment claim. GitHub environment protection, branch rules, and cloud trust policy now reinforce the same deployment path.
+Audit successful and denied operations. An unused permission may be removable, though rare recovery duties need confirmation. Repeated denied attempts may indicate missing legitimate capability, a stale script, or suspicious probing. A denial is not automatic evidence to grant more.
 
-![OIDC trust chain showing a CI workflow token matched against repository, environment, audience, and branch claims before receiving temporary cloud credentials](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/oidc-trust-chain.png)
+Test negative permissions. The plan identity should fail to apply. The staging role should fail against production. The runtime service should fail to change its own IAM policy. A deployment role should fail to create a broader role. These tests prove effective boundaries more directly than policy text.
 
-*The trust chain shows how a workflow token turns into a temporary deployment role only after the cloud provider checks repository, environment, and audience claims.*
+Account and project hierarchy can add outer constraints. Organization policy, service-control-style policy, and permission boundaries can set a maximum even when a local administrator attaches a broader allow. Keep the intended layers understandable and test the combined effective result.
 
-A workflow then requests an OIDC token and assumes the role:
+Least privilege also applies to read actions. Read-only access can expose customer data, secrets, infrastructure topology, logs, source artifacts, or encryption material. Do not treat `ReadOnly` as universally low risk; scope it to the data and operational question.
 
-```yaml
-name: production-deploy
+Conditions can narrow otherwise broad actions. Require expected resource tags, source identity, network, service, region, or session properties where the provider supports reliable conditions. Do not base critical authorization on a user-controlled tag or name without protecting who can change it.
 
-on:
-  workflow_dispatch:
+Policy simulators and access analyzers help, but test important calls using dedicated fixtures or lower environments. A simulated deny can differ from reality because of resource policy, organization policy, session policy, or service-specific behavior. Effective access is the combined decision of all relevant layers.
 
-permissions:
-  id-token: write
-  contents: read
+Avoid wildcard resources merely because an API does not reveal the exact resource until runtime. Investigate whether the operation can be redesigned, isolated into another role, constrained by condition, or protected by a maximum boundary. Document genuine provider limitations rather than normalizing them silently.
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
+## How Should Human Federation, Groups, and Roles Work?
+<!-- section-summary: Human access should begin with a central identity provider, map people through durable groups into cloud roles, use short sessions, and avoid permanent individual cloud credentials. -->
 
-      - name: Configure temporary AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::111122223333:role/northstar-prod-terraform-deploy
-          aws-region: us-east-1
-          role-session-name: deploy-${{ github.run_id }}
+Human federation lets a person authenticate through the organization's identity provider and receive a cloud session. The identity provider owns joiner, mover, leaver lifecycle, multifactor authentication, device or risk policy, and central account disablement.
 
-      - name: Apply reviewed plan
-        run: terraform apply -auto-approve tfplan
+```text
+employee -> identity provider -> group membership -> cloud role -> temporary session
 ```
 
-`permissions.id-token: write` lets the workflow request the OIDC token. `environment: production` connects the job to protected environment rules. `role-to-assume` names the cloud deployment role. `role-session-name` includes the workflow run ID, which helps later audit review.
+Federation removes the need for separate long-lived cloud passwords and access keys for each person. Disabling the central account can cut off new sessions across providers, subject to session lifetime and revocation behavior.
 
-Azure workload identity federation and Google Cloud Workload Identity Federation use the same security idea with different setup steps. The pipeline proves who it is through a signed token and receives short-lived credentials for the allowed job.
+Groups and roles are better than individual permission attachments. `ProductionReadOnly`, `PlatformDeployers`, or `SecurityAudit` express a job relationship that can be reviewed and reassigned. Do not accumulate one-off grants that survive team changes and become impossible to explain.
 
-OIDC answers how the pipeline gets credentials. The next section narrows what those credentials can do.
+Group membership is authority. Protect who can add members, require appropriate approval, log changes, and review nested or dynamic groups. A well-written cloud role is not least privilege if a broad group can assume it.
 
-## Least-Privilege Deployment Roles
-<!-- section-summary: Deployment roles should be split by job and scoped to the resources and actions each workflow needs. -->
+Use short sessions and reauthentication for sensitive roles. A person may hold ordinary read access but request temporary elevated capability for a deployment or incident. The session should state actor, role, reason, time, and approval where required.
 
-**Least privilege** means each identity receives the permissions needed for its job. A plan role needs read access. A deploy role needs controlled write access. A runtime role needs application access. An incident role needs investigation access. An emergency role needs recovery access with stronger monitoring.
+Avoid shared human accounts. Audit logs that say `prod-admin` cannot distinguish Alice, Bob, an automation process, or an attacker using their shared credential. Individual federated identity improves authorization, attribution, and revocation.
 
-Start by separating plan and deploy. The `northstar-prod-terraform-plan` role can read remote state, describe resources, and produce a speculative plan. It should avoid write permissions because pull request workflows run before production approval.
+Do not attach critical production policy directly to a named person as the long-term model. Durable teams and roles preserve continuity; audit events still identify the actual person who assumed the role.
 
-The `northstar-prod-terraform-deploy` role has stronger permissions, so it should run only from protected branches or protected environments. It can change Terraform-managed infrastructure, while avoiding dangerous side paths such as creating permanent access keys, disabling audit logging, attaching administrator policies, or passing arbitrary roles to services.
+Federation configuration is part of the trust chain. Protect identity-provider administrators, application registrations, group mapping, claims, and cloud trust settings. An attacker who can add themselves to the production group does not need to defeat the cloud role policy.
 
-In AWS, `iam:PassRole` deserves special review. It allows a caller to pass an IAM role to a service such as ECS, Lambda, or EC2. If a deployment role can pass any role, it may indirectly give a workload powerful access. A safer policy allows only approved runtime roles and only to the expected service:
+Joiner, mover, and leaver automation should remove old relationships promptly. Moving from platform engineering to another team should not leave production deployment membership. Offboarding should revoke active credentials and sessions according to provider capability, not only prevent the next login.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "PassOnlyApprovedRuntimeRolesToEcs",
-      "Effect": "Allow",
-      "Action": "iam:PassRole",
-      "Resource": [
-        "arn:aws:iam::111122223333:role/northstar-prod-api-runtime",
-        "arn:aws:iam::111122223333:role/northstar-prod-worker-runtime"
-      ],
-      "Condition": {
-        "StringEquals": {
-          "iam:PassedToService": "ecs-tasks.amazonaws.com"
-        }
-      }
-    }
-  ]
-}
+Privileged roles can require stronger session controls than ordinary roles: phishing-resistant multifactor authentication, managed devices, shorter duration, reauthentication, and approval. Record the actual federated subject even when the cloud event shows an assumed-role session name.
+
+Review nested groups and group ownership. A production group may be small directly but include a broad engineering group through nesting. Dynamic rules based on department or attributes can grant access unexpectedly when source data changes.
+
+## How Do Workload Identity and CI OIDC Remove Bootstrap Secrets?
+<!-- section-summary: Workload identity lets a platform attest which workload or workflow is running so it can receive temporary cloud authorization without storing a permanent bootstrap credential. -->
+
+Humans and workloads are different identity problems. An application cannot complete interactive SSO each time it starts. Traditionally, teams place a cloud key or service-account credential on the machine so the workload can authenticate.
+
+That creates a bootstrap secret: the workload must already possess authority to prove who it is. The credential can be copied from disk, an image, environment, secret store, or runner and reused elsewhere until revoked.
+
+**Workload identity** uses facts the platform can attest: service account, cluster, namespace, cloud resource, instance, repository, workflow, or environment. The workload exchanges signed platform identity for a short cloud session.
+
+```text
+platform knows workload context
+      -> signed identity assertion
+      -> cloud validates trust conditions
+      -> temporary scoped role
 ```
 
-`Action` names the role-passing permission. `Resource` lists the only runtime roles the deploy role can pass. `iam:PassedToService` limits the pass to ECS tasks. This protects the deployment path from accidentally launching a workload with an unrelated admin role.
+Identity should follow the workload, not the machine. Two applications on one node need different roles. Moving an application to a new node should not require copying a permanent key. The orchestrator or cloud platform can issue identity for the service itself.
 
-Least privilege usually improves in stages. Teams can start with broader permissions in development to discover real API calls, then use audit logs, access analyzer findings, failed access events, and deployment history to narrow production roles. The target is practical: the caller can do its job and cannot perform high-risk actions outside that job.
+CI/CD has the same problem. Storing one permanent cloud deploy key in the CI platform creates standing authority. OIDC federation lets a job request a token containing repository, ref, workflow, environment, issuer, and audience claims.
 
-Guardrails add a ceiling above individual roles.
+The cloud trust policy answers which token context may assume the role. The permission policy answers what the role may do.
 
-## Guardrails and Permission Boundaries
-<!-- section-summary: Guardrails set maximum permissions so one broad role policy cannot bypass organization rules. -->
-
-A **guardrail** is a control that sets a boundary around what teams, accounts, projects, subscriptions, or roles can do. Guardrails help when an individual role policy is too broad or a module creates an unsafe permission. They block sharp edges across the organization.
-
-In AWS, common guardrails include AWS Organizations service control policies, IAM permissions boundaries, resource control policies, and account-level settings. A **permissions boundary** sets the maximum permissions for a role or user. It does not grant access by itself; the identity still needs an allow policy, and the boundary limits the maximum scope.
-
-Here is a simplified boundary shape for application-created runtime roles:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "DenyPermanentCredentialAndOrgAdminPaths",
-      "Effect": "Deny",
-      "Action": [
-        "iam:CreateAccessKey",
-        "iam:CreateUser",
-        "iam:AttachUserPolicy",
-        "iam:PutUserPolicy",
-        "iam:CreatePolicyVersion",
-        "organizations:*"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
+```text
+trust policy: approved repository + protected workflow + production environment
+permission policy: update ParcelPulse production service only
 ```
 
-The `Deny` statement blocks permanent credential creation and organization administration paths. Since explicit deny has strong priority in IAM evaluation, this boundary can stop a risky action even if a separate policy accidentally allows it.
+![OIDC trust chain validates repository, environment, audience, and source claims before issuing temporary cloud credentials](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/oidc-trust-chain.png)
 
-Azure and Google Cloud have similar organization-level ideas. Azure uses management groups, Azure Policy, Azure RBAC, Privileged Identity Management, and deny assignments in some managed contexts. Google Cloud uses organization policies, IAM allow policies, IAM deny policies, principal access boundaries, and folder or project hierarchy controls.
+_Federation removes the stored cloud key, but the trust and permission policies still define the security boundary._
 
-Good guardrails focus on the dangerous exits. Deny disabling audit logs. Deny creating permanent admin users. Deny leaving approved regions. Deny public storage where the organization has a hard rule. Deny deployment outside approved identity paths. Detailed application design still belongs in reviewed IaC and policy packs.
+Broad OIDC trust is dangerous. Accepting any repository, branch, or workflow in an organization lets a lower-trust workload become the role. Validate issuer and audience, match precise claims, protect the workflow and environment that generate them, and audit sessions.
 
-Emergency recovery needs a careful path through those guardrails.
+Workload identity is better than shared secrets because it improves scope, attribution, lifetime, and revocation. It does not protect a legitimate identity while malicious code runs inside the authorized workload. Runtime and pipeline security still matter.
 
-## Temporary Elevation and Break-Glass Access
-<!-- section-summary: Temporary elevation gives short approved access for special work, and break-glass handles rare recovery when normal paths fail. -->
+Workload identity needs admission control. Decide which orchestrator service account, cloud resource, cluster, namespace, repository, or workflow may map to the cloud identity. If any workload can choose the trusted service-account name, the identity boundary is only a label.
 
-**Temporary elevation** means a person receives stronger access for a short time after approval. They request a role, explain the reason, link a ticket, pass MFA, and receive a session that expires automatically.
+Audience validation prevents a token intended for one relying service from being accepted elsewhere. Issuer validation ensures the assertion came from the expected platform. Subject and contextual claims narrow the workload. Expiry limits time. All four belong in the exchange.
 
-This fits normal production work. An on-call engineer may need two hours of read-only investigation. A database engineer may need a maintenance role during a planned migration. A security reviewer may need IAM reports for a quarterly review. Each session should name the person, reason, ticket, and expiry.
+Do not let one machine-level role remain as an unmonitored fallback after workload identity is introduced. Node or instance credentials may still be reachable through metadata. Minimize the underlying role, block workload access where possible, and verify applications use the intended federated path.
 
-**Break-glass access** is the emergency path for serious incidents where normal automation cannot recover production. The path should exist before the incident, receive regular tests, stay rare, and leave strong evidence.
+For CI, separate token issuance permission from cloud role permission. A job may need `id-token: write` to request an OIDC assertion, but the cloud trust policy decides whether that assertion can become a role. Restrict the permission to the deployment job and keep proposed pull-request code away from the production context.
 
-For Northstar, break-glass might cover these cases:
+Audit role sessions using meaningful workload attributes and correlate them with platform run IDs. Alert when a repository, branch, workflow, environment, cluster, namespace, or time falls outside the normal pattern even if authentication succeeds.
 
-| Emergency | Why normal access may fail | Recovery action |
-|---|---|---|
-| CI/CD cannot assume the deploy role | A trust policy or identity provider setting broke | Restore the last known good trust configuration |
-| Terraform state is locked and the unlock workflow is down | The deployment pipeline cannot progress | Clear the lock through the approved backend procedure |
-| A bad network change blocks health checks | Normal rollback cannot reach the service path | Revert the specific security group or route change |
-| Workforce federation has an outage | Humans cannot start normal sessions | Restore identity integration through monitored emergency access |
-| Audit forwarding broke during incident response | Security visibility is degraded | Restore log delivery and verify retention |
+## How Do Permission Boundaries and Explicit Deny Constrain Escalation?
+<!-- section-summary: Maximum-permission boundaries and explicit denies limit the effective authority local policies can grant, while escalation analysis follows every path by which an identity can create, modify, pass, or assume more powerful roles. -->
 
-A practical break-glass runbook should capture the sequence:
+A permission boundary or equivalent maximum policy says that even if another administrator attaches a broader allow, effective permission cannot exceed the boundary. Organization-level constraints can provide another ceiling across accounts or projects.
 
-1. Declare the incident and record the incident ID.
-2. Request the emergency role with expected actions, resources, duration, and rollback plan.
-3. Get peer approval from a named person outside the responder.
-4. Authenticate with strong MFA.
-5. Start a short session with the incident ID in the session name.
-6. Perform the planned recovery actions.
-7. Alert security monitoring when the role is assumed.
-8. Close the session or let it expire.
-9. Query audit logs for every API call in the session.
-10. Run a drift check and open a pull request for any lasting infrastructure change.
+Explicit deny is powerful because it overrides ordinary allows in many IAM models. It can forbid disabling audit, leaving approved regions, making protected data public, or changing specific security roles even when a local policy is broad.
 
-This runbook lets the team recover production while keeping emergency power rare, short, approved, and reviewable.
+Use outer controls for invariants, not as a substitute for readable least-privilege roles. A role with thousands of unnecessary allows below one deny remains difficult to review and may exploit actions the deny forgot.
 
-## Access Reviews and Evidence
-<!-- section-summary: Access reviews compare current permissions with real usage, ownership, exceptions, and audit logs. -->
+Privilege escalation is about paths. An identity lacking `Administrator` may still become administrator if it can:
 
-An **access review** is a scheduled check of whether a person, group, workload, or role still needs its current access. The reviewer looks at business need, recent usage, permission scope, group membership, exceptions, and audit logs. The decision should say keep, reduce, remove, or add an expiry.
+- Create or update a role and then assume it.
+- Pass a powerful role to a service it controls.
+- Modify a function or instance that already has a strong identity.
+- Change a trust policy or group membership.
+- Read another identity's credentials.
+- Disable the boundary or organization policy.
 
-IAM drifts over time. People change teams. Workloads stop using old services. Deployment roles keep permissions from retired modules. Emergency exceptions remain after incidents. A role that fit last quarter may be too broad today.
+Model delegation edges:
 
-For Northstar, a quarterly review should cover these paths:
-
-| Review target | Evidence to collect | Decision shape |
-|---|---|---|
-| Workforce groups | HR roster, on-call rotation, MFA status, role assignments | Remove people who changed teams |
-| Plan role | Workflow runs, state reads, describe calls, failed access attempts | Keep read-only scope |
-| Deploy role | OIDC trust policy, protected environment approvals, `iam:PassRole` usage | Remove unused write actions and broad resources |
-| Runtime roles | Audit activity, secret reads, bucket access, last accessed data | Keep actions the workload uses |
-| Emergency role | Activations, incident tickets, approvers, API calls, drift cleanup PRs | Confirm every session had a valid incident |
-| Static keys | Key age, last used date, owner, exception record | Delete unused keys and migrate exceptions to federation |
-
-The review record should be specific enough for a later audit:
-
-| Evidence field | Example |
-|---|---|
-| Review | `NORTHSTAR-PROD-IAM-Q3-2026` |
-| Role | `northstar-prod-terraform-deploy` |
-| Trust path | GitHub OIDC, `repo:northstar/customer-portal:environment:production` |
-| Current scope | Terraform-managed ECS, load balancer, receipt bucket, constrained `iam:PassRole` |
-| Usage evidence | CloudTrail activity for last 90 days and workflow run IDs |
-| Decision | Remove unused `rds:DescribeDBSnapshots`; keep constrained `iam:PassRole` |
-| Reviewer | `platform-security` |
-| Owner | `cloud-platform` |
-| Ticket | `SEC-8124` |
-| Next review | `2026-12-31` |
-
-For an AWS review, the platform security team can collect a first evidence bundle from the CLI:
-
-```bash
-REVIEW_ID="NORTHSTAR-PROD-IAM-Q3-2026"
-ROLE_NAME="northstar-prod-terraform-deploy"
-ROLE_ARN="arn:aws:iam::111122223333:role/northstar-prod-terraform-deploy"
-ANALYZER_ARN="arn:aws:access-analyzer:us-east-1:111122223333:analyzer/northstar-prod"
-START="2026-07-01T00:00:00Z"
-END="2026-09-30T23:59:59Z"
-
-mkdir -p "evidence/$REVIEW_ID/$ROLE_NAME"
-
-aws iam get-role \
-  --role-name "$ROLE_NAME" \
-  > "evidence/$REVIEW_ID/$ROLE_NAME/role.json"
-
-aws iam list-attached-role-policies \
-  --role-name "$ROLE_NAME" \
-  > "evidence/$REVIEW_ID/$ROLE_NAME/attached-policies.json"
-
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=ResourceName,AttributeValue="$ROLE_NAME" \
-  --start-time "$START" \
-  --end-time "$END" \
-  --output json \
-  > "evidence/$REVIEW_ID/$ROLE_NAME/cloudtrail-role-events.json"
-
-aws accessanalyzer list-findings \
-  --analyzer-arn "$ANALYZER_ARN" \
-  --filter "{\"resource\":{\"eq\":[\"$ROLE_ARN\"]}}" \
-  > "evidence/$REVIEW_ID/$ROLE_NAME/access-analyzer-findings.json"
+```text
+caller -> can modify service -> service has role -> role can administer
 ```
 
-The variables at the top keep the review ID, role, analyzer, and time window consistent across commands. The `get-role` and `list-attached-role-policies` commands capture the current role definition. The CloudTrail query collects recent events tied to the role name. The Access Analyzer query collects findings for the role ARN.
+Least-privilege review must include indirect authority. A deployment role may legitimately pass one runtime role to one service but should not pass arbitrary roles. A workload may create jobs but should not choose a stronger service identity.
 
-The same review pattern works in Azure and Google Cloud: export role assignments or IAM policies, export audit activity, list policy findings, and write the keep, reduce, or remove decision beside the evidence.
+Protect IAM policy changes with code review, plan analysis, policy as code, and additional ownership. Identity changes alter who can control every other security mechanism.
 
-Access reviews should lead to changes. If a workload no longer calls a service, remove that action. If a human group contains people outside the on-call rotation, remove them. If an emergency role was used without a ticket, fix the process. If a pipeline still uses static keys, move it to OIDC and delete the key.
+Separate who can write permissions, who can attach them, who can assume roles, and who can change outer boundaries where the risk justifies independent control.
 
-## Putting It All Together
-<!-- section-summary: Cloud IAM ties every production change to a scoped caller, short session, guardrail, and reviewable evidence trail. -->
+Resource policies can create access even when the identity's central policy appears narrow. Storage buckets, keys, queues, secrets, and roles may trust external accounts or service principals. Access review should evaluate identity and resource policies together.
 
-Northstar's production path now has clear identities. A developer opens a pull request. The plan workflow uses OIDC to assume `northstar-prod-terraform-plan`, reads current state, and posts a speculative plan. That role cannot change production.
+Explicit deny can protect audit trails and IAM infrastructure from deployment roles. For example, the application deployer may update service versions but can never disable logging, edit the production role, or leave approved regions. Test that local administrators cannot override the invariant.
 
-A release manager approves the protected production environment. The deploy workflow receives a fresh OIDC token and assumes `northstar-prod-terraform-deploy`. The trust policy checks repository and environment claims. The permission policy allows expected infrastructure changes and only passes approved runtime roles. The session name includes the workflow run ID.
+Beware escalating through data. An identity able to alter a deployment template, startup script, container image, or function source can cause a more privileged service to execute its code. It may not need direct `AssumeRole`. Protect every code-to-role edge.
 
-The API and worker run with workload identities. They receive temporary credentials from the cloud platform. They can use the secrets, queues, buckets, and logs they need. They cannot modify IAM or network rules.
+Permission boundaries also require governance. If the role creator can choose or remove its own boundary, the maximum is not effective. Enforce required boundaries and protect the organization-level mechanism that mandates them.
 
-An incident starts. The on-call engineer signs in through workforce federation and activates `northstar-prod-incident-readonly` with MFA and an incident ticket. If the normal path is blocked, a responder requests `northstar-prod-emergency-recovery`, gets peer approval, and uses a short session with the incident ID in the name. Afterward, the team reviews audit logs and runs a drift check.
+## Why Must Build, Deployment, Runtime, and Environment Identities Differ?
+<!-- section-summary: Each delivery and runtime stage performs a different job, so separating identities prevents code execution or compromise in one stage from inheriting authority for another. -->
 
-A quarterly access review keeps the design current. The team checks people, groups, deployment roles, runtime roles, emergency activations, static key exceptions, and audit logs. Permissions that no longer match real usage get removed. Exceptions get expiry dates. The evidence shows who had access, why they had it, whether they used it, and what changed.
+Build identity reads source and dependencies and writes an artifact. Deployment identity updates one environment. Runtime identity calls application dependencies. They do not need the same capabilities.
 
-This closes the Cloud and Infrastructure Security module as one loop. Infrastructure code defines the desired change. Policy as Code checks the rules before apply. Drift and perimeter security watch the live account after deployment. IAM controls the callers behind every change and gives the team evidence that access was approved, scoped, temporary where needed, and reviewed over time.
+If the build can deploy production, a malicious compiler or package script can use that authority. If runtime can edit its own role, application compromise can become control-plane administration. Separate the paths.
 
-![Cloud IAM summary showing federated human access, workload identity, CI OIDC, least-privilege deployment roles, break-glass access, and access review evidence](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/cloud-iam-summary.png)
+```text
+build role -> source read and artifact write
+deploy role -> one service update
+runtime role -> application data-plane calls
+```
 
-*The summary ties the IAM practices together: federated humans, workload roles, OIDC, limited deployment access, break-glass controls, and recurring evidence review.*
+Environment separation matters too. Development, staging, and production should use different identities and resources. One shared role with conditional scripts increases lateral movement and makes audit less clear.
+
+The production role trust policy can require protected workflow and environment approval. Staging cannot satisfy that context. Production permissions can name only production resources, while the development role cannot cross the resource boundary.
+
+Separate control plane from data plane. The data plane handles application operations such as reading a message or object. The control plane creates resources, changes networking, modifies IAM, or deploys versions. An application normally needs data-plane capability, not control-plane administration.
+
+Managed services also need explicit identities. Backups, monitoring, event delivery, and replication may assume service roles or use resource policies. Review the trusted service principal, conditions, resource scope, and ability to delegate.
+
+Secrets often indicate weak identity architecture. If CI stores a cloud administrator key or a workload image contains a service-account file, ask whether platform identity or federation can remove the standing secret. Some application credentials remain necessary, but identity should replace credentials used merely to discover or assume another identity.
+
+Runtime identities should follow service replicas. Every instance of the same service can receive the same bounded role without embedding a copied key, while different services remain separated on the same cluster or host. Session issuance and audit can still distinguish individual workload instances where the platform provides that context.
+
+The plan role and apply role can differ. Pull requests may need read-only state and provider visibility to produce a plan. The protected apply path receives write authority only after review and policy. Be careful because read-only planning can still expose sensitive infrastructure and state.
+
+Signing and publishing identities may need their own boundaries too. A build can create bytes without authorizing them for release. A signer can authenticate one digest without deploying it. A publisher can write one registry namespace. Separation limits a single compromised stage.
+
+Environment separation should include state backends, secrets, keys, artifact repositories, and network, not only role names. A staging role with permission to read a shared production state or secret store still crosses the intended boundary.
+
+## How Should Temporary Elevation and Break-Glass Access Work?
+<!-- section-summary: Standing human administration should be replaced where possible by approved time-bounded elevation, with a separately protected and tested break-glass path for genuine recovery. -->
+
+Standing access exists continuously. Needed access exists only while a job or incident requires it. Reducing standing production administration shrinks the interval in which a compromised account can act silently.
+
+Temporary elevation can require a named request, reason or ticket, approval, strong reauthentication, bounded role, short duration, and automatic expiry. Audit events connect the person, elevation, actions, and end time.
+
+**Break-glass** is emergency authority for recovery when ordinary identity, deployment, or approval systems cannot operate. Pretending it does not exist often produces an informal shared root credential.
+
+A designed break-glass path should use protected credentials or identity, require named use where possible, notify responders immediately, limit time and actions, preserve all events, and force post-incident review and credential reset.
+
+Emergency access must be tested. During a real identity-provider outage is not the first time to discover the account is disabled, the key expired, the role lacks recovery permission, or logs do not capture use. Test in a controlled exercise, rotate secrets, and verify alerting.
+
+Break-glass should not be ordinary convenience. Frequent use means the normal access or recovery workflow is inadequate. Fix the recurring operational need rather than normalizing uncontrolled administration.
+
+After use, reconcile every production change into IaC, policy, or the authoritative source, remove temporary grants, verify live state, and preserve the incident chain.
+
+Temporary elevation should use the smallest role that solves the task. A database diagnostic does not require organization administrator. Define common incident roles for read-only investigation, service restart, network containment, and identity recovery rather than defaulting every request to root.
+
+Approval does not eliminate the need for technical boundaries. The elevated role should still restrict resources and destructive actions. Human reviewers can misunderstand a request or an approved account can be compromised.
+
+Alert on elevation creation, use, extension, and expiry. A session that remains active beyond its approved window or assumes a different role should trigger investigation. Capture commands or API actions through cloud audit and session tooling where appropriate.
+
+Break-glass credentials require separate storage and access from normal SSO so an identity-provider outage does not block recovery. They also need strong protection, periodic rotation, dual control or other governance where consequence warrants it, and a tested way to retrieve them.
+
+Exercises should verify not only login but the complete recovery objective and audit trail. Confirm the emergency role can perform the intended bounded action, cannot perform prohibited actions, generates alerts, and can be revoked and reconciled.
+
+## How Do Access Reviews and Audit Evidence Keep IAM Accurate?
+<!-- section-summary: Periodic reviews validate live relationships and actual use, while high-quality audit logs connect identities, sessions, API actions, resources, and outcomes for verification and response. -->
+
+Permissions drift. People change teams, services stop using APIs, projects retire, temporary exceptions persist, and trust relationships broaden. Access reviews ask whether each relationship should still exist.
+
+Review as a graph:
+
+```text
+identity -> group -> role -> action -> resource
+identity -> can modify workload -> workload role -> resource
+CI workflow -> OIDC trust -> deployment role -> environment
+```
+
+Inspect direct and indirect paths, group owners, trust policies, service accounts, machine identities, dormant keys, unused grants, cross-account roles, environment conditions, and outer boundaries.
+
+Telemetry can identify unused permissions, but absence of observed use may reflect rare emergency duties. Ask the owner, validate the job, then remove or move the capability behind temporary elevation.
+
+Audit logs need identity quality. A useful record names the human or workload, federated session and source claims, assumed role, API action, resource, time, source, request context, and outcome. Shared credentials and generic service users reduce accountability.
+
+Connect cloud events to delivery evidence. A production update should show the approved CI workflow's role session and artifact or IaC run. A direct human change should show temporary elevation or break-glass reason. Unexpected identities become a detection signal.
+
+Protect and centralize audit logs. Restrict deletion and configuration changes, monitor gaps, retain them for investigation, and avoid sending sensitive request values into broadly readable systems.
+
+Review access as relationships rather than policy files. A role can be unused directly but reachable through another role. A service account can appear inactive while a scheduled job assumes it monthly. Query grants, trust, group membership, role passing, workload mapping, and resource policies as one graph.
+
+Access-review evidence should record reviewer, scope, snapshot time, decisions, removed and retained relationships, justification, and follow-up. A spreadsheet saying “review complete” does not prove which live policies were examined.
+
+Use provider last-access information and audit queries as evidence, not unquestionable truth. Some actions may be missing from summaries, logs may have retention gaps, and rare disaster-recovery permissions may not appear. Combine telemetry with owner attestation and negative testing.
+
+Stale identities should be disabled and then removed through a controlled process. Preserve enough history to investigate their past actions. Rotate credentials and remove trust references so deletion does not leave another role still able to impersonate the retired principal.
+
+IAM is part of every other security control. Encryption depends on who can use keys. Logging depends on who can disable it. Network policy depends on who can edit routes. Secrets depend on who can retrieve them. Supply-chain admission depends on who can change trust policy. Review IAM changes with consequence equal to the systems they govern.
+
+![Cloud IAM summary connects human federation, workload identity, CI OIDC, least-privilege deployment, break-glass, and access review evidence](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/cloud-iam-summary.png)
+
+_Identity lifecycle and evidence turn IAM from a static policy file into a maintained security system._
+
+The final mental model is:
+
+```text
+every cloud action has a caller
+  -> caller proves identity
+  -> policies and boundaries calculate capability
+  -> temporary context limits duration and environment
+  -> logs prove the action
+  -> reviews remove relationships that no longer belong
+```
+
+## Check Your Answers
+
+:::expand[Why Does Every Cloud Change Need a Clear Caller?]{kind="recap"}
+Model each human and workload through authentication, capability, resource, conditions, duration, delegation, ownership, and evidence.
+:::
+
+:::expand[How Do You Map Capabilities and Least Privilege?]{kind="recap"}
+Grant the smallest action, resource, condition, and session for the job, then observe use and test expected denials.
+:::
+
+:::expand[How Should Human Federation, Groups, and Roles Work?]{kind="recap"}
+Use central identity, multifactor authentication, durable groups, role sessions, and individual attribution instead of permanent personal cloud credentials.
+:::
+
+:::expand[How Do Workload Identity and CI OIDC Remove Bootstrap Secrets?]{kind="recap"}
+Let platforms attest workload context and exchange it for temporary scoped roles under precise trust and permission policies.
+:::
+
+:::expand[How Do Permission Boundaries and Explicit Deny Constrain Escalation?]{kind="recap"}
+Set maximum authority and deny invariants, then analyze indirect paths through role creation, passing, impersonation, policy changes, and workload control.
+:::
+
+:::expand[Why Must Build, Deployment, Runtime, and Environment Identities Differ?]{kind="recap"}
+Separate stage, environment, and control-plane authority so compromise in build, staging, or application runtime cannot inherit production administration.
+:::
+
+:::expand[How Should Temporary Elevation and Break-Glass Access Work?]{kind="recap"}
+Replace standing administration with approved expiring sessions and keep emergency recovery narrow, tested, alerted, audited, and reconciled.
+:::
+
+:::expand[How Do Access Reviews and Audit Evidence Keep IAM Accurate?]{kind="recap"}
+Review live identity relationships and actual use, preserve high-quality session and action evidence, and remove stale grants and trust paths.
+:::
 
 ## References
 
-- [AWS IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html) - Official AWS documentation for IAM roles, trust policies, permissions, and temporary credentials.
-- [AWS temporary security credentials](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html) - Official AWS documentation for STS and temporary access.
-- [AWS OIDC federation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc.html) - Official AWS guidance for using OIDC identity providers with IAM roles.
-- [AWS IAM Access Analyzer policy generation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-policy-generation.html) - Official AWS documentation for generating IAM policies from access activity.
-- [AWS permissions boundaries](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) - Official AWS documentation for maximum permission boundaries.
-- [AWS Organizations service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) - Official AWS documentation for organization-level permission guardrails.
-- [AWS CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Official AWS documentation for account activity and API audit logs.
-- [GitHub Actions OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect) - Official GitHub documentation for OIDC tokens in workflows.
-- [Configuring OpenID Connect in Amazon Web Services](https://docs.github.com/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services) - GitHub's AWS-specific OIDC setup guidance.
-- [Azure managed identities](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview) - Official Microsoft documentation for managed identities for Azure resources.
-- [Microsoft Entra workload identity federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation) - Official Microsoft documentation for federated workload credentials.
-- [Azure role-based access control overview](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview) - Official Microsoft documentation for Azure RBAC.
-- [Microsoft Entra Privileged Identity Management](https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-configure) - Official Microsoft documentation for eligible role activation and privileged access governance.
-- [Microsoft Entra emergency access accounts](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/security-emergency-access) - Official Microsoft guidance for emergency access account planning.
-- [Microsoft Entra access reviews](https://learn.microsoft.com/en-us/entra/id-governance/access-reviews-overview) - Official Microsoft documentation for recurring access reviews.
-- [Google Cloud IAM overview](https://cloud.google.com/iam/docs/overview) - Official Google Cloud documentation for IAM concepts and access control.
-- [Google Cloud service accounts](https://cloud.google.com/iam/docs/service-account-overview) - Official Google Cloud documentation for service accounts as workload identities.
-- [Google Cloud Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation) - Official Google Cloud documentation for federated workload access without service account keys.
-- [Google Cloud IAM deny policies](https://cloud.google.com/iam/docs/deny-overview) - Official Google Cloud documentation for deny policies.
-- [NIST Secure Software Development Framework SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final) - NIST guidance for protecting development workflows and access to development systems.
+- [AWS IAM best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) - Covers federation, temporary credentials, least privilege, and access analysis.
+- [Google Cloud IAM overview](https://cloud.google.com/iam/docs/overview) - Defines principals, roles, policies, and resource hierarchy.
+- [Azure identity fundamentals](https://learn.microsoft.com/en-us/entra/fundamentals/identity-fundamental-concepts) - Describes human and workload identity concepts.
+- [GitHub OIDC cloud federation](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/about-security-hardening-with-openid-connect) - Documents workflow identity claims and cloud trust.
+- [NIST SP 800-207 Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final) - Describes explicit identity and resource access principles.

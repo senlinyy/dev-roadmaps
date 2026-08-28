@@ -34,7 +34,7 @@ capacity control→ How much connection, request, and queue load is safe?
 
 The order matters. A proxy cannot load-balance within v2 until routing has chosen v2, and it should not retry until it knows the operation, failure, remaining deadline, and retry capacity allow another attempt.
 
-Seven questions follow that decision:
+Keep these questions in view as you work through the lesson:
 
 1. **How does a mesh route one Service name to a particular destination version?**
 2. **What does a weighted traffic split actually control?**

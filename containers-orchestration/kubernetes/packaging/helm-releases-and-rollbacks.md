@@ -37,7 +37,7 @@ chart + values + release context
 
 The render result depends not only on chart files and values, but also on release identity and available cluster capabilities used by templates. Helm then manages two related outputs: the API objects sent to Kubernetes and the history record used to explain or revisit that operation.
 
-Seven questions separate chart, release, revision, and live state:
+Keep these questions in view as you work through the lesson:
 
 1. **How does a chart gain a release identity?**
 2. **Where does Helm keep release history, and what can it contain?**
@@ -178,7 +178,7 @@ payments.v3
 └─ status and revision 3
 ```
 
-`helm history` can enumerate this sequence because Helm reads its own release records; it is not asking the Deployment controller to reconstruct a multi-object application history. This distinction becomes important when a release owns resources from several API groups.
+`helm history` can enumerate this sequence because Helm reads its own release records; it is not asking the Deployment controller to reconstruct a multi-object application history. A release owning resources from several API groups makes this distinction important.
 
 Storage also establishes two operational obligations. First, access to the release records can expose configuration and rendered content, so Kubernetes Secret access and encryption at rest matter. Second, retention determines which historical states remain available as rollback inputs. Unlimited retention preserves more recovery material but accumulates records; pruning history reduces that material. Choose the trade deliberately rather than treating the storage backend as an implementation detail.
 

@@ -21,7 +21,13 @@ id: article-containers-orchestration-kubernetes-operations-production-debugging-
 
 A production request succeeds only when a chain of contracts succeeds: a controller creates the intended revision, Pods schedule and start, the application becomes Ready, EndpointSlices contain useful backends, a Service routes to them, dependencies respond, and the edge returns the result. Debugging is the work of finding the earliest false contract with the smallest useful experiment.
 
-Seven questions make that process repeatable:
+A successful request depends on a sequence: the Deployment controller creates the intended ReplicaSet, Pods schedule and start, the application becomes Ready, EndpointSlices contain those Pods, the Service routes to them, dependencies respond, and the edge returns the result. If the request fails, at least one statement in that chain is false.
+
+Debugging should locate the **earliest false contract** with the smallest experiment. This prevents a team from jumping randomly between ingress, logs, CPU, DNS, and restarts without reducing uncertainty. Prove one upstream boundary before moving downstream.
+
+A useful debugging workflow turns the request path into a checklist of statements that can each be tested independently.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What exact result can the team repeat, and how wide is its scope?**
 2. **What do the Deployment, ReplicaSets, and Pods each reveal?**
@@ -35,12 +41,6 @@ Seven questions make that process repeatable:
 <!-- section-summary: Convert a vague report into a bounded test whose path, timing, outcome, and affected subset can be compared before and after each intervention. -->
 
 ### Express the incident as a broken chain of contracts
-
-A successful request depends on a sequence: the Deployment controller creates the intended ReplicaSet, Pods schedule and start, the application becomes Ready, EndpointSlices contain those Pods, the Service routes to them, dependencies respond, and the edge returns the result. If the request fails, at least one statement in that chain is false.
-
-Debugging should locate the **earliest false contract** with the smallest experiment. This prevents a team from jumping randomly between ingress, logs, CPU, DNS, and restarts without reducing uncertainty. Prove one upstream boundary before moving downstream.
-
-Write the request path as a checklist of statements:
 
 ```text
 Deployment points to the intended revision

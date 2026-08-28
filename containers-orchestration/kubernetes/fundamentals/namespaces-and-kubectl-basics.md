@@ -20,9 +20,6 @@ id: article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kube
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## What Are kubectl and a Namespace Doing?
-<!-- section-summary: kubectl is an HTTP client for the Kubernetes API, while a namespace supplies part of the address for namespaced objects. -->
-
 When you enter this command:
 
 ```bash
@@ -74,20 +71,23 @@ This gives the two ideas in the article a precise meaning:
 - **`kubectl` is a Kubernetes API client.** It turns command-line arguments into authenticated API requests and formats the responses.
 - **A namespace is an API scope.** For a namespaced resource, its namespace forms part of the resource's address and identity.
 
+Keep these questions in view as you work through the lesson:
+
+1. **What Are kubectl and a Namespace Doing?**
+2. **Why Is a Namespace Part of an Object's Address?**
+3. **Which Controls Turn Namespace Scope into Isolation?**
+4. **How Does Kubeconfig Choose the Destination and Identity?**
+5. **How Does a kubectl Command Become an API Request?**
+6. **What Evidence Do get, describe, logs, and events Provide?**
+7. **How Do Scope, Selectors, and Output Shape a Query?**
+8. **How Do You Confirm the Target and Permission Before a Change?**
+
+## What Are kubectl and a Namespace Doing?
+<!-- section-summary: kubectl is an HTTP client for the Kubernetes API, while a namespace supplies part of the address for namespaced objects. -->
+
 The API server sees a request with several coordinates: a destination cluster, an authenticated identity, an HTTP operation, an API group and version, a resource type, an optional namespace, an optional object name, and optional query parameters. `kubectl` gathers those coordinates from your command and local kubeconfig.
 
 That is why a short command can do useful work. Some coordinates are typed directly, while the remaining coordinates come from saved client configuration and API discovery.
-
-The rest of the article follows eight questions:
-
-1. What Are kubectl and a Namespace Doing?
-2. Why Is a Namespace Part of an Object's Address?
-3. Which Controls Turn Namespace Scope into Isolation?
-4. How Does Kubeconfig Choose the Destination and Identity?
-5. How Does a kubectl Command Become an API Request?
-6. What Evidence Do get, describe, logs, and events Provide?
-7. How Do Scope, Selectors, and Output Shape a Query?
-8. How Do You Confirm the Target and Permission Before a Change?
 
 ## Why Is a Namespace Part of an Object's Address?
 <!-- section-summary: Namespace scope allows namespaced objects to reuse names safely because namespace contributes to their API identity. -->

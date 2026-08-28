@@ -38,20 +38,6 @@ aliases:
 
 A **Virtual Private Cloud**, or VPC, is a logically isolated network that you create inside a cloud provider's infrastructure. That short definition contains several ideas—addresses, boundaries, packet forwarding, security, and virtualization—that are easier to understand when built one at a time.
 
-The sections below answer these questions in order:
-
-1. **Why Does Cloud Computing Need VPCs?**
-2. **How Does a VPC Create a Network Boundary?**
-3. **How Do Resources Attach to the VPC?**
-4. **How Do Routes Move Packets?**
-5. **Why Does a Route Not Guarantee Connectivity?**
-6. **How Does a Small Application Fit Inside a VPC?**
-7. **Which Mental Model Makes VPCs Easier to Debug?**
-8. **What Does a VPC Not Mean?**
-
-## Why Does Cloud Computing Need VPCs?
-<!-- section-summary: VPCs let cloud customers build separate logical IP networks on shared provider infrastructure. -->
-
 Start with two computers before adding any cloud terminology:
 
 ```text
@@ -68,6 +54,20 @@ Even this tiny example needs three things:
 3. A **forwarding mechanism** moves packets toward their destinations.
 
 Those same ideas become the foundation of a VPC.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Does Cloud Computing Need VPCs?**
+2. **How Does a VPC Create a Network Boundary?**
+3. **How Do Resources Attach to the VPC?**
+4. **How Do Routes Move Packets?**
+5. **Why Does a Route Not Guarantee Connectivity?**
+6. **How Does a Small Application Fit Inside a VPC?**
+7. **Which Mental Model Makes VPCs Easier to Debug?**
+8. **What Does a VPC Not Mean?**
+
+## Why Does Cloud Computing Need VPCs?
+<!-- section-summary: VPCs let cloud customers build separate logical IP networks on shared provider infrastructure. -->
 
 Now imagine a cloud provider operating millions of machines for many customers. Without isolation, one giant network might contain Customer A's servers and databases beside Customer B's systems and the cloud provider's internal infrastructure. Customer A must not automatically be able to reach Customer B's database merely because both use the same physical cloud.
 
@@ -199,7 +199,7 @@ Virtual machine
               └── VPC
 ```
 
-The IP address normally belongs to the interface, not to the abstract VPC and not necessarily to the application process. This distinction becomes useful when a resource has more than one interface or address, or when a managed service creates interfaces on your behalf.
+The IP address normally belongs to the interface, not to the abstract VPC and not necessarily to the application process. This distinction is useful for a resource with more than one interface or address, or when a managed service creates interfaces on your behalf.
 
 The interface is the concrete attachment point between a resource and the network. Its subnet determines which address range supplies its private address. Network security controls may also attach to the interface. Packets sent by the resource enter the VPC through that attachment.
 

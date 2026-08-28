@@ -19,28 +19,36 @@ aliases:
 
 ## Table of Contents
 
-1. [The Resource Story](#the-resource-story)
-2. [Resource Names](#resource-names)
-3. [Resource IDs](#resource-ids)
-4. [Resource Providers and Types](#resource-providers-and-types)
-5. [Tags](#tags)
-6. [Locks](#locks)
-7. [Evidence Before Changes](#evidence-before-changes)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
-
-## The Resource Story
-<!-- section-summary: Azure resources become safer to operate when the team can connect a friendly name, full resource ID, provider type, tags, locks, and change evidence. -->
+1. [What Must Azure Know About a Resource?](#what-must-azure-know-about-a-resource)
+2. [How Do Resource Names and IDs Differ?](#how-do-resource-names-and-ids-differ)
+3. [How Do Providers, Types, and API Versions Define a Resource?](#how-do-providers-types-and-api-versions-define-a-resource)
+4. [How Should Tags Describe Resources?](#how-should-tags-describe-resources)
+5. [How Do Locks Protect Resources?](#how-do-locks-protect-resources)
+6. [What Evidence Should You Collect Before a Change?](#what-evidence-should-you-collect-before-a-change)
+7. [How Do Names, IDs, Types, Tags, and Locks Work Together?](#how-do-names-ids-types-tags-and-locks-work-together)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
 In the previous Azure foundations article, the Orders team chose the home for `orders-api-prod`: the `devpolaris.com` tenant, the `sub-orders-prod` subscription, the `rg-orders-app-prod-uksouth` and `rg-orders-data-prod-uksouth` resource groups, and the `uksouth` region. That placement work answers where the workload belongs, but daily operations need one more layer. The team has to identify the exact object behind an alert, a bill, a deployment plan, or an access request.
 
 An **Azure resource** is one manageable object in Azure. A resource can be a storage account, a Key Vault vault, a Container App, a database, a virtual network, a diagnostic setting, or a resource group. Azure Resource Manager, usually shortened to ARM, is the management system that accepts create, read, update, and delete requests for those objects through the Azure portal, CLI, SDKs, Bicep, Terraform, and REST APIs.
 
-Here is the situation for this article. The Orders API starts failing during checkout while it tries to read one secret from Key Vault. At the same time, finance sees a new cost line for a storage account that claims to belong to Orders. Maya, the on-call engineer, needs to work out which resources are real production resources, which ones are staging, which ones are shared platform resources, and which ones need protection before anyone runs a fix.
+Consider one concrete operating situation. The Orders API starts failing during checkout while it tries to read one secret from Key Vault. At the same time, finance sees a new cost line for a storage account that claims to belong to Orders. Maya, the on-call engineer, needs to work out which resources are real production resources, which ones are staging, which ones are shared platform resources, and which ones need protection before anyone runs a fix.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Must Azure Know About a Resource?**
+2. **How Do Resource Names and IDs Differ?**
+3. **How Do Providers, Types, and API Versions Define a Resource?**
+4. **How Should Tags Describe Resources?**
+5. **How Do Locks Protect Resources?**
+6. **What Evidence Should You Collect Before a Change?**
+7. **How Do Names, IDs, Types, Tags, and Locks Work Together?**
+
+## What Must Azure Know About a Resource?
+<!-- section-summary: Safe Azure operations connect a friendly name, full resource ID, provider type, tags, locks, and change evidence. -->
 
 Azure gives Maya several pieces of identity evidence. A **resource name** is the human-friendly label, such as `kv-orders-prod`. A **resource ID** is the full ARM path that points to one exact object. A **resource type** tells her which Azure provider owns the API surface, such as `Microsoft.KeyVault/vaults`. **Tags** hold searchable business metadata such as service, team, environment, and cost center. **Locks** add control-plane protection against accidental deletion or broad configuration changes.
-
-For AWS readers, a resource ID fills the same "exact target" job that an ARN often fills in AWS evidence, although the syntax follows Azure Resource Manager path segments. An Azure resource group also has stronger lifecycle meaning than many AWS Resource Groups, because deleting the Azure resource group deletes the resources inside it.
 
 Those pieces work together, and each one answers a different question. The table below gives the first version of the checklist Maya will use through the rest of the article.
 
@@ -54,7 +62,7 @@ Those pieces work together, and each one answers a different question. The table
 
 That table is the structure for the article. First we talk about names, because that is what humans search for. Then we move into resource IDs, because the full path removes ambiguity. After that we look at providers and types, because Azure routes requests through provider namespaces. Then we use tags to make inventory and cost reports useful. Finally we add locks and a small evidence workflow so the team changes the right target.
 
-## Resource Names
+## How Do Resource Names and IDs Differ?
 <!-- section-summary: Resource names help humans recognize Azure objects quickly, but each resource type has its own uniqueness scope, length rules, and naming limits. -->
 
 A **resource name** is the name assigned to one Azure object when the team creates it. In the Orders environment, `rg-orders-data-prod-uksouth`, `kv-orders-prod`, `stordersprodevents`, and `ca-orders-api-prod` are resource names. They are useful because humans can scan them quickly and see workload, environment, region, and sometimes resource type.
@@ -77,12 +85,11 @@ For the Orders team, the naming pattern can look like this:
 
 This gives Maya a first pass during an incident. If an alert says `kv-orders-prod`, the name strongly suggests a production Key Vault for Orders. The name still needs proof, because another subscription or resource group can hold a resource with the same short name. The next layer gives that proof, and that layer is the resource ID.
 
-## Resource IDs
+### Resource IDs
 <!-- section-summary: A resource ID is the full Azure Resource Manager path that identifies one exact resource across subscription, resource group, provider, type, and name. -->
 
 A **resource ID** is the full management path for one Azure object. It is the address ARM uses when a tool asks for a specific resource. A friendly name can repeat in different places, but the resource ID includes the subscription, resource group, provider namespace, resource type, and resource name, so it points at one exact target.
 
-If you are coming from AWS, put resource IDs in the same incident notes where you would put ARNs for IAM, CloudTrail, or deployment review. The Azure detail to notice is the resource group segment, because it names both an organization boundary and a deletion boundary for that resource.
 
 The Orders production Key Vault has a resource ID like this:
 
@@ -161,7 +168,7 @@ That output gives her the exact target:
 
 Now the team can prove the subscription, resource group, type, name, location, and tags. The `type` field is worth its own section, because it tells us which Azure provider owns the resource and which API shape the resource follows.
 
-## Resource Providers and Types
+## How Do Providers, Types, and API Versions Define a Resource?
 <!-- section-summary: Resource providers are Azure service API families, and resource types describe the specific resource kind managed by that provider. -->
 
 A **resource provider** is an Azure service API family that ARM can route management requests to. Key Vault uses the `Microsoft.KeyVault` provider. Container Apps uses `Microsoft.App`. Storage uses `Microsoft.Storage`. Authorization resources such as role assignments and locks use `Microsoft.Authorization`.
@@ -206,12 +213,11 @@ Provider registration can take a little time. After running it, the team reruns 
 
 So far, Maya can recognize the resource by name, prove the exact target by ID, and understand the provider type that owns the API. The next problem is ownership at scale. A company can have thousands of resources, and names alone make cost reports, inventories, and automation hard to trust. That is where tags come in.
 
-## Tags
+## How Should Tags Describe Resources?
 <!-- section-summary: Tags are key-value metadata that make resources searchable by owner, service, environment, cost, and operational purpose. -->
 
 A **tag** is a key-value metadata pair attached to a subscription, resource group, or resource. Tags help humans and tools group resources by business meaning. In the Orders environment, `service=orders-api`, `env=prod`, and `team=commerce-platform` tell finance, support, security, and automation which application a resource belongs to.
 
-Tags serve the same broad ownership and cost-reporting job as AWS tags. Azure tag names are case-insensitive for operations while preserving the casing you typed, so teams should standardize the spelling early instead of letting `Service`, `service`, and `SERVICE` drift across templates.
 
 Tags answer questions that resource names carry poorly. A name can show a short workload and environment, but it has strict length and character rules. Tags can hold owner, cost center, data class, support contact, deployment tool, expiration date, and change policy. A good name helps someone recognize a resource, and a good tag set helps the whole organization search, report, and govern it.
 
@@ -305,7 +311,7 @@ This is why the Orders team's Bicep and Terraform modules keep common tags in on
 
 Tags make the resources findable, while locks add the deletion protection story for a production database or vault. Once Maya knows which resources belong to the Orders data layer, the next question is how Azure can add a deliberate pause before dangerous management changes. That is where locks enter the story.
 
-## Locks
+## How Do Locks Protect Resources?
 <!-- section-summary: Azure management locks protect subscriptions, resource groups, or resources from accidental deletion or broad control-plane modification. -->
 
 An **Azure management lock** is a control-plane protection rule applied to a subscription, resource group, or resource. It affects Azure Resource Manager operations, so it protects the management path that creates, updates, moves, or deletes resources. The lock applies across users and roles, which means a person with broad permissions still has to deal with the lock before the blocked operation can succeed.
@@ -349,9 +355,11 @@ prevent-orders-data-delete  CanNotDelete  Production Orders data resources requi
 
 A lock is also a resource with its own ID under `Microsoft.Authorization/locks`. Creating or deleting locks requires permissions such as `Microsoft.Authorization/locks/*`, which Owner and User Access Administrator roles include. That permission model matters because removing a lock is itself a serious control-plane action, and production teams usually route it through a reviewed change.
 
+RBAC and locks solve opposite sides of a control problem. Azure RBAC grants an identity permission to perform actions at a scope. A management lock blocks selected control-plane changes at that scope even when the caller otherwise has permission. Contributor may be authorized to delete a resource, while a `CanNotDelete` lock stops the delete until someone with lock-management permission removes the guardrail. A lock is not an RBAC role, and RBAC is not a deletion-protection switch.
+
 Now Maya has the pieces: name, ID, provider type, tags, and locks. The last step is a habit that turns those pieces into safe operations. Before any change, the team collects evidence and looks for conflicts.
 
-## Evidence Before Changes
+## What Evidence Should You Collect Before a Change?
 <!-- section-summary: A safe Azure change starts by collecting subscription, resource ID, type, tags, lock state, and recent activity evidence before touching the target. -->
 
 **Evidence before changes** means the team proves the target before changing it. In Azure, the wrong target can look very close to the right target. A staging group and production group can share a workload name. Two subscriptions can contain the same short resource name. A cost report can show a tag that was copied incorrectly. A deployment output can carry an old resource ID after a move.
@@ -433,11 +441,13 @@ The evidence packet can stay small. It needs to answer the operational questions
 
 This habit keeps automation honest. A cleanup job might start with all resources tagged `env=dev`, but one resource could have `service=orders-api` and a production-looking resource ID because someone copied the wrong tag. A safe job checks multiple fields together and treats disagreement as evidence that the target needs review.
 
+Infrastructure as code introduces another source of truth. If Bicep or Terraform declares the resource name, tags, lock, and settings, an emergency portal edit can create drift between the live Azure object and the next deployment. The evidence packet should include the deployment source and plan alongside the live read. The team then decides whether to revert the live drift or update the reviewed template, instead of letting the next pipeline silently overwrite an incident fix.
+
 This also helps access reviews. When someone asks for Contributor on a resource group, the reviewer can look at the group ID, tags, resource types, and lock state. Contributor on `rg-orders-app-prod-uksouth` means something very different from Contributor on `rg-orders-data-prod-uksouth`, even though both names contain Orders and production.
 
 By this point, Maya can prove the target before she changes anything. The final section ties the whole flow together from alert to safe action.
 
-## Putting It All Together
+## How Do Names, IDs, Types, Tags, and Locks Work Together?
 <!-- section-summary: The Orders team combines names, IDs, types, tags, locks, and evidence into one repeatable resource review before production changes. -->
 
 The Orders API alert starts with a friendly name: `kv-orders-prod`. Maya uses that name to find the likely resource, but she treats the name as the beginning of the investigation. The resource ID proves the exact subscription and resource group. The type proves that the object is a Key Vault vault. The tags prove that it belongs to `orders-api`, `prod`, and `commerce-platform`.
@@ -457,7 +467,7 @@ That sequence gives the team a repeatable production review:
 
 This is the foundation for safer Azure operations. Names make resources readable. IDs make resources exact. Provider types explain the API family. Tags make resources searchable and reportable. Locks add protection around important management operations. Evidence before changes turns all of that into a habit the team can use during incidents, deployments, access reviews, and cost cleanup.
 
-## What's Next
+### What's Next
 
 The Orders team can now find and verify exact Azure resources before touching them. The next foundation article zooms back out to the Azure service map: traffic entry, compute, state, identity, telemetry, and release paths.
 
@@ -465,7 +475,37 @@ That service map helps connect a production symptom to the right Azure service f
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[What Must Azure Know About a Resource?]{kind="recap"}
+Safe Azure operations connect a resource's friendly name, full resource ID, provider type, tags, locks, and change evidence.
+:::
+
+:::expand[How Do Resource Names and IDs Differ?]{kind="recap"}
+Resource names help humans recognize Azure objects quickly, but each resource type has its own uniqueness scope, length rules, and naming limits. A resource ID is the full Azure Resource Manager path that identifies one exact resource across subscription, resource group, provider, type, and name.
+:::
+
+:::expand[How Do Providers, Types, and API Versions Define a Resource?]{kind="recap"}
+Resource providers are Azure service API families, and resource types describe the specific resource kind managed by that provider.
+:::
+
+:::expand[How Should Tags Describe Resources?]{kind="recap"}
+Tags are key-value metadata that make resources searchable by owner, service, environment, cost, and operational purpose.
+:::
+
+:::expand[How Do Locks Protect Resources?]{kind="recap"}
+Azure management locks protect subscriptions, resource groups, or resources from accidental deletion or broad control-plane modification.
+:::
+
+:::expand[What Evidence Should You Collect Before a Change?]{kind="recap"}
+A safe Azure change starts by collecting subscription, resource ID, type, tags, lock state, and recent activity evidence before touching the target.
+:::
+
+:::expand[How Do Names, IDs, Types, Tags, and Locks Work Together?]{kind="recap"}
+The Orders team combines names, IDs, types, tags, locks, and evidence into one repeatable resource review before production changes.
+:::
+
+## References
 
 - [Define your naming convention](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-naming) - Microsoft guidance on naming components, name permanence, resource name scope, and example Azure naming patterns.
 - [Naming rules and restrictions for Azure resources](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules) - Resource-specific length, character, and uniqueness rules for Azure resource names.

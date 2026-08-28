@@ -20,12 +20,16 @@ aliases:
 6. [How Should You Design Availability and Latency SLOs?](#how-should-you-design-availability-and-latency-slos)
 7. [How Do You Investigate an Unhealthy Service?](#how-do-you-investigate-an-unhealthy-service)
 8. [How Does the Complete Service-Health Model Fit Together?](#how-does-the-complete-service-health-model-fit-together)
-9. [What Should You Remember?](#what-should-you-remember)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
 The service-health progression is `requests -> telemetry -> application signals -> SLIs -> SLOs -> engineering decisions`. Each layer answers a different question. A trace explains one request. Application Signals summarizes how an operation behaves across many requests. An SLO decides whether that behavior is good enough for users.
 
-The sections below answer these questions in order:
+In the previous article, you followed a checkout request across services with OpenTelemetry and AWS X-Ray. That is a huge step forward. A trace can show that the checkout API spent 1.8 seconds waiting on a payment provider, 300 milliseconds writing to DynamoDB, and 40 milliseconds sending an event to SQS. A responder can finally see the path instead of guessing from separate logs.
+
+A production team needs more than one trace at a time to run the business. During a real incident, the on-call engineer needs broader answers about traffic, errors, latency, dependencies, and customer impact.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Is One Trace Not Enough to Measure Service Health?**
 2. **What Does Application Signals Add?**
@@ -38,10 +42,6 @@ The sections below answer these questions in order:
 
 ## Why Is One Trace Not Enough to Measure Service Health?
 <!-- section-summary: Tracing explains individual requests, but production operations need a service-level view of customer-facing health. -->
-
-In the previous article, you followed a checkout request across services with OpenTelemetry and AWS X-Ray. That is a huge step forward. A trace can show that the checkout API spent 1.8 seconds waiting on a payment provider, 300 milliseconds writing to DynamoDB, and 40 milliseconds sending an event to SQS. A responder can finally see the path instead of guessing from separate logs.
-
-A production team needs more than one trace at a time to run the business. During a real incident, the on-call engineer needs to answer broader questions quickly:
 
 * Which services are unhealthy right now?
 * Which operation is hurting customers: `POST /checkout`, `GET /cart`, or `POST /payment/authorize`?
@@ -411,7 +411,7 @@ The important production habit is to create SLOs for the journeys that matter mo
 
 Once services have SLOs, the next visibility gap is the customer's actual path. A service can look healthy from inside AWS while the public checkout page is broken by a JavaScript error, a CDN problem, or a regional network issue. That is why the next article moves from service health to **CloudWatch Synthetics** and **CloudWatch RUM**.
 
-## What Should You Remember?
+## Check Your Answers
 <!-- section-summary: Application Signals organizes application telemetry into health signals, while SLIs and SLOs turn those signals into explicit user-facing reliability decisions. -->
 
 The conceptual hierarchy is:

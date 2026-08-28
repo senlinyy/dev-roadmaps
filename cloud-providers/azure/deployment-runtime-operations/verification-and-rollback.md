@@ -14,32 +14,38 @@ aliases:
 
 ## Table of Contents
 
-1. [What This Article Covers](#what-this-article-covers)
-2. [The Release Continues When Traffic Moves](#the-release-continues-when-traffic-moves)
-3. [Watch Window](#watch-window)
-4. [How To Run The Watch Window](#how-to-run-the-watch-window)
-5. [Verification Has Layers](#verification-has-layers)
-6. [The Industrial Observability And On-Call Stack](#the-industrial-observability-and-on-call-stack)
-7. [Health Checks and Smoke Tests](#health-checks-and-smoke-tests)
-8. [Real Traffic Telemetry](#real-traffic-telemetry)
-9. [Rollback](#rollback)
-10. [How To Roll Back In Azure](#how-to-roll-back-in-azure)
-11. [Failure Scenarios and Decisions](#failure-scenarios-and-decisions)
-12. [Runtime Operations After the Decision](#runtime-operations-after-the-decision)
-13. [How To Verify After The Action](#how-to-verify-after-the-action)
-14. [Release Record](#release-record)
-15. [Putting It All Together](#putting-it-all-together)
-
-## What This Article Covers
-<!-- section-summary: The final part of the module focuses on evidence and decisions after users start reaching the candidate. -->
+1. [When Does a Release End?](#when-does-a-release-end)
+2. [How Does a Watch Window Verify the New Version?](#how-does-a-watch-window-verify-the-new-version)
+3. [What Layers of Evidence Should You Check?](#what-layers-of-evidence-should-you-check)
+4. [How Do Health Checks and Smoke Tests Differ?](#how-do-health-checks-and-smoke-tests-differ)
+5. [What Does Real Traffic Telemetry Reveal?](#what-does-real-traffic-telemetry-reveal)
+6. [When Should You Roll Back?](#when-should-you-roll-back)
+7. [How Do Azure Services Perform Rollback and Runtime Recovery?](#how-do-azure-services-perform-rollback-and-runtime-recovery)
+8. [What Should the Final Release Record Prove?](#what-should-the-final-release-record-prove)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 The previous article gave the orders API a controlled rollout path. The candidate revision has runtime settings, Key Vault access, traffic weights, and a rollback shape. This article starts at the moment real production traffic reaches that candidate and the team has to decide what happens next.
 
 We will keep using `devpolaris-orders-api`. The team ships receipt retry code in revision `orders-api--v31`. Traffic starts at 10 percent on the candidate and 90 percent on the stable revision `orders-api--v30`. The first direct checks passed, but production traffic has real customers, real payment timing, real storage behavior, and real dependency pressure.
 
-This article has four jobs. First, we define the **watch window** so the team knows who is watching which signals. Then we connect platform health, smoke tests, real traffic telemetry, and Azure Monitor alerts. After that, we compare **rollback** and **fix forward** decisions. Finally, we talk about runtime operations after the decision, such as scaling, restarting, draining traffic, restoring configuration, and writing the release record.
+The verification and recovery model has four jobs. First, we define the **watch window** so the team knows who is watching which signals. Then we connect platform health, smoke tests, real traffic telemetry, and Azure Monitor alerts. After that, we compare **rollback** and **fix forward** decisions. Finally, we talk about runtime operations after the decision, such as scaling, restarting, draining traffic, restoring configuration, and writing the release record.
 
-## The Release Continues When Traffic Moves
+Keep these questions in view as you work through the lesson:
+
+1. **When Does a Release End?**
+2. **How Does a Watch Window Verify the New Version?**
+3. **What Layers of Evidence Should You Check?**
+4. **How Do Health Checks and Smoke Tests Differ?**
+5. **What Does Real Traffic Telemetry Reveal?**
+6. **When Should You Roll Back?**
+7. **How Do Azure Services Perform Rollback and Runtime Recovery?**
+8. **What Should the Final Release Record Prove?**
+
+## When Does a Release End?
+<!-- section-summary: The final part of the module focuses on evidence and decisions after users start reaching the candidate. -->
+
+### The Release Continues When Traffic Moves
 <!-- section-summary: Moving traffic starts the verification period where the team proves the candidate behaves well for real users. -->
 
 Traffic movement is the moment the release is visible to users. In App Service, traffic might move through a slot swap or slot routing. In Container Apps, traffic might move through revision weights. In AKS, traffic might move through a rolling update, service selector, ingress route, or progressive delivery controller.
@@ -50,7 +56,7 @@ For `devpolaris-orders-api`, the release question changes after 10 percent traff
 
 This is the point where the release can drift into guesswork if the team has no shared plan. One person watches a dashboard. Another checks logs. Someone else asks if the rollout is done. A watch window turns that loose attention into a named period of release verification.
 
-## Watch Window
+## How Does a Watch Window Verify the New Version?
 <!-- section-summary: A watch window is a time-boxed period where named owners inspect named production signals after traffic moves. -->
 
 A **watch window** is a planned period of active observation after a release step. It has an owner, a duration, a traffic level, a signal list, and a decision rule. The team uses a watch window after each meaningful exposure change, such as 10 percent traffic, 50 percent traffic, or 100 percent traffic.
@@ -91,7 +97,7 @@ The exact numbers depend on the service. A high-traffic checkout API might need 
 
 The useful habit is the same across those services: decide what evidence matters before traffic moves. A watch window gives the release owner a clear moment to continue, pause, roll back, or fix forward. Now we can talk about the layers of evidence inside that window.
 
-## How To Run The Watch Window
+### How To Run The Watch Window
 <!-- section-summary: Running a watch window means capturing traffic state, checking health, watching targeted telemetry, and writing the decision at the end. -->
 
 The hands-on watch window starts with a state capture. The release owner records the current traffic split and revision list before looking at graphs. That way, if the team later asks which version received traffic at 10:12, the release record has an answer.
@@ -147,7 +153,7 @@ requests
 
 At the end of the watch window, the release owner writes one of four decisions in the release record: continue, pause, roll back, or fix forward. A useful record has the time, traffic split, signal snapshot, and decision. That short note is the difference between "we watched it for a while" and "we had a controlled release decision."
 
-## Verification Has Layers
+## What Layers of Evidence Should You Check?
 <!-- section-summary: Release verification combines platform health, direct checks, real traffic telemetry, alerts, and business signals. -->
 
 **Verification** means proving that the candidate works well enough for the next release step. One signal rarely tells the whole story, so good verification has layers. Each layer answers a different question about the candidate.
@@ -174,14 +180,13 @@ The layers work together. A green probe with rising checkout failures points tow
 
 The layers work best when the team knows what each one proves. Health checks and smoke tests usually come first because they give the team controlled evidence before real users carry the release.
 
-## The Industrial Observability And On-Call Stack
+### The Industrial Observability And On-Call Stack
 <!-- section-summary: Real release verification connects Azure telemetry to open standards, SLOs, alert routing, and an incident workflow. -->
 
 Azure Monitor and Application Insights are the Azure surfaces in this article, but a production verification stack is usually wider. Many teams instrument application code with **OpenTelemetry**, send that telemetry to Application Insights or another backend, define **service level indicators** and **service level objectives**, route alerts through an on-call system, and keep a runbook next to the dashboard. The Azure tools hold the evidence; the operating practice tells the team what to do with it.
 
 For the orders API, OpenTelemetry should add stable fields that make release queries possible. The exact backend can be Application Insights, Grafana, Datadog, New Relic, Honeycomb, or another tool chosen by the company. The important release fields are provider-neutral: service name, environment, version, revision, route, dependency target, and trace id. Azure Monitor's OpenTelemetry distribution can export those traces, metrics, and logs into Application Insights, where the Kusto queries in this article can group by revision.
 
-AWS teams can use the same telemetry contract with CloudWatch, X-Ray, or another backend. The release query needs stable fields such as service, version, route, dependency target, and trace ID no matter which provider stores the telemetry.
 
 ```yaml
 telemetry_contract:
@@ -221,7 +226,7 @@ The on-call workflow is the last piece. When an alert fires, the release owner s
 
 This stack also keeps the article grounded in real industry practice. Azure Monitor gives the alert and query surface. OpenTelemetry keeps instrumentation portable. SLOs and error budgets come from site reliability engineering practice. PagerDuty, Opsgenie, ServiceNow, Teams, Slack, or a similar system carries the human response. A good Azure release connects all of them before traffic moves.
 
-## Health Checks and Smoke Tests
+## How Do Health Checks and Smoke Tests Differ?
 <!-- section-summary: Health checks prove the runtime can serve traffic, while smoke tests prove a small user path works end to end. -->
 
 A **health check** is a lightweight endpoint or probe that tells the platform whether the app instance can receive traffic. App Service Health check pings a configured path and expects a healthy HTTP response. Container Apps supports startup, liveness, and readiness probes. Kubernetes-based runtimes use similar probe ideas through startup, liveness, and readiness checks.
@@ -264,7 +269,7 @@ smoke_test:
 
 Health checks and smoke tests give the team controlled evidence. Real users still matter because they bring request shapes and timing that tests may miss.
 
-## Real Traffic Telemetry
+## What Does Real Traffic Telemetry Reveal?
 <!-- section-summary: Real traffic telemetry shows how the candidate behaves under production users, dependencies, and timing. -->
 
 **Real traffic telemetry** is the evidence produced by actual production requests. In Azure, Application Insights is the main place many teams inspect this for applications. It can store request telemetry, dependency calls, exceptions, traces, availability results, custom events, and operation correlation so one checkout flow can be followed across several signals.
@@ -320,7 +325,7 @@ Telemetry also has a failure mode: it can go missing. A missing Application Insi
 
 When telemetry crosses a threshold, the team needs a recovery decision. That decision should protect users first and leave investigation for the stable period afterward.
 
-## Rollback
+## When Should You Roll Back?
 <!-- section-summary: Rollback moves users back to a known-good runtime state when the candidate creates unacceptable impact. -->
 
 **Rollback** means returning users to a known-good runtime state. It is a user-protection move first. The team can investigate the candidate after users are back on a stable path.
@@ -340,7 +345,6 @@ container_apps_rollback:
 
 For App Service, rollback often means swapping slots back. If the team swapped the staging slot into production and users start seeing failures, a swap back can restore the previous slot content and settings according to the slot configuration. The team still needs to check sticky settings because a slot swap may leave some values attached to the slot by design.
 
-AWS rollback often uses the same pattern through different controls: a CodeDeploy rollback, a Lambda alias shifted back to the previous version, an ECS service deployment rollback, or an ALB weighted route moved away from the candidate. The Azure command changes, but the release decision is still about returning new traffic to a known-good path.
 
 For configuration, rollback means restoring the previous setting or secret reference. If the retry feature flag causes failures, setting `CHECKOUT_RECEIPT_RETRY_ENABLED` back to `"false"` may stop the bad path. If a Key Vault reference points to a bad secret version, restoring the previous versioned URI may recover the app. The release record should show the previous values so nobody has to discover them during pressure.
 
@@ -348,7 +352,7 @@ Rollback has limits. If the release changed data in a way the old version fails 
 
 Rollback protects users. Fix forward can also be valid in some cases, so the team needs a decision framework.
 
-## How To Roll Back In Azure
+## How Do Azure Services Perform Rollback and Runtime Recovery?
 <!-- section-summary: A rollback runbook should name the exact Azure command, the expected state after the command, and the first verification check. -->
 
 For Container Apps, the common rollback action is traffic movement. The release owner moves all traffic to the stable revision and then immediately shows the traffic split. The first command changes production behavior; the second command proves the platform accepted the change.
@@ -412,7 +416,7 @@ az containerapp update \
 
 The runbook should end after the team verifies traffic, health, and user-path telemetry. A finished command is one checkpoint; recovered user traffic is the goal. That is where runtime operations take over.
 
-## Failure Scenarios and Decisions
+### Failure Scenarios and Decisions
 <!-- section-summary: The right release decision depends on user impact, evidence quality, rollback safety, and the size of the fix. -->
 
 A **fix forward** is a small corrective change that keeps the release moving instead of returning to the previous version. It might be a feature flag change, a config restore, a quick patch, or a scale adjustment. Fix forward is useful when the issue is understood, the fix is small, and user impact stays controlled.
@@ -448,7 +452,7 @@ The team should also record the decision time. Release incidents often become co
 
 After the decision, runtime operations continue. The service still needs hands-on care even after the team chooses continue, pause, rollback, or fix forward.
 
-## Runtime Operations After the Decision
+### Runtime Operations After the Decision
 <!-- section-summary: Runtime operations stabilize the service after continue, pause, rollback, or fix-forward decisions. -->
 
 **Runtime operations** are the actions the team takes on the running service after the release decision. They include scaling, restarting, draining traffic, restoring settings, checking logs, validating telemetry, clearing bad instances, and watching alerts return to normal. These actions focus on production stability rather than product feature work.
@@ -481,7 +485,7 @@ runtime_operations:
 
 Runtime operations turn the decision into production stability. The last piece is recording enough of that work that the team can learn from it later.
 
-## How To Verify After The Action
+### How To Verify After The Action
 <!-- section-summary: Post-action verification proves that the recovery command actually changed user traffic and improved the user path. -->
 
 After rollback or fix forward, the release owner should verify three things: Azure state, application health, and real traffic. Azure state proves the platform accepted the action. Application health proves the app can serve basic requests. Real traffic proves customers are recovering.
@@ -540,7 +544,7 @@ requests
 
 The last verification step is cleanup evidence. The team checks whether failed checkout attempts, receipt retries, or duplicate receipt objects need repair. That work may become a separate incident task, but the release record should name it before the team closes the watch window.
 
-## Release Record
+## What Should the Final Release Record Prove?
 <!-- section-summary: The release record captures the candidate, traffic steps, evidence, decisions, and runtime actions. -->
 
 A **release record** is the timeline of the production change. The first article used a release record to name the artifact, runtime, settings, traffic plan, health signals, and rollback target. After traffic moves, the record should also capture evidence, decisions, and runtime operations.
@@ -592,7 +596,7 @@ Release records also feed better automation. If every rollback needs the same tr
 
 Now let us connect the final story from traffic movement to stable production. Evidence behind each step keeps the release story clear.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: Verification and runtime operations turn traffic movement into an evidence-based release decision. -->
 
 The orders API release starts its 10 percent watch window. `orders-api--v31` receives a small slice of production traffic while `orders-api--v30` serves the rest. The owner watches checkout failures, p95 duration, Azure SQL dependency calls, Storage upload failures, exceptions, and telemetry health.
@@ -607,7 +611,41 @@ The release record captures the traffic step, evidence, rollback decision, actio
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[When Does a Release End?]{kind="recap"}
+The final part of the module focuses on evidence and decisions after users start reaching the candidate. Moving traffic starts the verification period where the team proves the candidate behaves well for real users.
+:::
+
+:::expand[How Does a Watch Window Verify the New Version?]{kind="recap"}
+A watch window is a time-boxed period where named owners inspect named production signals after traffic moves. Running a watch window means capturing traffic state, checking health, watching targeted telemetry, and writing the decision at the end.
+:::
+
+:::expand[What Layers of Evidence Should You Check?]{kind="recap"}
+Release verification combines platform health, direct checks, real traffic telemetry, alerts, and business signals. Real release verification connects Azure telemetry to open standards, SLOs, alert routing, and an incident workflow.
+:::
+
+:::expand[How Do Health Checks and Smoke Tests Differ?]{kind="recap"}
+Health checks prove the runtime can serve traffic, while smoke tests prove a small user path works end to end.
+:::
+
+:::expand[What Does Real Traffic Telemetry Reveal?]{kind="recap"}
+Real traffic telemetry shows how the candidate behaves under production users, dependencies, and timing.
+:::
+
+:::expand[When Should You Roll Back?]{kind="recap"}
+Rollback moves users back to a known-good runtime state when the candidate creates unacceptable impact.
+:::
+
+:::expand[How Do Azure Services Perform Rollback and Runtime Recovery?]{kind="recap"}
+A rollback runbook should name the exact Azure command, the expected state after the command, and the first verification check. The right release decision depends on user impact, evidence quality, rollback safety, and the size of the fix. Runtime operations stabilize the service after continue, pause, rollback, or fix-forward decisions. Post-action verification proves that the recovery command actually changed user traffic and improved the user path.
+:::
+
+:::expand[What Should the Final Release Record Prove?]{kind="recap"}
+The release record captures the candidate, traffic steps, evidence, decisions, and runtime actions. Verification and runtime operations turn traffic movement into an evidence-based release decision.
+:::
+
+## References
 
 - [Monitor App Service instances using Health check](https://learn.microsoft.com/en-us/azure/app-service/monitor-instances-health-check) - Explains App Service Health check paths, expected status codes, and unhealthy instance behavior.
 - [Health probes in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/health-probes) - Documents startup, liveness, and readiness probes for Container Apps.

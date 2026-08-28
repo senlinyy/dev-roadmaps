@@ -23,9 +23,6 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## What Are the Control Plane and Worker Nodes in Plain Terms?
-<!-- section-summary: The control plane stores intent and coordinates cluster-wide decisions; worker nodes supply the machines and local agents that run application processes. -->
-
 The previous article followed one application through its Deployment, ReplicaSet, Pods, Service, EndpointSlices, and Nodes. Those objects describe the application and its relationships. This article looks at the software components that read those objects and make the requested system real.
 
 **The control plane is the cluster's coordination system. Worker nodes are the machines that execute application work.**
@@ -37,7 +34,21 @@ The distinction begins with two kinds of work:
 
 Kubernetes needs both areas even for the simplest multi-node cluster. A request such as “keep six copies of this Pod template running” must remain available after `kubectl` exits and after individual control-plane processes restart. Meeting that request requires a view across the whole cluster: current Pods, free resources, placement rules, and Node health. Starting one of those Pods requires a different kind of access: direct contact with one machine's container runtime, storage mounts, network setup, and operating system.
 
-That produces a natural chain of responsibility. The API server accepts and stores the requested object. Controllers create the dependent objects needed to represent the requested population. The scheduler gives each unscheduled Pod one Node assignment. The kubelet on that Node coordinates local execution and returns observations through the API. Each component completes one part of the work and leaves a durable result for the next component to observe.
+Keep these questions in view as you work through the lesson:
+
+1. **What Are the Control Plane and Worker Nodes in Plain Terms?**
+2. **Why Does Kubernetes Separate Coordination from Execution?**
+3. **How Does an API Request Become Shared Cluster State?**
+4. **Why Does Kubernetes Need etcd?**
+5. **How Do Controllers and the Scheduler Divide the Work?**
+6. **How Does a Worker Node Turn a Pod Record into a Running Process?**
+7. **How Does the Cluster Learn What Happened on the Worker?**
+8. **What Continues When a Component Fails, and How Do You Find the Boundary?**
+
+## What Are the Control Plane and Worker Nodes in Plain Terms?
+<!-- section-summary: The control plane stores intent and coordinates cluster-wide decisions; worker nodes supply the machines and local agents that run application processes. -->
+
+The control-plane-to-node path produces a natural chain of responsibility. The API server accepts and stores the requested object. Controllers create the dependent objects needed to represent the requested population. The scheduler gives each unscheduled Pod one Node assignment. The kubelet on that Node coordinates local execution and returns observations through the API. Each component completes one part of the work and leaves a durable result for the next component to observe.
 
 The main components fit into these two areas:
 
@@ -54,17 +65,6 @@ The main components fit into these two areas:
 | Worker node | **Service data-plane agent** | Optionally programs local Service forwarding; some clusters use eBPF-based replacements |
 
 The components are separate processes with narrow responsibilities. They cooperate through durable API records instead of relying on one long-running command to complete the whole sequence.
-
-These questions guide the rest of the article:
-
-1. **What are the control plane and worker nodes in plain terms?**
-2. **Why does Kubernetes separate coordination from execution?**
-3. **How does an API request become shared cluster state?**
-4. **Why does Kubernetes need etcd?**
-5. **How do controllers and the scheduler divide the work?**
-6. **How does a worker node turn a Pod record into a running process?**
-7. **How does the cluster learn what happened on the worker?**
-8. **What continues when a component fails, and how do you find the boundary?**
 
 ## Why Does Kubernetes Separate Coordination from Execution?
 <!-- section-summary: Separating cluster-wide decisions from machine-local execution lets each component recover independently and keeps application traffic outside the control plane. -->
@@ -382,7 +382,7 @@ The API object remains the source of coordination across reconnects. A transient
 
 Production clusters commonly run several API server instances behind one endpoint. Any healthy instance can handle a compatible request because all instances use the same persistent etcd state, while each maintains caches populated from that state. This horizontal design provides more API capacity and preserves access when one API server instance stops.
 
-Admission webhooks and authentication dependencies become part of the request path when the cluster enables them. A slow required webhook can delay API writes even while the core API server processes remain healthy. API latency therefore needs component-level and dependency-level observability.
+Enabling admission webhooks and authentication dependencies adds them to the request path. A slow required webhook can delay API writes even while the core API server processes remain healthy. API latency therefore needs component-level and dependency-level observability.
 
 ## Why Does Kubernetes Need etcd?
 <!-- section-summary: etcd preserves authoritative API state, orders concurrent changes, and lets control-plane processes restart without losing the cluster's declared intent. -->
@@ -777,35 +777,35 @@ The core method stays the same. Read the durable records, find the last complete
 ## Check Your Answers
 <!-- section-summary: Revisit coordination and execution, API persistence, etcd, controllers, scheduling, worker realization, status reporting, and failure boundaries. -->
 
-:::expand[What are the control plane and worker nodes in plain terms?]{kind="recap"}
+:::expand[What Are the Control Plane and Worker Nodes in Plain Terms?]{kind="recap"}
 The control plane accepts and stores cluster intent, creates and updates Kubernetes objects, chooses placements, and maintains a cluster-wide view. Worker nodes supply the machines and local agents that prepare storage and networking, run containers, supervise assigned Pods, and report observations.
 :::
 
-:::expand[Why does Kubernetes separate coordination from execution?]{kind="recap"}
+:::expand[Why Does Kubernetes Separate Coordination from Execution?]{kind="recap"}
 Cluster-wide placement and reconciliation need a global view, while starting a container needs local machine access. Separating them narrows failure scope, lets components recover independently from durable API records, and keeps application traffic outside the control-plane path.
 :::
 
-:::expand[How does an API request become shared cluster state?]{kind="recap"}
+:::expand[How Does an API Request Become Shared Cluster State?]{kind="recap"}
 `kubectl` discovers the resource endpoint and translates a command into an HTTP request: `get` uses `GET`, `create` uses `POST`, server-side apply uses `PATCH`, and delete uses `DELETE`. The API server authenticates and authorizes the client, runs admission and validation, persists the accepted object, and returns its stored representation with fields such as `uid` and `resourceVersion`. Controllers list the current objects and watch later versions, so the stored request can drive work long after the original command exits.
 :::
 
-:::expand[Why does Kubernetes need etcd?]{kind="recap"}
+:::expand[Why Does Kubernetes Need etcd?]{kind="recap"}
 etcd stores byte-string keys and values. A Deployment key typically resembles `/registry/deployments/commerce/pricing-api`, while its value contains the serialized Kubernetes object, commonly in a binary Protobuf envelope for supported built-in resources. etcd adds durable revisions, atomic operations, ordered change history, and consensus, allowing several API servers to share one authoritative state. The API server keeps validation, version conversion, authorization, admission, encryption, and human-readable JSON or YAML around those raw records.
 :::
 
-:::expand[How do controllers and the scheduler divide the work?]{kind="recap"}
+:::expand[How Do Controllers and the Scheduler Divide the Work?]{kind="recap"}
 Controllers reconcile object relationships and populations, such as Deployment to ReplicaSet to Pods. The scheduler begins with each unscheduled Pod, filters and scores Nodes, then records one binding. The kubelet handles execution after that placement exists.
 :::
 
-:::expand[How does a worker node turn a Pod record into a running process?]{kind="recap"}
+:::expand[How Does a Worker Node Turn a Pod Record into a Running Process?]{kind="recap"}
 The kubelet watches Pods assigned to its Node, coordinates volumes, sends container lifecycle requests through CRI, works with the runtime and CNI integration to establish the Pod sandbox and network, runs configured probes, and reports Pod state. CSI, CRI, and CNI keep storage, runtime, and networking implementations replaceable behind stable contracts.
 :::
 
-:::expand[How does the cluster learn what happened on the worker?]{kind="recap"}
+:::expand[How Does the Cluster Learn What Happened on the Worker?]{kind="recap"}
 The kubelet publishes container state, Pod conditions, Node status, and a lightweight Node Lease heartbeat through the API. Controllers derive ReplicaSet and Deployment status from those observations, while events explain recent transitions and failures.
 :::
 
-:::expand[What continues when a component fails, and how do you find the boundary?]{kind="recap"}
+:::expand[What Continues When a Component Fails, and How Do You Find the Boundary?]{kind="recap"}
 Work already realized on workers and in the data plane often continues while the failed component's new decisions pause. Follow Deployment, ReplicaSet, Pod, Node assignment, container state, readiness, Node condition, and Lease renewal in order. The first missing result identifies the component and evidence source to inspect next.
 :::
 

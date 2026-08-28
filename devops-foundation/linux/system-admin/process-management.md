@@ -9,25 +9,36 @@ id: article-devops-foundation-linux-system-admin-process-management
 
 ## Table of Contents
 
-1. [From Terminal Commands to Processes](#from-terminal-commands-to-processes)
-2. [PID and PPID Badges](#pid-and-ppid-badges)
-3. [The Process Tree and Exit Status](#the-process-tree-and-exit-status)
-4. [PID 1 and Services Started by systemd](#pid-1-and-services-started-by-systemd)
-5. [Ask Linux What Is Running](#ask-linux-what-is-running)
-6. [Signals: Polite Messages Before Hard Stops](#signals-polite-messages-before-hard-stops)
-7. [Foreground, Background, and SSH Sessions](#foreground-background-and-ssh-sessions)
-8. [Priority, Nice Values, and `/proc`](#priority-nice-values-and-proc)
-9. [Worked Failure Diagnoses](#worked-failure-diagnoses)
+1. [What Is a Linux Process?](#what-is-a-linux-process)
+2. [How Do Process Creation, PIDs, Parents, and Exit Status Fit Together?](#how-do-process-creation-pids-parents-and-exit-status-fit-together)
+3. [Why Are PID 1 and Service Managers Special?](#why-are-pid-1-and-service-managers-special)
+4. [How Do You Inspect Processes, Threads, and States?](#how-do-you-inspect-processes-threads-and-states)
+5. [How Do Signals Control a Process Lifecycle?](#how-do-signals-control-a-process-lifecycle)
+6. [How Do Terminals, Jobs, Sessions, and SSH Affect Lifetime?](#how-do-terminals-jobs-sessions-and-ssh-affect-lifetime)
+7. [How Do Identity, /proc, Priority, and cgroups Describe Resources?](#how-do-identity-proc-priority-and-cgroups-describe-resources)
+8. [How Do You Diagnose a Process That Exits, Hangs, or Returns?](#how-do-you-diagnose-a-process-that-exits-hangs-or-returns)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-## From Terminal Commands to Processes
-<!-- section-summary: Every command, shell, server, and background task is a running program that Linux tracks as a process. -->
 
 You have already started processes if you have opened Terminal, connected to a server with SSH, run `nano`, launched `curl`, or started a Node app. The command may feel like one small line of text, but Linux has to run something real behind that line. While that thing is running, Linux tracks it as a **process**.
 
 A process is one running copy of a program. The file `/usr/bin/curl` can sit on disk all day doing nothing. When you type `curl https://example.com`, Linux starts a live copy of that program, gives it memory, connects it to your terminal, lets it open network connections, and tracks it until it exits.
 
 The same program can have many running copies at the same time. Two people can run `nano` in two SSH sessions. A web server can have several worker processes handling requests. Each copy gets its own process identity, its own memory, and its own live state.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Is a Linux Process?**
+2. **How Do Process Creation, PIDs, Parents, and Exit Status Fit Together?**
+3. **Why Are PID 1 and Service Managers Special?**
+4. **How Do You Inspect Processes, Threads, and States?**
+5. **How Do Signals Control a Process Lifecycle?**
+6. **How Do Terminals, Jobs, Sessions, and SSH Affect Lifetime?**
+7. **How Do Identity, `/proc`, Priority, and cgroups Describe Resources?**
+8. **How Do You Diagnose a Process That Exits, Hangs, or Returns?**
+
+## What Is a Linux Process?
+<!-- section-summary: Every command, shell, server, and background task is a running program that Linux tracks as a process. -->
 
 Try a tiny command that stays alive long enough to inspect:
 
@@ -52,7 +63,7 @@ The output tells you two useful things:
 
 Under the hood, the kernel stores more than the command name. It tracks the process owner, current directory, environment variables, open files, signal rules, memory, CPU scheduling information, and parent process. The simplest handle is the process ID.
 
-## PID and PPID Badges
+## How Do Process Creation, PIDs, Parents, and Exit Status Fit Together?
 <!-- section-summary: PID names the running process itself, while PPID names the process that started it. -->
 
 You open an SSH session and type `nano notes.txt`. The editor appears in your terminal, and your shell waits for it to finish. Linux does not remember that situation as a vague idea like "the editor is open." It gives the running editor an ID badge so other parts of the system can talk about that exact process.
@@ -99,7 +110,7 @@ This is why PPID is more than a trivia field. If a process belongs to your shell
 
 _The image turns a process row into named fields so `ps` output is easier to inspect._
 
-## The Process Tree and Exit Status
+### How Do the Process Tree and Exit Status Carry Lifecycle Information?
 <!-- section-summary: Parent processes start child processes and collect their small exit reports after they finish. -->
 
 You have probably seen a command fail and then checked `$?`, or watched a shell prompt return after a command finishes. That little return to the prompt hides an important process habit. The child finished, and the parent shell collected its ending result.
@@ -150,7 +161,7 @@ The tree gives you the story:
 
 Under the hood, Linux keeps this parent-child shape so resources and endings can be accounted for. You do not need to memorize kernel data structures. In daily operations, the useful question is simpler: who started this process, and who is responsible for cleaning it up or restarting it?
 
-## PID 1 and Services Started by systemd
+## Why Are PID 1 and Service Managers Special?
 <!-- section-summary: On modern Linux servers, systemd usually runs as PID 1 and starts the long-running services that should survive your SSH session. -->
 
 Now picture a more painful beginner moment. You SSH into a server, run `node server.js`, see the app respond, close the laptop, and later the site is down. The program worked while your terminal was alive, but it was living under your login shell instead of under the service manager.
@@ -184,7 +195,7 @@ Those two checks tell you:
 
 This is the bridge from process management to service management. Processes are the live running objects. systemd is the parent and manager you usually want for long-running server work. If you find an app process parented by `bash`, treat that as a clue that someone started it by hand.
 
-## Ask Linux What Is Running
+## How Do You Inspect Processes, Threads, and States?
 <!-- section-summary: `ps`, `pgrep`, and `top` let you inspect the process table from quick lookup to live resource view. -->
 
 Suppose the server feels slow. You do not need to guess which program is busy. Start by asking Linux for the process table, then narrow the answer until you know the process, owner, parent, command line, and resource use.
@@ -243,7 +254,7 @@ Inside `top`, press `P` to sort by CPU, `M` to sort by memory, `1` to show per-C
 
 Once you identify the process, the next question is usually control. If it is healthy but busy, keep gathering evidence. If it needs to stop or reload, send the right message instead of reaching straight for the harshest option.
 
-## Signals: Polite Messages Before Hard Stops
+## How Do Signals Control a Process Lifecycle?
 <!-- section-summary: Signals are small messages to processes, and graceful stop signals should come before forced termination. -->
 
 During a deploy, you may need an old process to stop so a new one can start. During a config change, you may want a server to reread files without dropping active work. Linux handles these requests with **signals**, which are small messages sent to a process.
@@ -313,7 +324,7 @@ Signals are process-level control. Services add another layer above that control
 
 _The image shows the evidence path for a process incident before reaching for a hard kill._
 
-## Foreground, Background, and SSH Sessions
+## How Do Terminals, Jobs, Sessions, and SSH Affect Lifetime?
 <!-- section-summary: Foreground and background jobs explain why shell-launched work can disappear with an SSH session. -->
 
 A very normal beginner move is to start a long command over SSH, then worry about closing the laptop. Maybe it is a database export, a tar backup, or a script that takes twenty minutes. The command is a process, but it is also attached to a terminal session unless another tool takes ownership.
@@ -374,7 +385,7 @@ The status output ties the process to a service:
 
 Keep shell jobs for short interactive work. Move long-running services, workers, and scheduled production tasks into systemd units or timers so logs, restarts, and boot behavior are written down.
 
-## Priority, Nice Values, and `/proc`
+## How Do Identity, `/proc`, Priority, and cgroups Describe Resources?
 <!-- section-summary: Nice values influence CPU scheduling, while `/proc/<pid>` exposes the live process details behind command output. -->
 
 Picture a backup job compressing old releases at noon while the web app is serving users. Both jobs need CPU, and the backup is less urgent. Linux lets you mark that backup as lower priority so request handling has a better chance to run first.
@@ -516,7 +527,7 @@ Environment variables can contain secrets, so inspect `/proc/<pid>/environ` with
 
 Priority tools are useful for maintenance jobs. `/proc` is useful for live facts. Both are part of the same habit: inspect the process you actually have, then choose the smallest action that fits the evidence.
 
-## Worked Failure Diagnoses
+## How Do You Diagnose a Process That Exits, Hangs, or Returns?
 <!-- section-summary: Process clues help you diagnose high CPU, stray manual services, stuck shutdown, zombies, and memory kills. -->
 
 Troubleshooting usually starts with a human symptom. Someone says the site is slow, a deploy hangs, or a health check disagrees with the service status. The process table helps turn that broad symptom into a specific running object.
@@ -610,6 +621,284 @@ This output points away from normal application shutdown:
 - The next checks are memory history, service limits, traffic spike, and recent code paths that allocate large objects.
 
 Each diagnosis follows the same shape. Start from the symptom, find the PID, check the parent, inspect state, then choose the next tool. That habit keeps process management practical instead of turning it into a pile of commands to memorize.
+
+### How Do `fork()` and `exec()` Create a Process?
+
+Unix separates process creation into two ideas. `fork()` creates a child process based on the calling process. The child begins with inherited process state such as environment, current directory, open file descriptors, identity, and signal configuration. `exec()` then replaces the current process image with a new program while preserving selected process context such as the PID and already prepared descriptors.
+
+This separation is useful to a shell. The shell can fork, arrange the child's standard input and output, change the child's environment or working directory, then exec the requested program. The parent shell remains available to wait, launch another command, or maintain interactive state. Redirection is therefore process setup performed before the new program runs.
+
+Pipes use the same model. The shell creates a pipe with a read end and a write end, forks the commands, connects their file descriptors to the appropriate ends, closes unused copies, and execs the programs. The programs do not need to know who created the pipe; one writes standard output and the next reads standard input.
+
+Some commands must remain shell builtins. If an ordinary child process performed `cd`, it would change only its own working directory and then exit; the parent shell would stay where it was. `export`, job control, and shell options similarly change state owned by the current shell. This is the same child-process boundary that makes sourcing a script different from executing it.
+
+PIDs are temporary handles. After a process exits and its lifecycle record is collected, the kernel can reuse the number for a later process. A PID written into an old incident note is not a permanent service identity. Confirm start time, executable, command line, cgroup, and service ownership before signaling it.
+
+### What Happens When a Process Exits?
+
+A process returns an exit status and the kernel releases most of its resources. The parent still needs to collect the termination information with a wait operation. Until then, a small zombie entry remains so the parent can learn which child ended and how. A zombie is already dead: it has no ordinary program code left to kill and consumes no normal address space. Fix a growing zombie population by investigating why the parent does not reap its children.
+
+If a parent exits before a child, the child becomes orphaned and is adopted by an appropriate subreaper, ultimately represented through the PID 1 responsibility in the process namespace. The child can continue running; parent-child ancestry describes creation and lifecycle collection, not an eternal control relationship.
+
+Exit status is separate from standard output. A command can print useful text and fail, print nothing and succeed, or write errors to standard error while returning a nonzero code. Shells, service managers, and automation use the status as the machine-readable lifecycle result. Signals can also be reflected in the termination result so a supervisor can distinguish a clean exit from a forced end.
+
+PID 1 must reap orphaned children and participate in system startup and shutdown. It also has special signal and namespace behavior. In a container, a program may see itself as PID 1 inside its PID namespace even though the host assigns another PID. That program inherits the reaping and signal-forwarding responsibilities within the namespace. A minimal wrapper that ignores them can leave zombies or fail to deliver termination to the real workload.
+
+### What Do Process States Actually Mean?
+
+`ps` state codes summarize what the kernel knows at the sample moment. `R` means running or runnable; it does not promise the task was literally executing on a CPU for the whole interval. `S` is interruptible sleep, common for a process waiting for a timer, socket, pipe, or event. `D` is uninterruptible sleep, often a wait in the kernel for I/O. `T` means stopped or traced. `Z` is a zombie awaiting collection.
+
+A sleeping server is usually healthy. Event-driven services spend much of their time waiting for work. A process in `D` is not automatically broken either, but a long-lived or growing group of `D` tasks can reveal a stuck storage, network-filesystem, or device path. `SIGKILL` cannot end the task until the kernel wait reaches a point where termination can complete, so repeated `kill -9` does not repair the underlying I/O.
+
+Processes and threads differ in what they share. Threads in one process share the address space and many resources while the kernel schedules each execution thread. Tools may show a process summary or individual task IDs. A multithreaded process can use several CPUs, and one blocked thread does not imply every thread is blocked. Use `ps -L`, `top -H`, or `/proc/PID/task` when the process-wide view hides the active thread.
+
+The scheduler chooses among runnable tasks. A nice value changes relative preference under CPU contention; it is not a speed limit. CPU affinity restricts which logical CPUs may run a task, which can help specialized placement but can also create an artificial bottleneck. cgroup CPU controls express workload shares or quotas more directly than renicing one PID in a managed service.
+
+### How Do File Descriptors Explain Hidden Process State?
+
+A process's file-descriptor table connects small integers to open kernel objects. Descriptors `0`, `1`, and `2` conventionally represent standard input, output, and error. Other descriptors can name regular files, sockets, pipes, devices, directories, or event objects. The open reference belongs to the process, not to the pathname text used earlier.
+
+Inspect it through `/proc`:
+
+```bash
+pid=1842
+ls -l "/proc/$pid/fd"
+readlink "/proc/$pid/exe"
+readlink "/proc/$pid/cwd"
+tr '\0' '\n' < "/proc/$pid/environ" | sed 's/=.*$/=<redacted>/'
+```
+
+`/proc/PID/exe` identifies the executable mapping and can differ from a shortened command name. `cwd` shows the current directory used for relative paths. `fd` reveals open files and sockets. The environment is sensitive process state; inspect it with privilege only when needed and avoid printing secret values into tickets or logs.
+
+Deleting a pathname does not close a process's descriptor. The process can continue reading or writing the unlinked object, and its blocks remain allocated. `lsof +L1` connects a disk-full symptom to the owning process. Restarting or directing that process to reopen logs releases the old reference; creating another empty pathname does not.
+
+Open descriptors also explain SSH jobs that behave oddly. A background program may still read from the terminal, write into a closed session, or receive a terminal-related signal. `nohup` changes SIGHUP handling and redirects output when appropriate, but it does not provide restart policy, boot activation, identity configuration, resource controls, or durable log ownership. Use `tmux` or `screen` for a human interactive session and a service manager for a real daemon.
+
+### How Do Signals Form a Lifecycle Protocol?
+
+Signals are asynchronous notifications. `SIGTERM` requests termination and can be caught so a program stops accepting work, closes resources, flushes state, and exits. `SIGINT` is commonly sent by `Ctrl+C` to the terminal foreground process group. `SIGTSTP`, commonly from `Ctrl+Z`, stops the group for job control rather than terminating it. `SIGHUP` historically reports terminal loss and is also used by some daemons as a reload convention.
+
+`SIGKILL` and `SIGSTOP` cannot be caught or ignored. They are kernel enforcement mechanisms. `SIGKILL` gives the process no cleanup opportunity, so it can interrupt application-level writes, leave temporary state, or prevent a graceful handoff. Send TERM first, wait for the service's documented shutdown interval, inspect why it remains, and reserve KILL for an intentional last step.
+
+Signal permission follows identity and privilege rules. An ordinary process generally cannot signal an unrelated process owned by another user. The command named `kill` does not imply termination; it sends the selected signal. Use `kill -TERM PID`, `kill -HUP PID`, or `kill -0 PID` to make the intent visible. Signal zero performs permission and existence checks without delivering a normal action signal.
+
+Foreground and background are terminal relationships. The terminal has a foreground process group that receives interactive input and terminal-generated signals. A shell job can contain several processes in a pipeline, so a job number is not the same as one PID. Process groups let the shell signal the whole pipeline. Sessions group process groups and associate them with a controlling terminal.
+
+A service manager extends the protocol. It knows the unit's cgroup, main process, child processes, expected exit codes, stop signal, timeout, and restart policy. `systemctl stop app.service` is normally safer than signaling a remembered PID because it applies the unit's declared lifecycle to the full managed workload. Killing one worker may only cause the supervisor to replace it.
+
+### How Do Identity, Memory, and cgroups Change the View?
+
+Processes carry real and effective user and group identities, supplementary groups, capabilities, namespaces, resource limits, environment, and security context. These values determine which files, processes, sockets, and privileged operations the process can access. “It works in my shell” may fail under a service because the service has a different identity, current directory, environment, limit, or sandbox.
+
+Virtual memory means a process's address range is not the same as physical RAM. RSS counts resident pages, but shared pages may be counted for several processes. `/proc/PID/maps` lists mapped address ranges and their permissions; `smaps_rollup` aggregates resident, proportional, private, shared, anonymous, and swap data. A large virtual range alone does not prove a leak.
+
+Process trees answer who created whom, but modern workload ownership can outlive or cross simple ancestry. A daemon can fork, reparent, or create many workers. cgroups answer which managed workload the kernel accounts together. Inspect a systemd service's cgroup with `systemctl status`, `systemd-cgls`, or `/proc/PID/cgroup` before treating one PID as the whole service.
+
+Resource limits belong to the same process state. File-descriptor limits, memory limits, process counts, CPU controls, and affinity can make a program fail while the machine still has spare global capacity. Inspect `/proc/PID/limits` and the service definition. Raising a limit may remove a symptom, but first establish why the workload reached it.
+
+### How Does an Unknown-Process Investigation Work?
+
+Start with a snapshot that does not mutate anything:
+
+```bash
+pid=1842
+ps -o pid,ppid,user,group,lstart,etime,stat,ni,psr,%cpu,%mem,rss,cmd -p "$pid"
+readlink -f "/proc/$pid/exe"
+readlink -f "/proc/$pid/cwd"
+cat "/proc/$pid/cgroup"
+sudo lsof -p "$pid" | head -50
+```
+
+Confirm whether the PID still describes the same process, who owns it, when it began, what executable is mapped, which service or container owns it, what state it is in, and what resources it holds. Then inspect the parent and children with `pstree -aps PID` or a forest view. Do not signal an unknown production process based only on a familiar command name.
+
+If a process will not die, confirm the signal was permitted and delivered, inspect state, and check whether it is a service that restarts. A `D` state points to the waited-on kernel resource. A new PID after termination points to a supervisor. The same PID remaining after TERM may be performing graceful shutdown or ignoring the signal; compare logs and the declared timeout before escalating.
+
+If a process returns after it is killed, find the owner above the PID: systemd, a container runtime, a process supervisor, or another parent. Stop or reconfigure the controller. Repeatedly killing the child fights the policy without changing it.
+
+If an SSH job disappears, distinguish a human session from a service. For a one-off interactive job, use a persistent terminal multiplexer and reconnect. For scheduled or long-running production work, create a service or timer with explicit output, identity, restart, and resource policy.
+
+If a process appears alive but the application is unhealthy, test the actual interface. A PID can exist while the service is deadlocked, not listening, returning errors, or still starting. Service status combines process lifecycle evidence; operational health requires the port, request, queue, or output the workload promises.
+
+The complete lifecycle is inheritance, optional setup, program replacement, scheduling and waiting, communication through descriptors and signals, exit, kernel cleanup, parent notification, and supervision policy. Placing each symptom on that lifecycle makes process management predictable instead of treated as a mysterious PID.
+
+### How Do Shell Jobs Build on Processes?
+
+The shell maintains a job table for commands it launched from that interactive session. `jobs` lists that shell's jobs; `ps` lists kernel processes and knows nothing about shell job numbers. A pipeline such as `producer | consumer` is one shell job containing multiple processes, normally placed in one process group so terminal signals reach the group.
+
+Appending `&` lets the shell continue without waiting in the foreground, but it does not detach every relationship. The job can retain the controlling terminal and open standard streams. `fg` places a job's process group back in the foreground, while `bg` continues a stopped job in the background. `disown` changes the shell's job tracking and HUP behavior; details depend on the shell and still do not create service supervision.
+
+Sessions organize process groups and a controlling terminal. SSH creates a remote session boundary. When the connection disappears, descriptors close and terminal/session signals may reach jobs. Programs react differently depending on their signal handlers and I/O. Redirecting output and using `nohup` can preserve a one-off noninteractive task, but only a declared service provides boot activation, stable logs, ownership, restart policy, and resource accounting.
+
+### Why Can a Process Be Alive but Make No Progress?
+
+Process existence proves only that the kernel still tracks it. A runnable task may receive little CPU under contention. A sleeping task may correctly await input. A task can block on a lock, socket, pipe, filesystem, page fault, or device. A multithreaded service can have one deadlocked path while health checks still run on another thread.
+
+Sample state and wait information over time rather than labeling one snapshot. `ps -o pid,stat,wchan:32,cmd -p PID` can show a kernel wait channel where available. `strace -p PID` can reveal repeated or blocked syscalls, but attaching changes observation conditions, requires permission, can add overhead, and may expose sensitive data. Use it deliberately after ordinary evidence narrows the process.
+
+Open network sockets add another view:
+
+```bash
+ss -ntp
+ss -lntp
+sudo lsof -Pan -p 1842 -i
+```
+
+A listener proves a socket is bound, not that the application can complete a request. An established connection can be waiting on the peer or application protocol. Combine socket state with request logs, timeouts, thread state, and downstream evidence.
+
+### How Do Automatic Restart and PID Reuse Mislead Operators?
+
+Suppose PID `1842` is consuming CPU. By the time an operator runs `kill 1842`, that process may have exited and the number may identify a different process. Confirm the current start time, executable, user, and cgroup immediately before mutation. Prefer a stable unit or container identity when the workload is managed.
+
+If systemd has `Restart=on-failure`, terminating the main process may produce a new PID by design. A container orchestrator may replace the container, and an application master may replace a worker. The return is not evidence that `kill` failed. It is evidence that a controller observed an undesired state and restored its policy.
+
+Trace from child to controller:
+
+```bash
+pstree -aps 1842
+cat /proc/1842/cgroup
+systemctl status app.service --no-pager
+systemctl show app.service -p MainPID -p Restart -p NRestarts
+```
+
+Then decide whether to stop the controller, change restart policy, fix the underlying failure, or leave recovery working. Fighting individual PIDs can turn a manageable service incident into a restart storm.
+
+### How Do Namespaces Change What a PID Means?
+
+PID namespaces allow the same process to have different IDs as seen from a container and the host. A process can be PID 1 inside its namespace and PID `29104` outside. Commands executed in the container see the inner process tree; host tools see the outer one. Logs and alerts should include container or cgroup identity so a PID is not interpreted in the wrong namespace.
+
+Other namespaces change mounts, network interfaces, hostnames, users, and IPC views. `/proc` is mounted for the observing namespace, so “all processes” can mean all visible processes in that boundary. When an expected PID, socket, or file is missing, confirm whether the command runs on the host, inside the correct container, or in another namespace.
+
+User namespaces can map numeric identities. A container process appearing as root inside may map to an unprivileged host UID. Signal and file permissions follow the relevant kernel identity mapping, not the printed name alone. Use the runtime and host ownership evidence before changing permission or privilege.
+
+### How Do Process Resources Interact?
+
+A CPU-bound process remains runnable and accumulates CPU time. An I/O-bound process alternates brief CPU work with waits. A process under memory pressure can spend CPU handling faults and reclaim while also waiting on storage for swap or file data. Classifying one process requires state over time, not its command name.
+
+Priority affects CPU scheduling only within its policy and contention. It does not directly prioritize disk I/O, network traffic, locks, or memory. I/O priority and cgroup controls exist, but begin by identifying the constrained resource and owner. Tuning the wrong scheduler can make the graph change without improving the application.
+
+CPU affinity can be inspected with `taskset -pc PID`. It may be inherited from a parent or manager and can explain why one CPU saturates. Changing affinity without understanding cache locality, interrupts, NUMA, and workload design can shift rather than remove contention.
+
+Memory limits and OOM behavior can be scoped to a cgroup. A service may be killed at its unit boundary even while the host has memory available. Conversely, one unbounded workload can force machine-wide OOM selection. Connect `/proc` process memory, cgroup resource files, service controls, and kernel messages before calling the largest RSS value the cause.
+
+### What Does a Careful Stop Procedure Look Like?
+
+Identify the workload owner and user-facing impact. For a managed service, inspect status and recent logs, then use the manager's stop or restart command so declared signals, timeouts, and the cgroup apply. For an unmanaged process, send `SIGTERM`, observe whether it begins cleanup, and wait for a bounded interval based on its contract.
+
+If it remains, collect state, children, descriptors, wait channel, and logs. Decide whether the process is making slow graceful progress, blocked in an interruptible wait, stuck in uninterruptible I/O, or ignoring the signal. Send `SIGKILL` only when forced termination and its cleanup consequences are accepted. Verify that every relevant process ended and that no supervisor restored it unexpectedly.
+
+Afterward, check exit result, service state, sockets, temporary or lock files, open deleted files, and application health. A forced process end can release kernel resources while leaving application-level work incomplete. Recovery must follow the owning application's consistency procedure.
+
+### Which Mistakes Does the Process Model Prevent?
+
+Do not equate a program file with a running instance; several instances may map the same executable. Do not equate a command name with identity; it can be shortened, changed, or reused. Do not treat a PID as permanent. Do not kill a zombie. Do not assume `D` state yields to KILL immediately. Do not use `nohup` as a full service manager.
+
+Do not sum process RSS as exact machine memory without accounting for shared pages. Do not treat nice as a CPU limit. Do not assume a parent always controls the child after creation. Do not stop one service worker when the unit owns a cgroup. Do not inspect secret-bearing environment or command lines without protecting the output.
+
+The practical command map follows the unknown: `pgrep` locates candidates, `ps` describes a snapshot, `pstree` shows ancestry, `top` samples change, `ss` maps sockets, `lsof` maps descriptors, `/proc` exposes kernel state, `systemctl` identifies unit ownership, and logs explain lifecycle results. Each command provides evidence for one part of the model rather than a universal answer.
+
+### What Can `/proc` Reveal Without a Specialized Agent?
+
+`/proc/PID/status` summarizes identity, state, threads, memory, capabilities, and namespace identifiers. `stat` provides machine-oriented process fields. `cmdline` stores null-delimited arguments, while `comm` stores a shorter task name. `exe`, `cwd`, `root`, and `fd` are symbolic links into live process state. `maps` shows address mappings, `io` shows attributed I/O counters, `limits` shows inherited resource limits, and `cgroup` shows workload membership.
+
+These files can change while being read because the process is live. It may exit between the directory listing and the next open, or a counter may advance. Permissions intentionally restrict sensitive information. Treat `/proc` as a point-in-time kernel interface, not a consistent historical database.
+
+```bash
+pid=1842
+grep -E '^(Name|State|Pid|PPid|Uid|Gid|Threads|VmRSS|voluntary_ctxt_switches)' "/proc/$pid/status"
+tr '\0' ' ' < "/proc/$pid/cmdline"; printf '\n'
+cat "/proc/$pid/limits"
+cat "/proc/$pid/io"
+```
+
+Command-line arguments and environment values can contain credentials. Collect only the fields needed for the incident and redact outputs before sharing. Process observability is also a security boundary.
+
+### How Does Exit Become Service Evidence?
+
+When the main service process exits, systemd receives the same fundamental termination information a parent receives: exit code or terminating signal. It combines that result with unit policy. A clean status can transition a oneshot job to success; an unexpected code can set `failed`; a matching restart rule can create a new process.
+
+This means process and service logs should share a timeline. The application may print its last domain error, the manager records the exit result, the kernel may record an OOM kill, and a proxy may record user-visible failure. Correlating those events explains why the process disappeared and why it did or did not return.
+
+`systemctl status` reporting a PID is not the same as health. The manager can know that the expected process tree exists and still have no knowledge of a deadlocked request handler. Likewise, a service can be intentionally inactive after successful bounded work. Interpret status through the declared unit type and application contract.
+
+### How Do Servers Use Multiple Processes or Threads?
+
+A prefork server can create worker processes so failures and address spaces are isolated and multiple CPUs serve work. A threaded server shares one address space across worker threads, reducing some communication cost while requiring synchronization. An event-driven server may use a small thread set to coordinate many sockets. None is universally superior; the model explains the process tree, CPU distribution, memory accounting, and signal behavior you observe.
+
+A master process can receive reload, start new workers with new configuration, and allow old workers to drain. Killing one worker may be routine and lead to replacement. Killing the master may trigger a broader outage or supervisor restart. Identify roles from the service documentation, command line, tree, sockets, and logs before signaling a member.
+
+Shared memory and libraries complicate per-process memory totals. Threads complicate process-wide CPU percentages. Worker recycling can look like PID churn while the service remains healthy. The operational unit may be the cgroup, deployment, or service rather than one process row.
+
+### What Does the Full Process Lifecycle Look Like in Practice?
+
+An interactive shell parses a command, creates pipes or redirections, forks, adjusts the child's descriptors and environment, and execs the program. The kernel schedules its threads. The program allocates virtual memory, opens files and sockets, communicates, sleeps while awaiting events, and receives signals. Its cgroup and identities constrain resources and authority.
+
+The program ends by returning, calling an exit operation, or receiving a terminating signal. The kernel closes descriptors and releases mappings, preserves the termination record, and notifies the parent. The parent waits and obtains the status. If a service manager owns the workload, it updates unit state and may restart according to policy.
+
+Every common incident fits a transition: creation failed, the wrong state was inherited, exec named the wrong file, scheduling is contended, a descriptor or dependency is blocked, a signal was mishandled, cleanup is incomplete, the parent did not reap, or a supervisor restored the process. Naming that transition produces a smaller and safer investigation.
+
+### How Should a Process Investigation Be Recorded?
+
+Record host or container, namespace, timestamp, PID, start time, executable, command line, user and group, parent, service or cgroup, state, CPU, memory, descriptors of interest, sockets, and relevant logs. Start time and workload identity protect against PID reuse. The namespace protects against comparing an inner PID with an unrelated host PID.
+
+For a changing problem, repeat the same snapshot. CPU percentage requires an interval, memory leaks require a trend, wait states can alternate, and a supervisor can replace the process. A small series with consistent fields is usually more useful than one enormous unstructured dump.
+
+Preserve mutation boundaries. Note which signal was sent, by whom, at what time, which result followed, and whether a controller restarted the workload. If KILL was required, record why graceful termination could not complete and which consistency checks followed. This turns an emergency command into evidence for repairing the lifecycle.
+
+Finally, separate immediate availability from permanent correction. Restarting a leaked service can restore users; it does not locate retained allocations. Stopping a backup can clear CPU contention; it does not establish a safe future schedule. Releasing an open deleted file clears blocks; rotation still needs a correct reopen path. Process management solves the live transition and hands the mechanism to the owning system for repair.
+
+The same discipline applies to unknown high CPU. Rank processes, confirm the instance and workload, inspect whether one thread or many are active, compare runnable pressure with CPU count, and correlate the start time with traffic, deployment, or scheduled work. A profiler can then explain where the process spends CPU. Renicing or killing first can change the symptom before establishing whether the work is necessary, malicious, stuck, or simply underprovisioned.
+
+For unknown memory, distinguish virtual reservation, resident pages, proportional share, anonymous memory, mappings, and cgroup totals. Compare several samples. A process with large stable RSS may be expected; many workers can create the real total; a rising anonymous baseline can suggest retained allocations. The kernel and service manager provide the machine-level consequences, while the runtime profiler explains objects and ownership inside the program.
+
+Process management is therefore observation plus lifecycle authority. Observation establishes the live instance and mechanism. Authority determines whether the shell, user, service manager, container runtime, or kernel owns the next action. Acting through the correct owner keeps cleanup, restart, logs, limits, and future desired state consistent.
+
+The kernel's process view and the application's work view should meet in a request, job, or queue identifier. A busy PID explains where resources go; application evidence explains which useful or faulty work created that demand. Both are needed before a permanent fix is selected.
+
+Inspect process ownership before attaching debuggers or reading descriptors because observation can expose user data and credentials. Use the least privilege required, preserve only relevant evidence, and avoid leaving tracing enabled after the bounded diagnostic window.
+
+When the process is part of a horizontally scaled workload, compare peers. One abnormal instance suggests local state, traffic skew, or a stuck path; every peer changing together suggests shared input, release, or dependency. The comparison narrows the mechanism without treating replacement as explanation.
+
+Compare the same process role across peers, because a master, worker, scheduler, and sidecar can have intentionally different CPU, memory, socket, and lifecycle patterns. Role-aware evidence prevents a healthy coordinator from being judged against a busy request worker.
+
+Record the deployed version too, because two identical command lines can execute different binaries or application code after a rollout.
+
+Confirm the executable mapping and release symlink rather than trusting the visible name alone.
+
+Include the precise observation timestamp so a later reviewer can align the instance with logs, metrics, deployments, and supervisor events.
+
+## Check Your Answers
+
+:::expand[What Is a Linux Process?]{kind="recap"}
+A process is a live program instance with kernel-tracked identity, memory, descriptors, environment, directory, scheduling state, and lifecycle.
+:::
+
+:::expand[How Do Process Creation, PIDs, Parents, and Exit Status Fit Together?]{kind="recap"}
+Fork inherits process state, exec replaces the program, PIDs identify live instances, and wait collects a child's result.
+:::
+
+:::expand[Why Are PID 1 and Service Managers Special?]{kind="recap"}
+PID 1 anchors userspace and reaping, while a service manager applies declared lifecycle policy to whole workloads.
+:::
+
+:::expand[How Do You Inspect Processes, Threads, and States?]{kind="recap"}
+Use snapshots and repeated samples to connect identity, command, ancestry, threads, scheduler state, time, and resource use.
+:::
+
+:::expand[How Do Signals Control a Process Lifecycle?]{kind="recap"}
+Signals request stop, interrupt, continue, reload, or forced action; graceful TERM should normally precede uncatchable KILL.
+:::
+
+:::expand[How Do Terminals, Jobs, Sessions, and SSH Affect Lifetime?]{kind="recap"}
+Terminal foreground groups, jobs, sessions, descriptors, and SIGHUP explain why a shell background command is not a service.
+:::
+
+:::expand[How Do Identity, `/proc`, Priority, and cgroups Describe Resources?]{kind="recap"}
+Kernel and cgroup views reveal effective identity, mappings, open resources, limits, scheduling preference, and workload ownership.
+:::
+
+:::expand[How Do You Diagnose a Process That Exits, Hangs, or Returns?]{kind="recap"}
+Verify the instance, parent, state, descriptors, cgroup, logs, and supervisor before choosing a lifecycle action.
+:::
 
 ![Process management summary infographic showing processes, PID trees, systemd, ps, signals, background jobs, nice values, proc, and diagnosis](/content-assets/articles/article-devops-foundation-linux-system-admin-process-management/process-management-summary.png)
 

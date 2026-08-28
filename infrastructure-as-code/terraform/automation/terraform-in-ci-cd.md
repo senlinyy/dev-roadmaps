@@ -1,448 +1,448 @@
 ---
 title: "Terraform in CI/CD"
-description: "A protected CI/CD workflow gives Terraform checks, plans, and applies reviewed artifacts, approvals, locking, evidence, and rollback notes."
-overview: "Terraform CI/CD turns the local checks from the testing article into a shared release path. This article follows a production stack through fast checks, a pull request plan, protected plan artifacts, an approved apply, state locking, audit evidence, and a practical rollback note."
-tags: ["ci/cd", "github actions", "automation", "pipeline", "terraform"]
+description: "Build a Terraform pipeline that gathers evidence, verifies its target, applies an approved saved plan, serializes state writers, and preserves an audit trail."
+overview: "Shared infrastructure should change through a reviewed, reproducible process rather than hidden laptop context. This article derives a CI/CD pipeline from progressively stronger evidence: formatting, validation, testing, target verification, an exact saved plan, policy, approval, protected apply, locking, and operational verification."
+tags: ["terraform", "ci-cd", "automation", "saved-plan", "state-locking"]
 order: 2
 id: article-iac-terraform-automation-cicd
 ---
 
 ## Table of Contents
 
-1. [The Laptop Apply Risk](#the-laptop-apply-risk)
-2. [Testing Layers in the Pipeline](#testing-layers-in-the-pipeline)
-3. [Target Context Beside the Plan](#target-context-beside-the-plan)
-4. [Careful Plan Artifacts](#careful-plan-artifacts)
-5. [Protected Apply Workflow](#protected-apply-workflow)
-6. [State Protection and One-Stack-at-a-Time Applies](#state-protection-and-one-stack-at-a-time-applies)
-7. [Evidence and Rollback Notes](#evidence-and-rollback-notes)
-8. [Putting It All Together](#putting-it-all-together)
+1. [Why Are Laptop Applies Risky for Shared Infrastructure?](#why-are-laptop-applies-risky-for-shared-infrastructure)
+2. [How Does a Pipeline Build Stronger Evidence?](#how-does-a-pipeline-build-stronger-evidence)
+3. [Why Must a Plan Include Its Target Context?](#why-must-a-plan-include-its-target-context)
+4. [How Does a Saved Plan Connect Review to Apply?](#how-does-a-saved-plan-connect-review-to-apply)
+5. [Where Do Approval and Credentials Create a Boundary?](#where-do-approval-and-credentials-create-a-boundary)
+6. [How Do State Locking and Concurrency Protect Applies?](#how-do-state-locking-and-concurrency-protect-applies)
+7. [What Evidence and Rollback Information Should Remain?](#what-evidence-and-rollback-information-should-remain)
+8. [What Does a Complete Terraform Pipeline Look Like?](#what-does-a-complete-terraform-pipeline-look-like)
+9. [Check Your Answers](#check-your-answers)
 
-The testing article built the safety layers on a developer machine and inside a reusable module. CI/CD takes those same checks and gives them a shared home. The goal is for Terraform changes to move through one visible path: checks, target context, plan, review, approval, apply, evidence, and rollback notes.
+The guiding principle is that shared infrastructure should change because a reviewed, reproducible process authorized a specific transition—not because one laptop happened to contain a particular directory, state selection, credential, plugin cache, and set of environment variables.
 
-The examples use GitHub Actions because the YAML is familiar to many teams. The same design works in GitLab CI, Azure Pipelines, Buildkite, Jenkins, HCP Terraform, Terraform Enterprise, and other systems. The important part is the workflow boundary, not the product name.
-
-## The Laptop Apply Risk
-<!-- section-summary: A local apply can change production while losing the exact context reviewers and operators need later. -->
-
-Imagine the billing team needs to change the log bucket retention from thirty days to ninety days. A developer has Terraform installed, cloud credentials on the laptop, and a working copy of the repository. The command sequence is familiar:
-
-![Pipeline Identity Approval](/content-assets/articles/article-iac-terraform-automation-cicd/pipeline-identity-approval.png)
-
-*The identity and approval path shows how CI replaces a laptop apply with a recorded, scoped, reviewable deployment path.*
+A developer can run:
 
 ```bash
 terraform init
-terraform plan -var-file=prod.tfvars
-terraform apply -var-file=prod.tfvars
+terraform plan
+terraform apply
 ```
 
-`terraform init` prepares the working directory, backend, modules, and provider plugins. `terraform plan -var-file=prod.tfvars` loads production values and prints the proposed actions. `terraform apply -var-file=prod.tfvars` runs a fresh plan and asks for confirmation before it calls provider APIs.
+Those commands are useful for learning and for appropriately controlled local work. For shared production infrastructure, many facts sit outside the source diff:
 
-The commands can succeed and still leave the team with weak evidence. Which Terraform version ran? Which cloud identity applied the change? Which backend key held the state? Which commit was checked out? Did another apply run at the same time? Who reviewed the plan? Where is the approval record? What would restore the previous retention value if the change causes a problem?
+```text
+working directory
+selected backend and workspace
+local state or remote state credentials
+variable files and environment variables
+provider plugin versions
+cloud account and role
+uncommitted local changes
+who reviewed the plan
+whether another apply is running
+what happened after completion
+```
 
-CI/CD answers those questions by owning the risky context. The pipeline pins the Terraform version, working directory, backend config, variable file, cloud identity, checks, approval rule, plan output, apply log, and artifact retention. The developer still writes Terraform, but production changes move through a workflow the team can inspect after the fact.
+Two people can run the same command from the same commit and target different infrastructure because their credentials, backend selection, or variables differ. A local plugin cache or uncommitted file can also change behavior that reviewers never saw.
 
-This matters during normal operations too. During an incident review, the answer to "what changed production?" should come from a run record, not one person's shell history. Terraform automation creates that run record as part of the deployment path.
+Keep these questions in view as you work through the lesson:
 
-## Testing Layers in the Pipeline
-<!-- section-summary: CI should run the same fast checks and module tests before it spends time planning a target environment. -->
+1. **Why Are Laptop Applies Risky for Shared Infrastructure?**
+2. **How Does a Pipeline Build Stronger Evidence?**
+3. **Why Must a Plan Include Its Target Context?**
+4. **How Does a Saved Plan Connect Review to Apply?**
+5. **Where Do Approval and Credentials Create a Boundary?**
+6. **How Do State Locking and Concurrency Protect Applies?**
+7. **What Evidence and Rollback Information Should Remain?**
+8. **What Does a Complete Terraform Pipeline Look Like?**
 
-The first CI job should carry forward the testing layers from the previous article. These commands catch common mistakes before the workflow reaches the target environment plan:
+## Why Are Laptop Applies Risky for Shared Infrastructure?
+<!-- section-summary: A laptop apply depends on invisible local context and can bypass shared review, evidence, identity, and concurrency controls. -->
+
+The ideal infrastructure change has a traceable statement:
+
+```text
+Commit:          reviewed revision
+Root:            payments production stack
+Cloud account:   production
+Region:          intended region
+State:           payments production state
+Variables:       production set
+Plan:            exact reviewed actions
+Policy:          passed
+Reviewer:        approved
+Apply identity:  production deployment role
+Result:          verified
+```
+
+CI/CD is valuable because it assembles that context in a repeatable environment and places authorization gates between evidence and mutation. It does not make Terraform intrinsically safer; a poorly protected pipeline can automate mistakes faster. The pipeline itself becomes production infrastructure whose workflow code, runners, identities, artifacts, and environment settings need review.
+
+The goal is not to ban every local plan. Developers should get fast feedback before opening a pull request. The high-risk boundary is production write authority. A local machine can format, validate, test, and often create a speculative plan under restricted credentials, while an approved pipeline owns production apply.
+
+## How Does a Pipeline Build Stronger Evidence?
+<!-- section-summary: Pipeline stages move from cheap source checks to target-aware planning, policy, approval, exact execution, and runtime verification. -->
+
+A good pipeline orders checks by cost, authority, and evidentiary strength:
+
+```text
+source
+  -> formatting
+  -> initialization without unnecessary backend access
+  -> validation
+  -> static analysis and tests
+  -> initialize intended backend
+  -> verify target identity
+  -> plan against intended state
+  -> policy evaluation
+  -> human approval
+  -> apply exact plan
+  -> verify outcome
+```
+
+Cheap failures should happen before production credentials or locks are acquired. Formatting answers whether files follow Terraform's canonical style. Validation answers whether configuration is syntactically and internally consistent. Module tests and linters answer additional contract and provider-awareness questions.
+
+These layers do not replace the plan. A formatted, valid configuration can still delete a production database. A plan is the first stage that combines the root configuration, variables, provider schemas, selected state, and current remote information into proposed actions for a particular target.
+
+Pull-request pipelines should mostly gather evidence. They can run:
 
 ```bash
 terraform fmt -check -recursive
 terraform init -backend=false
 terraform validate
 terraform test
-tflint --init
-tflint --recursive
-checkov -d .
 ```
 
-The order is intentional. Formatting runs before provider initialization. Backend-free initialization and validation check Terraform language and module structure without touching remote state. `terraform test` checks module behavior with planned values. TFLint and security scanners add provider-aware and security rules.
+For a deployable root, the pipeline then initializes the intended backend and produces a speculative or saved plan as appropriate. Pull requests should not gain production write authority merely to show what a change would do. Plan credentials can often use read access plus narrowly required operations.
 
-CI runners usually start from a small toolset. The workflow should install Terraform-adjacent tools explicitly and pin their versions in one place. In the GitHub examples below, Terraform uses `vars.TERRAFORM_VERSION`, TFLint uses `vars.TFLINT_VERSION`, and Checkov uses `vars.CHECKOV_VERSION`. Those repository or environment variables should hold reviewed values such as `1.x.y`, `v0.x.y`, and `3.x.y`. The article uses variables instead of hard-coded tool versions so the example stays current while still teaching version pinning.
+Evidence becomes progressively stronger but more expensive:
 
-In GitHub Actions, a fast check job can run on pull requests. The job skeleton has four parts: path trigger, read-only permissions, tool setup, and the checks themselves. The completed job below fills those parts in that order:
-
-```yaml
-name: terraform-checks
-
-on:
-  pull_request:
-    paths:
-      - "terraform/live/**"
-      - "terraform/modules/**"
-
-permissions:
-  contents: read
-
-jobs:
-  checks:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: ${{ vars.TERRAFORM_VERSION }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - uses: terraform-linters/setup-tflint@v6
-        with:
-          tflint_version: ${{ vars.TFLINT_VERSION }}
-
-      - name: Install Checkov
-        env:
-          CHECKOV_VERSION: ${{ vars.CHECKOV_VERSION }}
-        run: python -m pip install "checkov==${CHECKOV_VERSION}"
-
-      - name: Format check
-        run: terraform fmt -check -recursive
-
-      - name: Validate modules without a backend
-        run: |
-          terraform -chdir=terraform/modules/log_bucket init -backend=false
-          terraform -chdir=terraform/modules/log_bucket validate
-          terraform -chdir=terraform/modules/log_bucket test
-
-      - name: Initialize TFLint plugins
-        run: tflint --init
-
-      - name: Provider-aware lint
-        run: tflint --recursive
-
-      - name: Security scan
-        run: checkov -d terraform
-```
-
-`terraform -chdir=terraform/modules/log_bucket` runs Terraform as if the shell had changed into that module directory. This keeps the job easy to read in repositories with several modules and live stacks. A larger repository may discover changed module directories dynamically, but the idea stays the same: module checks run before a production plan.
-
-A useful failed job points to the layer that failed. A formatting failure should tell the author to run `terraform fmt -recursive`. A test failure should show the `run` block name and assertion message. A scanner failure should name the resource and rule. This keeps the pull request review focused on infrastructure behavior instead of log archaeology.
-
-## Target Context Beside the Plan
-<!-- section-summary: A pull request plan needs target context so reviewers know which stack, state, account, and values produced the result. -->
-
-After fast checks pass, the pipeline can create a plan for a target stack. A **target stack** is one deployable Terraform root module, such as `terraform/live/prod/billing`. It has its own backend key, variable file, provider account, and apply workflow.
-
-The plan job should show the target context before it renders resource changes. Reviewers need to match the pull request, working directory, state location, cloud account, region, and variable file. A correct resource change in the wrong target is still dangerous.
-
-The plan workflow has five pieces: trigger, OIDC permissions, target context output, Terraform initialization, and the saved plan summary. The complete YAML keeps those pieces in one job so reviewers can see the context and plan together:
-
-```yaml
-name: terraform-plan-prod
-
-on:
-  pull_request:
-    paths:
-      - "terraform/live/prod/billing/**"
-      - "terraform/modules/**"
-
-permissions:
-  contents: read
-  id-token: write
-
-jobs:
-  plan:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: terraform/live/prod/billing
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: ${{ vars.TERRAFORM_VERSION }}
-
-      - uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: arn:aws:iam::123456789012:role/devpolaris-terraform-plan
-          aws-region: us-east-1
-
-      - name: Print target context
-        run: |
-          echo "environment=prod"
-          echo "stack=billing"
-          echo "working_directory=terraform/live/prod/billing"
-          echo "state_key=billing/prod/terraform.tfstate"
-          echo "var_file=terraform.tfvars"
-          echo "region=us-east-1"
-          echo "terraform_version=${{ vars.TERRAFORM_VERSION }}"
-
-      - name: Terraform init
-        run: terraform init -backend-config=backend.hcl
-
-      - name: Terraform validate
-        run: terraform validate
-
-      - name: Terraform plan
-        run: terraform plan -lock-timeout=5m -var-file=terraform.tfvars -out=tfplan
-
-      - name: Render plan for review
-        run: terraform show -no-color tfplan > tfplan.txt
-```
-
-The `permissions` block gives the workflow read access to repository contents and permission to request an OpenID Connect token. The AWS credentials step uses that token to assume a cloud role. This avoids storing long-lived cloud access keys in CI secrets.
-
-The plan role should be narrower than the apply role where possible. It often needs enough read access to refresh state and calculate a plan, but it should not receive broad unrelated production permissions. The cloud trust policy should limit which repository, workflow, branch, or environment can assume the role.
-
-The plan output should include a clear summary:
-
-```console
-Plan: 0 to add, 1 to change, 0 to destroy.
-
-  # aws_s3_bucket_lifecycle_configuration.logs will be updated in-place
-  ~ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
-      ~ rule {
-          ~ expiration {
-              ~ days = 30 -> 90
-            }
-        }
-    }
-```
-
-That output gives reviewers the action count and the exact change. The target context tells them this is the billing production stack in `us-east-1` with the expected state key. Both pieces belong together in the pull request review.
-
-## Careful Plan Artifacts
-<!-- section-summary: A saved plan connects review, policy, and apply, but plan files can expose sensitive values. -->
-
-Terraform can save a binary plan with `-out=tfplan`. The workflow can then render human-readable text and machine-readable JSON from that same saved plan:
-
-```bash
-terraform plan -var-file=terraform.tfvars -out=tfplan
-terraform show -no-color tfplan > tfplan.txt
-terraform show -json tfplan > tfplan.json
-```
-
-The binary `tfplan` is the exact set of actions Terraform can apply later with `terraform apply tfplan`. The text file is the review artifact. The JSON file feeds policy checks in the next article. All three come from the same saved plan, so reviewers, policy, and apply discuss the same evaluated change.
-
-Plan artifacts need careful protection. Terraform documentation warns that saved plan files can include configuration, input variables, planned values, and sensitive data. A terminal plan may hide a sensitive value, while a saved plan or JSON representation can still carry it. Artifact access and retention should match the sensitivity of the infrastructure.
-
-For pull requests, many teams upload only the readable text summary:
-
-```yaml
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prod-billing-tfplan-review
-          path: terraform/live/prod/billing/tfplan.txt
-          retention-days: 14
-```
-
-The artifact name includes the environment and stack so reviewers can identify it later. Fourteen days may fit a normal pull request review window, but sensitive environments may need shorter retention.
-
-For a protected apply workflow, a team may store the binary plan only inside the production environment:
-
-```yaml
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prod-billing-tfplan-binary
-          path: terraform/live/prod/billing/tfplan
-          retention-days: 1
-```
-
-The apply job should download a binary plan only after the environment approval and only for the same commit that produced it. If the repository, variables, providers, backend, or state changed, the workflow should create a fresh plan. A stale plan can describe a world that no longer matches production.
-
-Some teams choose a simpler and safer pattern: the pull request workflow publishes the readable plan, and the protected post-merge workflow creates a fresh saved plan immediately before approval and apply. That pattern reduces artifact handoff risk while still giving reviewers evidence during the pull request.
-
-## Protected Apply Workflow
-<!-- section-summary: Production apply should run from a protected environment with approval, short-lived credentials, and the reviewed plan. -->
-
-The apply workflow should have stronger trigger controls than the pull request plan workflow. It usually runs from the default branch after merge, targets one stack, creates a fresh post-merge plan, and requires approval before the apply job receives production apply credentials.
-
-![CI Plan Apply Gates](/content-assets/articles/article-iac-terraform-automation-cicd/ci-plan-apply-gates.png)
-
-*The pipeline view separates plan, evidence, approval, and apply so the saved plan is the thing reviewers approve.*
-
-In GitHub Actions, environment approval happens before a job starts. That means a good production workflow often has two jobs. The first job creates the fresh plan and uploads a short-lived artifact. The second job is attached to the protected environment, waits for approval, downloads the saved plan from the same workflow run, and applies it. The skeleton is plan first, protected apply second; the completed workflow keeps that boundary visible:
-
-```yaml
-name: terraform-apply-prod-billing
-
-on:
-  push:
-    branches: ["main"]
-    paths:
-      - "terraform/live/prod/billing/**"
-      - "terraform/modules/**"
-
-permissions:
-  contents: read
-  id-token: write
-
-concurrency:
-  group: terraform-prod-billing
-  cancel-in-progress: false
-
-jobs:
-  plan:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: terraform/live/prod/billing
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: ${{ vars.TERRAFORM_VERSION }}
-
-      - uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: arn:aws:iam::123456789012:role/devpolaris-terraform-plan
-          aws-region: us-east-1
-
-      - name: Terraform init
-        run: terraform init -backend-config=backend.hcl
-
-      - name: Create production plan
-        run: terraform plan -lock-timeout=5m -var-file=terraform.tfvars -out=tfplan
-
-      - name: Show action summary
-        run: terraform show -no-color tfplan | sed -n '/Plan:/,$p'
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prod-billing-tfplan-binary
-          path: terraform/live/prod/billing/tfplan
-          retention-days: 1
-
-  apply:
-    runs-on: ubuntu-latest
-    needs: plan
-    environment: production
-    defaults:
-      run:
-        working-directory: terraform/live/prod/billing
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: ${{ vars.TERRAFORM_VERSION }}
-
-      - uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: arn:aws:iam::123456789012:role/devpolaris-terraform-apply
-          aws-region: us-east-1
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: prod-billing-tfplan-binary
-          path: terraform/live/prod/billing
-
-      - name: Terraform init
-        run: terraform init -backend-config=backend.hcl
-
-      - name: Apply approved saved plan
-        run: terraform apply tfplan
-```
-
-The `plan` job creates a fresh plan after merge, so it sees the current default branch and current remote state. The `apply` job uses `needs: plan`, so it cannot start until the plan job finishes. `environment: production` connects the apply job to GitHub environment protection rules such as required reviewers. The approver should review the plan job's target context and action summary before approving the protected apply job.
-
-`terraform apply tfplan` applies the saved plan file. Terraform does not ask for another interactive approval for a saved plan file because the approval happened in the workflow. This is why the workflow must create the plan in the right context, keep the artifact short-lived, and require approval before the apply job runs.
-
-The apply role should have enough permission for this stack and as little unrelated access as practical. A role that can manage billing production storage does not also need broad permission to modify identity, networking, and databases across every account. Short-lived OIDC credentials reduce secret handling risk, but permissions still need careful scope.
-
-Production applies should run from trusted branches and protected environments. A workflow from an untrusted fork should never receive production credentials. A manual `workflow_dispatch` apply can be useful for controlled operations, but it should require the same target context, approval, and evidence as a merge-triggered apply.
-
-## State Protection and One-Stack-at-a-Time Applies
-<!-- section-summary: Backend locking and CI concurrency protect different layers, so production workflows should use both. -->
-
-Terraform state records the resources Terraform manages and the last known attributes for those resources. A remote backend stores that state in a shared location such as Terraform Cloud, HCP Terraform, S3 with native lock files, Azure Storage, Google Cloud Storage, or another supported backend. Some older S3 setups still use DynamoDB locking, so migration notes should call out which lock path a stack actually uses. The exact backend varies, but the operational rule stays the same: one writer should update a stack's state at a time.
-
-State locking protects the state file. If one Terraform run holds the lock, another run should wait or fail rather than write conflicting state. The plan and apply commands can use a lock timeout:
-
-```bash
-terraform plan -lock-timeout=5m -var-file=terraform.tfvars -out=tfplan
-terraform apply -lock-timeout=5m tfplan
-```
-
-`-lock-timeout=5m` tells Terraform to wait up to five minutes for an existing lock. That helps during normal deploy overlap, where one run is finishing and another begins. A repeated lock timeout should trigger investigation because it may mean a previous run crashed or an operator is applying outside the pipeline.
-
-CI concurrency protects the workflow scheduler:
-
-```yaml
-concurrency:
-  group: terraform-prod-billing
-  cancel-in-progress: false
-```
-
-This setting tells GitHub Actions to run one `terraform-prod-billing` workflow at a time. `cancel-in-progress: false` lets the current apply finish rather than interrupting it halfway through. The concurrency group should include the environment and stack name so unrelated stacks can still deploy independently.
-
-Both controls matter because they protect different layers. The backend lock protects Terraform state from simultaneous writers, even if someone runs Terraform outside CI. The CI concurrency group prevents the pipeline from queueing or overlapping two applies for the same stack. Together they reduce the chance of state conflicts, partial releases, and confusing evidence.
-
-The workflow should also print lock-related failures clearly. A failed lock message should include the stack name, backend key, run URL, and next action. The next action may be "wait for the active run," "find the operator holding the lock," or "follow the backend's documented force-unlock procedure after confirming no run is active." Force-unlocking without checking for an active run can corrupt state, so it belongs in a controlled incident or operations process.
-
-## Evidence and Rollback Notes
-<!-- section-summary: A production Terraform run should leave target context, plan summary, approvals, apply output, policy result, and rollback guidance. -->
-
-After apply, the team needs evidence. Evidence helps with audits, incident reviews, cost investigations, and ordinary debugging. A good Terraform run record answers who changed what, where, at what time, why, and how to respond if the change causes trouble.
-
-For the billing retention change, the evidence should include:
-
-| Evidence item | Example |
+| Stage | Main proposition |
 |---|---|
-| Commit | `abc1234` on `main` |
-| Actor | Pull request author and workflow actor |
-| Approver | Production environment reviewer |
-| Target | `terraform/live/prod/billing`, state key `billing/prod/terraform.tfstate` |
-| Terraform version | The `vars.TERRAFORM_VERSION` value recorded by the workflow |
-| Plan summary | `Plan: 0 to add, 1 to change, 0 to destroy.` |
-| Changed resource | `aws_s3_bucket_lifecycle_configuration.logs` |
-| Policy result | Passed required tags and protected delete rules |
-| Apply result | Successful apply log and final output changes |
+| `fmt` | Source follows canonical formatting |
+| `validate` | Configuration is structurally valid |
+| tests and lint | Module contracts and known rules hold |
+| plan | Terraform proposes these actions for this target now |
+| policy | Proposed actions satisfy organizational rules |
+| approval | An authorized reviewer accepts the evidence |
+| apply | The approved actions are attempted |
+| verification | The resulting system meets operational expectations |
 
-The rollback note should be part of the same habit. Terraform rollback usually means a new commit that restores the previous desired configuration, followed by the same plan, approval, and apply workflow. The note should name the previous value and the expected verification check.
+The sequence avoids asking a weak check to answer a stronger question. Formatting should not discover a database deletion, and a plan should not be presented as proof that the application will serve traffic correctly.
 
-For the retention change, a rollback note could look like this:
+Pull-request evidence should be reproducible by another reviewer. Pin the Terraform version, install providers from the committed lock file, and run from a clean checkout. If the repository contains several roots, detect which deployable stacks a change can affect and plan each under its declared target rather than running one command from the repository root.
 
-```markdown
-Rollback note:
-- Previous value: log expiration was 30 days.
-- Restore path: open a pull request that changes `expiration.days` from `90` back to `30`.
-- Verification: plan should show `90 -> 30` for `aws_s3_bucket_lifecycle_configuration.logs`.
-- Owner: platform on-call approves and applies through the production workflow.
+Module changes may affect several callers. A source-only validation of the module proves its internal consistency, while representative root plans show how existing states would react to the new module code. The pipeline can limit the matrix to known consumers or publish a dependency map, but it should not imply that one module test proves every deployment plan.
+
+Tests and policy have different roles. A Terraform test can assert the module's intended output for supplied inputs. A policy can reject a prohibited outcome across many repositories. Both run before apply, and neither makes the selected state or provider account irrelevant. They strengthen the evidence chain without replacing target verification.
+
+Fast feedback also belongs on developer machines. A pre-commit hook can run formatting and validation, while CI repeats them in a trusted environment. Repetition is intentional: local checks shorten feedback, and the protected pipeline creates evidence that does not depend on one person's workstation.
+
+## Why Must a Plan Include Its Target Context?
+<!-- section-summary: A Terraform plan is meaningful only with the state, variables, credentials, provider context, configuration, and dependency versions that produced it. -->
+
+Suppose a plan says one bucket will be created. Is it development or production? Which account? Which state key? Which region? Which variable set? The resource name alone cannot answer reliably.
+
+The pipeline should print a target record beside the plan:
+
+```text
+Environment: production
+Stack:       payments-api
+Account:     expected production account ID
+Region:      eu-west-2
+State:       payments-api/prod
+Root:        live/prod/eu-west-2/payments-api
+Commit:      reviewed SHA
 ```
 
-That note avoids improvisation during an incident. Some resources, such as databases, identity policies, or network changes, may need data checks, customer communication, or a forward fix instead of a direct rollback. The point is to record the recovery path while the change is fresh.
+The general equation is:
 
-Evidence retention should separate metadata from sensitive artifacts. Run metadata, approvals, and plan summaries may need longer retention for audit. Binary plans and JSON plans may contain sensitive values and should usually have shorter retention and stricter access.
+```text
+plan meaning = configuration
+             + selected state
+             + variables
+             + provider and module code
+             + authenticated API context
+             + current remote observations
+```
 
-## Putting It All Together
-<!-- section-summary: Terraform CI/CD turns local checks into a protected production path with review, approval, locking, evidence, and rollback context. -->
+Setting `environment = "prod"` is not proof of target. It may only change tags and names. The provider could still be authenticated to a development account. Mature pipelines query and verify the real account or project identifier before planning and again before applying.
 
-The workflow started with a risky laptop apply. The testing layers moved into CI so formatting, validation, module tests, linting, and scans fail before a production plan. The plan job printed target context beside the evaluated change. Plan artifacts received careful handling because they can contain sensitive values. The apply workflow used a protected environment, short-lived cloud identity, state locking, CI concurrency, and a saved plan. The run record kept evidence and a rollback note.
+Terraform cannot verify every identity relationship automatically. If planning and applying use different credentials, they could point at different accounts that contain similarly named resources. The pipeline must enforce that plan and apply contexts agree.
 
-![CI/CD Summary](/content-assets/articles/article-iac-terraform-automation-cicd/cicd-summary.png)
+Backend identity matters separately. A production provider role combined with development state can create development-addressed resources inside production. Display the backend key or workspace, and bind it to the same stack definition that supplies the expected account and root directory.
 
-*The summary board shows the full CI/CD loop from local checks through protected apply and deployment evidence.*
+One declared target mapping is safer than separately typed values in each job. A stack record can map `payments-prod` to its root, backend key, region, variable set, plan role, apply role, and expected account. Both jobs resolve that record and reject mismatches.
 
-This is the production shape most teams are trying to reach. Developers still work locally and open pull requests. Reviewers see the code diff and the Terraform plan together. Approvers see the target and action summary before production apply. Operators can answer what changed after the run finishes.
+The plan should also identify dependency inputs: Terraform CLI version, `.terraform.lock.hcl`, installed providers, and remote module revisions. These are executable code that affects proposed actions. A clean runner reduces dependence on a developer's cached packages.
 
-The next article adds the governance gate. Policy as code reads the plan JSON from this workflow and blocks known risks, such as missing tags, public exposure, broad IAM, or protected deletes, before the apply step can call provider APIs.
+Target verification should fail closed. If the identity command returns an unexpected account, the job must stop before plan or apply. If the backend key cannot be derived from the declared stack, the job should not guess. If a required variable set is missing, using Terraform defaults may be more dangerous than failing.
+
+The plan summary should be paired with the full rendered diff. Counts compress meaning: one deletion can be more important than hundreds of tag updates. Automation can highlight action categories without hiding the underlying plan. Reviewers should be able to follow resource addresses, replacement reasons, unknown values, and output changes.
+
+Unknown values deserve special treatment. A plan can contain attributes that will be known only after apply. That is normal, but policy and reviewers must not silently treat unknown as compliant. A critical rule may need to reject or defer the proposal until the value can be established, while a lower-risk rule may allow it with explicit review.
+
+Target context should travel with the artifact, not only appear in a transient log. Store a small manifest containing the commit, root, state identifier, workspace, account, region, Terraform version, provider lock checksum, plan checksum, and creation time. The apply job verifies the manifest before obtaining write credentials.
+
+## How Does a Saved Plan Connect Review to Apply?
+<!-- section-summary: Saving a plan creates an executable artifact so approval can attach to the exact Terraform decision later applied. -->
+
+Consider this sequence:
+
+```text
+10:00 terraform plan
+10:05 reviewer approves the displayed output
+10:06 terraform apply
+```
+
+Plain `terraform apply` calculates a new plan. The configuration, state, remote infrastructure, variables, credentials, or provider environment may have changed between review and execution. The newly calculated decision is not necessarily the artifact the reviewer accepted.
+
+Save the plan instead:
+
+```bash
+terraform plan -out=tfplan
+terraform show -no-color tfplan > tfplan.txt
+```
+
+After approval, execute it directly:
+
+```bash
+terraform apply tfplan
+```
+
+This establishes a strong invariant:
+
+> The artifact approved is the artifact executed.
+
+The binary plan contains more than pretty terminal output. It represents proposed operations based on configuration, state, variable values, provider selections, and planning results. The text rendering is for review; the binary artifact is the input to apply.
+
+Saved plans have operational constraints. Plan and apply runners should use compatible Terraform versions, operating system and CPU architecture, configuration, and identical provider packages. Commit the dependency lock file and preserve the plan's execution environment rather than recreating it loosely.
+
+The artifact is sensitive. A plan can contain values that terminal output redacts, and JSON or machine-readable rendering can expose them. Restrict access, encrypt storage and transport, use short retention, and avoid posting unfiltered plan JSON to public logs or pull-request comments.
+
+State may change after planning. Locking during the plan does not normally reserve the state until a later approval. Another apply can update the state or remote infrastructure. Terraform checks the saved plan at apply and may reject stale assumptions, but the pipeline should minimize the delay and decide whether production needs a fresh post-merge plan.
+
+Planning after merge is often valuable because it uses the exact revision on the protected branch and the latest target state. The pull-request plan supplies review evidence; the post-merge saved plan becomes the deployment decision, which can receive a final approval.
+
+There are two legitimate plan types. A speculative plan answers what the current configuration appears likely to do and is useful during pull-request review. A saved plan created with `-out` is intended for later execution. Calling both “the plan” without distinguishing their purpose can make reviewers believe a PR preview is the exact deployment artifact when the release job will calculate another decision.
+
+If a final plan is recalculated after merge, show the difference from the pull-request evidence. The protected branch may contain intervening commits or newer state. Approval should attach to the final saved plan, not to a stale preview. For low-risk automated changes, policy may provide the authorization; for production changes, a human gate can review the final risk summary.
+
+Applying a saved plan avoids a new planning decision, but remote APIs can still reject operations. Quotas, eventual consistency, permissions, and concurrent non-Terraform changes can produce failures. Exact-plan execution means Terraform attempts the approved operations; it is not a guarantee that every provider call succeeds.
+
+Plans should expire operationally. A plan waiting for days is increasingly likely to be stale and to carry credentials, assumptions, or dependencies no longer acceptable. Set an approval window, delete expired artifacts, and require a fresh plan when the window closes.
+
+## Where Do Approval and Credentials Create a Boundary?
+<!-- section-summary: Approval belongs after a complete target-aware plan, and the apply identity should be available only inside the protected deployment stage. -->
+
+Approval is meaningful only when reviewers can see what they are approving. It should sit after formatting, tests, target verification, the saved plan, and policy checks, but before production write authority is used.
+
+Reviewers should look beyond action counts. A plan with “1 to add, 1 to destroy” might represent a routine replacement or destruction of a critical database. Highlight deletes, replacements, identity-policy changes, networking changes, and blast-radius increases.
+
+A protected apply is an authorization boundary:
+
+```text
+untrusted or ordinary PR job
+    no production write credentials
+        |
+        v
+evidence and saved plan
+        |
+        v
+protected environment approval
+        |
+        v
+short-lived production apply role
+        |
+        v
+apply exact plan
+```
+
+CI credentials should belong to the pipeline identity, not to a person's laptop or a shared permanent key. OIDC can exchange a signed workflow token for short-lived cloud credentials. Trust conditions narrow which repository, branch, or protected environment may assume the role; permission policies narrow what the resulting session may do.
+
+Plan and apply can use separate roles. A planning role may read state and remote resources. The apply role adds the write operations required by that stack and becomes available only after approval. Both jobs must verify they target the same account and state context.
+
+Protect more than the approval button. Workflow files, reusable actions, runner images, environment secrets, role trust policies, branch protections, artifact storage, and who can modify them all influence the deployment boundary. A user who can alter the workflow before approval may be able to exfiltrate credentials or replace the reviewed plan.
+
+Least privilege should be per stack where practical. A payments deployment role does not automatically need organization-wide identity, network, and database administration. Short-lived credentials reduce exposure time; narrow action and resource policies reduce blast radius.
+
+Approval should record which risk was accepted. A reviewer may approve a normal in-place tag update but reject a replacement or deletion. If the plan changes, the old approval no longer applies. A cryptographic checksum or artifact identity helps connect the human decision to the binary later executed.
+
+Production environments can require multiple controls: protected branch, protected deployment environment, required reviewers, a narrow OIDC trust subject, and an apply role unavailable to pull requests from forks. No single control should be presented as the whole boundary.
+
+The plan job should not persist credentials inside the saved artifact or workspace. Remove temporary tokens and local backend files after use, and avoid uploading the `.terraform/` directory as a convenience cache. Cache provider packages carefully if needed, but treat executable cache poisoning as a supply-chain risk.
+
+Runner trust matters as much as cloud trust. A self-hosted runner with broad network and filesystem access can retain artifacts or credentials after the job. Ephemeral runners reduce cross-job residue. Hosted or self-hosted, the runner image and actions used before credentials are issued should be pinned and reviewed.
+
+## How Do State Locking and Concurrency Protect Applies?
+<!-- section-summary: Backend locking protects one state from concurrent writers, while pipeline concurrency coordinates the broader workflow for that state boundary. -->
+
+Terraform state makes concurrent applies dangerous. Two runs can read the same starting state, calculate separate changes, and race to update remote objects and write a new state snapshot.
+
+A backend lock is the first defense:
+
+```text
+run A acquires state lock
+run B attempts same state and waits or fails
+run A applies and writes state
+run A releases lock
+run B can refresh and calculate from the new state
+```
+
+Use a remote backend that supports collaboration and locking. Do not disable locking to make a blocked job pass. The lock is evidence that another writer may be changing the ownership record; bypassing it can corrupt coordination.
+
+Locking is not the entire deployment scheduler. A lock usually exists for active Terraform operations, not for the hours between planning, approval, and apply. It does not serialize non-Terraform changes, external deployment controllers, or two different states that affect a shared platform constraint.
+
+Pipeline concurrency can allow only one deployment workflow per state boundary:
+
+```text
+concurrency key = environment + stack or state identifier
+```
+
+The key should not be global unless every stack truly must wait. Independent states can usually deploy concurrently. Two workflows targeting the same state should serialize even if they came from different branches or repositories.
+
+Avoid canceling an apply midway merely because a newer commit arrived. Provider operations may already have happened, and abrupt cancellation does not provide transactional rollback. Let the current writer reach a known outcome, then plan the next change against the resulting state.
+
+Remote state is therefore a team coordination primitive: it centralizes ownership, locking, and recovery. Pipeline concurrency surrounds that primitive with job-level sequencing. Cloud APIs and runtime controllers still have their own concurrency behavior, so operations must remain idempotent and observable.
+
+State locks should have bounded waiting and an escalation process. A job can use `-lock-timeout` to wait for an ordinary concurrent operation. If the lock remains, inspect the backend and the run that owns it. Force-unlocking without proving the owner is gone risks admitting a second writer while the first is still active.
+
+Pipeline concurrency and backend locking protect different time windows. A concurrency group can cover planning, approval, and applying so a newer deployment does not overtake an older approved plan. The backend lock then protects actual state operations. If approvals may remain open for a long time, teams may instead allow concurrent planning and require a fresh serialized final plan after approval.
+
+“One at a time” should be scoped by state. A network state and an unrelated documentation-site state need not block each other. However, two states can still share a deployment constraint such as an organization policy or global DNS name. Add a broader concurrency key only when that external relationship truly requires serialization.
+
+After a failed apply, leave the lock workflow intact. Terraform normally releases its lock when it exits cleanly, but a crashed runner may leave recovery work. Inspect current state, cloud operations, and lock ownership before retrying. A blind rerun can repeat non-idempotent provider behavior or calculate from misunderstood partial results.
+
+## What Evidence and Rollback Information Should Remain?
+<!-- section-summary: Preserve enough evidence to reconstruct the decision and outcome, while recognizing that evidence does not itself reverse a failed infrastructure change. -->
+
+A deployment record should retain:
+
+```text
+configuration commit and pull request
+root directory and target stack
+backend key or workspace
+cloud account, region, and execution role
+Terraform and provider versions
+variable-set identity, without exposing secrets
+saved-plan checksum and review rendering
+plan summary and highlighted risky actions
+policy results and approved exceptions
+reviewer and approval time
+apply logs and final result
+post-apply verification
+```
+
+Retention must balance audit needs with artifact sensitivity. Binary plans, JSON plans, state-derived output, and provider logs can contain confidential data. Store them under restricted access and delete them according to policy rather than keeping every artifact publicly forever.
+
+Evidence is not rollback. Terraform apply is not a transaction that automatically reverses completed remote operations when a later step fails. Returning source code to an earlier commit creates another desired-state proposal; it does not restore deleted data or necessarily reverse an incompatible provider change.
+
+An infrastructure rollback normally means making a deliberate follow-up change, planning it against current state, reviewing its consequences, and applying it. Critical systems also need backups, provider-native recovery, and tested runbooks.
+
+Application rollback may be separate. If infrastructure supports blue/green routing, the fastest response to a bad release can be moving traffic back to the healthy generation while Terraform is reconciled afterward. Database migrations require their own compatibility and recovery plan.
+
+The pipeline should record a rollback note before production apply: previous version or values, quickest safe traffic action, data-recovery dependency, person authorized to act, and how Terraform state will be reconciled after users are safe.
+
+Post-apply verification should be specific to the change. A storage policy change can query the resulting policy, a fleet rollout can inspect health and version convergence, and a network change can run connectivity checks from an appropriate boundary. “Apply succeeded” is one fact; service correctness is a different fact.
+
+Evidence should include failed runs too. A partial apply may have changed resources and written an updated state before returning an error. Preserve the error, refresh current state, identify completed operations, and create the recovery plan from reality. Deleting the failed run's logs removes exactly the information needed during an incident.
+
+Rollback notes should avoid promising reversibility that the platform cannot provide. Deleting a database, rotating a key, shrinking retention, or applying an incompatible schema can lose information. For those changes, prevention, backups, restore tests, and forward-compatible migration matter more than reverting a variable.
+
+## What Does a Complete Terraform Pipeline Look Like?
+<!-- section-summary: A complete pipeline separates evidence gathering from protected execution and maintains target, artifact, and state invariants throughout. -->
+
+A generic pull-request phase is:
+
+```bash
+terraform fmt -check -recursive
+terraform init -backend=false
+terraform validate
+terraform test
+
+# For the intended deployable root under read-oriented identity:
+terraform init -backend-config="$BACKEND_CONFIG"
+terraform plan -out=tfplan
+terraform show -no-color tfplan
+```
+
+The job verifies account and state context, evaluates policy, highlights risk, protects the plan artifact, and publishes review evidence without production apply credentials.
+
+After merge or in a protected deployment job, create or select the final plan from the exact protected revision, then place approval before apply:
+
+```bash
+terraform init -backend-config="$BACKEND_CONFIG"
+terraform plan -out=tfplan
+terraform show -no-color tfplan
+
+# Protected approval happens outside Terraform.
+
+terraform apply tfplan
+```
+
+After apply, query relevant cloud and application signals and save the result. A successful Terraform exit proves the provider operations completed according to Terraform; it does not prove the service is healthy.
+
+Protect these invariants:
+
+```text
+The reviewed commit is the planned commit.
+The displayed target is the actual backend and provider target.
+The approved plan is the applied plan.
+Plan and apply environments are compatible.
+Only the protected stage obtains production write authority.
+Only one writer operates per state boundary.
+Locks are never bypassed to force progress.
+Plan and state artifacts remain confidential.
+The outcome is verified after apply.
+Failures create a new recovery decision, not an assumed transaction rollback.
+```
+
+CI/CD is ultimately an authorization and evidence system around Terraform. Terraform supplies declarative planning, state coordination, and provider operations. The pipeline decides which source is trusted, which target is intended, which identity may act, which plan was approved, when concurrent work is safe, and whether the result is acceptable.
+
+Bind approval to an immutable plan artifact and the exact commit, backend, workspace, runtime, provider lock, variables, and short-lived identity that produced it. If any of those inputs change, regenerate the plan rather than applying stale evidence. Separate pull-request validation from protected mutation authority, serialize deployments per state boundary, censor plan artifacts that may contain sensitive values, and verify service behavior after apply. CI improves safety only when it makes scope and authorization explicit rather than automating a broad apply command.
+
+## Check Your Answers
+
+:::expand[Why Are Laptop Applies Risky for Shared Infrastructure?]{kind="recap"}
+A laptop carries hidden directory, state, variable, credential, dependency, and concurrency context that shared reviewers and audit systems may never see.
+:::
+
+:::expand[How Does a Pipeline Build Stronger Evidence?]{kind="recap"}
+Run cheap source checks first, then target-aware plan, policy, approval, exact apply, and runtime verification. Each layer answers a stronger question.
+:::
+
+:::expand[Why Must a Plan Include Its Target Context?]{kind="recap"}
+A plan only has meaning with its root, state, variables, dependencies, authenticated account, provider context, configuration, and current remote observations.
+:::
+
+:::expand[How Does a Saved Plan Connect Review to Apply?]{kind="recap"}
+The binary saved plan is executable input. Protect it and apply it directly so the reviewed Terraform decision is the one executed.
+:::
+
+:::expand[Where Do Approval and Credentials Create a Boundary?]{kind="recap"}
+Approval follows complete evidence, and only the protected apply stage receives a short-lived, narrowly trusted production identity.
+:::
+
+:::expand[How Do State Locking and Concurrency Protect Applies?]{kind="recap"}
+Backend locks serialize Terraform writers for one state; pipeline concurrency coordinates the longer workflow around that same state boundary.
+:::
+
+:::expand[What Evidence and Rollback Information Should Remain?]{kind="recap"}
+Record target, identity, plan, approval, apply, and verification while protecting sensitive artifacts. Recovery requires a new decision because apply is not transactional rollback.
+:::
+
+:::expand[What Does a Complete Terraform Pipeline Look Like?]{kind="recap"}
+Separate evidence from write authority and preserve commit, target, exact-plan, environment, state-writer, confidentiality, and post-apply verification invariants.
+:::
 
 ---
 
 **References**
 
-- [`terraform plan`](https://developer.hashicorp.com/terraform/cli/commands/plan)
-- [`terraform apply`](https://developer.hashicorp.com/terraform/cli/commands/apply)
-- [`terraform show`](https://developer.hashicorp.com/terraform/cli/commands/show)
-- [`terraform test`](https://developer.hashicorp.com/terraform/cli/commands/test)
-- [Automate Terraform with GitHub Actions](https://developer.hashicorp.com/terraform/tutorials/automation/github-actions)
-- [HashiCorp setup-terraform action](https://github.com/hashicorp/setup-terraform)
-- [TFLint setup action](https://github.com/terraform-linters/setup-tflint)
-- [Checkov installation](https://github.com/bridgecrewio/checkov#installation)
-- [GitHub Actions OpenID Connect security hardening](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect)
-- [Configuring OpenID Connect in Amazon Web Services](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services)
-- [AWS configure-aws-credentials action](https://github.com/aws-actions/configure-aws-credentials)
-- [GitHub Actions environments](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
-- [GitHub Actions concurrency](https://docs.github.com/en/actions/using-jobs/using-concurrency)
+- [Terraform CLI: plan](https://developer.hashicorp.com/terraform/cli/commands/plan)
+- [Terraform CLI: apply](https://developer.hashicorp.com/terraform/cli/commands/apply)
+- [Terraform: Running in automation](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform)
+- [Terraform: State locking](https://developer.hashicorp.com/terraform/language/state/locking)
+- [Terraform: Remote state](https://developer.hashicorp.com/terraform/language/state/remote)
+- [Terraform: Dependency lock file](https://developer.hashicorp.com/terraform/language/files/dependency-lock)
+- [Terraform: Manage sensitive data](https://developer.hashicorp.com/terraform/language/manage-sensitive-data)

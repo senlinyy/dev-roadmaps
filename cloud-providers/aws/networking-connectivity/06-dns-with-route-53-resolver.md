@@ -24,7 +24,7 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-AWS DNS becomes easier when four problems remain separate:
+Keep four problems separate when reasoning about AWS DNS:
 
 | Problem | AWS mechanism |
 |---|---|
@@ -33,7 +33,9 @@ AWS DNS becomes easier when four problems remain separate:
 | How does a question reach another DNS system? | Resolver endpoints and rules |
 | Can packets reach the resulting address? | Routes, transit, VPN, security controls, endpoint policies, and firewalls |
 
-The sections below answer these questions in order:
+Follow one lookup as two separate outcomes. Resolver configuration determines who answers and which record becomes visible; only then do routes, security controls, endpoint policy, and the destination service determine whether the returned address works. This separation matters most with private hosted zones, PrivateLink, and hybrid forwarding, where the same name can follow different DNS paths from different networks.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What Does DNS Do Before Networking Begins?**
 2. **What Is Route 53 Resolver?**

@@ -9,24 +9,36 @@ id: article-devops-foundation-networking-firewalls-security
 
 ## Table of Contents
 
-1. [What Firewalls Do](#what-firewalls-do)
-2. [What a Firewall Rule Means](#what-a-firewall-rule-means)
-3. [Cloud Firewalls: Security Groups and Network ACLs](#cloud-firewalls-security-groups-and-network-acls)
-4. [Host Firewalls with iptables](#host-firewalls-with-iptables)
-5. [Opening Web Traffic Without Opening Everything](#opening-web-traffic-without-opening-everything)
-6. [SSH Hardening for the Admin Path](#ssh-hardening-for-the-admin-path)
-7. [fail2ban and Reactive Blocking](#fail2ban-and-reactive-blocking)
-8. [Firewall Failure Modes](#firewall-failure-modes)
-9. [References](#references)
-
-## What Firewalls Do
-<!-- section-summary: Firewalls read packet fields and connection state, then decide whether traffic may continue toward a service. -->
+1. [What Does a Firewall Decide?](#what-does-a-firewall-decide)
+2. [What Does a Firewall Rule Match and Allow?](#what-does-a-firewall-rule-match-and-allow)
+3. [How Do Security Groups, Network ACLs, and Host Rules Differ?](#how-do-security-groups-network-acls-and-host-rules-differ)
+4. [How Does a Stateful Host Firewall Handle Traffic?](#how-does-a-stateful-host-firewall-handle-traffic)
+5. [How Do You Expose Web Traffic Without Exposing Every Service?](#how-do-you-expose-web-traffic-without-exposing-every-service)
+6. [How Should You Protect the Administrative Path?](#how-should-you-protect-the-administrative-path)
+7. [What Can Reactive Blocking Add After Prevention?](#what-can-reactive-blocking-add-after-prevention)
+8. [How Do You Diagnose Firewall and Reachability Failures?](#how-do-you-diagnose-firewall-and-reachability-failures)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Picture a small production server that runs a website, an admin SSH service, and a database client. Browsers need to reach HTTPS on TCP `443`. Operators may need SSH on `22`, but only from a VPN or bastion. The database port should never accept random internet traffic. Before any of those services gets a chance to answer, the server needs a gatekeeper that decides which packets deserve to continue.
 
 A **firewall** is that gatekeeper. It checks packet details such as source IP, destination IP, protocol, port, interface, and connection state. A firewall rule says, in plain terms, "traffic with these details may pass" or "traffic with these details must stop."
 
 For a web server, one rule might allow TCP `443` from the internet so browsers can load the site. Another rule might allow TCP `22` only from `198.51.100.10`, the office VPN exit address. A third rule might block every other inbound packet. That simple shape lets the public use the public service while keeping the admin path and private ports out of reach.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Does a Firewall Decide?**
+2. **What Does a Firewall Rule Match and Allow?**
+3. **How Do Security Groups, Network ACLs, and Host Rules Differ?**
+4. **How Does a Stateful Host Firewall Handle Traffic?**
+5. **How Do You Expose Web Traffic Without Exposing Every Service?**
+6. **How Should You Protect the Administrative Path?**
+7. **What Can Reactive Blocking Add After Prevention?**
+8. **How Do You Diagnose Firewall and Reachability Failures?**
+
+## What Does a Firewall Decide?
+<!-- section-summary: Firewalls read packet fields and connection state, then decide whether traffic may continue toward a service. -->
 
 **Allow** means the packet continues. **Drop** means the packet disappears silently. **Reject** means the sender gets an explicit refusal.
 
@@ -38,7 +50,7 @@ Under the hood, most firewall decisions happen before the application reads the 
 
 The beginner trap is blaming the app too early. If TCP port `443` is blocked, the certificate can be correct, Nginx can be configured, and the app can be healthy while the browser still waits until the connection times out. A good network check asks whether the packet reached the service before debugging the service itself.
 
-## What a Firewall Rule Means
+## What Does a Firewall Rule Match and Allow?
 <!-- section-summary: A firewall rule matches packet fields and applies an action, usually as part of an allowlist with default deny. -->
 
 Suppose the HTTPS request still times out. Before you change Nginx or restart the app, slow the request down to one packet. A firewall does not know that someone clicked a dashboard button. It sees packet details: where the packet came from, where it wants to go, which protocol it uses, and which port it targets.
@@ -93,7 +105,7 @@ The source field deserves special care because many outages and incidents start 
 
 The practical rule-writing habit is to make each rule as narrow as the service allows. Public HTTPS can use source `0.0.0.0/0` and `::/0` if the site is internet-facing. SSH should usually use a VPN CIDR, bastion Security Group, or small admin range. App and database ports should usually accept traffic only from the load balancer or app tier that needs them.
 
-## Cloud Firewalls: Security Groups and Network ACLs
+## How Do Security Groups, Network ACLs, and Host Rules Differ?
 <!-- section-summary: Cloud firewalls filter traffic before it reaches the host, with security groups attached to resources and NACLs attached to subnets. -->
 
 Now move the same idea from one Linux host to a cloud network. You can have an app working perfectly on the instance, then still fail from the browser because the cloud stopped the packet before Linux ever saw it. If `curl localhost:3000` works on the instance but the browser cannot connect to the public IP, the cloud firewall is one of the first places to inspect.
@@ -195,7 +207,7 @@ For NACL debugging, also check the matching egress rule. A client may connect fr
 
 _The image shows why cloud firewall behavior depends on where the rule is attached and whether return traffic is remembered._
 
-## Host Firewalls with iptables
+## How Does a Stateful Host Firewall Handle Traffic?
 <!-- section-summary: iptables configures Linux kernel packet filtering through ordered chains and actions. -->
 
 After the cloud allows the packet, Linux can still stop it. Maybe the cloud Security Group allows web traffic broadly, while the host should allow SSH only from a bastion and keep a metrics port private. The host firewall gives you that last local gate on the server itself.
@@ -308,7 +320,7 @@ This says SSH is allowed only from `198.51.100.10`, while web ports `80` and `44
 
 _The image makes ordered rule evaluation visible, which is the key to debugging host firewall surprises._
 
-## Opening Web Traffic Without Opening Everything
+## How Do You Expose Web Traffic Without Exposing Every Service?
 <!-- section-summary: A production web path usually exposes only ports 80 and 443 publicly, while app ports stay private behind the proxy or load balancer. -->
 
 Now connect the firewall work to the web-server layout. For a public web app, the browser should reach Nginx on `443`. The browser should not reach the Node, Django, Rails, or Go app port directly. The app port should listen on `127.0.0.1` if Nginx is on the same host, or on a private subnet address if Nginx or a load balancer sits on another host.
@@ -360,7 +372,7 @@ That timeout is healthy for the private app port:
 
 _The image shows web access as layered protection instead of one giant allow rule._
 
-## SSH Hardening for the Admin Path
+## How Should You Protect the Administrative Path?
 <!-- section-summary: SSH is a separate admin path, so it needs key-based access, source restrictions, and a safe rollout process. -->
 
 The web path and the admin path need different exposure. Anyone on the internet may need HTTPS, but only trusted operators should reach SSH. If attackers brute-force or steal SSH access, they can change the firewall, Nginx, certificates, or app.
@@ -415,7 +427,7 @@ The Security Group rule carries the same meaning at the cloud edge:
 
 Many teams place servers behind a VPN or bastion host so SSH is never open to the public internet. That design reduces scanner noise and gives a central place for logging and access review. The next decision is usually whether SSH should be reachable from the internet at all. For a small learning VM, a narrow `/32` admin source may be enough. For a team environment, a VPN, bastion, or cloud session manager usually gives stronger control and better audit trails.
 
-## fail2ban and Reactive Blocking
+## What Can Reactive Blocking Add After Prevention?
 <!-- section-summary: fail2ban watches logs for repeated failures and adds temporary firewall blocks for abusive sources. -->
 
 Even with SSH locked down, public servers see constant login attempts from scanners. The important signal is repetition: the same source fails again and again in a short time. **fail2ban** watches logs for that pattern and adds a temporary firewall block for the abusive source.
@@ -468,7 +480,7 @@ fail2ban works best as a reactive layer alongside SSH keys, MFA-protected bastio
 
 _The image shows how reactive blocking follows log evidence and should stay temporary and reviewable._
 
-## Firewall Failure Modes
+## How Do You Diagnose Firewall and Reachability Failures?
 <!-- section-summary: Firewall incidents often come from blocked ports, wrong sources, rule order mistakes, missing state rules, or unsaved host rules. -->
 
 A firewall incident usually arrives as a short, frustrating report: "the checkout page cannot load over HTTPS." Work one request through the path instead of jumping between random rules. The first question is what the client sees, because timeout and refused tell different stories.
@@ -539,6 +551,40 @@ The persistence command stores the current IPv4 firewall rules for boot-time res
 - After saving, a reboot test or `sudo iptables-restore < /etc/iptables/rules.v4` in a safe maintenance window proves the rules can reload.
 
 A careful firewall debug path has four checks: the cloud policy allows the intended source and port, the host firewall rule order allows the packet, conntrack allows replies, and a capture or connection test proves the packet reaches the next layer. After port `443` passes the firewall, your browser can move to TLS and Nginx.
+
+## Check Your Answers
+
+:::expand[What Does a Firewall Decide?]{kind="recap"}
+A firewall decides whether traffic matching observable network and transport facts may cross one policy boundary.
+:::
+
+:::expand[What Does a Firewall Rule Match and Allow?]{kind="recap"}
+Rules match direction, protocol, source, destination, ports, interface, and state before applying ordered allow or deny policy.
+:::
+
+:::expand[How Do Security Groups, Network ACLs, and Host Rules Differ?]{kind="recap"}
+Cloud resource, subnet, and host controls sit at different boundaries and may use stateful or stateless return handling.
+:::
+
+:::expand[How Does a Stateful Host Firewall Handle Traffic?]{kind="recap"}
+Connection tracking recognizes established return traffic, while explicit policy protects new flows, loopback, and required control traffic.
+:::
+
+:::expand[How Do You Expose Web Traffic Without Exposing Every Service?]{kind="recap"}
+Publish only proxy ports, keep application and database listeners private, and restrict each east-west relationship explicitly.
+:::
+
+:::expand[How Should You Protect the Administrative Path?]{kind="recap"}
+Restrict SSH sources, prefer keys, disable unsafe root and password paths, and use a controlled VPN or bastion boundary.
+:::
+
+:::expand[What Can Reactive Blocking Add After Prevention?]{kind="recap"}
+Reactive blocking can slow repeated abuse from logs, but it does not replace authentication, patching, or narrow exposure.
+:::
+
+:::expand[How Do You Diagnose Firewall and Reachability Failures?]{kind="recap"}
+Verify resolution, route, listener, every policy layer, connection state, counters, logs, return traffic, and application authorization.
+:::
 
 ![Firewalls and security summary infographic showing rules, cloud firewalls, iptables, web ports, SSH hardening, fail2ban, and failure modes](/content-assets/articles/article-devops-foundation-networking-firewalls-security/firewalls-security-summary.png)
 

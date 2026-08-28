@@ -20,22 +20,8 @@ aliases:
 6. [When Is Lambda the Right Compute Model?](#when-is-lambda-the-right-compute-model)
 7. [How Do Versions, Aliases, and Rollback Work?](#how-do-versions-aliases-and-rollback-work)
 8. [How Do You Design a Complete Lambda Workload?](#how-do-you-design-a-complete-lambda-workload)
-9. [Check Your Understanding](#check-your-understanding)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-The sections below answer these questions in order:
-
-1. **What Is AWS Lambda?**
-2. **What Is an Execution Environment?**
-3. **Where Should a Lambda Function Keep State?**
-4. **How Does Lambda Scale?**
-5. **Why Do Retries Require Idempotency?**
-6. **When Is Lambda the Right Compute Model?**
-7. **How Do Versions, Aliases, and Rollback Work?**
-8. **How Do You Design a Complete Lambda Workload?**
-
-## What Is AWS Lambda?
-<!-- section-summary: Lambda runs bounded pieces of customer code when work arrives while AWS operates the underlying machines and execution infrastructure. -->
 
 All code needs compute. A function such as `resize_image(image)` cannot execute without processors, memory, an operating system, a language runtime, networking, permissions, a start mechanism, capacity for simultaneous work, and recovery when infrastructure fails.
 
@@ -62,6 +48,20 @@ result or failure
 ```
 
 You are not primarily renting a permanent server. You define how AWS should perform **bounded executions of code**. One invocation starts with input, performs computation and calls other systems, produces a result or error, and ends.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Is AWS Lambda?**
+2. **What Is an Execution Environment?**
+3. **Where Should a Lambda Function Keep State?**
+4. **How Does Lambda Scale?**
+5. **Why Do Retries Require Idempotency?**
+6. **When Is Lambda the Right Compute Model?**
+7. **How Do Versions, Aliases, and Rollback Work?**
+8. **How Do You Design a Complete Lambda Workload?**
+
+## What Is AWS Lambda?
+<!-- section-summary: Lambda runs bounded pieces of customer code when work arrives while AWS operates the underlying machines and execution infrastructure. -->
 
 ```text
 invocation starts
@@ -583,7 +583,7 @@ idempotency, logs, metrics, traces, versions, aliases
 
 A Lambda function is not a tiny permanent server. It is a definition of how AWS should execute a finite piece of your code when work arrives.
 
-## Check Your Understanding
+## Check Your Answers
 
 :::expand[What Is AWS Lambda?]{kind="recap"}
 Lambda runs bounded pieces of customer code when work arrives while AWS operates the underlying machines and execution infrastructure.

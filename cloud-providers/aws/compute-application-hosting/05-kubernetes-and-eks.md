@@ -23,22 +23,8 @@ aliases:
 6. [How Do Scaling, Health, and Resilience Work?](#how-do-scaling-health-and-resilience-work)
 7. [What Must a Team Operate in EKS?](#what-must-a-team-operate-in-eks)
 8. [How Do You Debug an EKS Application?](#how-do-you-debug-an-eks-application)
-9. [Check Your Understanding](#check-your-understanding)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-The sections below answer these questions in order:
-
-1. **Why Do Containers Need an Orchestrator?**
-2. **What Does EKS Manage in a Cluster?**
-3. **What Are Pods, Deployments, and Services?**
-4. **How Does EKS Networking Work?**
-5. **How Do Pods and Humans Get Permissions?**
-6. **How Do Scaling, Health, and Resilience Work?**
-7. **What Must a Team Operate in EKS?**
-8. **How Do You Debug an EKS Application?**
-
-## Why Do Containers Need an Orchestrator?
-<!-- section-summary: Containers package applications, but an orchestrator coordinates placement, replacement, scaling, networking, health, and deployment across many machines. -->
 
 Start with one application named `payments-api`. On a plain EC2 instance, a team can install Linux, Python, libraries, application files, and a long-running process. That works, but deployments depend on the exact state of the server. Which runtime and libraries are installed? Does production match testing? Can two versions run together? How can the application move to another machine?
 
@@ -62,6 +48,20 @@ worker A                 worker B
 ├── payments container  └── payments container
 └── payments container
 ```
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Do Containers Need an Orchestrator?**
+2. **What Does EKS Manage in a Cluster?**
+3. **What Are Pods, Deployments, and Services?**
+4. **How Does EKS Networking Work?**
+5. **How Do Pods and Humans Get Permissions?**
+6. **How Do Scaling, Health, and Resilience Work?**
+7. **What Must a Team Operate in EKS?**
+8. **How Do You Debug an EKS Application?**
+
+## Why Do Containers Need an Orchestrator?
+<!-- section-summary: Containers package applications, but an orchestrator coordinates placement, replacement, scaling, networking, health, and deployment across many machines. -->
 
 Who notices when worker A fails? Who recreates its containers? Who changes four replicas to twelve when traffic grows? Who gradually replaces version 7 with version 8? How do clients find replicas whose addresses can change? Who assigns CPU and memory and checks health?
 
@@ -518,7 +518,7 @@ VPC Pod networking, EBS/EFS storage, observability
 
 The shortest useful definition is: **Amazon EKS is AWS’s managed Kubernetes platform. You declare how containerized applications should run, Kubernetes continuously reconciles that state, and EKS operates the critical control plane while integrating workloads with AWS compute, networking, identity, storage, and load balancing.**
 
-## Check Your Understanding
+## Check Your Answers
 
 :::expand[Why Do Containers Need an Orchestrator?]{kind="recap"}
 Containers package applications, but an orchestrator coordinates placement, replacement, scaling, networking, health, and deployment across many machines.

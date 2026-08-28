@@ -12,38 +12,46 @@ aliases:
 
 ## Table of Contents
 
-1. [What Cosmos DB Is For](#what-cosmos-db-is-for)
-2. [Access Patterns First](#access-patterns-first)
-3. [Accounts, Databases, Containers, and Items](#accounts-databases-containers-and-items)
-4. [Partition Keys](#partition-keys)
-5. [Request Units and Throughput](#request-units-and-throughput)
-6. [Indexing and Queries](#indexing-and-queries)
-7. [Consistency and Regions](#consistency-and-regions)
-8. [Private Access and Backup Modes](#private-access-and-backup-modes)
-9. [TTL and Temporary State](#ttl-and-temporary-state)
-10. [Transactions and Boundaries](#transactions-and-boundaries)
-11. [When Cosmos DB Fits](#when-cosmos-db-fits)
-12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
+1. [What Workloads Fit Cosmos DB?](#what-workloads-fit-cosmos-db)
+2. [Why Must Access Patterns Come First?](#why-must-access-patterns-come-first)
+3. [How Do Accounts, Databases, Containers, and Items Organize Data?](#how-do-accounts-databases-containers-and-items-organize-data)
+4. [Why Is the Partition Key So Important?](#why-is-the-partition-key-so-important)
+5. [How Do Request Units, Throughput, Indexing, and Queries Affect Cost?](#how-do-request-units-throughput-indexing-and-queries-affect-cost)
+6. [How Do Consistency and Regions Change Behavior?](#how-do-consistency-and-regions-change-behavior)
+7. [How Do Private Access, Backup, and TTL Protect Data?](#how-do-private-access-backup-and-ttl-protect-data)
+8. [What Transaction Boundaries and Fit Questions Matter?](#what-transaction-boundaries-and-fit-questions-matter)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## What Cosmos DB Is For
-<!-- section-summary: Cosmos DB is useful for item-shaped data where the app already knows how it will read and write the records. -->
-
-Azure Cosmos DB is Microsoft's managed database platform for distributed app data. Microsoft now describes the broader product as covering NoSQL, relational, and vector database needs, with support for several APIs and engines. In this article, Cosmos DB means the **API for NoSQL** shape because that is where beginners most often meet **items**, **containers**, **partition keys**, **request units**, and **TTL**.
-
-If you know DynamoDB, Cosmos DB for NoSQL uses a familiar design habit: start from access patterns, choose a partition key carefully, watch capacity cost, and use TTL for temporary items. Azure names the cost unit **request units**, and Cosmos DB has its own API, consistency, indexing, and multi-region choices.
+Azure Cosmos DB is Microsoft's managed database platform for distributed app data. Microsoft now describes the broader product as covering NoSQL, relational, and vector database needs, with support for several APIs and engines. Here, Cosmos DB means the **API for NoSQL** shape because that is where beginners most often meet **items**, **containers**, **partition keys**, **request units**, and **TTL**.
 
 The practical reason to reach for Cosmos DB is simple: the application has data that looks like independent items, and the app can usually name the exact item or the exact group of items it needs. A checkout service may keep the real order ledger in Azure SQL Database, receipt PDFs in Blob Storage, and short-lived retry records in Cosmos DB. The retry record is small, it has one key, the app reads it quickly during checkout, and the record can disappear after the retry window.
 
 That same checkout system also has background export jobs. A support user starts an export, the worker updates a status record, and the support page checks that job by job ID. This status record also looks like an item: one small JSON document, one natural lookup key, a few updates, and a clear expiry window after support no longer needs it.
 
-Those two examples will carry the whole article. We will follow `idempotency-keys` and `job-status` containers inside an `orders-events` database. First we name the access patterns, then we choose item shape, partition key, throughput, indexes, consistency, TTL, and finally the service fit. Cosmos DB rewards that order of thinking because the access path and the partition key sit close to the center of the design.
+The partition key ties these decisions together because it influences routing, transaction scope, scalability, and request-unit cost.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Workloads Fit Cosmos DB?**
+2. **Why Must Access Patterns Come First?**
+3. **How Do Accounts, Databases, Containers, and Items Organize Data?**
+4. **Why Is the Partition Key So Important?**
+5. **How Do Request Units, Throughput, Indexing, and Queries Affect Cost?**
+6. **How Do Consistency and Regions Change Behavior?**
+7. **How Do Private Access, Backup, and TTL Protect Data?**
+8. **What Transaction Boundaries and Fit Questions Matter?**
+
+## What Workloads Fit Cosmos DB?
+<!-- section-summary: Cosmos DB is useful for item-shaped data where the app already knows how it will read and write the records. -->
+
+The idempotency-key and job-status examples carry the rest of the article. We will follow `idempotency-keys` and `job-status` containers inside an `orders-events` database. First we name the access patterns, then we choose item shape, partition key, throughput, indexes, consistency, TTL, and finally the service fit. Cosmos DB rewards that order of thinking because the access path and the partition key sit close to the center of the design.
 
 ![Cosmos DB access pattern map showing an Orders API writing relational order records to a SQL ledger, PDFs to receipt files, and idempotency plus job status records to NoSQL items](/content-assets/articles/article-cloud-providers-azure-storage-databases-cosmos-db-nosql-data-models/cosmos-access-patterns.png)
 
 *The checkout platform uses different storage shapes on purpose: SQL keeps the order ledger, file storage keeps PDFs, and Cosmos DB keeps small item-shaped operational records.*
 
-## Access Patterns First
+## Why Must Access Patterns Come First?
 <!-- section-summary: An access pattern is the normal read or write path, and Cosmos DB design depends on naming those paths early. -->
 
 An **access pattern** is the normal way application code reads or writes data. In a relational database, a team may start with tables and later add several queries across those tables. In Cosmos DB, the team gets a better result by naming the common requests before creating the container.
@@ -66,7 +74,7 @@ Here is the production review question I would ask before a Cosmos DB container 
 
 This table matters because Cosmos DB design has fewer surprises when the main reads are known-key reads. The body of each item can stay flexible JSON, but the access path still needs a shape. NoSQL moves the modeling work from foreign keys and joins toward item boundaries, partition keys, query paths, and request cost.
 
-## Accounts, Databases, Containers, and Items
+## How Do Accounts, Databases, Containers, and Items Organize Data?
 <!-- section-summary: Cosmos DB stores JSON-like items in containers, and containers hold the main scale and behavior settings. -->
 
 A **Cosmos DB account** is the top-level Azure resource. It owns account-level settings such as API kind, regions, default consistency, backup mode, network access, and keys or identities used by clients. In our example, the account could be named `cosmos-devpolaris-orders-prod` and live in the same production data resource group as the order platform.
@@ -111,6 +119,10 @@ The `job-status` container would hold a different item shape:
 
 This second item has a separate lifecycle. It gets updated while a worker runs, support reads it by `jobId`, and the record expires after about 30 days. Keeping it in a separate container lets the team choose a different partition key, TTL, throughput, and indexing policy from the idempotency records.
 
+Cosmos DB designs often use **intentional denormalization**. A relational design may store a customer once and join it to many orders. A document design may copy a small customer display name or order summary into the item that is read most often so one request can retrieve the complete response from one partition. The duplicate value is a tradeoff: it simplifies and localizes reads, while the application must decide how to update copied values after the original fact changes.
+
+This does not mean "duplicate everything." Stable facts that belong to one aggregate can be embedded together. Large, frequently changing, or independently owned data may deserve its own item or another store. The choice follows the access pattern, item-size limits, write amplification, and consistency requirement. Denormalization is useful when it deliberately removes an expensive cross-item or cross-partition read, not when it hides an unclear data model.
+
 Here is what that choice can look like from the Azure CLI. The database is only the namespace. The important design values live on the containers: partition key path, autoscale maximum RU/s, and default TTL.
 
 ```bash
@@ -146,14 +158,13 @@ A healthy container review should turn those flags into evidence. The database c
 | `options.autoscaleSettings.maxThroughput` | `4000` | The autoscale ceiling matches the capacity plan |
 | `resource.defaultTtl` | `604800` | Items expire after the seven-day retry window |
 
-## Partition Keys
+## Why Is the Partition Key So Important?
 <!-- section-summary: The partition key decides how Cosmos DB groups items and routes work, so it must match both scale and lookup paths. -->
 
 A **partition key** is the item property Cosmos DB uses to group items into logical partitions. The partition key path is the property name in the container definition, such as `/idempotencyKey` or `/jobId`. The partition key value is the value on one item, such as `pay_req_8f31` or `job_2026_06_11_0042`.
 
 Cosmos DB hashes partition key values and maps logical partitions onto physical partitions that the service manages. Azure owns the physical placement. The application team chooses a key that gives Cosmos DB enough distinct values and routes common requests efficiently.
 
-AWS readers can use DynamoDB partition-key instincts here, especially the warning about hot keys. A key with many well-distributed values helps scale, while a key such as `/status` can concentrate active writes into a few busy groups.
 
 For `idempotency-keys`, `/idempotencyKey` is a clean beginner example. Every retry token gets its own partition key value, so writes spread across many values and point reads can target one record. For `job-status`, `/jobId` has the same basic shape because support reads and workers update one job at a time.
 
@@ -194,12 +205,11 @@ The expected output is small enough to read during review:
 
 *Balanced partition keys let known-item reads go straight to the target item, while broad queries fan out and spend more request units.*
 
-## Request Units and Throughput
+## How Do Request Units, Throughput, Indexing, and Queries Affect Cost?
 <!-- section-summary: Request units measure the work Cosmos DB performs, and throughput settings decide how much work the container can do per second. -->
 
 A **request unit**, usually shortened to **RU**, is Cosmos DB's unit for database work. Reads, writes, queries, and deletes all consume RUs based on the CPU, memory, and I/O the service uses for the operation. A point read by item ID and partition key costs much less than a broad query that loads many records.
 
-The closest AWS comparison is DynamoDB read and write capacity thinking, but Cosmos DB measures the work as RUs across operation types. The useful review is still capacity plus access path: point reads stay cheap, broad queries and hot partitions consume more budget.
 
 Microsoft's examples use a one-kilobyte point read as `1` RU. Larger items cost more. Queries cost more as they scan more data, use more predicates, return more results, or need more index work. Stronger read consistency levels can also increase RU cost for reads.
 
@@ -243,7 +253,7 @@ The application log should name the item, partition key, and request charge toge
 | --- | --- | --- |
 | `pay_req_8f31` | `pay_req_8f31` | `1.0` |
 
-## Indexing and Queries
+### Indexing and Queries
 <!-- section-summary: Cosmos DB indexes item properties for queries, but the best query still follows the partition and data shape. -->
 
 An **index** is a data structure the database uses to find items without scanning everything. Cosmos DB for NoSQL creates an indexing policy for every container. By default, new containers index every property on every item, which gives beginners useful query behavior without designing indexes on day one.
@@ -276,7 +286,7 @@ This second query has a better routing story, although a real point read by ID a
 
 Indexing also affects writes. A large item with many indexed properties costs more to write than a small item with fewer indexed fields. If the application stores big blobs of text, PDF bytes, or image data inside Cosmos DB, the item is expensive and awkward. Blob Storage is usually the better home for large files, with Cosmos DB storing the metadata and blob URL when the app needs a fast item record.
 
-## Consistency and Regions
+## How Do Consistency and Regions Change Behavior?
 <!-- section-summary: Consistency controls how fresh reads must be after writes, especially when data lives in more than one region. -->
 
 So far, the checkout records have a home, a partition key, and a cost shape. The next question comes from the user experience. After the app writes a record, how fresh does the next read need to be?
@@ -301,7 +311,7 @@ For our idempotency key, the payment path should avoid stale confusion. If a cli
 
 Consistency also has cost. Microsoft documents that Strong and Bounded Staleness reads consume roughly twice the RUs of more relaxed levels. That cost belongs in the product tradeoff, especially on high-volume read paths where freshness rules affect both behavior and capacity.
 
-## Private Access and Backup Modes
+## How Do Private Access, Backup, and TTL Protect Data?
 <!-- section-summary: A production Cosmos DB account needs a planned network path and backup mode before the app depends on the data. -->
 
 The checkout API can have a clean item model and still fail in production if the network path and recovery path are vague. A **private endpoint** gives the Cosmos DB account private IP addresses in a virtual network. The app can still use the normal account endpoint name, while private DNS points approved clients to the private address. This gives the platform team a way to keep database traffic on approved private paths and reduce public exposure.
@@ -333,14 +343,13 @@ The exact values depend on the environment, but a production private-access desi
 | `backupMode` | `Continuous` | The account supports point-in-time restore behavior |
 | `backupTier` | `Continuous30Days` | The restore window matches the incident discovery window |
 
-## TTL and Temporary State
+### TTL and Temporary State
 <!-- section-summary: TTL lets Cosmos DB expire short-lived items automatically, which fits retry keys and operational status records. -->
 
 Now the read behavior, network path, and backup mode are named, and the next production problem is cleanup. Idempotency keys and job status records have value for a while, then they turn into clutter. A database that keeps every temporary record forever creates storage growth, noisy dashboards, and awkward support questions later.
 
 **TTL** means **time to live**. It is an expiry setting in seconds. Cosmos DB counts that number from the item's last modified time, so an update refreshes the countdown. A container must have TTL enabled before item-level `ttl` values matter, and then each item can use the container default or override it with its own value.
 
-This maps to the same cleanup habit as DynamoDB TTL. Use it for retry keys, job status, sessions, and other temporary records where expiry is part of the data contract.
 
 The `idempotency-keys` container may use a default TTL of `604800` seconds, which is seven days. That matches a retry policy where payment clients may repeat requests for a limited period. After the retry window, the key has served its purpose and should stop taking storage.
 
@@ -350,12 +359,11 @@ TTL deletion runs as background work. After an item expires, it stops appearing 
 
 This gives TTL a real operational shape. It helps control storage growth, but it is still part of the data contract. The team should choose the expiry window with product, support, compliance, and recovery needs in mind. A retry key, a job status record, and a legal audit record usually need different retention choices.
 
-## Transactions and Boundaries
+## What Transaction Boundaries and Fit Questions Matter?
 <!-- section-summary: Cosmos DB supports transactional work inside one logical partition, so item grouping affects correctness as well as scale. -->
 
 A **transaction** is a group of data operations that succeeds together or fails together. Cosmos DB supports ACID transactions with snapshot isolation inside a single logical partition. In practice, that means the partition key can also define the boundary for multi-item transactional work.
 
-AWS readers should connect this to the same boundary question they ask with DynamoDB transactions and item grouping. Cosmos DB can do strong transactional work inside one logical partition, so the partition key affects correctness as well as scale.
 
 For the idempotency example, the simplest design keeps one item per key. The API can create or update that one item safely with optimistic concurrency controls such as ETags. An **ETag** is a version value the service changes when the item changes, so an update can say, "apply this only if nobody changed the item since I read it."
 
@@ -365,7 +373,7 @@ That tradeoff shows up in real systems. A shopping cart container may partition 
 
 Cosmos DB can serve many workloads with single-item write patterns. The key is naming the boundary honestly. If the product requires foreign keys, multi-table joins, broad reporting, and transactions across many unrelated records, Azure SQL Database probably belongs in the first design review.
 
-## When Cosmos DB Fits
+### When Cosmos DB Fits
 <!-- section-summary: Cosmos DB fits item-shaped, key-oriented workloads and asks for another design when the workload is relational, analytical, or file-shaped. -->
 
 Cosmos DB fits well when the data has item-shaped boundaries, the frequent reads are known early, the partition key can spread load, and the team values low-latency reads, elastic scale, TTL, or multi-region options. Idempotency records, shopping carts, user preferences, device state, session documents, job status, and event snapshots can all fit this pattern.
@@ -387,7 +395,7 @@ Here is a quick service-fit review. The point is to match the data shape to the 
 
 The common beginner trap is choosing Cosmos DB because a record can be written as JSON. JSON is only the item format. The stronger question is whether the app can name the item, route through a good partition key, control RU cost, and choose a retention and consistency policy that matches the product.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: A good Cosmos DB design connects the access pattern to the item, partition key, RU budget, consistency level, and TTL rule. -->
 
 Let's put the checkout platform together. The main order system keeps durable relational records in Azure SQL Database. Receipt files go to Blob Storage. Cosmos DB holds two operational containers in the `orders-events` database: `idempotency-keys` for checkout retries and `job-status` for background export progress.
@@ -404,13 +412,47 @@ That is the bigger lesson. Cosmos DB moves modeling work from table relationship
 
 *Use the final fit check before production: item shape, routing, capacity, consistency, expiry, backup, and recovery all need to match the product behavior.*
 
-## What's Next
+### What's Next
 
 Next we look at Disks and File Shares, where the storage question changes from database records to operating-system paths. That is the world of VM-attached block devices, shared folders, host caching, file protocols, and workloads that expect to call normal filesystem operations.
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[What Workloads Fit Cosmos DB?]{kind="recap"}
+Cosmos DB is useful for item-shaped data where the app already knows how it will read and write the records.
+:::
+
+:::expand[Why Must Access Patterns Come First?]{kind="recap"}
+An access pattern is the normal read or write path, and Cosmos DB design depends on naming those paths early.
+:::
+
+:::expand[How Do Accounts, Databases, Containers, and Items Organize Data?]{kind="recap"}
+Cosmos DB stores JSON-like items in containers, and containers hold the main scale and behavior settings.
+:::
+
+:::expand[Why Is the Partition Key So Important?]{kind="recap"}
+The partition key decides how Cosmos DB groups items and routes work, so it must match both scale and lookup paths.
+:::
+
+:::expand[How Do Request Units, Throughput, Indexing, and Queries Affect Cost?]{kind="recap"}
+Request units measure the work Cosmos DB performs, and throughput settings decide how much work the container can do per second. Cosmos DB indexes item properties for queries, but the best query still follows the partition and data shape.
+:::
+
+:::expand[How Do Consistency and Regions Change Behavior?]{kind="recap"}
+Consistency controls how fresh reads must be after writes, especially when data lives in more than one region.
+:::
+
+:::expand[How Do Private Access, Backup, and TTL Protect Data?]{kind="recap"}
+A production Cosmos DB account needs a planned network path and backup mode before the app depends on the data. TTL lets Cosmos DB expire short-lived items automatically, which fits retry keys and operational status records.
+:::
+
+:::expand[What Transaction Boundaries and Fit Questions Matter?]{kind="recap"}
+Cosmos DB supports transactional work inside one logical partition, so item grouping affects correctness as well as scale. Cosmos DB fits item-shaped, key-oriented workloads and asks for another design when the workload is relational, analytical, or file-shaped. A good Cosmos DB design connects the access pattern to the item, partition key, RU budget, consistency level, and TTL rule.
+:::
+
+## References
 
 - [Azure Cosmos DB documentation](https://learn.microsoft.com/en-us/azure/cosmos-db/) - Official Cosmos DB documentation hub and product overview.
 - [Databases, containers, and items in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/resource-model) - Account, database, container, item, indexing, and TTL resource model.

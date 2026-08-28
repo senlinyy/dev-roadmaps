@@ -1,7 +1,7 @@
 ---
 title: "Ownership and Evidence"
-description: "Learn how teams assign clear owners to sensitive delivery paths and collect records that prove a production change followed the approved route."
-overview: "Start with a simple production accountability story, then build an evidence trail for one Patient Reminder API release using service ownership, CODEOWNERS, branch rules, CI logs, scan results, image provenance, deployment records, and access reviews."
+description: "Learn how teams assign decision authority to sensitive delivery paths and preserve evidence that proves what happened to a production change."
+overview: "Trace one ParcelPulse pricing change from proposal to runtime. Connect named ownership, CODEOWNERS routing, enforced review, CI and security evidence, immutable artifact identity, provenance, deployment records, access reviews, retention, and a small audit packet that an independent investigator can verify."
 tags: ["devsecops", "ownership", "evidence", "audit"]
 order: 3
 id: article-devsecops-security-foundations-security-ownership-in-devops
@@ -19,722 +19,353 @@ aliases:
 
 ## Table of Contents
 
-1. [A Simple Accountability Story](#a-simple-accountability-story)
-2. [The Change We Will Trace](#the-change-we-will-trace)
-3. [Sensitive Systems Need Named Owners](#sensitive-systems-need-named-owners)
-4. [CODEOWNERS Routes the Review](#codeowners-routes-the-review)
-5. [Branch Rules Enforce the Path](#branch-rules-enforce-the-path)
-6. [CI Evidence Shows the Change Was Tested](#ci-evidence-shows-the-change-was-tested)
-7. [Security Evidence Shows Risk Was Checked](#security-evidence-shows-risk-was-checked)
-8. [Digests and Provenance Tie Source to Artifact](#digests-and-provenance-tie-source-to-artifact)
-9. [Deployment Records Tie Artifact to Production](#deployment-records-tie-artifact-to-production)
-10. [Access Reviews Keep Owner Lists Current](#access-reviews-keep-owner-lists-current)
-11. [Build a Small Audit Packet](#build-a-small-audit-packet)
-12. [Verify the Packet During an Incident](#verify-the-packet-during-an-incident)
-13. [Common Gaps Teams Fix Early](#common-gaps-teams-fix-early)
-14. [References](#references)
+1. [How Do Ownership and Evidence Support a Trustworthy Change?](#how-do-ownership-and-evidence-support-a-trustworthy-change)
+2. [How Do Named Owners Route and Authorize Sensitive Decisions?](#how-do-named-owners-route-and-authorize-sensitive-decisions)
+3. [What Evidence Proves CI and Security Claims?](#what-evidence-proves-ci-and-security-claims)
+4. [How Do Digests and Provenance Bind Evidence to an Artifact?](#how-do-digests-and-provenance-bind-evidence-to-an-artifact)
+5. [How Do Deployment Records Create End-to-End Traceability?](#how-do-deployment-records-create-end-to-end-traceability)
+6. [How Do Reviews and Retention Keep Ownership and Evidence Reliable?](#how-do-reviews-and-retention-keep-ownership-and-evidence-reliable)
+7. [Which Gaps Break an Apparently Secure Evidence Chain?](#which-gaps-break-an-apparently-secure-evidence-chain)
+8. [How Do You Build and Verify the Smallest Useful Audit Packet?](#how-do-you-build-and-verify-the-smallest-useful-audit-packet)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## A Simple Accountability Story
-<!-- section-summary: Ownership and evidence answer who was responsible for a change and which records prove the path it took. -->
+Every production change creates two distinct questions. **Ownership** asks who is responsible for deciding whether the change is acceptable. **Evidence** asks what an investigator can inspect later to prove what happened.
 
-Imagine a clinic replaces the keypad on a medicine storage room. The next morning, nurses cannot open the door during a busy shift. The clinic manager needs two kinds of answers. First, who owns that room and the access system? Second, what records show who approved the keypad change, who installed it, which code was entered, and when the failure started?
+A trustworthy change combines four properties:
 
-The answer cannot live only in someone's memory. The clinic needs a named owner for the room, a work order, an approval record, an installer record, a test result, and an access log. Those records help the team fix the current problem, and they also show whether the normal change path worked.
-
-Software delivery has the same need. If a production change breaks something, the team needs to know who owns the affected area and what evidence proves the change path. For DevSecOps, **ownership** means named people or teams are accountable for a system, workflow, data area, or environment. **Evidence** means durable records that show what happened: pull request reviews, branch-rule results, CI runs, scan outputs, image digests, attestations, deployment approvals, audit logs, and access review decisions.
-
-Here is the simple mapping:
-
-| Clinic story | Software delivery version |
-|---|---|
-| Medicine room owner | Service owner or production environment owner |
-| Work order | Change ticket or pull request |
-| Approval record | Code review, CODEOWNERS review, environment approval |
-| Installer record | CI workflow run and deployment job |
-| New keypad code | Built artifact digest and deployed image reference |
-| Door access log | GitHub audit log, cloud audit log, Kubernetes deployment record |
-
-NIST Secure Software Development Framework, usually called **SSDF**, gives teams a broad vocabulary for preparing people and processes, protecting code, producing well-secured software, and responding to vulnerabilities. The practical DevSecOps version is this: for every sensitive production change, the team should be able to name the owners, show the review path, show the checks, show the artifact, show the deployment, and show who had access at the time.
-
-We will build that trail with one production change.
-
-## The Change We Will Trace
-<!-- section-summary: One Patient Reminder API change gives each evidence record a concrete system, commit, artifact, and deployment. -->
-
-Harbor Clinic runs a service called **Patient Reminder API**. It sends SMS appointment reminders and reads patient phone numbers from a production database. The service is small, and it touches private customer data, production infrastructure, and a third-party SMS provider.
-
-The change is `CHG-2026-0417`. It fixes a retry bug that sent duplicate reminder messages during a vendor outage. The fix touches application code, a test, the deployment workflow, and the Kubernetes deployment for production. If the change breaks production, Harbor Clinic wants to answer these questions quickly:
-
-| Question | Plain meaning |
-|---|---|
-| Who owns the affected system? | The accountable teams are known before the incident starts |
-| Which change entered production? | The PR, commit, and change ID are clear |
-| Who reviewed it? | The CODEOWNERS and approval records match the sensitive paths |
-| Which checks ran? | Tests and security scans ran against the same commit |
-| Which artifact shipped? | The image digest and provenance connect source to artifact |
-| Who approved deployment? | The production environment approval is recorded |
-| What is running now? | Kubernetes reports the same digest that the release record approved |
-| Who could approve or deploy then? | Access review records show team membership and decisions |
-
-The first tiny evidence record can look like this:
-
-```yaml
-change_id: CHG-2026-0417
-service: patient-reminder-api
-repository: github.com/harbor-clinic/platform
-pull_request: 1842
-source_sha: 8b91f3c1b91d4c3d6a7a6c8c3d1aa0b1f6a42c18
-production_environment: prod-reminders
+```text
+accountability + enforced process + verifiable evidence + traceability
 ```
 
-That skeleton is intentionally small. It gives us the spine of the change before we add controls and proof. Next we need the most basic accountability record: who owns this sensitive system?
+Without ownership, the delivery path lacks a reliable decision-maker. Without evidence, the team can describe its normal procedure but cannot demonstrate that the procedure governed this release.
 
-## Sensitive Systems Need Named Owners
-<!-- section-summary: A sensitive system needs named teams before review routing, deployment approval, and incident response can work cleanly. -->
+Imagine a developer changes the shipping-price function in ParcelPulse:
 
-A **sensitive system** is any system where a mistake can harm customers, leak private data, move money, break production, or weaken security controls. Patient Reminder API qualifies because it reads patient contact data and sends messages through a third-party provider. The deployment workflow also qualifies because it can push new code into production.
-
-A beginner-friendly rule works well here: every sensitive thing needs a team that can answer for it. The owner reviews risky changes, keeps runbooks current, participates in incidents, explains controls during reviews, and knows which other teams must be involved. "`@harbor/reminder-owners` owns `services/reminder-api/`" gives people a usable path. "Someone in platform knows" gives responders a search problem.
-
-Real teams usually keep ownership in several places. A service catalog gives humans a readable view. CODEOWNERS routes pull request reviews. Branch rules enforce the merge path. On-call schedules show who responds after deployment. Access reviews show whether team membership still matches the work. These records should agree with each other.
-
-Here is a small ownership record for Patient Reminder API:
-
-```yaml
-systems:
-  patient-reminder-api:
-    description: "Sends appointment reminders from production patient contact data."
-    repository: "harbor-clinic/platform"
-    production_environment: "prod-reminders"
-    sensitive_data:
-      - "patient_phone_number"
-      - "appointment_time"
-      - "sms_delivery_status"
-    code_paths:
-      - "services/reminder-api/"
-      - ".github/workflows/deploy-reminder.yml"
-      - "infra/prod/reminder/"
-    owners:
-      service: "@harbor/reminder-owners"
-      security: "@harbor/security-champions"
-      production: "@harbor/sre-prod"
-    change_risk: "customer-data-production"
+```python
+def calculate_shipping_price(parcel):
+    ...
 ```
 
-The record names the system, repository, production environment, sensitive data, paths, teams, and risk class. It also creates a source for the later audit packet. The packet can point to this record when it says which teams owned the system and production path.
+The change moves through source control, pull request, review, CI, security checks, build, registry, deployment, and production. At 03:00, customers begin receiving incorrect prices. Responders immediately need to know what changed, who proposed and reviewed it, which tests and security checks ran, which artifact was built, whether that exact object reached production, who authorized deployment, and what is running now.
 
-Ownership is useful when the delivery platform uses it. The next step puts these teams into GitHub review routing.
+Ownership does not mean one person performs every task. It means a person or team is accountable for ensuring that appropriate decisions are made, rules are maintained, and incidents reach someone able to act. Evidence does not mean storing unlimited employee activity. It means preserving purposeful records that answer security and operational claims.
 
-![Ownership review routing infographic showing a sensitive system mapped to ownership records, CODEOWNERS, and required service, security, and SRE reviewers](/content-assets/articles/article-devsecops-security-foundations-security-ownership-in-devops/ownership-review-routing.png)
+Keep these questions in view as you work through the lesson:
 
-*Ownership starts as a named system record, then CODEOWNERS turns that record into reviewers for sensitive changes.*
+1. **How Do Ownership and Evidence Support a Trustworthy Change?**
+2. **How Do Named Owners Route and Authorize Sensitive Decisions?**
+3. **What Evidence Proves CI and Security Claims?**
+4. **How Do Digests and Provenance Bind Evidence to an Artifact?**
+5. **How Do Deployment Records Create End-to-End Traceability?**
+6. **How Do Reviews and Retention Keep Ownership and Evidence Reliable?**
+7. **Which Gaps Break an Apparently Secure Evidence Chain?**
+8. **How Do You Build and Verify the Smallest Useful Audit Packet?**
 
-## CODEOWNERS Routes the Review
-<!-- section-summary: CODEOWNERS connects changed repository paths to the teams that should review those paths. -->
+## How Do Ownership and Evidence Support a Trustworthy Change?
+<!-- section-summary: Ownership identifies who is accountable for accepting a change, while evidence proves what decisions and events actually occurred. -->
 
-**CODEOWNERS** is a GitHub file that maps repository paths to GitHub users or teams. When a pull request changes a matching path, GitHub requests review from the matching owners. GitHub supports CODEOWNERS in `.github/CODEOWNERS`, the repository root, or `docs/CODEOWNERS`. In practice, many teams use `.github/CODEOWNERS` so the file is easy to find with other repository controls.
+It helps to separate a decision from a fact. “Identity Engineering accepts the residual risk in this authentication change” is a decision and must name an authorized owner. “CI run 18429 tested commit `3f92c8a` and produced digest `sha256:a8219f...`” is a fact that a system can record. A trustworthy delivery path preserves both. Facts without an authorized decision may show that software was built but not that it was accepted. A decision without facts may show intent but not what the automated path actually did.
 
-GitHub evaluates CODEOWNERS patterns in order, and the last matching pattern takes precedence. That means broad rules usually go near the top and sensitive, specific rules go later.
+This distinction prevents ownership from becoming ceremonial. A team name in a directory is useful only when it maps to real authority: the ability to maintain policy, require correction, accept bounded risk, respond to incidents, and escalate when a change falls outside the normal path. Evidence then allows that owner and later investigators to evaluate the same event from the same records rather than from memory.
 
-Harbor Clinic uses this file:
+## How Do Named Owners Route and Authorize Sensitive Decisions?
+<!-- section-summary: Ownership assigns accountable decision authority, and repository controls route and enforce review by the right people. -->
 
-```bash
-/.github/CODEOWNERS @harbor/platform-security
-/.github/workflows/deploy-reminder.yml @harbor/platform-security @harbor/sre-prod
-/services/reminder-api/ @harbor/reminder-owners @harbor/security-champions
-/infra/prod/reminder/ @harbor/sre-prod @harbor/platform-security
+Systems do not own themselves. ParcelPulse can contain tracking UI, pricing, authentication, infrastructure, deployment workflows, identity policy, encryption, and customer-data controls. When an authentication file changes, the Identity team, Platform team, and application team may each assume another group will decide whether the change is safe. The absence of a named decision-maker is an ownership failure even when everyone is acting reasonably.
+
+Ownership should follow decision authority. A contributor proposes a change. A reviewer assesses it. An approver authorizes it. An owner remains accountable for the system and the rules that govern those decisions. One person can sometimes hold several roles, but allowing an author to write, review, approve, merge, and deploy a sensitive change collapses independent controls.
+
+Risk determines how explicit the model should be. A README edit and an identity-policy edit need different governance. An ownership map might assign the pricing engine to Shipping Platform, authentication to Identity Engineering, production identity policy to Cloud Security, deployment workflows to Platform Engineering, and customer-data policy to Data Governance.
+
+An ownership directory alone does not influence a change. A `CODEOWNERS`-style file turns the organizational fact into routing:
+
+```text
+/src/pricing/        -> Shipping Platform
+/src/auth/           -> Identity Engineering
+/infra/              -> Platform Engineering
+/.github/workflows/  -> Platform Engineering and Security
 ```
 
-The CODEOWNERS file itself has an owner because changing review rules changes future production review. The deployment workflow has platform security and SRE owners because workflow edits can change how code reaches production. The service path names the service team and security champions because Patient Reminder API handles sensitive data.
+When a pull request changes token validation, the repository knows that an authentication owner should review it. This embeds governance in the delivery path rather than leaving it in a spreadsheet nobody consults.
 
-For `CHG-2026-0417`, the pull request touches these files:
+Routing is still not enforcement. A requested review that can be ignored is a suggestion. Branch rules express what must happen before merge: a pull request, required owner approval, a minimum number of reviewers, passing tests and security checks, resolved comments, and no direct push to the protected branch.
 
-```bash
-services/reminder-api/src/retry-scheduler.ts
-services/reminder-api/test/retry-scheduler.test.ts
-.github/workflows/deploy-reminder.yml
-infra/prod/reminder/deployment.yaml
+The distinction is useful:
+
+```text
+CODEOWNERS -> who should review?
+branch rules -> what must be true before merge?
 ```
 
-GitHub requests `@harbor/reminder-owners`, `@harbor/security-champions`, `@harbor/platform-security`, and `@harbor/sre-prod`. The pull request record will show requested reviewers, completed reviews, requested changes, approvals, and the commit reviewed.
+Important properties should be enforced where practical rather than depending only on memory or convention. Bypass capability, where necessary, should be narrow, authenticated, justified, logged, and reviewed afterward.
 
-The team captures the pull request record:
+Ownership must cover more than application source. Delivery workflows, build definitions, infrastructure, production authorization, exception policy, encryption settings, and evidence stores can each change the meaning of a release. A pull request that leaves application code untouched but broadens the deployment role may be more sensitive than a feature change. The ownership map should therefore follow control boundaries as well as directories.
 
-```bash
-gh pr view 1842 \
-  --repo harbor-clinic/platform \
-  --json number,title,author,url,headRefOid,mergeCommit,reviews,reviewDecision,files
+The repository can route several owners when responsibilities overlap. An infrastructure change may require the service owner to confirm operational intent and the platform owner to confirm the delivery mechanism. A customer-data rule may require both the implementing team and the governance owner. Multiple reviews are useful when each reviewer answers a distinct question; collecting approvals from people with no defined decision responsibility merely adds ceremony.
+
+Ownership also includes maintaining the rules after the merge. If a control creates constant false positives, an accountable owner should improve the rule instead of teaching everyone to bypass it. If a temporary risk exception is accepted, an owner should track its scope, expiration, compensating control, and closure. The point is not to attach blame to every change. It is to ensure that important decisions always have a reachable, authorized steward.
+
+Ownership is not blame. Its useful purpose is to make decision rights, escalation, maintenance responsibility, residual-risk acceptance, and incident coordination clear. When authentication fails, responders should know which durable team to involve without organizational archaeology.
+
+## What Evidence Proves CI and Security Claims?
+<!-- section-summary: Controls describe required behavior, while event evidence records what ran, against which input, under which policy, and with which result. -->
+
+A branch setting that requires tests is policy evidence. It shows how the repository was configured. To prove that commit `abc123` was tested before release, an investigator needs event evidence such as a CI run identifier, the exact source revision, test set, result, workflow identity, runner, build configuration, and timestamps.
+
+```text
+control: required tests must pass
+event evidence: run 98471 tested commit abc123;
+                2,418 tests passed and none failed
 ```
 
-`gh pr view 1842` reads pull request `#1842`. `--repo` selects the repository. `--json` asks GitHub CLI for fields the evidence packet can store: PR identity, author, URL, commit, merge commit, reviews, final review decision, and changed files.
+Controls say what should happen. Evidence says what did happen for this change.
 
-Example output, shortened:
+Begin evidence design with a claim. For “the production version passed unit tests,” the proof must connect a test result to a source commit, build identity, artifact identity, and deployment. If commit A passed but artifact B was deployed, the presence of both records does not prove the claim.
 
-```json
-{
-  "number": 1842,
-  "title": "Fix duplicate SMS retry during vendor outage",
-  "author": { "login": "amina" },
-  "headRefOid": "8b91f3c1b91d4c3d6a7a6c8c3d1aa0b1f6a42c18",
-  "reviewDecision": "APPROVED",
-  "files": [
-    { "path": "services/reminder-api/src/retry-scheduler.ts" },
-    { "path": ".github/workflows/deploy-reminder.yml" }
-  ]
-}
+CI evidence commonly records repository, commit SHA, workflow identity, runner or builder, build configuration, start and finish, tests executed, outcomes, and produced artifacts. This supports the bounded statement that a specific revision passed a recorded suite in a specific run. It does not yet prove that production ran the run's output.
+
+Security evidence answers different claims:
+
+- Did static analysis run on the intended source?
+- Did secret detection find a verified credential?
+- Did dependency policy find a prohibited vulnerability?
+- Did the final container pass the release threshold?
+- Did infrastructure policy find a forbidden configuration?
+- Did licensing or compliance checks pass?
+
+A label such as `security-check=PASS` is too weak when nobody knows which tool, rule version, input, time, or threshold it represents. Useful evidence records the policy or scanner identity, the object examined, the configuration or policy version, the result, important findings, and any exception decision.
+
+Evidence should be produced automatically where possible. Requiring people to assemble screenshots of source control, CI, scanner, registry, and deployment consoles after every release is costly and error-prone. A well-engineered pipeline records commit, approvals, tests, scan results, artifact identity, provenance, and deployment as part of ordinary execution. An audit packet then becomes a query over operational evidence instead of paperwork reconstructed later.
+
+Automation increases the need for these records. A modern change may pass through bots, workflows, build services, scanners, registries, deployment controllers, and cloud services with no person watching each action. Each machine should record what triggered it, which identity it used, which input it consumed, which decision it made, and which output it produced.
+
+Evidence should be specific enough to support a bounded conclusion. A successful unit-test record does not prove that dynamic security testing ran. A source scan does not prove that the final container contains no prohibited package. A passing infrastructure-policy check does not prove that production currently matches the reviewed plan. Each record must say what object and claim it covers, and the audit packet must not silently stretch that claim beyond its boundary.
+
+Failures and dismissals are evidence too. If a scanner reports a finding and an authorized owner accepts it under a time-bounded exception, retaining only the final green status hides an important decision. Preserve the original result, the decision identity, the justification, the affected object, the compensating control, and the expiration. That history explains why the path continued without pretending the finding never existed.
+
+## How Do Digests and Provenance Bind Evidence to an Artifact?
+<!-- section-summary: Immutable source and artifact identifiers connect test, scan, build, and provenance evidence to the exact object they describe. -->
+
+Evidence quality depends on binding. A vulnerability report saying `PASS` is not useful when it could describe Monday's source, Tuesday's container, a staging artifact, or an image that never reached production.
+
+Stable identifiers create joins: commit SHA, workflow run ID, build ID, artifact hash, container digest, deployment ID, and environment. Names and tags remain useful for humans, but they can move. `parcelpulse-api:latest` may name artifact A at 10:00 and artifact B at 11:00. An investigator at noon cannot infer what the tag meant at 10:17 from the name alone.
+
+A digest identifies content. If CI produces `sha256:a8219f...`, the scanner examines `sha256:a8219f...`, and the deployment record names `sha256:a8219f...`, the records support a strong claim: the scanned artifact is the deployed artifact.
+
+```text
+build ----------- sha256:a8219f...
+scan ------------ sha256:a8219f...
+deployment ------ sha256:a8219f...
 ```
 
-This output shows that the PR exists and which commit it reviewed. Review routing alone still leaves room for a bypass if the branch accepts merges without the right approvals. The next section turns routing into an enforced gate.
+A digest does not explain origin. Provenance links the artifact to repository, revision, build workflow, builder, resolved inputs, run, and time:
 
-## Branch Rules Enforce the Path
-<!-- section-summary: Branch protection and rulesets require review, status checks, and controlled merge behavior before production code changes. -->
-
-**Branch protection** and **rulesets** are GitHub controls that define what must happen before changes can enter important branches such as `main`. A rule can require pull requests, approvals, code-owner review, status checks, signed commits, merge queues, linear history, and restrictions on force pushes or direct pushes. Rulesets give organizations a broader way to apply similar rules across repositories, branches, and tags.
-
-CODEOWNERS answers who should review a path. Branch rules answer whether GitHub will enforce the required path before merge. Harbor Clinic needs both for production evidence.
-
-For Patient Reminder API, the `main` branch rule has this shape:
-
-| Control | Harbor Clinic setting | Evidence to keep |
-|---|---|---|
-| Pull request required | Every change to `main` uses a PR | PR URL and merge commit |
-| Approvals required | At least two approving reviews | Review list with timestamps |
-| Code owner review required | Matching CODEOWNERS path must approve | Code owner review status |
-| Status checks required | `test`, `dependency-review`, `codeql`, `container-scan`, `build-image` | Check run IDs and logs |
-| Branch must be current | PR includes latest `main` before merge | Merge queue or strict status result |
-| Direct pushes blocked | Normal users update `main` through the merge path | Branch protection or ruleset export |
-
-The settings can drift. A repository admin can change a rule, a team can rename a required check, or a new workflow can miss a required job. Harbor Clinic captures the active controls near the production change.
-
-```bash
-CHANGE_ID=CHG-2026-0417
-mkdir -p "evidence/$CHANGE_ID/repository-controls"
-
-gh api repos/harbor-clinic/platform/branches/main/protection \
-  > "evidence/$CHANGE_ID/repository-controls/main-branch-protection.json"
-
-gh api repos/harbor-clinic/platform/rulesets \
-  > "evidence/$CHANGE_ID/repository-controls/repository-rulesets.json"
+```text
+artifact: sha256:a8219f...
+repository: parcelpulse/api
+commit: 3f92c8a
+build run: 18429
+builder: approved ParcelPulse workflow
 ```
 
-`CHANGE_ID` names the evidence folder. `mkdir -p` creates the folder if it is missing. The first `gh api` command exports classic branch protection for `main`. The second exports repository rulesets. Some repositories use one, some use both, so the packet records the controls the repository actually uses.
+This closes a dangerous gap. Source review and tests can succeed while an attacker builds different bytes and inserts them into the release path. Provenance connects reviewed source, approved builder, and identified output.
 
-A shortened branch protection export might include:
+The latest revision matters. If commit A passes and commit B is added before merge, an artifact from B is not covered by A's result. Required checks should apply to the exact revision permitted to merge and build.
 
-```json
-{
-  "required_pull_request_reviews": {
-    "required_approving_review_count": 2,
-    "require_code_owner_reviews": true
-  },
-  "required_status_checks": {
-    "strict": true,
-    "contexts": [
-      "test",
-      "dependency-review",
-      "codeql",
-      "container-scan",
-      "build-image"
-    ]
-  },
-  "enforce_admins": {
-    "enabled": true
-  }
-}
+The final-build boundary matters too. Scanning artifact A and later rebuilding artifact B under the same tag breaks the security claim. Build one final object, record its digest, scan that digest, associate provenance and other evidence with it, and deploy that same digest.
+
+Binding should continue when evidence is copied between systems. A registry may store an attestation beside an artifact, a CI system may retain a test report, and a deployment platform may record a release. Their display names can differ, but every record should carry enough immutable identifiers to reconstruct the join. Time proximity is not a strong join: two builds can occur within seconds, and an attacker can deliberately exploit an ambiguous name.
+
+Provenance itself is a claim that needs a trustworthy producer. A file supplied by the same untrusted build step it describes is weaker than evidence generated and protected by the controlled build service. The investigator therefore asks not only what the provenance says, but which identity created it, which builder rules applied, whether it was altered, and how its artifact subject matches the digest under review.
+
+The same reasoning applies to source. A branch name such as `main` moves over time, while a commit SHA identifies a particular revision. Preserve both human context and immutable identity: repository and branch explain intent; the revision proves which content entered the build. If policy required checks on the final merge revision, the evidence should point to that exact revision rather than an earlier pull-request snapshot.
+
+## How Do Deployment Records Create End-to-End Traceability?
+<!-- section-summary: Deployment evidence joins one artifact digest to an environment, initiating identity, approval, time, result, and current runtime state. -->
+
+Perfect source and build evidence does not establish what reached production. A deployment record adds another event:
+
+```text
+deployment: deploy-7814
+environment: production
+artifact: sha256:a8219f...
+initiated by: parcelpulse-production-workflow
+approved by: release manager
+started: 14:44 UTC
+completed: 14:47 UTC
+result: successful
 ```
 
-This record connects ownership to enforcement. It says the repository required code owner review and named status checks before the change merged. Next we collect the CI records for those checks.
+Now the system can join source commit to CI run, CI run to artifact digest, artifact digest to deployment ID, and deployment ID to the production environment. Runtime state provides the final comparison: is production currently running the digest that the deployment record says was admitted?
 
-## CI Evidence Shows the Change Was Tested
-<!-- section-summary: CI evidence ties the pull request commit to automated jobs, logs, test reports, and build outputs. -->
+A mature evidence graph contains links rather than a pile of independent logs:
 
-**CI**, or continuous integration, is the automation that builds, tests, and checks code after a change. CI evidence is useful because it ties a commit SHA to actual work: installing dependencies, running tests, building an image, uploading results, and reporting job outcomes. A green checkmark helps humans scan, and durable evidence needs run metadata, logs, and artifacts.
-
-The retry fix has a clear functional risk. If the scheduler handles a vendor outage poorly, patients receive duplicate SMS reminders. Harbor Clinic wants test output that shows the retry behavior was checked against the same commit that reviewers approved.
-
-Here is a trimmed workflow:
-
-```yaml
-name: reminder-service-ci
-
-on:
-  pull_request:
-    paths:
-      - "services/reminder-api/**"
-      - ".github/workflows/deploy-reminder.yml"
-      - "infra/prod/reminder/**"
-
-permissions:
-  contents: read
-  packages: write
-  security-events: write
-  id-token: write
-  attestations: write
-
-jobs:
-  test:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - run: npm ci
-        working-directory: services/reminder-api
-      - run: npm test -- --runInBand --reporter=junit
-        working-directory: services/reminder-api
-      - uses: actions/upload-artifact@v4
-        with:
-          name: reminder-test-results
-          path: services/reminder-api/junit.xml
-
-  build-image:
-    runs-on: ubuntu-24.04
-    needs: test
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: services/reminder-api
-          push: true
-          tags: ghcr.io/harbor-clinic/reminder-api:${{ github.sha }}
-          provenance: true
-          sbom: true
+```text
+developer identity
+  -> commit SHA
+  -> pull request and reviewers
+  -> CI run, tests, and security checks
+  -> artifact digest and provenance
+  -> deployment record
+  -> production runtime state
 ```
 
-The workflow runs on pull requests that touch the service, deployment workflow, or production infrastructure. The `permissions` block gives the jobs only the GitHub token permissions they need for repository reads, package writes, security events, OIDC, and attestations. The `build-image` job exposes the image digest so later jobs can record or attest it.
+Investigators need both directions. Starting from a suspicious production digest, they should move backward to deployment, build, source, review, and owner, and sideways to SBOM, scan evidence, provenance, and logs. Starting from a vulnerable source revision, they should move forward to builds, artifacts, and every staging or production environment that received them.
 
-Harbor Clinic collects CI evidence:
+Alternative production paths can destroy traceability. A polished automated pipeline is not authoritative when an administrator can make an unrecorded manual replacement. Direct mutation should be blocked where possible. Emergency access, when unavoidable, should use a named identity, expire, record commands or changes, state a reason, and trigger review so the evidence graph reflects reality.
 
-```bash
-CHANGE_ID=CHG-2026-0417
-PR_NUMBER=1842
-RUN_ID=6812459912
+Ownership and evidence reinforce each other. Evidence locates the affected component and event. Ownership names the team responsible for interpreting it and deciding the response. Owners without evidence investigate blindly; evidence without owners can identify a problem that nobody is accountable for resolving.
 
-mkdir -p "evidence/$CHANGE_ID/ci"
+Runtime comparison is what connects expected state to real state. A successful deployment event proves that a controller reported success, not necessarily that every instance still runs the intended object. A later manual replacement, failed rollout, rollback, or partial update can change reality. Inventory or runtime observations should therefore report the active artifact identity and environment so investigators can compare current state with the last authorized deployment.
 
-gh run view "$RUN_ID" \
-  --repo harbor-clinic/platform \
-  --json databaseId,displayTitle,event,headSha,conclusion,createdAt,updatedAt,workflowName,url \
-  > "evidence/$CHANGE_ID/ci/run-$RUN_ID.json"
+Forward traceability supports exposure analysis. If library version X is found vulnerable, teams can begin with the affected source or SBOM component, identify the builds that included it, follow their artifact digests, and locate every environment that received them. Backward traceability supports incident investigation. If one production instance behaves suspiciously, responders can begin with its digest and walk back through deployment, provenance, build, revision, reviews, and owner.
 
-gh run view "$RUN_ID" \
-  --repo harbor-clinic/platform \
-  --log \
-  > "evidence/$CHANGE_ID/ci/run-$RUN_ID.log"
+Both directions depend on deliberately propagated identifiers. A timestamp can help narrow a search, but clock differences and concurrent releases make it unreliable as the primary relationship. Recording the digest in deployment evidence, the source revision in provenance, and the run and artifact identities in CI makes the graph explicit.
 
-gh run download "$RUN_ID" \
-  --repo harbor-clinic/platform \
-  --dir "evidence/$CHANGE_ID/ci/artifacts"
+## How Do Reviews and Retention Keep Ownership and Evidence Reliable?
+<!-- section-summary: Ownership and evidence need lifecycle maintenance so organizational change, deletion, and tampering do not make the path unusable. -->
+
+Ownership records become stale. A repository can still route authentication reviews to a team that was reorganized eighteen months ago. People eventually create bypasses around controls that no active owner can satisfy. Stale ownership can be worse than an obvious blank because users assume it still works.
+
+Periodic reviews should ask whether repositories and components name the right durable team; reviewers still work on the system; merge and bypass permission remains justified; old service accounts have been removed; emergency administrators remain necessary; and production approver groups match current responsibility.
+
+Prefer team ownership such as Identity Engineering over “ask Alice.” The team provides continuity through staffing changes. Event records still name the actual reviewer, giving individual accountability at the decision moment.
+
+Evidence has a lifecycle too: creation, integrity protection, storage, retention, retrievability, and deletion. Seven-day CI retention cannot support an incident discovered thirty days after release. Keeping everything forever is not the answer either. Preserve the records required for the period in which the organization may investigate, prove a control, or reconstruct a release.
+
+Evidence should be difficult to rewrite. A shared `production-log.txt` editable by many administrators provides weak proof. Stronger properties include authenticated sources, timestamps, immutable or append-oriented storage, restricted modification, cryptographic object identities, and centralized retention.
+
+Retention should follow the questions the organization may need to answer. Release and approval evidence may need to outlive short-lived CI workspaces. Security findings may need to remain available until remediation and exception periods have closed. Deployment and runtime records should cover the interval in which an incident could be discovered and investigated. The policy should also define eventual deletion instead of turning evidence collection into indefinite surveillance.
+
+Retrievability deserves an explicit test. Evidence that technically exists in expired accounts, isolated consoles, or undocumented storage is not operationally useful. Teams should rehearse reconstruction: choose a production digest, ask someone outside the original release to find its source, approvals, checks, provenance, and deployment, and record how long the task takes. Missing permissions, undocumented identifiers, and retention gaps become visible before an emergency.
+
+Access to evidence must also be reviewed. Too many writers weaken integrity; too few readers can delay response. Separate the identities that produce records, administer storage, and investigate events where practical. Log changes to retention or audit configuration because disabling evidence collection can itself be a meaningful security event.
+
+Evidence collection should be purposeful. Commit identity answers what source changed. Reviewer identity answers who approved it. Artifact digest names exact software. Deployment ID says when and where it was released. Audit events identify actors. Recording ten terabytes each day without stable identifiers, retention policy, query methods, or known questions creates volume rather than evidence quality.
+
+## Which Gaps Break an Apparently Secure Evidence Chain?
+<!-- section-summary: Bypass paths, imprecise binding, shared identities, disconnected records, and excessive noise can invalidate otherwise convincing controls. -->
+
+Several gaps recur because an individual control looks healthy in isolation.
+
+**An owner exists but can be bypassed.** `CODEOWNERS` names Identity Engineering, yet administrators can merge without its approval. Review who can bypass, under which conditions, whether the action is logged and justified, and how emergency use is reviewed.
+
+**Tests ran against the wrong revision.** Commit A passes, commit B is added, and B becomes the build input without required checks rerunning. Bind merge eligibility to the exact revision that passed.
+
+**Scanning precedes the final artifact.** Artifact A passes, artifact B is rebuilt under the same version tag, and production receives B. Bind the scanner result and deployment to one digest.
+
+**Production can change outside the pipeline.** Evidence says artifact A should run while an administrator has manually installed Z. Restrict alternate paths and record exceptional changes.
+
+**Humans or automation share identities.** Every action appears as `prod-admin`, so the log cannot separate Alice, Bob, CI, or an attacker holding their credential. Unique identities improve authorization and accountability.
+
+**Evidence exists but cannot be joined.** Source says `abc123`, CI says `run-9188`, registry says `parcelpulse:v44`, scanner says `scan-818`, and deployment says `release-purple`. Propagate source and artifact identifiers so each record names the relationships explicitly rather than relying on timestamps.
+
+**Evidence is abundant but unusable.** Huge uncurated logs lack known questions, identifiers, retention, and query paths. Design the small high-value path from identity to change, review, build, artifact, deployment, and runtime.
+
+**Ownership depends on memory.** One expert can explain the release, then leaves. Critical knowledge must live in reproducible records and durable team responsibility.
+
+These gaps can be found by asking an independent person to prove a claim. “Only reviewed source reaches production” should be demonstrable as production state, deployment record, artifact digest, provenance, source commit, pull request, and required owner approval. Any link answered with “that is how we normally work” is a concrete evidence gap.
+
+Common gaps often combine. A shared production identity makes a manual bypass hard to attribute. A mutable tag makes the bypass hard to connect to exact content. Short log retention removes the remaining event before discovery. Reviews should therefore test complete claims instead of checking isolated controls. A list of individually enabled features can still produce an unprovable delivery path when their identifiers, identities, and retention do not connect.
+
+The opposite failure is collecting every possible log without deciding which claims matter. More events create storage cost and search noise, while the decisive relationship remains absent. Start with a small set of high-value questions—who authorized the change, which exact source and artifact were involved, which controls ran, where it was deployed, and what is running now—then make those answers dependable before expanding the collection.
+
+## How Do You Build and Verify the Smallest Useful Audit Packet?
+<!-- section-summary: A useful packet compresses linked operational evidence so an independent investigator can move from ownership and intent to current production reality. -->
+
+An audit packet is not valuable because it is a report. It is valuable because each claim points to a trustworthy source record. For one ParcelPulse production change, keep:
+
+```text
+change: pull request 812
+proposer: Alice
+source: commit 3f92c8a
+component owner: Identity Engineering
+approvers: Bob and Carol
+CI: run 18429
+tests: required suite passed
+security: required checks passed or recorded decisions
+artifact: sha256:a8219f...
+provenance: digest built from 3f92c8a by approved CI
+deployment: deploy-7814
+environment: production
+completed: 2026-08-25 14:47 UTC
+deployment identity: production workflow
+runtime: production reports sha256:a8219f...
 ```
 
-`RUN_ID` is the GitHub Actions workflow run. The first `gh run view` command stores machine-readable run metadata. `headSha` should match the approved source commit, and `conclusion` should be `success`. The second command stores logs. `gh run download` saves uploaded artifacts such as JUnit reports and scan outputs.
+Policy and event evidence are both needed. A branch rule stating that two reviews are required shows configuration. The two recorded approvals show what happened for this change. A vulnerability policy that blocks critical findings states the rule. A digest-bound scan result records the release decision.
 
-Example run metadata:
+Use the packet during an incident, not only an audit. If ParcelPulse reports unexpected outbound connections from `sha256:a8219f...`, responders can locate the deployment, build, source, author, reviewers, changed files, SBOM, scans, provenance, and build logs. If they begin with a compromised commit, they can identify every artifact and environment reached by that revision.
 
-```json
-{
-  "databaseId": 6812459912,
-  "workflowName": "reminder-service-ci",
-  "event": "pull_request",
-  "headSha": "8b91f3c1b91d4c3d6a7a6c8c3d1aa0b1f6a42c18",
-  "conclusion": "success",
-  "url": "https://github.com/harbor-clinic/platform/actions/runs/6812459912"
-}
+The deeper model is:
+
+```text
+intent -> owner decision -> automated execution -> artifact
+       -> deployment -> production reality
 ```
 
-The CI records show that the commit survived the required automated checks. Security checks need their own summary because each scanner answers a different question.
-
-## Security Evidence Shows Risk Was Checked
-<!-- section-summary: Security evidence records which scans ran, what they checked, and how the team handled findings. -->
-
-A **security scan** is an automated check for a specific class of risk. Dependency review checks whether a pull request adds vulnerable packages. Code scanning looks for risky code patterns. Secret scanning detects committed credentials. Container scanning checks the built image for vulnerable packages and risky base images.
-
-These tools do different jobs, so Harbor Clinic stores each scan result separately. A single sentence such as "security passed" hides too much. The evidence should name the scan, commit, tool version when available, result, report file, and decision for any finding.
+Ownership governs who may propose, review, approve, merge, deploy, respond, and accept risk. Evidence records who actually acted, which checks actually ran, which artifact resulted, which environment received it, and what is running now.
 
-For `CHG-2026-0417`, the team expects these scan records:
+To verify the packet, choose one claim at a time and follow its references. For “the deployed artifact passed required checks,” begin with runtime state, obtain the digest, locate the deployment event, follow the digest to the build and provenance, locate the exact source revision, and then inspect the required results for that revision and artifact. For “the sensitive change received authorized approval,” begin with the changed path, resolve its owner at the time, inspect the enforced rule, and connect the recorded reviewer identities to the merge event.
 
-| Scan | What it checks | Evidence field |
-|---|---|---|
-| Dependency review | New or changed dependencies in the PR | PR check result and dependency report |
-| Code scanning | Security patterns in application code | SARIF or code scanning result for the commit |
-| Secret scanning | Accidental credentials in committed content | Secret scanning status or alert review |
-| Container scan | Vulnerable packages inside the built image | Scan report tied to the image digest |
-
-A practical scan summary can live beside raw tool output:
+An effective packet includes links or identifiers, not pasted screenshots with lost context. It should be compact enough for a responder to navigate and rich enough that each statement can be challenged. If a result was accepted through an exception, include the original finding and decision rather than presenting an unconditional pass. If emergency authority altered production, include that named, time-bounded event and its review rather than omitting the alternate path.
 
-```json
-{
-  "change_id": "CHG-2026-0417",
-  "repository": "harbor-clinic/platform",
-  "pull_request": 1842,
-  "commit": "8b91f3c1b91d4c3d6a7a6c8c3d1aa0b1f6a42c18",
-  "scans": [
-    {
-      "name": "dependency-review",
-      "result": "pass",
-      "report": "ci/artifacts/dependency-review.json"
-    },
-    {
-      "name": "codeql",
-      "result": "pass",
-      "report": "ci/artifacts/codeql-summary.sarif"
-    },
-    {
-      "name": "container-scan",
-      "result": "pass-with-accepted-medium",
-      "report": "ci/artifacts/container-scan.json",
-      "decision": "Medium OpenSSL package finding accepted because the runtime image lacks the affected feature; ticket SEC-9124 tracks the base image update."
-    }
-  ]
-}
-```
+The packet is a view over operational systems, not a parallel manual truth. Source control remains authoritative for revisions and reviews, CI for executions, the registry for artifact identity, the provenance store for origin claims, the deployment system for release events, and runtime inventory for current state. The packet joins those records around durable identifiers so the investigator can verify them at their sources.
 
-Real production systems sometimes ship with an accepted low or medium finding. The important record is the decision: risk explanation, owner, ticket, expiration date, and follow-up plan. That way an accepted finding has a review trail.
+The same exercise supports personnel continuity. Ask a responder who did not participate in the release to reconstruct it without private messages or help from the original author. They should be able to discover the responsible durable team, the exact change, required and actual reviewers, completed checks, artifact identity, deployment, and runtime state. If the answer depends on “Alice remembers” or “Bob has the screenshot,” the organization has knowledge but not dependable evidence.
 
-![Production evidence trail infographic showing PR, checks, scans, digest, deploy, and access review evidence connected across one change](/content-assets/articles/article-devsecops-security-foundations-security-ownership-in-devops/production-evidence-trail.png)
+An independent reconstruction should also distinguish automated facts from human decisions. The build system can state which input it consumed and which digest it produced. It cannot decide whether a business exception was acceptable unless policy already encoded that decision. The owner can accept a bounded exception but should not rewrite the scanner's original output. Keeping both layers lets a later investigator see the fact, the governing rule, the decision, and the decision-maker.
 
-*A useful evidence trail keeps separate records for review, checks, scans, artifact identity, deployment, and access review.*
+Finally, test whether the packet can answer an unexpected question. Starting from a reviewer should reveal the changes they approved. Starting from a build identity should reveal its artifacts. Starting from an exception should reveal affected releases and whether it expired. Starting from production should reveal the exact authorized path. These reverse and sideways joins make evidence useful during incidents, not merely for a predictable audit checklist.
 
-The scan records show what risk checks ran. The next evidence link names the exact artifact that came out of the build.
+If one join fails, record it as a concrete engineering gap with an owner instead of filling the packet from memory.
 
-## Digests and Provenance Tie Source to Artifact
-<!-- section-summary: Image digests identify the exact artifact, while provenance records how the artifact was built from source. -->
+That gap should name the missing identifier, record, retention rule, or ownership link so the delivery system can produce better evidence on the next release.
 
-An **image digest** is a cryptographic identifier for a container image, usually written as `sha256:...`. A tag like `ghcr.io/harbor-clinic/reminder-api:main` is a friendly name that can move. A digest identifies exact image content, so production records should use digests when the team needs strong evidence.
+Verify the correction on a later release by asking the same independent investigator to traverse the repaired link without help from the original team.
 
-For `CHG-2026-0417`, CI builds this image:
+Preserve that successful reconstruction as evidence.
 
-```bash
-ghcr.io/harbor-clinic/reminder-api@sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112
-```
+The objective is a shift from “trust our process” to “verify this event.” Months later, or during an incident, a reviewer should be able to start with exact production software, trace it through deployment, artifact, build, tests, security checks, source, approvals, and responsible owners, and explain how it arrived and what proves the expected path occurred.
 
-That digest lets the team connect three records. The PR merged commit `8b91f3c`, the CI workflow built an image from that commit, and production later ran the image with the digest above.
+## Check Your Answers
 
-**Provenance** is metadata that describes how an artifact was built. In software supply chain work, provenance usually records the source repository, source commit, build workflow, build environment, builder identity, and artifact digest. SLSA defines provenance fields for this purpose, and GitHub artifact attestations give GitHub Actions users a built-in way to create and verify provenance for build outputs.
+:::expand[How Do Ownership and Evidence Support a Trustworthy Change?]{kind="recap"}
+Ownership assigns accountable decision authority, while evidence records verifiable facts about the path and result.
+:::
 
-The workflow can attest the image after the build:
+:::expand[How Do Named Owners Route and Authorize Sensitive Decisions?]{kind="recap"}
+Map sensitive areas to durable teams, route changes automatically, and enforce the required independent review before merge.
+:::
 
-```yaml
-  attest-image:
-    runs-on: ubuntu-24.04
-    needs: build-image
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ghcr.io/harbor-clinic/reminder-api
-          subject-digest: ${{ needs.build-image.outputs.digest }}
-          push-to-registry: true
-```
+:::expand[What Evidence Proves CI and Security Claims?]{kind="recap"}
+Record exact input, identity, policy or tool, time, action, result, and output for the claim being made.
+:::
 
-`subject-name` names the image repository. `subject-digest` uses the digest produced by the build job. `push-to-registry: true` stores the attestation with the registry so later verification can find it.
+:::expand[How Do Digests and Provenance Bind Evidence to an Artifact?]{kind="recap"}
+Immutable identifiers join tests and scans to exact content, while provenance connects that content to source and build history.
+:::
 
-Harbor Clinic records the digest and verifies the attestation:
+:::expand[How Do Deployment Records Create End-to-End Traceability?]{kind="recap"}
+Join one digest to the deployment identity, approval, environment, time, result, and current runtime state in both directions.
+:::
 
-```bash
-CHANGE_ID=CHG-2026-0417
-IMAGE="ghcr.io/harbor-clinic/reminder-api@sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112"
+:::expand[How Do Reviews and Retention Keep Ownership and Evidence Reliable?]{kind="recap"}
+Refresh owners and access, preserve records for the investigation period, restrict modification, and keep evidence retrievable.
+:::
 
-mkdir -p "evidence/$CHANGE_ID/artifact"
+:::expand[Which Gaps Break an Apparently Secure Evidence Chain?]{kind="recap"}
+Bypass, wrong revisions, rebuilt artifacts, manual production changes, shared identities, disconnected identifiers, and noise break proof.
+:::
 
-printf "%s\n" "$IMAGE" \
-  > "evidence/$CHANGE_ID/artifact/image-digest.txt"
-
-gh attestation verify "oci://$IMAGE" \
-  --owner harbor-clinic \
-  > "evidence/$CHANGE_ID/artifact/provenance-verification.txt"
-```
-
-`IMAGE` holds the exact digest reference. `printf` writes it to the packet. `gh attestation verify` checks that an attestation exists for the artifact and that it belongs to the expected owner.
-
-Example verification output:
-
-```bash
-Loaded digest sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112
-✓ Verification succeeded
-sha256:0fd3a7f... was attested by harbor-clinic/platform
-```
-
-Now the team knows which artifact CI produced. The next question is whether production received that same artifact through the approved deployment path.
-
-## Deployment Records Tie Artifact to Production
-<!-- section-summary: Deployment evidence proves which artifact entered which environment, who approved it, and what the platform reported. -->
-
-A **deployment record** is evidence that a specific artifact moved into a specific environment at a specific time. In GitHub, that can include an environment approval, deployment event, and workflow run. In Kubernetes, it can include the image reference on the Deployment, rollout status, annotations, and pod image IDs.
-
-Harbor Clinic uses a production environment called `prod-reminders`. A release manager approves the GitHub environment deployment after the PR merges, and the deployment job updates Kubernetes by digest. The workflow also writes the change ID, PR number, source commit, and image digest into Kubernetes annotations.
-
-```bash
-CHANGE_ID=CHG-2026-0417
-PR_NUMBER=1842
-SOURCE_SHA=8b91f3c1b91d4c3d6a7a6c8c3d1aa0b1f6a42c18
-IMAGE="ghcr.io/harbor-clinic/reminder-api@sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112"
-
-kubectl -n prod-reminders set image deployment/reminder-api api="$IMAGE"
-
-kubectl -n prod-reminders annotate deployment/reminder-api \
-  devpolaris.io/change-id="$CHANGE_ID" \
-  devpolaris.io/pull-request="$PR_NUMBER" \
-  devpolaris.io/source-sha="$SOURCE_SHA" \
-  devpolaris.io/image="$IMAGE" \
-  --overwrite
-
-kubectl -n prod-reminders rollout status deployment/reminder-api
-```
-
-`-n prod-reminders` selects the production namespace. `set image` updates the `api` container in the `reminder-api` Deployment. `annotate` stores release context on the Deployment, and `--overwrite` updates existing annotations during later releases. `rollout status` waits for Kubernetes to report the rollout state.
-
-Example output:
-
-```bash
-deployment.apps/reminder-api image updated
-deployment.apps/reminder-api annotated
-deployment "reminder-api" successfully rolled out
-```
-
-After rollout, the team stores deployment evidence:
-
-```bash
-CHANGE_ID=CHG-2026-0417
-mkdir -p "evidence/$CHANGE_ID/deployment"
-
-kubectl -n prod-reminders get deployment reminder-api -o json \
-  > "evidence/$CHANGE_ID/deployment/kubernetes-deployment.json"
-
-kubectl -n prod-reminders rollout history deployment/reminder-api \
-  > "evidence/$CHANGE_ID/deployment/rollout-history.txt"
-
-kubectl -n prod-reminders get pods -l app=reminder-api \
-  -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.containers[0].image}{"\n"}{end}' \
-  > "evidence/$CHANGE_ID/deployment/running-images.txt"
-```
-
-`get deployment -o json` stores the full Deployment record. `rollout history` stores Kubernetes rollout revisions. The `get pods` command uses a label selector to list pods for the service and a `jsonpath` expression to print pod names and image references.
-
-Example `running-images.txt` output:
-
-```bash
-reminder-api-6d8f9d66cc-n7m2p ghcr.io/harbor-clinic/reminder-api@sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112
-reminder-api-6d8f9d66cc-r4z8k ghcr.io/harbor-clinic/reminder-api@sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112
-```
-
-The deployment records connect the approved digest to the running platform. The final ownership question is whether the people who could approve or deploy still belonged in those groups.
-
-## Access Reviews Keep Owner Lists Current
-<!-- section-summary: Access reviews compare intended owners and approvers with the real people who can review, merge, approve, or deploy. -->
-
-An **access review** is a periodic check of who can perform sensitive actions. For this delivery path, the important actions are reviewing owned code, merging to protected branches, approving production environments, changing workflows, and deploying to production. The review asks whether each person still needs that access for their role.
-
-Access drifts during normal work. A senior engineer moves to another team and remains in `@harbor/reminder-owners`. A contractor finishes a migration and remains an environment reviewer. A platform admin keeps broad repository access after an incident. These cases come from everyday team movement, so the process has to catch them.
-
-Harbor Clinic reviews three groups:
-
-| Access group | Sensitive action | Review owner |
-|---|---|---|
-| `@harbor/reminder-owners` | Code owner review for service code | Engineering manager for reminders |
-| `@harbor/security-champions` | Security review for sensitive code paths | Application security lead |
-| `@harbor/sre-prod` | Production environment approval and deployment workflow review | SRE manager |
-
-The review evidence should include membership exports and decisions. A small CSV decision file works:
-
-```csv
-review_date,team,member,decision,reason,ticket
-2026-04-15,reminder-owners,amina,keep,primary service maintainer,ACCESS-2331
-2026-04-15,reminder-owners,leo,remove,moved to analytics team,ACCESS-2332
-2026-04-15,sre-prod,marisol,keep,on-call release manager,ACCESS-2331
-2026-04-15,security-champions,nadia,keep,security reviewer for patient messaging,ACCESS-2331
-```
-
-The GitHub CLI can export current team members:
-
-```bash
-CHANGE_ID=CHG-2026-0417
-mkdir -p "evidence/$CHANGE_ID/access-review"
-
-gh api orgs/harbor-clinic/teams/reminder-owners/members \
-  --paginate \
-  --jq '.[] | [.login, .type] | @csv' \
-  > "evidence/$CHANGE_ID/access-review/reminder-owners-members.csv"
-
-gh api orgs/harbor-clinic/teams/security-champions/members \
-  --paginate \
-  --jq '.[] | [.login, .type] | @csv' \
-  > "evidence/$CHANGE_ID/access-review/security-champions-members.csv"
-
-gh api orgs/harbor-clinic/teams/sre-prod/members \
-  --paginate \
-  --jq '.[] | [.login, .type] | @csv' \
-  > "evidence/$CHANGE_ID/access-review/sre-prod-members.csv"
-```
-
-`gh api` calls the GitHub REST API. `--paginate` follows additional pages for larger teams. `--jq` formats each member as CSV with login and account type. The export says who had access when the team captured it; the decision CSV says whether that access still matched the person's role.
-
-Example CSV output:
-
-```csv
-"amina","User"
-"nadia","User"
-"marisol","User"
-```
-
-GitHub audit logs add another angle. The audit log can show organization activity such as repository setting changes, team changes, ruleset changes, and security-related events. Harbor Clinic keeps the query and exported results around sensitive production releases, especially when a repository control changed near the release date.
-
-At this point, we have owner records, review records, branch controls, CI logs, scan outputs, artifact proof, deployment records, and access review records. The next section packages them into one small folder.
-
-## Build a Small Audit Packet
-<!-- section-summary: An audit packet collects the smallest useful records that prove a production change followed the secure delivery path. -->
-
-An **audit packet** is a folder, ticket attachment, or evidence bundle for one change. It should stay small enough for a reviewer to understand and complete enough to answer the core questions. The packet is a map, not a data dump.
-
-For `CHG-2026-0417`, Harbor Clinic creates this structure:
-
-```
-evidence/CHG-2026-0417/
-  change-summary.md
-  pr-1842.json
-  repository-controls/
-    main-branch-protection.json
-    repository-rulesets.json
-  ci/
-    run-6812459912.json
-    run-6812459912.log
-    artifacts/
-      reminder-test-results/
-      dependency-review.json
-      codeql-summary.sarif
-      container-scan.json
-  artifact/
-    image-digest.txt
-    provenance-verification.txt
-  deployment/
-    github-environment-approval.json
-    kubernetes-deployment.json
-    rollout-history.txt
-    running-images.txt
-  access-review/
-    reminder-owners-members.csv
-    security-champions-members.csv
-    sre-prod-members.csv
-    access-review-decisions.csv
-```
-
-The `change-summary.md` file gives the packet a readable front door:
-
-```markdown
-# CHG-2026-0417 - Patient Reminder retry fix
-
-Production system: Patient Reminder API
-Repository: harbor-clinic/platform
-Pull request: https://github.com/harbor-clinic/platform/pull/1842
-Merged commit: 8b91f3c1b91d4c3d6a7a6c8c3d1aa0b1f6a42c18
-CI run: https://github.com/harbor-clinic/platform/actions/runs/6812459912
-Image digest: ghcr.io/harbor-clinic/reminder-api@sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112
-Production environment: prod-reminders
-Deployment result: rollout completed at 2026-04-17T21:43:18Z
-
-Review evidence:
-- CODEOWNERS requested reminder, security, platform, and SRE owners.
-- Two approvals were recorded before merge.
-- Required checks passed on the merged commit.
-
-Security evidence:
-- Dependency review passed.
-- Code scanning reported no new high or critical alerts for this commit.
-- Container scan recorded one accepted medium finding with ticket SEC-9124.
-- Provenance verification passed for the image digest.
-
-Access evidence:
-- Team membership exports were captured from GitHub on 2026-04-17.
-- Access review decisions were completed under ticket ACCESS-2331.
-```
-
-The summary gives a reviewer the main story and points to the deeper files. During an incident, responders can start with the digest running in production, jump back to the PR and source commit, inspect test evidence, and review deployment approvals without searching chat history.
-
-![Audit packet summary infographic showing change summary, PR review, CI logs, scan reports, image provenance, deploy record, and access evidence feeding one approved packet](/content-assets/articles/article-devsecops-security-foundations-security-ownership-in-devops/audit-packet-summary.png)
-
-*The audit packet collects the smallest practical set of records that proves who approved the change, which checks ran, which artifact shipped, and who could approve production.*
-
-The packet exists for audits, and it also helps real incidents. Let's use it the way an on-call engineer would.
-
-## Verify the Packet During an Incident
-<!-- section-summary: Incident verification compares the live system with the packet so responders know whether the approved artifact is running. -->
-
-Two days after the release, the SMS vendor reports another burst of duplicate messages. SRE lead Marisol opens the packet and asks one first question: is production running the approved image from `CHG-2026-0417`?
-
-She checks the Deployment annotation and configured image:
-
-```bash
-kubectl -n prod-reminders get deployment reminder-api \
-  -o jsonpath='{.metadata.annotations.devpolaris\.io/change-id}{"\n"}{.metadata.annotations.devpolaris\.io/source-sha}{"\n"}{.spec.template.spec.containers[?(@.name=="api")].image}{"\n"}'
-```
-
-`kubectl get deployment` reads the live Deployment. The `jsonpath` expression prints the change ID, source SHA, and configured image for the `api` container.
-
-Expected output:
-
-```bash
-CHG-2026-0417
-8b91f3c1b91d4c3d6a7a6c8c3d1aa0b1f6a42c18
-ghcr.io/harbor-clinic/reminder-api@sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112
-```
-
-Then she checks running pods:
-
-```bash
-kubectl -n prod-reminders get pods -l app=reminder-api \
-  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[?(@.name=="api")].imageID}{"\n"}{end}'
-```
-
-`-l app=reminder-api` selects pods for the service. The `imageID` field comes from the container runtime after the image is pulled.
-
-Expected output:
-
-```bash
-reminder-api-6d8f9d66cc-n7m2p   ghcr.io/harbor-clinic/reminder-api@sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112
-reminder-api-6d8f9d66cc-r4z8k   ghcr.io/harbor-clinic/reminder-api@sha256:0fd3a7f5c2a9d44e7b7467a8f9106cb4d71c3ce86b5e2a6f6f6aab6e08c7f112
-```
-
-Both checks match the packet. Marisol now knows the approved artifact is running. That answer does not fix the SMS issue by itself. It narrows the investigation. The team can look at vendor behavior, retry configuration, feature flags, or data state with confidence that production is running the reviewed image.
-
-If the live digest differed from the packet, the incident would move toward deployment drift, emergency changes, or stuck rollout investigation. The packet gives responders a clean first comparison.
-
-## Common Gaps Teams Fix Early
-<!-- section-summary: The most common evidence gaps come from missing owners, weak enforcement, movable tags, vague scan decisions, and stale access. -->
-
-The first common gap is **ownership that lives only in people's heads**. A senior engineer knows who owns the reminder service, while the repo has no CODEOWNERS entry and the service catalog has an old team name. Harbor Clinic fixes this by treating the ownership record, CODEOWNERS, and team membership as connected records that need review together.
-
-The second common gap is **requested review without enforced review**. GitHub can request code owners on a pull request, and branch rules have to require the review before merge. Harbor Clinic fixes this by requiring pull requests, code-owner review, multiple approvals, and named status checks on the protected branch or ruleset.
-
-The third common gap is **artifact tags without digests**. A deployment record that says `reminder-api:main` leaves room for confusion because the tag can point to a different image later. Harbor Clinic fixes this by deploying `reminder-api@sha256:...`, recording the digest in the change summary, and verifying provenance for that digest.
-
-The fourth common gap is **scan output without a decision trail**. A scanner can produce a long JSON file, and the team still needs a clear decision for important findings. Harbor Clinic fixes this with a scan summary that records pass, fail, accepted risk, owner, ticket, and follow-up date.
-
-The fifth common gap is **access review evidence captured too late**. Teams often export membership after someone asks for proof, and that export may miss who had access at the time of the change. Harbor Clinic fixes this by capturing reviewer and approver membership near the release date and by running periodic reviews for owner teams and production approvers.
-
-Ownership and evidence turn secure delivery from a promise into records the team can use. For a sensitive system, every important change should answer the same questions: who owned the paths, who approved the change, which checks ran, which artifact shipped, which environment received it, and who could approve that path.
-
----
+:::expand[How Do You Build and Verify the Smallest Useful Audit Packet?]{kind="recap"}
+Compress the linked ownership, source, review, CI, security, artifact, provenance, deployment, and runtime records needed to prove the event.
+:::
 
 ## References
 
-- [NIST Secure Software Development Framework, SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final) - Official NIST SSDF publication for secure software development practices.
-- [GitHub CODEOWNERS documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners) - Explains CODEOWNERS file locations, pattern behavior, ownership requirements, and pull request review requests.
-- [GitHub protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) - Documents branch protection rules, required reviews, required status checks, and related merge controls.
-- [GitHub rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets) - Documents repository and organization rulesets for applying branch and tag rules.
-- [GitHub Actions workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax) - Documents workflow triggers, permissions, jobs, and steps.
-- [GitHub audit log for organizations](https://docs.github.com/en/organizations/keeping-your-organization-secure/managing-security-settings-for-your-organization/reviewing-the-audit-log-for-your-organization) - Documents audit log review and filtering for organization activity.
-- [GitHub artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations) - Explains how GitHub Actions can create attestations for build artifacts.
-- [GitHub attest-build-provenance action](https://github.com/actions/attest-build-provenance) - Official GitHub action for generating build provenance attestations.
-- [SLSA build provenance](https://slsa.dev/spec/v1.2/provenance) - Defines provenance metadata for software artifacts in the SLSA specification.
-- [SLSA provenance distribution](https://slsa.dev/spec/v1.2/distributing-provenance) - Explains ways to distribute and verify provenance for artifacts.
-- [Docker image digests](https://docs.docker.com/dhi/core-concepts/digests/) - Explains image digests and immutable image references.
-- [Kubernetes images](https://kubernetes.io/docs/concepts/containers/images/) - Documents container image names, tags, digests, and image pulls.
-- [Kubernetes annotations](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/) - Documents annotations for attaching non-identifying metadata to Kubernetes objects.
-- [Kubernetes deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Documents Deployment rollouts, status, and rollback history.
+- [GitHub CODEOWNERS documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners) - Documents repository ownership routing and code-owner review requests.
+- [GitHub protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges/managing-protected-branches/about-protected-branches) - Documents required review, status checks, and protected merge paths.
+- [SLSA build provenance](https://slsa.dev/spec/v1.2/provenance) - Defines structured build evidence connecting source, builder, and artifact subject.
+- [Kubernetes container images](https://kubernetes.io/docs/concepts/containers/images/) - Explains image tags and immutable digest references used in runtime state.

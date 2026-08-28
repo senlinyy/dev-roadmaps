@@ -43,7 +43,9 @@ The central idea is:
 
 > **The process is disposable; the logical identity persists.**
 
-A StatefulSet expresses that idea by managing an ordered set of identity slots. Each slot joins an ordinal, a Pod name, a network identity, and usually a storage claim. The explanation follows seven questions:
+A StatefulSet expresses that idea by managing an ordered set of identity slots. Each slot joins an ordinal, a Pod name, a network identity, and usually a storage claim.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why does a stateful workload need a stable replica identity?**
 2. **How does a StatefulSet keep a Pod name, DNS name, and storage claim aligned?**

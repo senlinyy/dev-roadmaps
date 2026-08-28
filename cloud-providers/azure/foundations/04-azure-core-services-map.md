@@ -15,19 +15,16 @@ aliases:
 
 ## Table of Contents
 
-1. [The Job-Based Map](#the-job-based-map)
-2. [The Orders API](#the-orders-api)
-3. [Traffic: What Handles Public Entry](#traffic-what-handles-public-entry)
-4. [Compute: Where the Code Runs](#compute-where-the-code-runs)
-5. [State: Where Data Survives](#state-where-data-survives)
-6. [Access: Identity, RBAC, and Secrets](#access-identity-rbac-and-secrets)
-7. [Signals: Logs, Metrics, and Traces](#signals-logs-metrics-and-traces)
-8. [Operations: Deployment, Cost, and Recovery](#operations-deployment-cost-and-recovery)
-9. [Debugging with the Map](#debugging-with-the-map)
-10. [Putting It All Together](#putting-it-all-together)
-
-## The Job-Based Map
-<!-- section-summary: An Azure core services map groups product names by the application job they perform, so traffic, runtime, state, access, signals, release, cost, and recovery each have a clear place. -->
+1. [Why Should You Learn Azure Services by Job?](#why-should-you-learn-azure-services-by-job)
+2. [How Does Traffic Enter an Azure Application?](#how-does-traffic-enter-an-azure-application)
+3. [Where Can Azure Run Application Code?](#where-can-azure-run-application-code)
+4. [Where Do Data and Deferred Work Live?](#where-do-data-and-deferred-work-live)
+5. [How Do Identity, Permissions, and Secrets Protect the System?](#how-do-identity-permissions-and-secrets-protect-the-system)
+6. [Which Signals Explain Runtime Behavior?](#which-signals-explain-runtime-behavior)
+7. [How Do Deployment, Cost, and Recovery Shape Operations?](#how-do-deployment-cost-and-recovery-shape-operations)
+8. [How Do You Debug With the Service Map?](#how-do-you-debug-with-the-service-map)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 An **Azure core services map** is a small operating map for an application. It connects each important application job to the Azure service family that performs that job. The point is to stop treating Azure as a long product menu and start treating it as a set of cooperating parts around one real system.
 
@@ -35,7 +32,21 @@ Imagine a junior engineer joining the on-call rotation for a production Orders A
 
 Before we name services, picture the first production question. A customer clicks checkout and the Orders API returns `500`. The on-call engineer needs to know which part of the system owns the public route, which part runs the code, which part stores the order, which identity can read secrets, and which workspace has the evidence. The table below is a small map for that request path, not a list to memorize.
 
-That request path gives us the structure for the whole article:
+Keep these questions in view as you work through the lesson:
+
+1. **Why Should You Learn Azure Services by Job?**
+2. **How Does Traffic Enter an Azure Application?**
+3. **Where Can Azure Run Application Code?**
+4. **Where Do Data and Deferred Work Live?**
+5. **How Do Identity, Permissions, and Secrets Protect the System?**
+6. **Which Signals Explain Runtime Behavior?**
+7. **How Do Deployment, Cost, and Recovery Shape Operations?**
+8. **How Do You Debug With the Service Map?**
+
+## Why Should You Learn Azure Services by Job?
+<!-- section-summary: An Azure core services map groups product names by the application job they perform, so traffic, runtime, state, access, signals, release, cost, and recovery each have a clear place. -->
+
+The request path gives the article its structure:
 
 | Application job | Plain English question | Common Azure service families |
 |---|---|---|
@@ -48,24 +59,11 @@ That request path gives us the structure for the whole article:
 | **Cost ownership** | Which team, service, and environment created this spend? | Resource groups, tags, Cost Management, budgets |
 | **Recovery** | Which data and workloads can be restored after failure or deletion? | Azure Backup, database restore features, storage redundancy, soft delete |
 
-If you know AWS, use this as a first translation layer. The job is the stable part; the Azure scope, identity model, and runtime boundary are the details to check before you design or troubleshoot.
-
-| Application job | Familiar AWS anchor | Azure detail to notice |
-|---|---|---|
-| **Traffic entry** | Route 53, CloudFront, ALB, NLB, AWS WAF | Front Door is the global HTTP edge, Application Gateway is regional layer 7, and Azure Load Balancer is lower-level load balancing. |
-| **Compute runtime** | EC2, Elastic Beanstalk, App Runner, ECS/Fargate, Lambda, EKS | Azure choices range from VMs to App Service, Container Apps, Functions, and AKS, with different release and scaling surfaces. |
-| **Persistent state** | RDS/Aurora, S3, DynamoDB, EBS | Azure SQL, Blob Storage, Cosmos DB, and Managed Disks each match a different data contract. |
-| **Access and secrets** | IAM, IAM Identity Center, Secrets Manager, KMS | Microsoft Entra ID, Azure RBAC, managed identities, and Key Vault split identity, authorization, and secret storage across Azure scopes. |
-| **Signals** | CloudWatch, CloudWatch Logs Insights, X-Ray, CloudTrail | Azure Monitor, Log Analytics, Application Insights, and Activity Log cover the operating evidence path. |
-| **Release path** | ECR, CodePipeline, CodeBuild, CodeDeploy, Lambda aliases, ECS deployments | Azure Container Registry, slots, revisions, and traffic weights provide Azure-native rollout handles. |
-| **Cost ownership** | Cost Explorer, AWS Budgets, cost allocation tags | Cost Management, budgets, resource groups, and tags turn Azure spend into owner-aware views. |
-| **Recovery** | AWS Backup, EBS snapshots, S3 Versioning/Object Lock, RDS PITR | Azure Backup, database PITR, Blob versioning, soft delete, snapshots, and redundancy form the recovery map. |
-
 This map should stay close to the system people operate today. A map with future services, unclear owners, and half-finished guesses looks impressive in a diagram tool, then causes pain during an incident. A useful first map is small, named, and tied to real resource IDs, tags, logs, and deployment records.
 
 The rest of the article uses one application so the sections connect naturally. We will keep coming back to the same Orders API and follow the request path through the service families as one connected system.
 
-## The Orders API
+### The Orders API
 <!-- section-summary: The example system is one production Orders API with a public entry path, managed container runtime, database, object storage, workload identity, vault, telemetry, image registry, tags, and recovery plan. -->
 
 Our example application is `devpolaris-orders-api`, a regional checkout backend for a small ecommerce product. It accepts HTTPS requests, creates orders, stores receipts, writes logs, and runs in the production resource group `rg-devpolaris-orders-prod`. The team has tagged the group with `team=orders`, `env=prod`, `service=orders-api`, and `owner=backend` so billing, ownership, and incident review have real labels.
@@ -80,7 +78,7 @@ Here is the request path in one service map:
 
 This image also shows why a service map is more than a traffic diagram. The request comes through public entry and compute, but the system depends on identity, secrets, database access, blob writes, image history, logs, tags, and recovery choices. The next sections walk through each row of the map with this same app in mind.
 
-## Traffic: What Handles Public Entry
+## How Does Traffic Enter an Azure Application?
 <!-- section-summary: Traffic entry services handle DNS, TLS, routing, WAF, backend health, API policy, and public access before a request reaches the application runtime. -->
 
 **Traffic entry** is the part of the system that receives client requests before the code handles them. It includes DNS names, HTTPS certificates, routing rules, web application firewall policy, backend health checks, API quotas, and the final handoff to the runtime. In plain English, traffic entry answers, "How does a request for `orders.devpolaris.example` reach the Orders API in a controlled way?"
@@ -101,7 +99,7 @@ The important habit is matching the entry service to the job. A hostname alone p
 
 Traffic connects naturally to compute because entry services hand accepted requests to a runtime. Once the request passes the public entry layer, Azure needs a place that can start the Orders API process, keep it healthy, scale it, and expose logs.
 
-## Compute: Where the Code Runs
+## Where Can Azure Run Application Code?
 <!-- section-summary: Compute services give application code CPU, memory, networking, lifecycle, scale behavior, and an ownership contract, from full virtual machine control to managed app and function runtimes. -->
 
 **Compute** is the runtime layer where code executes. It gives the app CPU, memory, process startup, network attachment, scale rules, and health behavior. A compute choice also decides the ownership contract between your team and Azure: how much operating system, container orchestration, patching, and scaling work your team accepts.
@@ -119,6 +117,8 @@ Azure offers several compute shapes, and each one gives a different amount of co
 | **Azure Kubernetes Service** | Managed Kubernetes control plane with worker nodes, Kubernetes objects, cluster networking, ingress controllers, and platform extensions. | Teams that need Kubernetes APIs, custom controllers, service mesh patterns, cluster-level policies, or shared platform control. |
 
 For `devpolaris-orders-api`, the service map can begin with Container Apps because the app is one containerized HTTP API with logs, database access, secrets, and a small on-call team. AKS is a serious option later when the team needs Kubernetes-level platform features, shared cluster networking, custom controllers, or deep multi-service orchestration. More control can be useful, and it also adds platform work that someone must operate.
+
+Choose compute from the workload contract rather than product popularity. A server-shaped dependency may need a VM. A normal HTTP application may fit App Service. An image-based service with revision traffic may fit Container Apps. Event-driven bounded work may fit Functions. A platform that genuinely needs Kubernetes APIs may fit AKS. The popular or most flexible service is not automatically the simplest service for this job.
 
 Container Apps has a few concepts worth naming because they show up during real incidents:
 
@@ -154,8 +154,8 @@ That command asks Azure for the hostname, ingress target port, image reference, 
 
 Compute gives the Orders API a running process. The next question is where the application data goes after that process exits, scales in, crashes, or gets replaced by a new revision.
 
-## State: Where Data Survives
-<!-- section-summary: State services keep business data after runtimes restart, and Azure separates relational records, object files, document data, and attached disk storage into different service families. -->
+## Where Do Data and Deferred Work Live?
+<!-- section-summary: State and messaging services keep data after runtimes restart and let work continue without forcing every component to finish in one synchronous request. -->
 
 **State** is the data that must survive beyond one request or one running container. Cloud compute is replaceable by design. A new revision can replace old replicas, scaling can remove idle containers, and a failed host can disappear from the system. The Orders API needs state services because order records, receipts, export files, and audit data must remain after those runtime events.
 
@@ -167,6 +167,7 @@ Azure splits state services by data shape and access pattern. A relational order
 | **Unstructured files** | **Azure Blob Storage** | Object storage for files such as receipts, images, CSV exports, raw logs, backups, and data lake objects. |
 | **Document or globally distributed NoSQL data** | **Azure Cosmos DB** | Fully managed database for document, key-value, and globally distributed app patterns where partitioning, latency, and scale are central design choices. |
 | **Attached block storage** | **Managed disks** | Durable disks attached to virtual machines for operating systems and VM-based workloads. |
+| **Reliable deferred work** | **Azure Service Bus** | Queues and topics that hold commands or messages until a consumer can process them, even when the consumer is temporarily unavailable. |
 
 For `devpolaris-orders-api`, Azure SQL Database stores the core order tables. A checkout request creates an `orders` row, `order_items` rows, and a payment state record inside a transaction. A transaction means the database treats a group of changes as one unit: either the whole order commit succeeds, or the database rolls it back so the system avoids a half-written order.
 
@@ -176,11 +177,19 @@ Cosmos DB enters the conversation when the data behaves like high-scale document
 
 Managed disks belong mostly to VM-based designs. If the Orders team ran a legacy inventory daemon on a VM, the VM might need an OS disk and a data disk. For the Container Apps version, the app treats local container storage as temporary scratch space and sends durable data to Azure SQL Database or Blob Storage.
 
-Managed state still needs ownership. Azure SQL Database removes much of the platform work around patching and availability, and the team still owns schema design, query shape, indexes, connection pooling, access policy, backup settings, restore tests, and data growth. A managed service reduces infrastructure chores; application data responsibility stays with the team.
+Not every result should be produced while the user waits for one HTTP response. Suppose checkout succeeds and the system still needs to generate a receipt, update a warehouse system, and send a confirmation email. Making the checkout API call all three systems directly creates a chain in which one slow or unavailable dependency can delay the customer response. **Messaging** gives the application a durable handoff point. The API records the order, places a message on Azure Service Bus, and returns. Separate workers can then process the deferred jobs at their own pace.
+
+Azure Service Bus supports **queues** for work normally handled by one competing consumer and **topics with subscriptions** when several consumers need their own copy of a published message. The message is not the business database; it is a durable instruction or notification moving between components. The order still belongs in Azure SQL Database, while a message such as `GenerateReceipt` tells a worker what to do next.
+
+It also helps to distinguish a **command** from an **event**. A command asks a particular capability to perform work, such as `GenerateReceipt` or `ReserveInventory`. An event states that something already happened, such as `OrderPlaced`. Several consumers may react to the same event without the producer knowing each one. The names are design signals: commands express intent, while events report facts.
+
+Messaging creates new operating responsibilities. Consumers must tolerate retries because a message can be delivered more than once. Failed work needs a dead-letter path and a review process. Message age, queue depth, processing rate, and dead-letter count become runtime signals. The service map should therefore show the producer, the queue or topic, every consumer, and the durable state each consumer updates. That makes deferred work visible instead of hiding it behind the vague phrase "background processing."
+
+Managed state and messaging still need ownership. Azure SQL Database removes much of the platform work around patching and availability, and the team still owns schema design, query shape, indexes, connection pooling, access policy, backup settings, restore tests, and data growth. Service Bus operates the broker, but the team still owns message contracts, retry behavior, duplicate handling, dead-letter processing, and capacity monitoring. A managed service reduces infrastructure chores; application and data responsibility stays with the team.
 
 Now the runtime has somewhere to write data. The next problem is access. The Orders API needs to prove which workload is calling SQL, Blob Storage, and Key Vault, and Azure needs a way to allow only the right actions.
 
-## Access: Identity, RBAC, and Secrets
+## How Do Identity, Permissions, and Secrets Protect the System?
 <!-- section-summary: Access connects a workload identity, Azure RBAC assignments, and Key Vault so running code can call approved services while keeping long-lived credentials out of the image. -->
 
 **Access** is the set of identity and authorization decisions that decide what the running app can do. In Azure, the important pieces are **Microsoft Entra ID**, **managed identities**, **Azure RBAC**, and **Azure Key Vault**. Entra ID names the caller, managed identity gives an Azure resource a workload identity, RBAC grants actions at a scope, and Key Vault stores secrets, keys, and certificates.
@@ -226,9 +235,9 @@ az role assignment list \
 
 If the app receives `403 Forbidden` from Key Vault, the team can check the managed identity principal ID, the assigned role, the vault scope, the vault network settings, and the exact secret operation being attempted. The map turns a vague phrase like "the app can read secrets" into reviewable facts.
 
-Access connects directly to signals because identity failures only become useful when someone can see them. The next row of the map collects the evidence that proves what the app, platform, and Azure control plane experienced.
+Access connects directly to signals because identity failures provide useful evidence only if someone can see them. The next row of the map collects the evidence that proves what the app, platform, and Azure control plane experienced.
 
-## Signals: Logs, Metrics, and Traces
+## Which Signals Explain Runtime Behavior?
 <!-- section-summary: Signals are the logs, metrics, traces, alerts, and activity records that leave the runtime and give operators evidence during normal operation and incidents. -->
 
 **Signals** are the evidence a system emits while it runs. Logs explain events, metrics show numeric behavior over time, traces connect one request across components, and activity records show Azure control-plane changes. Those signals give the on-call engineer proof that the diagram matches the live system.
@@ -260,7 +269,7 @@ This query asks Application Insights for recent request records from the Orders 
 
 Signals naturally connect to operations. Logs and metrics tell the team what happened after a deploy, cost records show what the system consumed, and backup or restore evidence proves the team can recover.
 
-## Operations: Deployment, Cost, and Recovery
+## How Do Deployment, Cost, and Recovery Shape Operations?
 <!-- section-summary: Operations connect image origin, running versions, resource boundaries, tags, budgets, cost evidence, backups, and restore plans so the application remains manageable after launch. -->
 
 **Operations** are the habits and services that keep the system manageable after the first successful deploy. This row of the map answers questions such as: Where did this container image come from? Which revision is running it? Which resource group owns the app? Which tags connect spend to the team? Which backup or restore path protects the data?
@@ -305,7 +314,7 @@ For recovery, the service map should list the data that needs restore behavior. 
 
 At this point the map covers the live system. The final operating skill is using the same rows during an incident so the team moves through portal pages with a reason.
 
-## Debugging with the Map
+## How Do You Debug With the Service Map?
 <!-- section-summary: Debugging with the service map means matching each symptom to the row that can explain it, then moving through traffic, compute, identity, state, signals, release, cost, and recovery with evidence. -->
 
 **Debugging with the map** means matching a symptom to the service family that can explain it. The team looks for evidence in the row closest to the symptom, then moves to the next row when the evidence points there. This keeps an incident review focused.
@@ -350,7 +359,9 @@ Now imagine a different incident. The API logs show `Forbidden` when reading `sq
 
 The value of the map is calm sequencing. Traffic evidence can lead to compute. Compute logs can lead to access. Access can lead to state. State errors can lead back to network or secrets. The map gives the team a shared language for moving through the system with proof.
 
-## Putting It All Together
+The categories are teaching labels, not hard product walls. Container Apps can provide compute, ingress, scaling, secrets integration, and observability hooks. Application Gateway combines traffic routing, TLS handling, health checks, and WAF behavior. Azure SQL combines state, availability, backup, identity, and network controls. Put each service in the row that explains its main job in this application, then draw the cross-row responsibilities it actually owns.
+
+### Putting It All Together
 <!-- section-summary: A useful Azure core services map stays small, names current services and owners, follows one request path, includes evidence sources, and grows as new services take on real jobs. -->
 
 The Azure core services map is a way to make a production app readable. It turns a long list of product names into a small set of jobs around one workload: traffic entry, compute runtime, durable state, access, signals, release, cost, and recovery.
@@ -367,7 +378,41 @@ This is the practical test for the map: during an incident, a new teammate shoul
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[Why Should You Learn Azure Services by Job?]{kind="recap"}
+An Azure core services map groups product names by the application job they perform, so traffic, runtime, state, access, signals, release, cost, and recovery each have a clear place. The example system is one production Orders API with a public entry path, managed container runtime, database, object storage, workload identity, vault, telemetry, image registry, tags, and recovery plan.
+:::
+
+:::expand[How Does Traffic Enter an Azure Application?]{kind="recap"}
+Traffic entry services handle DNS, TLS, routing, WAF, backend health, API policy, and public access before a request reaches the application runtime.
+:::
+
+:::expand[Where Can Azure Run Application Code?]{kind="recap"}
+Compute services give application code CPU, memory, networking, lifecycle, scale behavior, and an ownership contract, from full virtual machine control to managed app and function runtimes.
+:::
+
+:::expand[Where Do Data and Deferred Work Live?]{kind="recap"}
+State services keep business data after runtimes restart, and Azure separates relational records, object files, document data, and attached disk storage into different service families.
+:::
+
+:::expand[How Do Identity, Permissions, and Secrets Protect the System?]{kind="recap"}
+Access connects a workload identity, Azure RBAC assignments, and Key Vault so running code can call approved services while keeping long-lived credentials out of the image.
+:::
+
+:::expand[Which Signals Explain Runtime Behavior?]{kind="recap"}
+Signals are the logs, metrics, traces, alerts, and activity records that leave the runtime and give operators evidence during normal operation and incidents.
+:::
+
+:::expand[How Do Deployment, Cost, and Recovery Shape Operations?]{kind="recap"}
+Operations connect image origin, running versions, resource boundaries, tags, budgets, cost evidence, backups, and restore plans so the application remains manageable after launch.
+:::
+
+:::expand[How Do You Debug With the Service Map?]{kind="recap"}
+Debugging with the service map means matching each symptom to the row that can explain it, then moving through traffic, compute, identity, state, signals, release, cost, and recovery with evidence. A useful Azure core services map stays small, names current services and owners, follows one request path, includes evidence sources, and grows as new services take on real jobs.
+:::
+
+## References
 
 - [Azure DNS overview](https://learn.microsoft.com/en-us/azure/dns/dns-overview) - Official Azure DNS overview for hosting zones, records, public DNS, private DNS, and DNS-based traffic services.
 - [Azure Front Door overview](https://learn.microsoft.com/en-us/azure/frontdoor/front-door-overview) - Microsoft Learn guide for global HTTP/HTTPS edge delivery, routing, acceleration, and WAF scenarios.

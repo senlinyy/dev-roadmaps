@@ -26,24 +26,10 @@ aliases:
 6. [When Should You Choose DynamoDB?](#when-should-you-choose-dynamodb)
 7. [How Do Movement, Availability, and Recovery Change the Design?](#how-do-movement-availability-and-recovery-change-the-design)
 8. [What Decision Process Should You Use?](#what-decision-process-should-you-use)
-9. [Check Your Understanding](#check-your-understanding)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-The sections below answer these questions in order:
-
-1. **What Does the Application Think the Data Is?**
-2. **What Is the Difference Between Storage and a Database?**
-3. **When Should You Choose S3?**
-4. **When Should You Choose EBS or Instance Store?**
-5. **When Should You Choose EFS or FSx?**
-6. **When Should You Choose DynamoDB?**
-7. **How Do Movement, Availability, and Recovery Change the Design?**
-8. **What Decision Process Should You Use?**
-
-## What Does the Application Think the Data Is?
-<!-- section-summary: The first storage decision is the data interface the application expects: block, file, object, relational row, or key-based item. -->
-
-AWS storage becomes confusing when service names come first: S3, EBS, EFS, FSx, RDS, Aurora, and DynamoDB sound like a list to memorize. Start instead with a more basic question:
+Starting with service names makes AWS storage confusing: S3, EBS, EFS, FSx, RDS, Aurora, and DynamoDB sound like a list to memorize. Start instead with a more basic question:
 
 > **Which operations must the application perform on this data?**
 
@@ -69,6 +55,20 @@ Ask what the application believes the data *is*:
 | Objects identified by keys | `images/cat.jpg` | S3 |
 | Rows with relationships | customers, orders, payments | RDS or Aurora |
 | Items found mainly through known keys | user ID to user profile | DynamoDB |
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Does the Application Think the Data Is?**
+2. **What Is the Difference Between Storage and a Database?**
+3. **When Should You Choose S3?**
+4. **When Should You Choose EBS or Instance Store?**
+5. **When Should You Choose EFS or FSx?**
+6. **When Should You Choose DynamoDB?**
+7. **How Do Movement, Availability, and Recovery Change the Design?**
+8. **What Decision Process Should You Use?**
+
+## What Does the Application Think the Data Is?
+<!-- section-summary: The first storage decision is the data interface the application expects: block, file, object, relational row, or key-based item. -->
 
 The contents do not decide the interface by themselves. A photo-sharing application can put image bytes in S3, photo ownership and caption rows in a database, and temporary image-processing scratch data on an EBS volume or ephemeral disk.
 
@@ -342,7 +342,7 @@ AWS Backup→ coordinate protection
 
 Choose the interface and guarantees the application needs, not the service name with the strongest marketing headline.
 
-## Check Your Understanding
+## Check Your Answers
 
 :::expand[What Does the Application Think the Data Is?]{kind="recap"}
 The first storage decision is the data interface the application expects: block, file, object, relational row, or key-based item.

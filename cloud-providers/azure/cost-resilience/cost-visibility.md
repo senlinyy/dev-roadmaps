@@ -12,28 +12,38 @@ aliases:
 
 ## Table of Contents
 
-1. [The Bill Jump Story](#the-bill-jump-story)
-2. [What Cost Visibility Means](#what-cost-visibility-means)
-3. [Cost Analysis](#cost-analysis)
-4. [Tags](#tags)
-5. [Budgets](#budgets)
-6. [Right-Sizing](#right-sizing)
-7. [Common Azure Cost Leaks](#common-azure-cost-leaks)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
-
-## The Bill Jump Story
-<!-- section-summary: Cost visibility starts with one uncomfortable bill and turns it into smaller questions the team can actually answer. -->
+1. [Why Did the Bill Jump?](#why-did-the-bill-jump)
+2. [What Does Cost Visibility Mean?](#what-does-cost-visibility-mean)
+3. [How Does Cost Analysis Find the Cause?](#how-does-cost-analysis-find-the-cause)
+4. [How Do Tags Assign Ownership?](#how-do-tags-assign-ownership)
+5. [How Do Budgets Warn Before Overspend?](#how-do-budgets-warn-before-overspend)
+6. [How Does Right-Sizing Remove Waste?](#how-does-right-sizing-remove-waste)
+7. [Which Azure Cost Leaks Recur?](#which-azure-cost-leaks-recur)
+8. [How Does a Cost Review Fit Together?](#how-does-a-cost-review-fit-together)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Imagine the ticketing team opens Azure Cost Management on Monday morning and sees a rough surprise. The subscription that usually lands near `8,000 USD` for the month now forecasts closer to `13,500 USD`. Nobody changed the official budget. Nobody planned a big traffic launch. The first feeling is usually panic, because the bill is one big number and one big number gives the team almost no direction.
 
-This article follows that moment. We will take the large bill and split it into useful questions: which **scope** holds the increase, which **service** created the charge, which **resource** grew, which **owner** reviews it, which **budget alert** gives warning, and which **right-sizing** action is safe after the evidence is clear.
+The large bill is not actionable until the team can trace it through progressively smaller boundaries. The subscription identifies the billing scope, the service and resource identify the source of usage, tags identify the owner and purpose, and runtime evidence shows whether the increase is waste or the cost of real work. Budgets provide warning; right-sizing comes only after that evidence makes the tradeoff visible.
 
-That order matters. Cost work goes badly when a team jumps straight from "the bill is high" to "delete something" or "make the database smaller." A production system has real traffic, recovery promises, backups, logs, and security needs. Some spending is waste, and some spending is the price of keeping a promise to users. **Cost visibility** gives the team enough evidence to tell those two apart.
+Keep these questions in view as you work through the lesson:
 
-If you have used AWS before, the map will feel familiar. Azure Cost Analysis plays the same everyday role as AWS Cost Explorer: it lets you group and filter billing data. Azure Budgets play the same early-warning role as AWS Budgets: they send notifications when actual or forecasted spend crosses thresholds. Azure tags play the same ownership role as AWS cost allocation tags: they attach business meaning to resources so billing data can be grouped by service, environment, or team. With those familiar pieces in mind, we can define the main idea before opening the tools.
+1. **Why Did the Bill Jump?**
+2. **What Does Cost Visibility Mean?**
+3. **How Does Cost Analysis Find the Cause?**
+4. **How Do Tags Assign Ownership?**
+5. **How Do Budgets Warn Before Overspend?**
+6. **How Does Right-Sizing Remove Waste?**
+7. **Which Azure Cost Leaks Recur?**
+8. **How Does a Cost Review Fit Together?**
 
-## What Cost Visibility Means
+## Why Did the Bill Jump?
+<!-- section-summary: Cost visibility starts with one uncomfortable bill and turns it into smaller questions the team can actually answer. -->
+
+The order of those cost checks matters. Cost work goes badly when a team jumps straight from "the bill is high" to "delete something" or "make the database smaller." A production system has real traffic, recovery promises, backups, logs, and security needs. Some spending is waste, and some spending is the price of keeping a promise to users. **Cost visibility** gives the team enough evidence to tell those two apart.
+
+## What Does Cost Visibility Mean?
 <!-- section-summary: Cost visibility is the habit of connecting Azure spend to time, service, resource, owner, and workload value before tuning anything. -->
 
 **Cost visibility** means the team can explain where Azure spend came from in plain operational terms. A useful cost view can say, "The ticketing production Log Analytics workspace created most of the May increase after release `v2.4` raised ingestion volume," instead of only saying, "Azure is expensive this month."
@@ -62,7 +72,7 @@ That delay changes how good teams work. They use budgets and anomaly review for 
 
 The ticketing bill is still high, though. The next step is finding the expensive area.
 
-## Cost Analysis
+## How Does Cost Analysis Find the Cause?
 <!-- section-summary: Cost Analysis turns one large Azure number into grouped views by scope, service, resource, tag, and date. -->
 
 **Cost Analysis** is the place where the team slices Azure spend into useful views. A **scope** is the boundary you are looking at, such as a billing account, management group, subscription, or resource group. The scope matters because a company may have shared platform subscriptions, product subscriptions, sandbox subscriptions, and one-off test resource groups. A bill increase is actionable only after the team knows which boundary contains it.
@@ -141,7 +151,7 @@ Cost Analysis also has limits that beginners often miss. Some charges have no de
 
 The expensive workspace is now visible. The next question is ownership.
 
-## Tags
+## How Do Tags Assign Ownership?
 <!-- section-summary: Tags connect cost records to service, environment, owner, and budget context, but they need enforcement and boring values. -->
 
 A **tag** is a small key-value label attached to Azure resources, resource groups, or subscriptions. In cost work, tags act like ownership coordinates. A resource name such as `law-ticketing-prod` helps a human guess what the resource does, but tags let billing reports group spend by stable fields such as `service`, `env`, `owner`, and `cost-center`.
@@ -215,7 +225,7 @@ A better pattern combines both ideas. The resource group groups resources that l
 
 Now the ticketing workspace has a team owner. The next question is why nobody got warned before the bill felt scary.
 
-## Budgets
+## How Do Budgets Warn Before Overspend?
 <!-- section-summary: Budgets create the financial alert loop, while tested automation is required for any workload change. -->
 
 An **Azure budget** is a spending threshold at a chosen scope. The scope might be a subscription, a resource group, or a filtered slice of cost data. A budget can track actual cost, which means the spend already accrued, or forecasted cost, which means Azure predicts the current trend may cross the budget by the end of the period.
@@ -264,14 +274,13 @@ Budgets also connect back to tags. A subscription-wide budget tells the cloud pl
 
 Now the team has an alert loop. The next question is what to do with the recommendation that says a resource looks oversized.
 
-## Right-Sizing
+## How Does Right-Sizing Remove Waste?
 <!-- section-summary: Right-sizing means changing resource size after cost evidence and workload evidence agree. -->
 
 **Right-sizing** means changing the size, tier, or count of a resource so it matches the workload it actually serves. In Azure, this might mean resizing a virtual machine, changing an App Service plan SKU, reducing an Azure SQL compute tier, moving storage to a cooler tier, or cleaning up resources that no longer support a workload.
 
 **Azure Advisor** helps with this work by finding idle and underutilized resources and showing cost recommendations. Advisor can point at virtual machines, virtual machine scale sets, reservations, App Service plans, SQL resources, and other services depending on the recommendation type. It is useful because it turns platform telemetry into a candidate list. It saves the team from manually hunting through every resource.
 
-AWS teams often do this first-pass review with Compute Optimizer and Trusted Advisor recommendations. Azure Advisor plays that candidate-list role in Azure, and the service owner still needs workload context before resizing, stopping, or deleting anything.
 
 Advisor is still the beginning of the decision. A resource can look idle for good reasons. A virtual machine might run a month-end settlement job for two hours and sit quiet for the rest of the month. A database might have low average CPU but strict latency needs during checkout peaks. A standby environment might look wasteful until the day the primary region has a serious issue. The recommendation says, "this deserves review." The owner decides after checking workload context.
 
@@ -319,7 +328,7 @@ That signal gives the right person something concrete to fix. If `AppTraces` jum
 
 Now the team can tune with context. There is one more practical habit: looking for the cost leaks that appear again and again in Azure accounts.
 
-## Common Azure Cost Leaks
+## Which Azure Cost Leaks Recur?
 <!-- section-summary: Cost leaks are resources or usage patterns that keep billing after their original purpose is gone. -->
 
 A **cost leak** is spend that no longer supports the intended workload. It can be small at first and still matter because cloud billing repeats. A forgotten disk, a noisy log table, or old blob versions can quietly bill every month until someone sees and removes the cause.
@@ -346,12 +355,22 @@ Here is a simple review table the ticketing team can use each month:
 
 Notice how none of these reviews start with random deletion. The team first asks what the resource does, who owns it, and whether it supports a service promise. A disk may be trash. It may also be the only recent copy of a database from a failed migration. Visibility keeps cleanup from turning into an outage.
 
-## Putting It All Together
+## How Does a Cost Review Fit Together?
 <!-- section-summary: Azure cost visibility connects billing views, tags, budgets, Advisor, and workload evidence into one operating habit. -->
 
 The ticketing team started with one scary forecast. By the end of the investigation, the bill became a chain of evidence. Cost Analysis showed the increase lived in Log Analytics. The resource view found `law-ticketing-prod`. Tags routed the review to `events-platform`. The budget design showed where the alert loop needed improvement. Runtime logs and deployment notes connected the jump to release `v2.4`. Advisor and metrics helped the team separate safe tuning from capacity that still had a purpose.
 
 That is the real job of cost visibility. It gives engineering, finance, and operations one shared story about spend. It also makes cost optimization safer, because every change has context.
+
+Total spend is only one view of efficiency. A useful companion measure is **cost per unit of value**:
+
+```text
+cost per successful checkout
+    = Azure cost for the checkout workload
+      / successful checkouts
+```
+
+If monthly spend rises 20 percent while successful checkouts rise 50 percent, the system may be becoming more efficient even though the invoice is larger. If spend rises while traffic and successful outcomes stay flat, the team has stronger evidence of waste or a regression. The unit can be an order, active tenant, report, gigabyte processed, or another outcome the business can count. The important point is to connect cloud consumption to useful work rather than optimizing the bill in isolation.
 
 ![Safe cost tuning summary showing cost evidence, runtime evidence, ownership evidence, and service promise feeding a shared review before tuning, cleaning up, or keeping capacity](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/safe-cost-tuning-summary.png)
 
@@ -368,13 +387,47 @@ The important pieces fit together like this:
 
 With that loop in place, the team can say something much more useful than "Azure costs too much." They can say which workload changed, when it changed, who owns it, why it changed, and which action is safe.
 
-## What's Next
+### What's Next
 
 Now that the team can see and explain Azure spend, the next article moves into recovery planning. We will use RTO, RPO, backups, redundancy, and restore drills to decide which resilience promises deserve extra cost and which workloads can recover more slowly.
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[Why Did the Bill Jump?]{kind="recap"}
+Cost visibility starts with one uncomfortable bill and turns it into smaller questions the team can actually answer.
+:::
+
+:::expand[What Does Cost Visibility Mean?]{kind="recap"}
+Cost visibility is the habit of connecting Azure spend to time, service, resource, owner, and workload value before tuning anything.
+:::
+
+:::expand[How Does Cost Analysis Find the Cause?]{kind="recap"}
+Cost Analysis turns one large Azure number into grouped views by scope, service, resource, tag, and date.
+:::
+
+:::expand[How Do Tags Assign Ownership?]{kind="recap"}
+Tags connect cost records to service, environment, owner, and budget context, but they need enforcement and boring values.
+:::
+
+:::expand[How Do Budgets Warn Before Overspend?]{kind="recap"}
+Budgets create the financial alert loop, while tested automation is required for any workload change.
+:::
+
+:::expand[How Does Right-Sizing Remove Waste?]{kind="recap"}
+Right-sizing means changing resource size after cost evidence and workload evidence agree.
+:::
+
+:::expand[Which Azure Cost Leaks Recur?]{kind="recap"}
+Cost leaks are resources or usage patterns that keep billing after their original purpose is gone.
+:::
+
+:::expand[How Does a Cost Review Fit Together?]{kind="recap"}
+Azure cost visibility connects billing views, tags, budgets, Advisor, and workload evidence into one operating habit.
+:::
+
+## References
 
 * [Azure Cost Management overview](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/overview-cost-mgt)
 * [Understand Cost Management data](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/understand-cost-mgt-data)

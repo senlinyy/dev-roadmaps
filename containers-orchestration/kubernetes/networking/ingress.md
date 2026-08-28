@@ -37,7 +37,9 @@ Something at the edge of the cluster must receive that outside connection, prove
 
 For a global commerce site, DNS publishes the edge address, TLS proves the site's identity and encrypts the connection, and the HTTP hostname and path choose the internal Service. These are separate decisions along one customer request, and the Ingress controller must implement all three correctly while API traffic continues.
 
-We will follow `https://shop.example.com/api` from the browser to a ready API Pod. Along that path, we need to answer seven questions:
+We will follow `https://shop.example.com/api` from the browser to a ready API Pod.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why does the browser need an edge route?**
 2. **What are the Ingress object and Ingress controller?**
@@ -153,7 +155,7 @@ Inside the protected connection, the browser sends an HTTP request containing th
 
 A rule for `shop.example.com` and `/api` yields `api-service:8080`. The Service then supplies ready endpoints. Depending on the controller, the proxy may use the Service address or consume EndpointSlice information directly, but the Kubernetes backend contract remains the Service and port.
 
-Notice which information becomes available when. Public DNS can route only by the queried hostname and returns an edge address; it never sees `/api`. During TLS, the edge uses the SNI hostname to choose a certificate before it can read encrypted HTTP content. After decryption, the HTTP hostname and path become available for Ingress matching. Mixing these stages leads to errors such as expecting a DNS record to choose an application path or expecting an HTTP rule to repair a certificate mismatch.
+Notice the point at which each piece of information is available. Public DNS can route only by the queried hostname and returns an edge address; it never sees `/api`. During TLS, the edge uses the SNI hostname to choose a certificate before it can read encrypted HTTP content. After decryption, the HTTP hostname and path become available for Ingress matching. Mixing these stages leads to errors such as expecting a DNS record to choose an application path or expecting an HTTP rule to repair a certificate mismatch.
 
 ![A browser request is separated into public DNS, TLS hostname verification, Ingress host and path matching, the API Service, and one ready Pod](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-request-path.png)
 

@@ -9,17 +9,16 @@ id: article-devops-foundation-networking-http-tls
 
 ## Table of Contents
 
-1. [What HTTP and TLS Do](#what-http-and-tls-do)
-2. [TLS: Proving and Protecting the Connection](#tls-proving-and-protecting-the-connection)
-3. [Certificates and the Chain of Trust](#certificates-and-the-chain-of-trust)
-4. [What HTTP Looks Like Inside the Connection](#what-http-looks-like-inside-the-connection)
-5. [Methods, Status Codes, and Headers](#methods-status-codes-and-headers)
-6. [Inspecting the Whole Request with curl](#inspecting-the-whole-request-with-curl)
-7. [HTTP and TLS Failure Modes](#http-and-tls-failure-modes)
-8. [References](#references)
-
-## What HTTP and TLS Do
-<!-- section-summary: HTTP carries web requests and responses, while TLS protects that HTTP conversation over HTTPS. -->
+1. [What Do HTTP and TLS Each Provide?](#what-do-http-and-tls-each-provide)
+2. [How Does TLS Establish a Protected Connection?](#how-does-tls-establish-a-protected-connection)
+3. [How Does a Certificate Chain Establish Server Identity?](#how-does-a-certificate-chain-establish-server-identity)
+4. [What Does HTTP Look Like Inside the Connection?](#what-does-http-look-like-inside-the-connection)
+5. [How Do Methods, Status Codes, Headers, and Cookies Carry Meaning?](#how-do-methods-status-codes-headers-and-cookies-carry-meaning)
+6. [How Do You Inspect the Complete Request with curl and OpenSSL?](#how-do-you-inspect-the-complete-request-with-curl-and-openssl)
+7. [How Does One Complete HTTPS Request Cross Every Boundary?](#how-does-one-complete-https-request-cross-every-boundary)
+8. [How Do You Diagnose HTTP and TLS Failure Modes?](#how-do-you-diagnose-http-and-tls-failure-modes)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 DNS found an address. Routing chose a path. Firewalls allowed port `443`. At that point, the browser has reached the web front door, but it still should not send cookies, passwords, or API tokens yet. It first needs proof that the server is really allowed to represent `app.example.com`.
 
@@ -28,6 +27,20 @@ DNS found an address. Routing chose a path. Firewalls allowed port `443`. At tha
 After TLS succeeds, **HTTP**, Hypertext Transfer Protocol, carries the actual web request and response. HTTP includes methods like `GET` and `POST`, paths like `/dashboard`, headers like `Host`, cookies, JSON bodies, status codes, redirects, and response content. HTTPS is HTTP sent through a TLS-protected connection.
 
 For `https://app.example.com/dashboard`, DNS has returned the IP, routing has found the next hop, and firewall rules have allowed TCP port `443`. At that point, the browser has a live TCP connection to the server, but it still has not sent the private HTTP request. It first completes TLS, then sends HTTP inside the protected channel.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Do HTTP and TLS Each Provide?**
+2. **How Does TLS Establish a Protected Connection?**
+3. **How Does a Certificate Chain Establish Server Identity?**
+4. **What Does HTTP Look Like Inside the Connection?**
+5. **How Do Methods, Status Codes, Headers, and Cookies Carry Meaning?**
+6. **How Do You Inspect the Complete Request with `curl` and OpenSSL?**
+7. **How Does One Complete HTTPS Request Cross Every Boundary?**
+8. **How Do You Diagnose HTTP and TLS Failure Modes?**
+
+## What Do HTTP and TLS Each Provide?
+<!-- section-summary: HTTP carries web requests and responses, while TLS protects that HTTP conversation over HTTPS. -->
 
 HTTP and TLS answer different questions. TLS asks, "Am I talking to the right server, and can we protect this connection?" HTTP asks, "Which resource does the client want, and what response should the server send?" If TLS fails, the browser never sends cookies or an API token. If TLS succeeds and HTTP fails, the request reached the web layer, and status codes or logs should explain the result.
 
@@ -48,7 +61,7 @@ The success line proves the TCP port is reachable. It does not prove the certifi
 
 The next practical decision is which tool to use. Use `openssl` when the certificate or handshake is the question. Use `curl` when the HTTP status, headers, redirects, or proxy behavior are the question.
 
-## TLS: Proving and Protecting the Connection
+## How Does TLS Establish a Protected Connection?
 <!-- section-summary: TLS verifies the server certificate, agrees on shared encryption keys, and protects the HTTP conversation from observers. -->
 
 If TLS fails, the browser stops before sending the private HTTP request. That is the safety feature. A login cookie or API token should stay in the browser until the server proves it is allowed to speak for the hostname.
@@ -89,7 +102,7 @@ The next decision after inspecting the certificate is direct. If the subject or 
 
 _The image shows TLS as a short trust and encryption exchange before HTTP data moves._
 
-## Certificates and the Chain of Trust
+## How Does a Certificate Chain Establish Server Identity?
 <!-- section-summary: A certificate connects a hostname to a public key, and the client trusts it through a chain ending at a trusted root CA. -->
 
 A browser privacy warning means the browser could not prove the server is allowed to answer for the hostname. Maybe the certificate expired. Maybe it was issued for `www.example.com` while the user visited `app.example.com`. Maybe the server forgot to send the intermediate certificate needed to build trust.
@@ -138,7 +151,7 @@ echo | openssl s_client -connect app.example.com:443 -servername app.example.com
 
 That date belongs in monitoring. An expired certificate takes down user-facing HTTPS even while DNS, routing, firewall rules, Nginx, and the app are all working. A practical alert should fire days or weeks before `notAfter`, with enough time to fix renewal, reload Nginx, and verify the public certificate.
 
-## What HTTP Looks Like Inside the Connection
+## What Does HTTP Look Like Inside the Connection?
 <!-- section-summary: HTTP carries the actual application request and response after TLS has created the protected channel. -->
 
 After TLS completes, the browser can finally send the request the user cared about. **HTTP**, Hypertext Transfer Protocol, is the application protocol your code uses through `fetch`, `axios`, browsers, API clients, and webhooks. It gives clients and servers a shared request and response format.
@@ -183,7 +196,7 @@ The production symptom tells you which part to inspect. If the method or path is
 
 _The image separates the HTTP message pieces that logs, frameworks, and proxies expose during debugging._
 
-## Methods, Status Codes, and Headers
+## How Do Methods, Status Codes, Headers, and Cookies Carry Meaning?
 <!-- section-summary: Methods describe client intent, status codes describe server results, and headers carry metadata needed by browsers, proxies, and applications. -->
 
 Suppose a form submission fails. The browser shows an error, and the app logs show a request to `/api/orders`. The useful evidence is in the HTTP message: which action the client tried, what result the server returned, and which metadata traveled with the request.
@@ -246,7 +259,7 @@ If the app log says `expected application/json`, fix the client header or the fo
 
 After the status and headers are clear, choose the next log source. `401` points at authentication. `403` points at authorization or access policy. `404` points at routing or missing resources. `429` points at rate limiting. `502` and `504` point at a proxy-to-upstream problem. The response family narrows the log search.
 
-## Inspecting the Whole Request with curl
+## How Do You Inspect the Complete Request with `curl` and OpenSSL?
 <!-- section-summary: curl can measure DNS, TCP, TLS, HTTP status, headers, and body behavior from one command line. -->
 
 A browser hides useful details behind a friendly error page. `curl` lets you ask the same URL from the command line and see the path in pieces: DNS, TCP, TLS, request headers, response headers, redirects, status codes, and timing.
@@ -320,7 +333,15 @@ The timing connects directly to the layers. `dns` measures name lookup. `connect
 
 _The image turns curl timing output into a request waterfall that points at the slow layer._
 
-## HTTP and TLS Failure Modes
+## How Does One Complete HTTPS Request Cross Every Boundary?
+
+A complete request begins before HTTP. The client resolves the hostname, chooses a route, opens a transport connection, negotiates TLS, and only then exchanges an HTTP request and response. For HTTP/3, QUIC combines transport and TLS over UDP, but the same questions remain: which address, which authenticated name, which application protocol, and which request result?
+
+The TLS ClientHello carries capabilities and usually the requested server name through SNI so a shared endpoint can select the right certificate. ALPN lets client and server choose an application protocol such as HTTP/2. The server sends its certificate chain and proves possession of the corresponding private key; both sides derive symmetric session keys, which protect the high-volume application bytes efficiently.
+
+After the handshake, the client sends a method, target, version, and headers. A reverse proxy may terminate TLS, add forwarding context, and create another connection to the upstream. That second hop has its own identity and encryption decision. The upstream response crosses the same boundaries in reverse, and every layer can contribute its own status, timeout, or log evidence.
+
+## How Do You Diagnose HTTP and TLS Failure Modes?
 <!-- section-summary: HTTP and TLS failures usually identify themselves through certificate errors, redirect loops, CORS blocks, content-type mismatches, and upstream status codes. -->
 
 HTTP and TLS failures usually leave a visible clue: a certificate warning, a repeated redirect, a browser CORS message, a parser error, or a proxy status code. The clue tells you whether the browser stopped during trust, HTTP routing, browser policy, or upstream handling.
@@ -455,6 +476,199 @@ Read that message in pieces:
 - The next checks are application logs for the same timestamp, slow database queries, blocked workers, dependency calls, and any proxy timeout that is shorter than the real request is allowed to take.
 
 The practical difference is simple: a `502` often means Nginx could not get a usable upstream response at all, such as a refused connection or crashed app. A `504` means Nginx waited for the upstream response and gave up. Do not increase timeouts as the first fix. First prove why the app is slow, then decide whether the request should be faster, moved to background work, cached, or given a longer timeout.
+
+### Why Does TLS Use Both Asymmetric and Symmetric Cryptography?
+
+Asymmetric cryptography lets the endpoint prove possession of a private key without sending that private key to the client. It also supports signatures that a client can verify through a certificate chain. Symmetric cryptography is much faster for protecting the large stream of application bytes. A TLS handshake combines these strengths: authenticate and agree on fresh secrets, then use derived symmetric keys for the session.
+
+Modern TLS commonly uses ephemeral key agreement, so the session keys are not simply the server's long-term private key. If the certificate key is compromised later, previously recorded sessions that used appropriate ephemeral exchange are not automatically decrypted. The certificate private key still matters enormously because possession allows the endpoint to authenticate as that name until the certificate or trust path is rejected.
+
+Confidentiality keeps passive observers from reading application data. Integrity detects modification. Authentication establishes which endpoint possesses the key associated with the certificate identity. TLS does not decide whether the authenticated user may delete an invoice, whether the application is safe, or whether the endpoint will store the data securely after decryption.
+
+### How Does a Client Validate a Certificate?
+
+The client checks that the requested hostname is covered by the certificate's subject alternative names, the current time lies within its validity window, the signature chain reaches a trusted root, and policy accepts the algorithms and usage. A wildcard such as `*.example.com` covers one label in the ordinary case; it does not mean every depth beneath the domain.
+
+Servers usually send the leaf certificate and required intermediate certificates. The client normally already has trust anchors. A missing intermediate can fail on a clean client even when a browser with a cached intermediate appears to work. Sending the root is unnecessary and does not make an untrusted root trusted.
+
+Revocation mechanisms and certificate transparency provide additional ecosystem signals. Revocation checks can report that an issued certificate should no longer be accepted, though client behavior and availability tradeoffs vary. Certificate transparency logs make public issuance observable. Neither replaces hostname validation or private-key protection.
+
+A private certificate authority can establish trust inside an organization only after its root is distributed to the intended client trust stores. A certificate being internally signed does not make public browsers trust it. Conversely, adding a root to a trust store grants broad authority to that root, so distribution and key protection are security-sensitive operations.
+
+SNI and hostname verification solve different moments. SNI in the ClientHello tells a shared server which name the client wants so it can select a certificate before HTTP begins. Verification then checks whether the returned certificate covers that name. When testing an IP directly, preserve the intended hostname with `curl --resolve` or an appropriate OpenSSL server name rather than changing the identity being tested.
+
+```bash
+curl --resolve app.example.com:443:203.0.113.25 https://app.example.com/health -v
+openssl s_client -connect 203.0.113.25:443 -servername app.example.com -showcerts
+```
+
+The first command overrides address resolution while retaining URL hostname, SNI, HTTP Host, and certificate verification. The second exposes the certificate chain, handshake, selected protocol, and verification result. `-k` suppresses verification and can isolate a trust problem, but it must not become the production fix.
+
+### How Do HTTP Versions Change Transport Without Changing Meaning?
+
+HTTP/1.1 represents requests and responses as textual start lines, headers, and an optional body over a connection. Persistent connections allow more than one exchange without a new TCP and TLS handshake. HTTP/2 uses binary framing and multiplexes streams over one connection while preserving HTTP concepts such as method, status, and headers. HTTP/3 carries HTTP over QUIC on UDP and integrates modern TLS protection into the transport.
+
+Those versions change framing, head-of-line behavior, and connection management; they do not change the basic application contract. A `GET` still requests a representation, a `POST` still submits according to application semantics, and a `404` still reports that the selected resource was not found. ALPN lets the peers choose a supported application protocol during secure connection setup.
+
+Connection reuse means DNS and TLS changes can take time to affect already-open clients. A client may not perform another lookup or handshake for every request. During a cutover, inspect new connection behavior and existing connection lifetime rather than assuming each HTTP request starts from zero.
+
+### What Do Method Safety and Idempotence Mean?
+
+A safe method is intended not to request a state change, while an idempotent method is intended to have the same desired effect when repeated. `GET` and `HEAD` are safe and idempotent by definition. `PUT` and `DELETE` are idempotent in their intended semantics even though the first attempt can change state. `POST` is not generally idempotent.
+
+These are protocol intentions, not magic enforcement. An application can incorrectly make a `GET` mutate state. A network retry of a non-idempotent operation can duplicate work unless the application uses an idempotency key or another deduplication contract. Proxies, clients, and operators should reason about the method and application behavior before retrying.
+
+Status codes group outcomes. `1xx` is informational, `2xx` successful, `3xx` redirection, `4xx` a client-side request problem in protocol terms, and `5xx` a server-side failure. The exact code narrows the owner: `401` asks for authentication, `403` refuses the authenticated or understood request, `404` does not find the resource, `429` reports rate limiting, `502` describes a bad gateway response, `503` unavailability, and `504` an upstream timeout.
+
+A reverse proxy's status is its observation. A `502` from Nginx does not prove the application returned `502`; the proxy may have failed to connect or parse an upstream response. Correlate proxy access and error logs with application logs and request IDs.
+
+### How Do Headers and Cookies Create Application State?
+
+Headers carry metadata around the message. `Host` or the HTTP/2 authority selects the virtual service. `Content-Type` describes the body's media type. `Content-Length` or protocol framing defines body boundaries. `Authorization` carries credentials according to a scheme. `Cache-Control`, `ETag`, and conditional headers coordinate caching and validation. Forwarding headers can preserve original client context across trusted proxies.
+
+Cookies are name-value state that a server asks a user agent to return for matching scope. `Secure` restricts sending to secure contexts, `HttpOnly` hides the cookie from ordinary script access, and `SameSite` changes cross-site sending behavior. Domain, path, and lifetime define scope. These attributes reduce particular risks; they do not make a weak or leaked session identifier safe.
+
+Security response headers express browser policy. HSTS tells supporting clients to use HTTPS for the host for a period after receiving the policy securely. Content Security Policy constrains content sources and execution. Frame and content-type policies reduce other browser attacks. Each header has deployment consequences, so test it rather than copying an aggressive value blindly.
+
+Proxies must treat client-supplied forwarding headers as untrusted unless a known upstream proxy overwrites or validates them. If an application trusts arbitrary `X-Forwarded-For`, a direct client can claim another address. Define the trusted proxy chain and reconstruct client identity only from that boundary.
+
+### Where Can TLS Terminate?
+
+TLS can terminate at a load balancer, reverse proxy, sidecar, or application. Termination means that component decrypts the connection and owns the presented certificate and private key. It can then inspect HTTP and route by application data. The next hop may be plaintext on a controlled network or protected by another TLS connection.
+
+Re-encryption creates two security sessions. The proxy authenticates to the client on the outer connection, then acts as a client to the upstream on the inner connection. Upstream verification, names, trust roots, and certificates require their own configuration. Calling the public endpoint “HTTPS” does not prove the proxy-to-application hop is encrypted or authenticated.
+
+Mutual TLS adds a client certificate so both endpoints authenticate with certificate identities. It is useful for controlled service-to-service or administrative relationships, but certificate issuance, rotation, revocation, mapping to application identity, and authorization still need design. mTLS authenticates a credential; it does not decide every allowed business action.
+
+### How Do You Read a Request as a Timeline?
+
+Begin with the exact name, client location, time, method, and expected response. Resolve `A` and `AAAA`, determine which address the client selected, and test route and transport reachability. A DNS success with a TCP timeout points below HTTP. A connection refusal means the destination actively rejected or had no listener at that address and port.
+
+Next inspect TLS with the original hostname. Verify SNI selection, certificate names, dates, chain, trusted root, protocol version, and ALPN. A certificate error occurs before the server processes the HTTP request. A TLS alert can reflect no shared protocol or cipher, client-certificate policy, SNI configuration, or server-side handshake failure.
+
+Then inspect HTTP without discarding headers:
+
+```bash
+curl -v --connect-timeout 5 --max-time 20 \
+  -H 'X-Request-ID: debug-20260825-1' \
+  https://app.example.com/api/items
+```
+
+`-v` shows connection choices, handshake summary, request headers, and response headers. Time limits separate a bounded diagnostic from a hanging terminal. A request ID can connect edge, proxy, and application logs when the systems preserve it.
+
+Redirects require another request and can cross scheme or hostname boundaries. Inspect `Location` before using `-L`, then follow intentionally. A redirect loop often comes from disagreement about the original scheme or host across a proxy. A successful TLS handshake followed by `404` proves the secure connection worked; the route or application resource is now the active layer.
+
+Sessions, authentication, and authorization occur after transport trust. A `401` or login redirect can be correct HTTP over perfect TLS. A `403` can come from application policy or an intermediary. Test with the same credentials, cookies, method, and body as the failing client, while keeping secrets out of shared shell history and logs.
+
+### How Do Failure Signatures Map to the Stack?
+
+Name-resolution errors precede connection setup. Timeouts can occur during routing, firewall handling, TCP, TLS, proxy-to-upstream connection, or application processing, so identify the last successful phase and the component that emitted the message. “Connection refused” differs from silence; certificate hostname mismatch differs from an expired certificate; `502` differs from `504`.
+
+Cipher and version settings define compatibility and security. Prefer maintained defaults and current protocol policy rather than inventing a custom list without evidence. Old clients may fail after a secure deprecation; weakening every endpoint restores compatibility by changing risk. Measure affected clients and isolate legacy requirements when they truly exist.
+
+The endpoint trust model includes DNS, routing, certificate authority, key possession, hostname validation, and application identity. Each layer proves a bounded fact. The reliable debugging habit is to state which fact has been established, then test the next boundary without skipping ahead.
+
+### How Do Timeouts Identify the Waiting Boundary?
+
+A client can have separate limits for DNS, connection establishment, TLS handshake, first response byte, idle transfer, and total request time. A reverse proxy adds connect, send, read, and response buffering timeouts for the upstream. The application and its dependencies add their own deadlines. One message saying “timeout” is incomplete until the waiting component and phase are named.
+
+Set an overall deadline so work does not continue after the caller has given up, and choose inner deadlines that leave time to return a controlled error. Retrying a timed-out request consumes more capacity and may duplicate a non-idempotent operation. A retry policy needs a bounded attempt count, backoff, jitter, and knowledge of whether the operation is safe to repeat.
+
+A `504` normally means a gateway did not receive a timely upstream response. A client-side timeout can occur before the gateway's limit and leave no `504` response at all. Application logs may show the work completing after the client disconnected. Correlate timestamps and request IDs across all three perspectives.
+
+### How Do Caching and Conditional Requests Affect HTTP?
+
+Responses can describe whether and how intermediaries or browsers cache them. `Cache-Control` directives express freshness and storage policy. An `ETag` or modification time can act as a validator. A client sends a conditional request such as `If-None-Match`, and the server can return `304 Not Modified` without the full representation when the validator still matches.
+
+Caching changes which component answered. A fresh CDN or browser response may not reach the origin. A stale or incorrectly keyed response can appear as an application bug. Include host, path, query, selected headers, authentication context, and cache status in the investigation. Do not cache private or user-specific content under a key that can serve it to another identity.
+
+TLS sessions can also resume, reducing handshake work while creating a different observation path than a full handshake. When validating a certificate or protocol change, force or identify a new connection and test from a clean client context. Existing long-lived or resumed sessions can temporarily preserve earlier behavior.
+
+### How Do Authentication and Authorization Stay Outside TLS?
+
+TLS server authentication proves that the endpoint controls a key for a trusted certificate name. Application authentication then establishes a user, service, or session identity through credentials such as a cookie, bearer token, or client certificate mapping. Authorization evaluates whether that identity may perform the requested action on the selected resource.
+
+An encrypted `403` is still a denial. A valid certificate does not make an API token valid. A client certificate accepted by mTLS may map to a service identity that still lacks application permission. Keep transport trust, caller identity, and business authorization as separate log and policy decisions.
+
+Credentials in headers and cookies require careful tooling. Verbose traces, shell history, proxy logs, and error reports can expose them. Reproduce with a bounded test credential, redact captured output, and configure logs to preserve request correlation without recording secrets or sensitive bodies.
+
+### What Does Secure Protocol Configuration Need to Balance?
+
+Protocol versions and cipher suites determine which cryptographic combinations peers can negotiate. Maintained platform defaults usually track current security and compatibility better than a long copied list. Disable obsolete protocols according to policy, observe which clients fail, and avoid restoring broad weakness to serve one unknown legacy client.
+
+Certificate automation must include key generation or storage, issuance challenge, installation, full-chain configuration, renewal before expiry, safe reload, and external verification. A renewal job reporting success does not prove the active listener presents the new certificate. Query the endpoint after reload and alert on remaining lifetime.
+
+Private keys should be readable only by the termination component and its controlled deployment path. Backups and copies expand the compromise surface. If TLS terminates at several components, each has its own key, certificate, trust, protocol, and renewal responsibility. Inventory the actual termination points rather than assuming the public DNS name has one certificate location.
+
+### What Does a Minimal Raw HTTP Exchange Show?
+
+An HTTP/1.1 request can be understood from a small wire-shaped example:
+
+```http
+GET /health HTTP/1.1
+Host: app.example.com
+Accept: application/json
+Connection: close
+```
+
+The blank line ends the headers. A response begins with a status line, followed by response headers, another blank line, and an optional body:
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 15
+Cache-Control: no-store
+
+{"status":"ok"}
+```
+
+This shape clarifies ownership. TLS protects these bytes but does not choose `200`. TCP carries the bytes but does not interpret `Host`. Nginx may generate or proxy the response, and the application may generate the body. Headers describe how the message should be interpreted and handled.
+
+Request bodies need correct framing and media type. A server expecting JSON can reject form data even though the connection is perfect. Proxies can impose body-size limits before the application reads anything. A `413`, parsing error, or missing `Content-Type` belongs to HTTP and application policy, not certificate trust.
+
+The final production check should observe from outside the termination boundary, use the public hostname, inspect the active chain, and make a representative authenticated or unauthenticated request without leaking credentials. Internal localhost success and a renewal file on disk are useful intermediate evidence, not proof of the complete client path.
+
+HTTP message boundaries also matter when requests cross intermediaries. A proxy and upstream must agree on framing so one request cannot be interpreted as parts of two requests or vice versa. Maintained servers reject ambiguous combinations and normalize protocol behavior. Operators should avoid configurations that blindly pass conflicting framing headers and should keep proxies patched.
+
+Connection and request logs should record enough context to assign ownership without recording secrets: timestamp, request ID, method, normalized route, status, response size, duration, upstream address and status, TLS protocol, and selected hostname where useful. High-cardinality or personal data requires retention and access policy. Logs are evidence, not permission to copy every header and body.
+
+Finally, distinguish browser policy from transport. Mixed-content blocking, CORS, cookie scope, and content-security policy can prevent a browser action even when curl shows valid TLS and a successful HTTP response. Use browser evidence for browser enforcement, server evidence for the received request, and protocol tools for the connection. One successful tool proves only the boundary it exercised.
+
+Preserve the exact URL, method, hostname, client location, and time in incident notes because each can select a different route, certificate, virtual host, cache entry, or authorization rule.
+
+## Check Your Answers
+
+:::expand[What Do HTTP and TLS Each Provide?]{kind="recap"}
+HTTP defines application messages; TLS authenticates a connection endpoint and protects those bytes in transit.
+:::
+
+:::expand[How Does TLS Establish a Protected Connection?]{kind="recap"}
+The handshake negotiates protocol, authenticates key possession, and derives efficient symmetric session keys.
+:::
+
+:::expand[How Does a Certificate Chain Establish Server Identity?]{kind="recap"}
+The client checks hostname, validity, usage, signatures, intermediates, and a locally trusted root.
+:::
+
+:::expand[What Does HTTP Look Like Inside the Connection?]{kind="recap"}
+HTTP versions frame methods, targets, headers, bodies, statuses, and responses differently while retaining common semantics.
+:::
+
+:::expand[How Do Methods, Status Codes, Headers, and Cookies Carry Meaning?]{kind="recap"}
+Methods express intent, statuses express outcomes, headers carry metadata and policy, and cookies preserve scoped client state.
+:::
+
+:::expand[How Do You Inspect the Complete Request with `curl` and OpenSSL?]{kind="recap"}
+Preserve the hostname and inspect resolution, connection, SNI, certificate chain, negotiated protocol, headers, timing, and body.
+:::
+
+:::expand[How Does One Complete HTTPS Request Cross Every Boundary?]{kind="recap"}
+A request crosses DNS, routing, transport, TLS, proxy, upstream, application, and response paths with separate evidence at each.
+:::
+
+:::expand[How Do You Diagnose HTTP and TLS Failure Modes?]{kind="recap"}
+Find the last successful phase, interpret the exact error owner, and test the next boundary with the original request identity.
+:::
 
 ![HTTP and TLS summary infographic showing connection, certificate trust, HTTP messages, headers, curl inspection, and failure modes](/content-assets/articles/article-devops-foundation-networking-http-tls/http-tls-summary.png)
 

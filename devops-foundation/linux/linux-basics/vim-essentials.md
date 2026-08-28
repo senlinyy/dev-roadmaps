@@ -9,18 +9,15 @@ id: article-devops-foundation-linux-linux-basics-vim-essentials
 
 ## Table of Contents
 
-1. [Why Vim Matters on a Server](#why-vim-matters-on-a-server)
-2. [Modes: How Vim Changes What Keys Do](#modes-how-vim-changes-what-keys-do)
-3. [Open, Edit, Save, and Quit](#open-edit-save-and-quit)
-4. [Move Through a Config File](#move-through-a-config-file)
-5. [Change Text Without Losing Control](#change-text-without-losing-control)
-6. [Search, Replace, and Review](#search-replace-and-review)
-7. [A Safe Remote Editing Workflow](#a-safe-remote-editing-workflow)
-8. [Cheatsheet](#cheatsheet)
-9. [References](#references)
-
-## Why Vim Matters on a Server
-<!-- section-summary: Vim is the editor you can rely on when a remote Linux server only gives you a terminal. -->
+1. [Why Does Vim Matter on a Remote Linux Server?](#why-does-vim-matter-on-a-remote-linux-server)
+2. [How Do Vim's Modes Turn Keys into Commands or Text?](#how-do-vims-modes-turn-keys-into-commands-or-text)
+3. [How Do You Open, Save, and Leave a File Safely?](#how-do-you-open-save-and-leave-a-file-safely)
+4. [How Do Motions Navigate by Character, Word, Line, and File?](#how-do-motions-navigate-by-character-word-line-and-file)
+5. [How Do Operators, Motions, Undo, and Put Change Text?](#how-do-operators-motions-undo-and-put-change-text)
+6. [How Do Search and Substitution Find and Review Changes?](#how-do-search-and-substitution-find-and-review-changes)
+7. [How Do You Edit Production Configuration Without Skipping Validation?](#how-do-you-edit-production-configuration-without-skipping-validation)
+8. [Which Vim Commands Form a Practical Server Toolkit?](#which-vim-commands-form-a-practical-server-toolkit)
+9. [Check Your Answers](#check-your-answers)
 
 Sooner or later, a server gives you only a terminal and one small file to fix. Maybe an Nginx config points at the wrong port, a systemd unit has a bad environment path, or an emergency shell has no desktop editor available. In that moment, the useful skill is simple: edit one file safely without getting trapped in the editor.
 
@@ -28,9 +25,23 @@ Sooner or later, a server gives you only a terminal and one small file to fix. M
 
 Operating Linux requires only a practical Vim baseline at first: open a file, move to the right line, make a small change, save, quit, and recover when you press the wrong key. That baseline keeps a simple Nginx or systemd edit from turning into a stressful moment.
 
+Keep these questions in view as you work through the lesson:
+
+1. **Why Does Vim Matter on a Remote Linux Server?**
+2. **How Do Vim's Modes Turn Keys into Commands or Text?**
+3. **How Do You Open, Save, and Leave a File Safely?**
+4. **How Do Motions Navigate by Character, Word, Line, and File?**
+5. **How Do Operators, Motions, Undo, and Put Change Text?**
+6. **How Do Search and Substitution Find and Review Changes?**
+7. **How Do You Edit Production Configuration Without Skipping Validation?**
+8. **Which Vim Commands Form a Practical Server Toolkit?**
+
+## Why Does Vim Matter on a Remote Linux Server?
+<!-- section-summary: Vim is the editor you can rely on when a remote Linux server only gives you a terminal. -->
+
 On a server, a common edit is small and important. You may change an Nginx upstream port, adjust a systemd unit, or fix an environment file. Vim handles the text edit. The shell handles validation afterward with commands such as `nginx -t` or `systemctl reload`.
 
-## Modes: How Vim Changes What Keys Do
+## How Do Vim's Modes Turn Keys into Commands or Text?
 <!-- section-summary: Vim uses modes so the same keys can either edit text or run commands, depending on the current state. -->
 
 The first surprising moment in Vim usually happens right after opening a config file. You type letters and they may appear in the file, or the cursor may jump around instead. That is Vim's mode system showing up before anyone has explained it.
@@ -58,7 +69,7 @@ The production symptom is accidental text typed into the file or command keys th
 
 _The image makes Vim modes explicit, so the same key doing different jobs is less confusing._
 
-## Open, Edit, Save, and Quit
+## How Do You Open, Save, and Leave a File Safely?
 <!-- section-summary: The survival workflow is open a file, enter Insert mode, save with `:w`, and quit with `:q`. -->
 
 After modes make sense, the first real win is a tiny server edit. A common one is changing an Nginx backend port over SSH. The target is small: open the site config, change `8080` to `8081`, write the file, and quit without disturbing the rest of the config.
@@ -118,7 +129,7 @@ The validation step is part of the edit. Vim writes text to disk. Nginx still ne
 
 The practical model is: edit the buffer, write the file, validate the service, then reload. If validation fails, the next decision is to return to Vim and fix the saved file or restore the backup. Do not reload a service after a failed validation command.
 
-## Move Through a Config File
+## How Do Motions Navigate by Character, Word, Line, and File?
 <!-- section-summary: Normal-mode navigation lets you reach the right line quickly without scrolling through a terminal by hand. -->
 
 After you can save and quit, the next frustration is reaching the right line. Nginx reports `invalid URL prefix in /etc/nginx/sites-enabled/web.conf:18`, and Vim opens the file at the top. The useful skill is getting to line 18 quickly, checking the nearby directive, and moving through the file without changing text by accident.
@@ -150,7 +161,7 @@ sudo nginx -t
 
 Back in Vim, `18G` takes you directly to line 18. The command `:set number` shows line numbers, and `:set relativenumber` can help when you need to move a known number of lines. Many operators turn on line numbers during config repair because service error messages usually speak in line numbers.
 
-## Change Text Without Losing Control
+## How Do Operators, Motions, Undo, and Put Change Text?
 <!-- section-summary: Vim editing commands combine an action with a movement, which makes small config changes fast and repeatable. -->
 
 After the first few edits, the task often gets more precise. You may need to replace one wrong directive, delete one duplicate line, or change only the value inside quotes. Dropping into Insert mode and moving character by character works, and it is easy to disturb nearby text.
@@ -202,7 +213,7 @@ The dot command, `.`, repeats the last change. For example, if you use `cw8081` 
 
 _The image shows how operators and motions combine into small repeatable edits._
 
-## Search, Replace, and Review
+## How Do Search and Substitution Find and Review Changes?
 <!-- section-summary: Search and substitution help you find every related directive before you save a server config change. -->
 
 Before saving a backend change, pause and find every reference to the old address. One `proxy_pass` may sit in the main location block, another may sit in a health-check location, and a comment may mention the old port for documentation. Search lets you review each match before changing the file.
@@ -242,7 +253,15 @@ The substitution pieces mean:
 
 Before leaving Vim, a quick review reduces mistakes. `:set number` shows line numbers, `/` jumps through changed directives, and `:w` writes the file. Then the shell takes over with the service validation command.
 
-## A Safe Remote Editing Workflow
+Search can begin from the word under the cursor: `*` searches forward for that word and `#` searches backward. Counts multiply many commands, so `3w` moves three words, `5dd` deletes five lines, and `2n` advances two search matches. The command grammar stays consistent: count, operator, then motion.
+
+`ciw` means change inside word. It deletes the current word, enters Insert mode, and leaves surrounding punctuation in place. `d$` deletes to the end of the line; `y}` yanks through the next paragraph boundary. These combinations are the core of Vim's design: operators such as delete, change, and yank accept motions that describe the text object or destination.
+
+Visual mode is useful when the desired range is easier to see than describe. Press `v` for character selection, `V` for whole lines, or `Ctrl+v` for a rectangular block; move to extend the selection, then use an operator such as `d`, `y`, or `>` on it. Return to Normal mode with `Esc` when the selection is not what you intended.
+
+Config comments and whitespace require review. A substitution may match an active directive and a commented example. `:set list` reveals tabs, trailing spaces, and line endings, while `:set nolist` returns to ordinary display. Case modifiers such as `\c` for case-insensitive and `\C` for case-sensitive can be placed in a search pattern when the default does not express the intended match.
+
+## How Do You Edit Production Configuration Without Skipping Validation?
 <!-- section-summary: Safe server edits include backup, minimal change, validation, reload, and rollback path. -->
 
 After Vim commands feel usable, wrap them in a safe server workflow. Editing production files directly deserves a small ritual. The ritual protects you from typos and gives you a way back if the service rejects the change.
@@ -329,11 +348,15 @@ sudo systemctl reload nginx
 
 The same shape applies to systemd units and environment files. Back up the file, make the smallest edit, run the service's validation command when one exists, reload or restart intentionally, and keep the rollback command obvious.
 
+Opening a file without write permission still allows inspection. Vim marks the buffer read-only and `:w` fails rather than silently gaining authority. Prefer `sudoedit /etc/example.conf` when the administrative policy supports it: the tool copies the file to a user-editable temporary location and installs the saved result with privilege. Use `visudo` for sudoers because its validation and locking are part of the safe editor boundary.
+
+Be especially careful with remote-access configuration. A bad SSH change can remove the path you are currently using. Keep the existing session open, validate with the service's own command, reload rather than restart when supported, and test a second connection before closing the first. The editor cannot prove that a syntactically valid setting preserves access.
+
 ![Vim buffer and swap file infographic showing original file, editing buffer, swap file, write, and recovery path](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-buffer-swap-file.png)
 
 _The image shows why Vim can recover work and why careful writes matter on a remote server._
 
-## Cheatsheet
+## Which Vim Commands Form a Practical Server Toolkit?
 <!-- section-summary: A compact set of Vim commands covers most remote Linux editing tasks. -->
 
 Keep this table as a safety recap during server edits. Press `Esc` to return to Normal mode, use one command for the action you need, then validate the service outside Vim before reloading anything. The goal is a calm edit path rather than memorizing every Vim feature.
@@ -364,7 +387,116 @@ This is enough to edit `/etc/nginx`, `/etc/systemd/system`, `/etc/fstab`, and si
 
 _The summary image turns the article into a compact Vim survival map._
 
-## References
+Vim configuration lives in files such as `~/.vimrc`. Personal settings can enable line numbers, search highlighting, or indentation, but they may not exist in a root shell, rescue image, or container. Learn the explicit commands so the workflow still works without your normal configuration.
+
+The buffer boundary is worth making explicit. Opening a file reads its contents into an in-memory buffer. Insertions, deletions, undo, and substitution change that buffer first; the disk file changes only when a write succeeds. `:q` refuses to discard a modified buffer, `:q!` discards it deliberately, and `:w` attempts to replace or update the file through the filesystem permissions available to Vim.
+
+That distinction explains swap warnings. Vim commonly creates a swap file while a buffer is being edited. A warning may mean another Vim process still has the file open, or an earlier session crashed and left recoverable changes. Do not reflexively delete the swap file. Read the process and host information, check whether the named process still exists, and choose recovery when it may contain unsaved work:
+
+```bash
+vim -r /etc/example.conf
+```
+
+Review the recovered buffer, write it to a safe location if necessary, compare it with the current file, and remove a stale swap only after confirming no live editor owns it. Two administrators editing the same configuration can otherwise overwrite each other's work even when both Vim sessions behave correctly.
+
+Vim also tracks more than one open buffer. `:ls` lists them, `:buffer N` switches by number, and `:edit FILE` opens another file. Before quitting a multi-buffer session, confirm which buffers are modified. `:wall` writes all writable modified buffers, while `:qall!` discards all changes and therefore deserves the same care as `:q!`. For emergency server work, one file at a time is often the clearer operational boundary.
+
+Registers explain why deleted text can be put back. `dd` deletes a line into a register, and `p` places it after the cursor. `yy` yanks without deleting. Repeated deletes can replace the unnamed register, so do not rely on it as a durable backup. A timestamped file copy or version-control diff is still the recovery path for an important configuration.
+
+Motions and operators make review precise. `0` goes to the start of the line, `^` to the first nonblank character, and `$` to the end. `gg` and `G` reach the start and end of the file. `{` and `}` move by paragraph. Combine a motion with `d`, `c`, or `y`, or add a count: `d3w` deletes across three word motions and `2dd` deletes two lines. The same grammar reduces the need for risky repeated key presses.
+
+Search state also needs a deliberate reset. `/pattern` searches forward, `?pattern` searches backward, `n` repeats in the same direction, and `N` reverses it. `:set hlsearch` highlights matches; `:nohlsearch` clears the current highlighting without changing the search. Before a substitution, search the pattern alone and inspect all occurrences. A global command is safe only when its match set is understood.
+
+Use external validation to cross the editor boundary. Vim can show the bytes, indentation, and diff, but it does not know whether an Nginx directive is valid, an SSH setting preserves access, or an fstab entry names a reachable device. The owning parser or service command supplies that meaning. A completed edit is therefore a sequence: locate, change, review, write, validate, reload when appropriate, and observe the service.
+
+The dot command repeats the last text change and `u` reverses it; together they support a controlled edit-review cycle. `Esc` is the safest reset to Normal mode. `Ctrl+C` can interrupt some operations, but it is not an exact replacement for `Esc` in every mapping or event path, so use `Esc` when the goal is simply to leave Insert or Visual mode.
+
+### What Does a Realistic Minimal Session Look Like?
+
+Suppose `nginx -t` reports an error on line 42 and the intended fix is one upstream port. Open the named file at that line:
+
+```bash
+sudo vim +42 /etc/nginx/sites-enabled/web.conf
+```
+
+Vim begins in Normal mode with the cursor near line 42. Use `:set number` to confirm location and `:set list` if indentation or invisible characters may matter. Search for every related directive before editing:
+
+```vim
+/proxy_pass
+n
+n
+```
+
+Move onto the port value with `w` or another precise motion. `ciw8081` changes the current word to `8081`; press `Esc` when the value is complete. Search again with `n` to see whether another active directive needs the same change. If the last change should repeat, use `.`. If it touched the wrong text, use `u` immediately.
+
+Review the buffer without saving yet. `:set number`, search navigation, and Normal-mode movement do not change the file. `:w` writes only when the intended line is correct. If you realize the whole edit began from a wrong assumption, `:q!` leaves the disk file unchanged. If you wrote and then find a problem, Vim's undo history may still help in the current session, but the external backup remains the clearer recovery record.
+
+After `:wq`, the shell regains control. Run the owning parser:
+
+```bash
+sudo nginx -t
+```
+
+If it fails, reopen at the reported line with `sudo vim +LINE FILE`. If it passes, inspect the diff when the file is version-controlled or compare with the timestamped backup:
+
+```bash
+sudo diff -u /etc/nginx/sites-available/web.conf.bak.20260825-120000 \
+  /etc/nginx/sites-available/web.conf
+```
+
+Only then reload and test the request path. The editor's success condition is that the intended bytes were saved. The operational success condition is that the service accepts them and continues to serve correctly.
+
+This sequence explains the small set worth memorizing:
+
+```text
+Esc          return to a known mode
+/text        find the target
+n / N        inspect every match
+numberG      jump to a reported line
+ciw          replace one logical word
+dd / yy / p  remove, copy, and place a line
+u / Ctrl-r   undo and redo
+.            repeat the last change
+:w / :q!     commit or discard the buffer
+```
+
+Vim becomes efficient because these pieces compose. You do not need hundreds of independent shortcuts; you need a stable home mode, motions that describe scope, operators that describe action, and a save boundary you use deliberately.
+
+## Check Your Answers
+
+:::expand[Why Does Vim Matter on a Remote Linux Server?]{kind="recap"}
+Vim provides a dependable terminal editor for small, reviewable changes when no graphical environment or IDE is available.
+:::
+
+:::expand[How Do Vim's Modes Turn Keys into Commands or Text?]{kind="recap"}
+Normal mode interprets commands, Insert mode enters text, Visual mode selects ranges, and command-line mode performs editor operations.
+:::
+
+:::expand[How Do You Open, Save, and Leave a File Safely?]{kind="recap"}
+Edit the in-memory buffer, write deliberately, respond carefully to swap warnings, and discard only changes you understand.
+:::
+
+:::expand[How Do Motions Navigate by Character, Word, Line, and File?]{kind="recap"}
+Motions address characters, words, lines, paragraphs, searches, and numbered locations without changing the text.
+:::
+
+:::expand[How Do Operators, Motions, Undo, and Put Change Text?]{kind="recap"}
+Operators combine with motions or selections, while undo, redo, put, and repeat make each change recoverable and reusable.
+:::
+
+:::expand[How Do Search and Substitution Find and Review Changes?]{kind="recap"}
+Search maps every occurrence; bounded and confirmable substitution changes only the matches an operator accepts.
+:::
+
+:::expand[How Do You Edit Production Configuration Without Skipping Validation?]{kind="recap"}
+Back up, make the smallest edit, validate with the owning service, reload deliberately, verify, and retain a rollback path.
+:::
+
+:::expand[Which Vim Commands Form a Practical Server Toolkit?]{kind="recap"}
+A small set of modes, motions, operators, search commands, save commands, and display options covers routine server work.
+:::
+
+### References
 
 - [Vim user manual table of contents](https://vimhelp.org/usr_toc.txt.html) - Official Vim help index for beginner and advanced topics.
 - [Vim editing effectively](https://vimhelp.org/usr_02.txt.html) - Official Vim tutorial section covering basic editing.

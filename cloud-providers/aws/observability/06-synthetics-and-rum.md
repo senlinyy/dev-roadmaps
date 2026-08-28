@@ -20,12 +20,16 @@ aliases:
 6. [How Do App Monitors, Sessions, Sampling, and Privacy Work?](#how-do-app-monitors-sessions-sampling-and-privacy-work)
 7. [How Do RUM and Synthetics Connect to X-Ray and Application Signals?](#how-do-rum-and-synthetics-connect-to-x-ray-and-application-signals)
 8. [How Do All the User-Experience Signals Work Together?](#how-do-all-the-user-experience-signals-work-together)
-9. [What Should You Remember?](#what-should-you-remember)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
 User-experience observability is an inference problem: can a person accomplish what they came to do? Synthetics creates an artificial user and observes a controlled experiment. RUM observes what happened to real users in uncontrolled browsers, devices, networks, and geographies. They provide independent views of the same product journey.
 
-The sections below answer these questions in order:
+Application Signals and SLOs give the checkout team a service-health layer. The team can see whether `orders-api` is available, whether `POST /checkout` is slow, and whether a dependency is burning the error budget. That view starts inside the instrumented service.
+
+The browser sees a wider path. A customer has to resolve DNS, complete TLS, download HTML, load JavaScript and CSS, run browser code, keep session state, call APIs, and render the next screen. A failure in any of those steps can stop the customer before the backend service receives a request.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Can Healthy Backends Still Produce a Broken User Experience?**
 2. **What Does CloudWatch Synthetics Test?**
@@ -38,10 +42,6 @@ The sections below answer these questions in order:
 
 ## Why Can Healthy Backends Still Produce a Broken User Experience?
 <!-- section-summary: Service health can miss browser failures, public-route failures, and rare client-side problems that customers actually feel. -->
-
-Application Signals and SLOs give the checkout team a service-health layer. The team can see whether `orders-api` is available, whether `POST /checkout` is slow, and whether a dependency is burning the error budget. That view starts inside the instrumented service.
-
-The browser sees a wider path. A customer has to resolve DNS, complete TLS, download HTML, load JavaScript and CSS, run browser code, keep session state, call APIs, and render the next screen. A failure in any of those steps can stop the customer before the backend service receives a request.
 
 Imagine this Monday morning incident. Application Signals shows the backend checkout service as healthy. The availability SLO is green. The latency SLO is green. The payment dependency is green. Then support tickets arrive: customers can add items to the cart, but the final checkout button stays inert.
 
@@ -67,7 +67,6 @@ Synthetics answers, "Can a known journey work from the outside right now?" RUM a
 | Main limitation | Cannot represent every user environment | Needs traffic and a working client |
 
 Neither source is universally better. Synthetics provides continuity; RUM provides representativeness.
-
 
 ## What Does CloudWatch Synthetics Test?
 <!-- section-summary: CloudWatch Synthetics runs scheduled canary scripts from your AWS account to test endpoints, APIs, and browser journeys before customers report problems. -->
@@ -107,7 +106,7 @@ A good canary is small, realistic, and safe.
 
 An HTTP 200 response is not enough. A page can return `200 OK` while rendering "Something went wrong" or loading no working checkout button. A useful journey asserts the semantic result: the login form exists, authentication reaches the dashboard, search returns results, a product displays a price, and the cart count changes. The canary tests the contract users care about rather than transport alone.
 
-Step boundaries also make timing diagnostic. If one journey grows from four to seventeen seconds, a total duration says only that the journey slowed. Separate `login`, `search`, `product`, and `cart` steps can reveal that search alone consumes 11.4 seconds. Telemetry becomes easier to interpret when its boundaries match meaningful operations.
+Step boundaries also make timing diagnostic. If one journey grows from four to seventeen seconds, a total duration says only that the journey slowed. Separate `login`, `search`, `product`, and `cart` steps can reveal that search alone consumes 11.4 seconds. Matching telemetry boundaries to meaningful operations makes the data easier to interpret.
 
 CloudWatch Synthetics supports blueprint scripts and custom scripts. For API-style canaries, the Node.js library includes `executeHttpStep`, which runs an HTTP step, publishes `SuccessPercent` and `Duration` metrics, and records a step summary in the canary report. A production canary usually names every step clearly because those names appear in metrics and reports.
 
@@ -490,7 +489,7 @@ Several perspectives reduce uncertainty like independent witnesses. A canary fai
 
 
 
-## What Should You Remember?
+## Check Your Answers
 <!-- section-summary: Synthetics detects whether a controlled journey works, RUM measures real impact, and traces and service signals explain the backend path. -->
 
 Remember the four observation jobs:

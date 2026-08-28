@@ -1,533 +1,378 @@
 ---
 title: "Protected Branches and Environment Gates"
-description: "Use branch rules, CODEOWNERS, required checks, merge queue, deployment environments, approvals, scan gates, and release records to control what reaches production."
-overview: "Start with one checkout-api change trying to reach production, then add protected branches, rulesets, CODEOWNERS, required checks, merge queue, environments, approvals, security scan gates, release records, and emergency bypass evidence."
-tags: ["devsecops", "branch-protection", "deployment-gates", "approvals"]
+description: "Learn how branch rules, ownership, required checks, merge queues, protected environments, artifact identity, release records, and break-glass evidence govern delivery transitions."
+overview: "Treat a branch as a movable reference and a protected transition as a write firewall. Connect CODEOWNERS and rulesets to stable check evidence, handle skipped jobs and merge races, then create a separate production authorization boundary with protected environments, exact artifact promotion, release records, and narrow auditable bypass."
+tags: ["devsecops", "protected-branches", "environment-gates", "release-controls"]
 order: 3
 id: article-devsecops-pipeline-and-runner-security-protected-branches-environment-gates
 ---
 
 ## Table of Contents
 
-1. [One Change Trying to Reach Production](#one-change-trying-to-reach-production)
-2. [The First Gate: Protected Branches and Rulesets](#the-first-gate-protected-branches-and-rulesets)
-3. [CODEOWNERS and Review Ownership](#codeowners-and-review-ownership)
-4. [Required Checks with Stable Names](#required-checks-with-stable-names)
-5. [Merge Queue for Busy Branches](#merge-queue-for-busy-branches)
-6. [Deployment Environments](#deployment-environments)
-7. [GitHub Actions Gates in Practice](#github-actions-gates-in-practice)
-8. [Security Scan Gates](#security-scan-gates)
-9. [Release Records](#release-records)
-10. [Break-Glass Bypass Evidence](#break-glass-bypass-evidence)
-11. [GitLab and Jenkins Context](#gitlab-and-jenkins-context)
-12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
-14. [References](#references)
+1. [Why Is a Protected Branch a Write Firewall?](#why-is-a-protected-branch-a-write-firewall)
+2. [How Do Rulesets and CODEOWNERS Control Review?](#how-do-rulesets-and-codeowners-control-review)
+3. [How Do Required Checks and Merge Queues Protect the Final Revision?](#how-do-required-checks-and-merge-queues-protect-the-final-revision)
+4. [Why Is Production Deployment a Separate Trust Boundary?](#why-is-production-deployment-a-separate-trust-boundary)
+5. [How Do Security Scan Results Become Release Gates?](#how-do-security-scan-results-become-release-gates)
+6. [Why Must One Identified Artifact Move Through Every Environment?](#why-must-one-identified-artifact-move-through-every-environment)
+7. [How Should Break-Glass Access and Gate Changes Be Controlled?](#how-should-break-glass-access-and-gate-changes-be-controlled)
+8. [How Do the Delivery Controls Work as One System?](#how-do-the-delivery-controls-work-as-one-system)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## One Change Trying to Reach Production
-<!-- section-summary: A production release starts as one change, and every gate should help the team decide whether that change may move forward. -->
+A Git branch is not a container holding code. It is a name that points to a commit:
 
-Imagine one envelope moving across a desk. At the first desk, a teammate checks the form. At the second desk, a specialist signs the payment section. At the third desk, the system stamps the envelope after automated checks pass. At the last desk, the release manager opens the production door.
-
-A production change moves in a similar way. A developer opens a pull request. Reviewers approve it. CI jobs report results. The change lands on `main`. A deployment job asks to enter `staging` or `production`. The environment gate releases secrets and identity only after the rule is satisfied.
-
-Summit Retail's `checkout-api` handles customer checkout. A small change to coupon validation can still affect payment flow, order totals, and support tickets. The team already worked on runner trust and token boundaries. Now they need controls over **which changes can merge** and **which workflow runs can deploy**.
-
-Here is the path we will build:
-
-| Step | Control | Summit Retail target |
-|---|---|---|
-| Pull request opened | Branch rule and CODEOWNERS | Sensitive paths reach the right reviewers |
-| CI runs | Required checks | Tests, build, dependency review, and code scanning report a result |
-| Approved PR waits | Merge queue | The queued merge result passes before `main` moves |
-| Staging deploys | Staging environment | Fast feedback from reviewed code |
-| Production deploys | Production environment | Required reviewers, branch policy, wait timer, scoped secrets |
-| Emergency release | Bypass evidence | Incident ID, approver, operator, skipped gate, rollback plan |
-
-![Protected delivery path showing pull request, CODEOWNERS review, required checks, merge queue, staging, and production gate for checkout-api](/content-assets/articles/article-devsecops-pipeline-and-runner-security-protected-branches-environment-gates/protected-delivery-path.png)
-
-*The protected delivery path shows one connected route, from pull request review through production approval.*
-
-We will start at the source branch because every later gate depends on what the repository accepted.
-
-## The First Gate: Protected Branches and Rulesets
-<!-- section-summary: Protected branches and rulesets define who can change important branches and which evidence must exist before the update is accepted. -->
-
-A **branch** is a named line of work in Git. Teams usually use `main` as the branch that represents releasable code. A **protected branch** adds rules so the platform blocks risky updates, such as direct pushes, force pushes, branch deletion, or merges without required review and checks.
-
-Summit protects `main` because production deploys come from that branch. A direct push to `main` would skip the review trail. A force push could rewrite release history. A merge with failing checks could let a broken service reach staging or production.
-
-GitHub has two related policy features:
-
-| Feature | Practical use |
-|---|---|
-| Branch protection rule | Repository-level rule for a branch pattern such as `main` |
-| Ruleset | Repository or organization policy that can target branches and tags, layer with other rulesets, and run in evaluate or active mode |
-
-Branch protection rules are common and familiar. Rulesets help organizations create a baseline across repositories, then allow sensitive repositories such as `checkout-api` to add stricter rules. GitHub documents one important branch-rule detail: only one branch protection rule applies to a branch at a time. Rulesets can layer, so teams often use them for broader policy once they are ready.
-
-Summit's production branch policy reads like this before anyone clicks through settings:
-
-| Rule for `main` | Production reason |
-|---|---|
-| Require a pull request | Every production candidate has a review record |
-| Require two approvals | One author cannot ship alone |
-| Require CODEOWNERS review | Payment, workflow, and infrastructure changes reach specialist owners |
-| Dismiss stale approvals | Approval follows the latest commit |
-| Require status checks | CI and security evidence exist before merge |
-| Require conversation resolution | Review feedback gets handled before merge |
-| Block force pushes and deletions | Release history stays traceable |
-| Include administrators or require bypass records | Admin changes leave evidence |
-
-Behind the scenes, GitHub checks the proposed update before it accepts it. It looks at the active rule or rulesets, the pull request state, required reviews, required checks, and bypass permissions. If the update does not satisfy the rule, the branch does not move.
-
-The branch gate says a change needs review. The next question is which reviewers should see which files.
-
-## CODEOWNERS and Review Ownership
-<!-- section-summary: CODEOWNERS maps sensitive repository paths to responsible teams so required review reaches people who understand the risk. -->
-
-**CODEOWNERS** is a file that maps repository paths to users or teams. When a pull request changes a matching path, GitHub can request those owners for review. When branch protection requires CODEOWNERS review, at least one owner for the changed path must approve before the PR can merge.
-
-Summit uses `.github/CODEOWNERS` for `checkout-api`. The file has a default owner and stricter owners for payment code, deployment workflows, infrastructure, dependency manifests, and container build files:
-
-```gitignore
-* @summit-retail/checkout-platform
-
-/src/payments/ @summit-retail/payments @summit-retail/appsec
-/src/fraud/ @summit-retail/fraud @summit-retail/appsec
-
-/.github/workflows/ @summit-retail/platform-security
-/infra/ @summit-retail/platform @summit-retail/platform-security
-
-/Dockerfile @summit-retail/platform-security
-/package.json @summit-retail/checkout-platform @summit-retail/appsec
-/package-lock.json @summit-retail/checkout-platform @summit-retail/appsec
+```text
+main -> commit A
 ```
 
-The first line gives every file a default service owner. The payment and fraud paths add the teams that understand financial and abuse risk. Workflow and infrastructure paths route to platform security because those files can change runner selection, token permissions, environments, deployment scripts, and cloud access. Dependency and container files route to teams that review supply-chain and runtime risk.
+Merging a change moves the name:
 
-Large ownership groups weaken the signal. A team like `@summit-retail/all-engineers` may satisfy a technical requirement while giving little assurance. A smaller team such as `@summit-retail/platform-security` tells reviewers and incident responders who accepted the release-path risk.
-
-Stale approvals deserve special care. A reviewer can approve a safe version of a PR, then a new commit can change `.github/workflows/deploy.yml`. Summit enables stale approval dismissal so the approval follows the version that actually merges.
-
-Ownership answers who approved the change. Automated checks answer what the machines proved about the change.
-
-## Required Checks with Stable Names
-<!-- section-summary: Required checks turn CI job results into merge gates, and stable unique names keep the gate tied to the intended job. -->
-
-A **status check** is a pass, fail, skipped, neutral, pending, or cancelled result attached to a commit. In GitHub Actions, each workflow job can create a check result. A **required check** is a result that must reach an accepted state before the protected branch can update.
-
-Summit starts with a small pull request workflow:
-
-```yaml
-name: checkout-api pull request
-
-on:
-  pull_request:
-    branches:
-      - main
-
-permissions:
-  contents: read
-
-jobs:
-  unit_tests:
-    name: ci / unit tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-      - run: npm ci
-      - run: npm test -- --runInBand
+```text
+main -> commit B
 ```
 
-`ci / unit tests` is the display name Summit selects as a required check. `npm ci` installs dependencies from the lockfile. `npm test -- --runInBand` runs the test suite in one process. The branch rule can now block merges when this job fails.
+If delivery treats `main` as trusted input, then moving that reference is a security-sensitive state transition. A **protected branch** acts like a write firewall around it. Proposed changes may approach through pull requests, but the reference moves only when review and evidence satisfy policy.
 
-Now add build and security evidence:
+Without protection, anyone with push access can bypass review and required analysis, replace trusted history, or move the branch to content that never passed the expected path. The control should normally require a pull request, minimum approvals, completed status checks, resolved discussion, and restricted direct push.
 
-```yaml
-  build_container:
-    name: ci / container build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: docker build --pull --tag checkout-api:${{ github.sha }} .
+Force-push protection matters because rewriting history can replace the commits that reviewers and scanners evaluated. If force pushes are allowed, an approved branch can point to a different history while old evidence still appears nearby. Deletion protection similarly prevents an important reference from disappearing outside the expected process.
 
-  dependency_review:
-    name: security / dependency review
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: high
+Keep these questions in view as you work through the lesson:
 
-  codeql:
-    name: security / codeql
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: javascript-typescript
-      - uses: github/codeql-action/autobuild@v3
-      - uses: github/codeql-action/analyze@v3
+1. **Why Is a Protected Branch a Write Firewall?**
+2. **How Do Rulesets and CODEOWNERS Control Review?**
+3. **How Do Required Checks and Merge Queues Protect the Final Revision?**
+4. **Why Is Production Deployment a Separate Trust Boundary?**
+5. **How Do Security Scan Results Become Release Gates?**
+6. **Why Must One Identified Artifact Move Through Every Environment?**
+7. **How Should Break-Glass Access and Gate Changes Be Controlled?**
+8. **How Do the Delivery Controls Work as One System?**
+
+## Why Is a Protected Branch a Write Firewall?
+<!-- section-summary: A branch is a movable name for a commit, so protection governs who and what evidence may move that trusted reference to new content. -->
+
+The firewall model separates proposal from acceptance:
+
+```text
+untrusted or proposed change
+        |
+        v
+pull request + evidence
+        |
+        v
+protected decision
+   |             |
+ reject          accept
+                  |
+                  v
+          trusted branch moves
 ```
 
-`docker build --pull` asks Docker to pull the newest base image tag allowed by the Dockerfile before building. The dependency review action checks dependency changes in the pull request and fails for high-severity findings. CodeQL initializes analysis, builds the project where needed, and uploads code scanning results.
+Protection is not the same as trusting every person who can open a pull request. Internal accounts can be compromised, and a contributor may be authorized to propose application code but not alter the delivery workflow. The branch policy determines which combinations of actor, review, and evidence can change the reference.
 
-The required check list now has clear names:
+Direct administrative bypass may still exist. Its existence does not erase the value of protection, but it must be narrow, justified, logged, and reviewed. Otherwise the normal gate is advisory whenever the change is inconvenient.
 
-| Required check | Evidence |
-|---|---|
-| `ci / unit tests` | Service tests passed |
-| `ci / container build` | Container build succeeded |
-| `security / dependency review` | Dependency changes stayed inside policy |
-| `security / codeql` | Static analysis completed |
+The branch is only the first important transition. Acceptance into source history does not automatically authorize production. Review may decide that code is suitable for the trusted branch, while release approval decides that a particular artifact may enter a particular environment at a particular time.
 
-GitHub recommends unique job names because required checks use names. If two workflows both publish a check named `build`, reviewers and rules can become confused. Summit prefixes names with `ci /`, `security /`, and `deploy /` so the gate points at the intended job.
+Branch protection should cover automation as well as humans. Bots that update dependencies, release workflows that create tags, merge services, and administrator scripts can all move references. Give each a named identity and only the operation it needs. A bot allowed to open a pull request does not need direct push merely because it is automated.
 
-Required checks should run where the gate needs them. Pull request gates need `pull_request` checks. A busy protected branch also needs a way to test the final combined merge result.
+Tags can be trusted release references too. If the pipeline deploys or publishes from a tag, protect who may create, update, or delete that tag pattern. A protected branch does not secure a release path that accepts an unprotected mutable tag.
 
-## Merge Queue for Busy Branches
-<!-- section-summary: A merge queue tests the actual combined result before approved pull requests land on a protected branch. -->
+Review the actual repository mode. A rule that administrators can always bypass, a legacy direct-push permission, or another unprotected release branch can create an alternate path. The security property depends on every route by which trusted source state enters delivery.
 
-A **merge queue** is a controlled line for approved pull requests. GitHub creates a temporary merge group, runs required checks on the combined result, and merges only after those checks pass.
+## How Do Rulesets and CODEOWNERS Control Review?
+<!-- section-summary: Rulesets express enforced repository policy, while CODEOWNERS routes sensitive paths to accountable reviewers whose approval can be required before the branch moves. -->
 
-Summit feels this during holiday traffic. One PR updates tax calculation, another updates payment retry behavior, and another changes the deployment workflow. Each PR passes by itself. The final combined result can still fail. A merge queue tests the queued merge result before `main` moves.
+Branch rules can protect one branch. **Rulesets** provide policy that can target branches or tags across broader patterns and can centralize requirements above individual settings. The important property is not the product name; it is that protected references inherit a reviewed rule that ordinary contributors cannot alter through the proposed code.
 
-The workflow needs a `merge_group` trigger so required checks run for merge queue commits:
+Rules may require pull requests, signed commits, review count, conversation resolution, status checks, linear history, restricted updates, or other evidence. Keep the set understandable. A large collection of overlapping rules can create bypass confusion and make it hard to explain why one change merged.
 
-```yaml
-name: checkout-api pull request
+**CODEOWNERS** answers a different question: who should review changes to a path? For example:
 
-on:
-  pull_request:
-    branches:
-      - main
-  merge_group:
-    branches:
-      - main
+```text
+/src/auth/            @identity-team
+/infra/               @platform-team
+/.github/workflows/   @platform-team @security-team
 ```
 
-The `pull_request` trigger runs checks on ordinary pull requests. The `merge_group` trigger runs the same checks on the temporary merge-group commit created by the queue. Without `merge_group`, the queue may wait for checks that never report.
+When a pull request changes authentication or a privileged workflow, the repository routes review to the accountable team. This turns an organizational ownership map into an operational control.
 
-Summit's merge queue settings are simple:
+Routing alone is not enforcement. A requested owner review that can be ignored is a notification. The branch or ruleset must require the relevant code-owner approval if the policy depends on it.
 
-| Setting | Summit choice |
-|---|---|
-| Target branch | `main` |
-| Pull request required | Enabled |
-| Required checks | Same CI and security checks as pull requests |
-| Merge queue | Enabled for `main` |
-| Workflow trigger | `pull_request` and `merge_group` |
+Ownership should follow sensitive control surfaces, not only application directories. Workflow definitions, dependency manifests, infrastructure, authorization policy, release scripts, CODEOWNERS itself, and ruleset configuration can change how later code becomes trusted. Protect the files that define the gate.
 
-Smaller repositories may begin with "branch must be up to date before merging." Busy repositories usually move to merge queue when approved PRs frequently collide or when the cost of breaking `main` is high.
+Reviewer identity and reviewer authority are distinct. A general code reviewer may understand implementation quality. An identity owner may judge authentication behavior. A platform owner may evaluate deployment changes. Multiple approvals are useful when each answers a defined question, not when they merely add names.
 
-Now source is controlled. The next gate controls deployment targets.
+Ownership records need maintenance. Team names change, people move, and permissions accumulate. Periodically verify that owners still understand the system, can satisfy review requirements, and have only the administrative access they need. A stale required owner can pressure teams into bypassing the control.
 
-## Deployment Environments
-<!-- section-summary: Deployment environments separate staging and production so each target can have its own approvers, secrets, wait time, branch policy, and records. -->
+Ruleset administration is itself high authority. Someone able to remove required review or checks can indirectly authorize any source change. Protect those configuration changes, preserve audit logs, and review who can bypass or edit policy.
 
-A **deployment environment** is a named target such as `staging` or `production`. In GitHub Actions, an environment can have protection rules, secrets, variables, and deployment history. A job references an environment by name, and GitHub applies the environment rules before the job can proceed.
+CODEOWNERS must itself be protected by ownership and branch policy. Otherwise a change can remove the required owner in the same proposal that alters the sensitive file. Locate the ownership file where the platform actually reads it and verify that syntax errors, missing teams, or inaccessible owners do not silently weaken routing.
 
-Summit uses two environments for `checkout-api`:
+Approval freshness matters when content changes. If a new commit appears after review, decide whether approvals should be dismissed and renewed. Sensitive paths often need the owner to approve the final diff rather than an earlier version. Avoid configurations in which the author can approve their own update through another identity or team membership.
 
-| Environment | Protection | Secrets and identity | Branch policy |
-|---|---|---|---|
-| `staging` | Fast deploy from reviewed `main` | Staging role and staging variables | `main` |
-| `production` | Required reviewers, wait timer, no self-review | Production role and production-only secrets | `main` and `release/*` |
+Review requirements should express independence where necessary. The author and required approver may both be authorized contributors, but the control is stronger when one person cannot propose, approve, merge, and change the gate. Use the least amount of separation that matches the repository's consequence.
 
-**Required reviewers** are people or teams who must approve a deployment before the job can access the protected environment. Summit uses `@summit-retail/release-managers` and `@summit-retail/checkout-oncall` for production.
+## How Do Required Checks and Merge Queues Protect the Final Revision?
+<!-- section-summary: Required checks turn test and scanner evidence into policy only when stable check identities complete on the exact revision that will merge, including after concurrent changes. -->
 
-**Wait timers** delay a deployment after approval or before the job proceeds, depending on the environment rules. Summit uses a short production wait during business hours so the release manager can catch a late alert, freeze notice, or support escalation before rollout.
+A scanner is not a gate by itself. It produces evidence. A required-check rule consumes that evidence and decides whether the branch may move.
 
-**Deployment branch policies** restrict which branches or tags can deploy to an environment. A feature branch can run tests and preview jobs, while the production environment accepts only `main` or `release/*`.
-
-**Environment secrets** are secrets scoped to one environment. The production deploy job can receive production-only values only after it references the `production` environment and the environment rules pass. GitHub withholds those production values from test and staging jobs.
-
-The branch gate and environment gate reinforce each other. Branch protection controls which commits reach `main`. The production environment controls which workflow run can receive production deployment access.
-
-## GitHub Actions Gates in Practice
-<!-- section-summary: A deployment workflow can keep staging fast, hold production behind an environment gate, and use concurrency so releases run one at a time. -->
-
-Now turn the policy into a workflow. Summit wants every push to `main` to deploy to staging. Production should run only when a release manager starts the workflow with a release ticket.
-
-Start with the production dispatch shape:
-
-```yaml
-name: checkout-api deploy
-
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
-    inputs:
-      target_environment:
-        description: Environment to deploy
-        required: true
-        type: choice
-        options:
-          - staging
-          - production
-      release_ticket:
-        description: Release or incident ticket
-        required: true
-        type: string
+```text
+tests or scanner -> named result for revision R
+                         |
+                         v
+                protected branch rule
+                    |          |
+                 fail          pass
+                    |          |
+                  reject      allow
 ```
 
-`push` runs staging after `main` updates. `workflow_dispatch` lets an approved operator start a deployment manually and supply a release or incident ticket. The ticket joins the release record.
+The result must apply to the exact revision accepted. If commit A passes, then commit B is added without rerunning the required job, the evidence does not cover B. Configure policy so updates invalidate old approval or checks where necessary and the final merge candidate receives the required analysis.
 
-Now add staging:
+Check names should be stable and unique. Branch policy refers to the published check identity. Renaming a workflow or job can leave the repository waiting for a result that will never arrive, while two jobs with the same display name can make it unclear which producer satisfied the requirement. Treat required check identities as an interface between workflow and policy.
 
-```yaml
-permissions:
-  contents: read
-  id-token: write
-  deployments: write
+Conditional execution creates a subtle problem. Suppose a required security job runs only when application files change. A documentation-only pull request skips it. Depending on platform behavior and configuration, the check may remain pending or a skipped parent workflow may report a misleading success. Design a stable required gate that always reports a deliberate outcome:
 
-jobs:
-  deploy_staging:
-    name: deploy / staging
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target_environment == 'staging')
-    runs-on: ubuntu-latest
-    environment:
-      name: staging
-      url: https://checkout-api.staging.summit-retail.example
-    concurrency:
-      group: checkout-api-staging
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v4
-      - run: docker build --tag registry.example.com/checkout-api:${{ github.sha }} .
-      - run: ./scripts/deploy.sh staging "${{ github.sha }}"
+```text
+relevant change -> run analysis and report result
+irrelevant change -> evaluate scope and report not-applicable success
+setup failure -> report failure or missing evidence
 ```
 
-`id-token: write` allows OIDC federation for deployment identity. `deployments: write` lets the workflow create deployment records. The staging concurrency group cancels older staging runs because the newest `main` commit is usually the one developers want in staging. `docker build` creates the image, and `./scripts/deploy.sh staging` updates the staging service with the current commit.
+“Did not run” and “ran cleanly” are different states. The gate should distinguish them.
 
-Production adds the environment gate and a non-cancelling concurrency rule:
+Concurrent merges create a race. Pull request X can pass against current `main`; pull request Y can also pass against the same base. After X merges, Y's combination with the new branch may fail even though Y previously showed green.
 
-```yaml
-  deploy_production:
-    name: deploy / production
-    if: github.event_name == 'workflow_dispatch' && inputs.target_environment == 'production'
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: https://checkout-api.summit-retail.example
-    concurrency:
-      group: checkout-api-production
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate release ticket
-        run: |
-          test -n "${{ inputs.release_ticket }}"
-          echo "Release ticket: ${{ inputs.release_ticket }}"
-      - run: docker build --tag registry.example.com/checkout-api:${{ github.sha }} .
-      - run: ./scripts/deploy.sh production "${{ github.sha }}"
+A **merge queue** tests the candidate in the order and combined state expected to enter the branch. It creates or evaluates a merge-group revision, runs required checks there, and moves the branch only when that final combination passes.
+
+```text
+PR X and PR Y pass separately
+        |
+        v
+queue tests main + X, then updated main + Y
+        |
+        v
+only verified combinations move the branch
 ```
 
-The production environment pauses the job until required reviewers approve it. `cancel-in-progress: false` prevents a newer production run from cancelling an active production deployment. The `test -n` command checks that the ticket input is present. The `echo` command writes the ticket to the log and workflow summary, where reviewers can connect the run to the release or incident record.
+Workflows must listen for the merge-queue event when the platform uses a distinct event type. Otherwise the required checks never appear for the queued revision. Stable names, correct triggers, and exact revision binding are all part of the security control.
 
-Human approval helps most when automated gates have already produced evidence. That is where scan gates enter.
+Required checks should come from a trusted producer. If proposed code can emit a status with the same context name as the official scanner, it may satisfy policy without running the control. Restrict who can create the required result and use platform mechanisms that bind the check to the expected application or workflow where available.
 
-## Security Scan Gates
-<!-- section-summary: Security scan gates turn dependency, code, secret, image, and policy checks into required evidence before merge or deployment. -->
+Timeouts and cancellations need explicit semantics. A job that times out during analysis should not report success from a cleanup step. A cancelled run should leave the transition blocked until a new run completes. Preserve the report even on failure so developers can distinguish a security finding from infrastructure failure.
 
-A **security scan gate** is an automated security check that can block a merge or deployment. It may look for vulnerable dependencies, secrets in code, unsafe application patterns, container image vulnerabilities, infrastructure policy violations, or malformed release evidence.
+Path filtering can improve speed, but the routing decision itself becomes part of policy. A small always-running gate can evaluate changed paths and then require or record the relevant analysis. Keep the evaluation logic reviewed, stable, and covered by tests for sensitive directories and renames.
 
-Summit wants scan results before production approval. The release manager should see high-severity dependency, code, and image findings before approving the deployment. The scan should publish a required check or code scanning result before the merge or deploy decision.
+## Why Is Production Deployment a Separate Trust Boundary?
+<!-- section-summary: Merge approval accepts source into a trusted branch, while a protected environment separately authorizes a release identity and identified artifact to affect a target environment. -->
 
-![Security gates showing dependency review, code scan, secret scan, and image scan blocking findings before production](/content-assets/articles/article-devsecops-pipeline-and-runner-security-protected-branches-environment-gates/security-gates.png)
+Source acceptance and production release answer different questions:
 
-*Security gates should produce evidence before a merge or deployment decision, and a real finding should move the change into review.*
+```text
+merge approval:
+Is this change acceptable in the trusted codebase?
 
-Add a container scan with a stable required-check name:
-
-```yaml
-  container_scan:
-    name: security / container scan
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-      - run: docker build --tag checkout-api:${{ github.sha }} .
-      - uses: aquasecurity/trivy-action@0.30.0
-        with:
-          image-ref: checkout-api:${{ github.sha }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          exit-code: "1"
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
+deployment approval:
+May this identified release enter production now?
 ```
 
-`docker build` creates the image to scan. The Trivy action scans that image and writes SARIF output. `severity: CRITICAL,HIGH` selects the severities Summit wants to block. `exit-code: "1"` makes matching findings fail the job. The SARIF upload sends the result to GitHub code scanning even when the scan job fails.
+The second question may depend on staging evidence, release timing, operational readiness, incident state, and separation of duties that were irrelevant to code review.
 
-In a high-trust release workflow, Summit pins third-party actions to reviewed commit SHAs. This article keeps versions readable while showing the gate behavior; the next article covers action pinning and third-party action review.
+A deployment **environment** acts as a security boundary only if it controls environment-specific secrets, protected identities, required reviewers, wait timers, deployment branches or tags, and audit records. Merely writing `environment: production` in editable YAML does not create authorization. Protect who can configure the environment and which workflow contexts may target it.
 
-Security findings sometimes need exceptions. The exception path should create evidence instead of silently skipping the gate.
+The production job should wait at the boundary before it receives production authority. After approval, it can obtain environment-scoped secrets or, preferably, exchange a contextual OIDC assertion for a short-lived role. The role trust policy should require the expected repository, workflow, protected ref, and production environment.
 
-## Release Records
-<!-- section-summary: Release records connect commits, checks, approvals, deployment status, artifact digests, and rollback targets into one trail. -->
+Staging and production need separate identities. One role with access to both environments lets compromise of the lower-trust path move laterally. Environment binding should influence both admission to the workflow step and external cloud authorization.
 
-A **release record** is the evidence package for a shipped change. It tells responders what changed, who approved it, which checks passed, what artifact deployed, and how to roll back. Auditors like release records, and engineers use them during incidents because they reduce searching.
+A reviewer should approve a concrete subject. The request should name source revision, artifact digest, environment, test and security evidence, and intended change. Approving “deploy latest” leaves room for the mutable name to point elsewhere before execution.
 
-Summit's production release record includes:
+Wait timers can support operational windows or give monitoring time, but they are not a substitute for identity and evidence. Required reviewers create independent authorization only when they cannot approve their own unreviewed changes or alter the artifact after approval.
 
-| Field | Example |
-|---|---|
-| Service | `checkout-api` |
-| Environment | `production` |
-| Release ticket | `CHG-10422` |
-| Pull request | `https://github.com/summit-retail/checkout-api/pull/1842` |
-| Commit | `8f31c2b9a8e0f1b72d4f6b3e9c901d6b8a12f0e7` |
-| Image digest | `registry.example.com/checkout-api@sha256:91ab...` |
-| Required checks | Unit tests, build, dependency review, CodeQL, container scan |
-| Environment approval | Release manager and checkout on-call |
-| Rollback target | Previous image digest |
-| Post-deploy checks | Error rate, payment latency, alert status |
+Deployment protection should also govern retries and reruns. An approval for digest D should not automatically authorize a changed digest after a failed job. If a rerun retains approval, confirm the immutable subject and workflow definition remain the same. If either changes, request a new decision.
 
-The production job can write a summary into GitHub:
+Separate the role that approves from the role that performs. The human or policy service authorizes the transition; a workload identity executes the bounded deployment. This keeps personal cloud credentials out of the pipeline and produces clearer attribution for both the decision and the action.
 
-```yaml
-      - name: Write release summary
-        if: always()
-        run: |
-          {
-            echo "## checkout-api production release"
-            echo ""
-            echo "- Commit: $GITHUB_SHA"
-            echo "- Environment: production"
-            echo "- Release ticket: ${{ inputs.release_ticket }}"
-            echo "- Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            echo "- Image: registry.example.com/checkout-api@$IMAGE_DIGEST"
-          } >> "$GITHUB_STEP_SUMMARY"
+Environment secrets should appear only after the job reaches the protected boundary. Earlier build and test steps should not inherit production credentials merely because they live in the same workflow file. Separate jobs and runner zones provide a stronger boundary than step ordering inside one process.
+
+
+_The trusted branch and production environment are two different state transitions with different evidence and decision owners._
+
+## How Do Security Scan Results Become Release Gates?
+<!-- section-summary: Security controls belong at the transition where their evidence exists, and policy must define thresholds, missing evidence, exceptions, and the exact object covered. -->
+
+Security scanning can protect several boundaries.
+
+Before code enters shared Git history, push protection can stop supported secrets. Before a pull request merges, SAST, dependency review, infrastructure policy, tests, and secret scanning can report on the proposed revision. Before production, final-artifact scanning, provenance verification, signing policy, and runtime test evidence can report on the release object.
+
+```text
+push boundary       -> secret present?
+merge boundary      -> unacceptable source or configuration risk?
+promotion boundary  -> is this exact artifact trusted for this environment?
 ```
 
-Each `echo` command writes one line of the release summary. `$GITHUB_STEP_SUMMARY` is the GitHub Actions file path that stores the job summary shown in the workflow run. `if: always()` writes the summary even when the deploy step fails, which helps responders inspect failed release attempts.
+Running the tools does not create enforcement. Policy must say which result blocks, which warns, who owns triage, what missing analysis means, and how an exception is approved. A job that uploads a report while the merge remains allowed is detection, not a gate.
 
-The release record complements the formal change ticket if the organization requires one. The GitHub environment approval, workflow run, deployment record, and summary should all point to the same commit and artifact digest.
+Do not gate blindly on every alert. High-confidence new findings in changed code may block immediately, while a historical baseline enters an owned backlog. A final image policy may reject prohibited severity or package conditions after reachability and exception rules are defined. The exact thresholds are product and risk decisions.
 
-Now we can handle the emergency path.
+Missing evidence should fail closed at sensitive transitions. If the scanner did not run, analyzed the wrong revision, failed to authenticate, or could not upload a result, a blank report is not a pass. Make setup and coverage failures visible.
 
-## Break-Glass Bypass Evidence
-<!-- section-summary: Emergency bypass can exist, but it needs narrow access and strong evidence so the team can review exactly what happened. -->
+Bind evidence to the object. Source analysis names a commit. Artifact scanning names a digest. Runtime tests name the deployed digest and environment. Provenance names the builder and input revision. A gate should not accept a result attached only to a mutable tag or approximate timestamp.
 
-**Break-glass** means an emergency path that lets trusted people bypass a normal control during a serious incident. In delivery systems, it can mean bypassing a ruleset, approving an environment deployment during an incident, or using admin access to ship a hotfix while a noncritical gate is unavailable.
+Exception handling belongs in the control design. A verified false positive, mitigation, or accepted risk can permit the transition when an authorized decision and expiry exist. Do not change the scanner configuration merely to make one release green.
 
-Summit needs a break-glass path because checkout incidents can be expensive. If customers cannot complete payment, the release manager may need to ship a rollback or hotfix while a scanner service is down. The risk is that bypass can hide a dangerous release, so the path stays narrow and evidence-heavy.
+Different gates can use different policies because they answer different questions. Push protection prefers very early prevention for a real credential. Pull-request analysis favors high precision and change-focused results. Production admission can evaluate final artifact composition, signature, provenance, and environment policy. Combining every alert into one undifferentiated red status hides which boundary failed and who should respond.
 
-A useful break-glass record includes:
+Record policy version alongside a decision. If thresholds or exception rules change later, investigators should know which rule admitted the release. A result called `pass` without its evaluated policy is weaker evidence.
 
-| Evidence | Example |
-|---|---|
-| Incident or change ticket | `INC-4821 checkout payment failures` |
-| Repository and branch | `summit-retail/checkout-api`, `main` |
-| Commit SHA | `8f31c2b9...` |
-| Gate bypassed | `security / container scan unavailable` |
-| Customer impact | `Payment authorization failures affecting 18% of checkouts` |
-| Approver | `@sam-release-manager` |
-| Operator | `@riley-oncall` |
-| Rollback plan | `Redeploy previous digest sha256:91ab...` |
-| Follow-up deadline | `2026-06-22 12:00 UTC` |
 
-GitHub rulesets can define bypass actors. Environment protection rules can allow or restrict admin bypass depending on the environment configuration. Deployment approvals and workflow logs show the commit, environment, inputs, and approver trail.
+_Each scanner produces bounded evidence; protected policy decides whether that evidence is sufficient for the next transition._
 
-Summit avoids hidden bypass flags such as `skip_security=true` in normal release workflows. If an exception is needed, it should appear in the incident record, environment approval, workflow input, or change ticket, and the post-incident review should verify the follow-up.
+## Why Must One Identified Artifact Move Through Every Environment?
+<!-- section-summary: Building once and promoting an immutable digest preserves the relationship between reviewed source, completed checks, approval, deployment, and rollback. -->
 
-GitHub gives the main examples here, and the same release-path design appears in GitLab and Jenkins.
+Suppose the trusted branch builds artifact A, staging tests A, and production rebuilds artifact B from the same source tag. The tests do not cover B's exact bytes. Different dependencies, build environment, compromised runner, or mutable inputs can make the artifacts differ.
 
-## GitLab and Jenkins Context
-<!-- section-summary: GitLab and Jenkins use different names, while the same pattern still controls branches, approvals, secrets, and deployment evidence. -->
+Build once in a controlled job. Record the source revision, builder, resolved inputs, artifact digest, test and scan results, and provenance. Promote that digest through staging and production.
 
-GitLab has **protected branches** for controlling who can push, merge, force push, or delete important branches. It also has **protected environments** for limiting who can deploy to targets such as production. GitLab merge request approvals, approval rules, CODEOWNERS, deployment approvals, and environment-scoped variables all support the same delivery path.
-
-Jenkins often handles the approval point inside a Pipeline with an `input` step. Jenkins still needs source control branch protection because the repository should control what reaches `main`. The Jenkins approval handles the production moment, while repository rules handle the source branch.
-
-Here is a small Jenkins example:
-
-```groovy
-pipeline {
-  agent any
-
-  stages {
-    stage('Build and test') {
-      steps {
-        sh 'npm ci'
-        sh 'npm test'
-      }
-    }
-
-    stage('Production approval') {
-      steps {
-        input message: 'Deploy checkout-api to production?',
-              submitter: 'release-managers,checkout-oncall'
-      }
-    }
-
-    stage('Deploy production') {
-      steps {
-        sh './scripts/deploy.sh production "$GIT_COMMIT"'
-      }
-    }
-  }
-}
+```text
+reviewed commit
+    -> controlled build
+    -> artifact sha256:D
+    -> scan and test D
+    -> approve D
+    -> deploy D
 ```
 
-`sh 'npm ci'` installs dependencies from the lockfile. `sh 'npm test'` runs the test script. The `input` step pauses the Pipeline until an allowed submitter approves. The final `sh` command runs Summit's deployment script with the production target and the Git commit Jenkins is building.
+Tags and release names help humans, but the digest preserves identity. An approval should name both useful context and immutable subject.
 
-The same review questions apply across tools. Who can approve? Which branch can run this production job? Which secrets are available? Which scan results block the deploy? Which record shows the approval, commit, artifact, and rollback target?
+Gates answer “may this transition occur?” **Release records** answer “what happened?” A useful production record includes artifact digest, source revision, deployment identity, approvers, evidence references, environment, start and completion times, result, and rollback relationship.
 
-## Putting It All Together
-<!-- section-summary: A strong release path combines branch rules, review ownership, required checks, merge queue, environment approvals, scoped secrets, and records. -->
+Immutable releases strengthen rollback. If production fails, operators can select a previously approved digest rather than reconstructing old source under a changed build environment. The rollback is another deployment event and should preserve who authorized it and what now runs.
 
-The complete `checkout-api` path now has connected gates. A developer opens a pull request. CODEOWNERS routes payment, workflow, dependency, and infrastructure changes to the right teams. Branch rules require two approvals, CODEOWNERS approval, stale approval dismissal, conversation resolution, and required checks.
+Runtime state closes the chain. After deployment, observe the digest actually running and compare it with the approved release. A successful workflow result does not prove that every instance reached the intended version or that an administrator did not later make a manual change.
 
-GitHub Actions reports stable check names. The branch rule requires unit tests, container build, dependency review, CodeQL, and container scan. Merge queue tests the final queued result before `main` moves.
+Release records also support forward and backward investigation. Starting from a vulnerable commit, locate artifacts and environments. Starting from suspicious production behavior, locate digest, deployment, provenance, source, checks, and reviewers.
 
-After merge, staging deploys quickly with staging identity. Production uses a named environment with required reviewers, wait timer, branch policy, production-only secrets, and non-cancelling concurrency. The workflow run writes a release summary, and the deployment record points to the same commit and artifact digest.
+The artifact store and deployment mechanism should prevent substitution after approval. A malicious actor must not be able to replace the bytes associated with an approved name. Use digest-addressed retrieval, registry immutability where available, signature or provenance verification, and narrow write permission.
 
-When an emergency release happens, Summit uses a small bypass group and records the incident, gate, approver, operator, commit, rollback target, and follow-up deadline. That evidence lets the team review the exception after the customer incident is stable.
+Promotion should carry evidence references forward rather than copying only a version label. The production request can name build run, digest, scan results, provenance, staging deployment, runtime tests, and exception records. That turns approval into a review of one release subject rather than a search across disconnected systems.
 
-![Release control summary showing branch rules, environment gates, and release records connected through reviews, checks, required reviewers, wait timers, commits, approvals, and rollback](/content-assets/articles/article-devsecops-pipeline-and-runner-security-protected-branches-environment-gates/release-control-summary.png)
+## How Should Break-Glass Access and Gate Changes Be Controlled?
+<!-- section-summary: Emergency bypass preserves availability when normal controls cannot serve the incident, but its scope, identity, reason, time, actions, outputs, and review must remain explicit. -->
 
-*Branch rules, environment gates, and release records work best when they describe the same production path.*
+Break-glass is not the opposite of security. A production incident may require a faster path than ordinary review, or the normal gate itself may be unavailable. Pretending no bypass exists often creates an informal, unaudited one.
 
-Runner isolation controls where jobs run. Token boundaries control what jobs can access. Branch protections control what code can land. Environment gates control what can deploy. Release records give the team proof of what happened.
+A designed emergency path should be narrow:
 
-## What's Next
+- Named authorized identity, not a shared account.
+- Explicit incident or reason.
+- Time-bounded access.
+- Limited target and actions.
+- Logging of configuration and deployment changes.
+- Preservation of exact artifact or source identity.
+- Immediate notification and later independent review.
+- Revocation when the emergency ends.
 
-Summit now has a controlled path from pull request to production. The next risk lives inside the workflow itself: third-party actions, reusable workflows, Jenkins plugins, shared libraries, install scripts, and uploaders. The next article treats workflow code as code that runs on the runner and can share the job's access.
+The event should remain visible as exceptional. Do not retroactively make it look like the normal checks passed. Record which controls were bypassed, which compensating review occurred, and what must be reconciled afterward.
+
+Who can change the gate matters as much as who can pass it. Repository administrators can weaken branch rules. Workflow owners can rename or skip checks. Environment administrators can remove reviewers. Cloud-policy editors can broaden OIDC trust. Runner administrators can route jobs to powerful machines. Treat these roles as part of release authorization.
+
+Policy changes should require review and produce audit evidence. Alert on removal of protection, new bypass actors, required-check changes, environment reviewer changes, wildcard trust, and force pushes. Periodically review unused administrative permission.
+
+Emergency authority should not depend on the same failed component as the normal path. If the deployment service is unavailable, a separately protected recovery mechanism may be necessary. It should still authenticate a named responder and preserve the exact change. Test the procedure before an incident so urgency does not force responders to invent an unlogged route.
+
+After use, reconcile source and production. If an emergency change was applied directly, place the equivalent reviewed change into the trusted source of truth, rebuild or identify the approved artifact, verify current runtime, and close the temporary access. Otherwise the next ordinary deployment may silently remove the fix or restore the vulnerable state.
+
+Break-glass actions must enter the release record. If an operator deploys a hotfix manually, capture the digest, source or patch, identity, time, commands or API operation, outcome, and later normalization into the controlled delivery path. Otherwise current production reality diverges from the evidence graph.
+
+## How Do the Delivery Controls Work as One System?
+<!-- section-summary: The complete system makes source and deployment transitions explicit, attaches object-bound evidence, separates evidence production from authorization, limits bypass, and records resulting reality. -->
+
+GitHub, GitLab, and Jenkins expose different mechanisms, but the underlying model is consistent.
+
+GitHub branch protections and rulesets can enforce pull requests, owners, checks, and merge queues; environments can add deployment reviewers and scoped secrets or identity. GitLab protected branches and protected environments provide comparable source and deployment boundaries, with platform-specific permission and approval behavior. Jenkins commonly relies on plugins, shared libraries, folder permissions, credentials, and pipeline code, so teams must assemble and govern the same transitions more explicitly.
+
+Do not copy configuration mechanically between platforms. Determine who can modify policy, how required evidence is identified, which events run, how skipped jobs behave, which identity deploys, and how bypass is audited in the chosen system.
+
+A complete path looks like:
+
+```text
+proposed change
+  -> pull request
+  -> CODEOWNERS and independent review
+  -> stable required tests and security checks
+  -> merge queue verifies final combination
+  -> protected branch moves to exact revision
+  -> controlled build produces digest and evidence
+  -> staging deploys and tests same digest
+  -> production environment authorizes same digest
+  -> short-lived deployment identity updates target
+  -> release and runtime records prove the result
+```
+
+
+_Branch rules govern entry to trusted source, environment gates govern effect on a target, and release records preserve what actually happened._
+
+Five principles keep the system coherent.
+
+First, make important state transitions explicit. Moving a trusted branch and changing production are separate decisions.
+
+Second, attach evidence to each transition. Review and checks bind to the final revision; artifact and runtime evidence bind to the digest.
+
+Third, separate evidence production from authorization. A scanner reports; protected policy decides. A build produces an artifact; an environment gate authorizes its deployment.
+
+Fourth, minimize who can bypass or change policy. Preserve identity and reason for every exceptional transition.
+
+Fifth, preserve the identity of what was approved. Mutable names support usability; immutable revisions and digests support proof.
+
+The controls should be tested as a system. Attempt a direct push, an author-only approval, a missing required scan, a skipped-sensitive path, a stale merge candidate, an unapproved environment deployment, a changed digest after approval, and a staging identity against production. Expected denials prove that the configuration creates the intended transition boundaries.
+
+Also rehearse the positive path. An ordinary reviewed change should move without hidden administrator intervention, producing branch, build, approval, deployment, and runtime evidence. Controls that are constantly bypassed because the normal path is unusable will not remain trustworthy.
+
+## Check Your Answers
+
+:::expand[Why Is a Protected Branch a Write Firewall?]{kind="recap"}
+A branch is a movable commit reference, so protection controls the reviewed and evidenced transition that changes trusted source state.
+:::
+
+:::expand[How Do Rulesets and CODEOWNERS Control Review?]{kind="recap"}
+Rulesets enforce repository policy, while CODEOWNERS routes sensitive paths to accountable reviewers whose approval can be required.
+:::
+
+:::expand[How Do Required Checks and Merge Queues Protect the Final Revision?]{kind="recap"}
+Use stable check identities on the exact merge candidate, report deliberate skipped outcomes, and retest concurrent changes in queue order.
+:::
+
+:::expand[Why Is Production Deployment a Separate Trust Boundary?]{kind="recap"}
+Merge accepts source; a protected environment separately authorizes an identified release and scoped deployment identity to affect production.
+:::
+
+:::expand[How Do Security Scan Results Become Release Gates?]{kind="recap"}
+Place bounded evidence at the correct transition and define thresholds, missing-evidence behavior, object identity, ownership, and exceptions in policy.
+:::
+
+:::expand[Why Must One Identified Artifact Move Through Every Environment?]{kind="recap"}
+Build once, test and approve the digest, promote the same object, record every deployment, and compare runtime with the approved release.
+:::
+
+:::expand[How Should Break-Glass Access and Gate Changes Be Controlled?]{kind="recap"}
+Make emergency authority named, narrow, temporary, recorded, reviewed, and reconciled, and protect every role that can weaken the gate.
+:::
+
+:::expand[How Do the Delivery Controls Work as One System?]{kind="recap"}
+Connect source review, final-revision checks, immutable build evidence, environment authorization, short-lived deployment, and runtime records.
+:::
 
 ## References
 
-- [GitHub: About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) - GitHub documentation for branch protection rules, required pull requests, required checks, force push restrictions, and branch rule behavior.
-- [GitHub: About rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets) - GitHub documentation for repository and organization rulesets, enforcement modes, bypass controls, and layered rules.
-- [GitHub: Available rules for rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets) - Lists rules for reviews, status checks, merge queue, code scanning, commit rules, and branch or tag restrictions.
-- [GitHub: About CODEOWNERS](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners) - Defines CODEOWNERS files, ownership matching, review requests, and branch protection integration.
-- [GitHub Actions: Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments) - Documents environments, environment secrets and variables, protection rules, deployment branches and tags, and environment URLs.
-- [GitHub Actions: Reviewing deployments](https://docs.github.com/actions/managing-workflow-runs/reviewing-deployments) - Explains approving, rejecting, and bypassing deployment protection rules for pending jobs.
-- [GitHub Actions: Control workflow concurrency](https://docs.github.com/actions/writing-workflows/choosing-what-your-workflow-does/control-the-concurrency-of-workflows-and-jobs) - Documents concurrency groups and cancel-in-progress behavior.
-- [GitLab: Protected branches](https://docs.gitlab.com/user/project/repository/branches/protected/) - GitLab documentation for protected branches, allowed push and merge permissions, force push controls, and branch deletion behavior.
-- [GitLab: Protected environments](https://docs.gitlab.com/ci/environments/protected_environments/) - GitLab documentation for limiting deployment access to protected environments and using deployment approvals.
-- [GitLab: Code Owners](https://docs.gitlab.com/user/project/codeowners/) - GitLab documentation for CODEOWNERS and approval integration.
-- [Jenkins Pipeline input step](https://www.jenkins.io/doc/pipeline/steps/pipeline-input-step/) - Jenkins documentation for pausing a Pipeline for human approval.
-- [OWASP CI/CD Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/CI_CD_Security_Cheat_Sheet.html) - OWASP CI/CD guidance for protecting source, build, and deployment pipelines.
+- [GitHub protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges/managing-protected-branches/about-protected-branches) - Documents branch review, checks, and update restrictions.
+- [GitHub rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets) - Describes repository and organization rulesets.
+- [GitHub CODEOWNERS](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners) - Describes ownership routing and required owner review.
+- [GitHub merge queues](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue) - Describes queued validation of merge-group revisions.
+- [GitHub deployment environments](https://docs.github.com/en/actions/reference/deployments-and-environments) - Documents protection rules, reviewers, and environment secrets.
+- [GitLab protected branches](https://docs.gitlab.com/user/project/repository/branches/protected/) - Documents protected branch permissions.
+- [GitLab protected environments](https://docs.gitlab.com/ci/environments/protected_environments/) - Documents environment deployment authorization.
+- [Jenkins pipeline security](https://www.jenkins.io/doc/book/security/) - Describes Jenkins authorization and security administration.

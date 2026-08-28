@@ -26,7 +26,8 @@ aliases:
 6. [How Should a Distributed Configuration System Fail?](#how-should-a-distributed-configuration-system-fail)
 7. [How Do Ownership, Guardrails, and Automation Make Changes Safer?](#how-do-ownership-guardrails-and-automation-make-changes-safer)
 8. [How Does a Complete Safe Rollout Work?](#how-does-a-complete-safe-rollout-work)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 A production system does not run on code alone. Its behavior is better modeled as:
 
@@ -44,7 +45,9 @@ Runtime behavior = f(
 
 The same binary can behave differently on a thousand instances because configuration differs. A healthy code deployment can be broken without changing one source line by changing a timeout, concurrency limit, database endpoint, feature flag, credential, or traffic weight. Anything capable of changing production behavior is part of the rollout system.
 
-The sections below answer these questions in order:
+The rollout boundary therefore extends beyond the image or function package. A safe change must identify the configuration version, validate values before use, control secret rotation, expose only part of the fleet or traffic, compare candidate evidence with a trustworthy baseline, and define what pauses or reverses the change when the distributed system cannot read a new value safely. Clear ownership and automation make those decisions repeatable.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What Is Runtime Configuration?**
 2. **How Do You Make Configuration Understandable and Valid?**
@@ -933,6 +936,8 @@ Ten principles summarize the model:
 The mindset changes from "we tested it, so it should work" to: **we tested it thoroughly, production can still surprise us, so we will introduce uncertainty gradually, visibly, and reversibly.**
 
 Those words describe concrete platform capabilities. "Gradually" means the controller can target a bounded cohort and pause. "Visibly" means every request, metric, and change timeline can identify the active code, configuration, secret generation, Region, and flag state. "Reversibly" means the previous compatible state still exists and the system has a tested action for restoring it. If any one of those properties is missing, the rollout plan should name the risk explicitly instead of treating a successful configuration write as proof that production is safe.
+
+## Check Your Answers
 
 :::expand[What Is Runtime Configuration?]{kind="recap"}
 Configuration selects how one deployed capability should behave now, and therefore represents executable production intent.

@@ -12,157 +12,151 @@ aliases:
 
 ## Table of Contents
 
-1. [The Tiny Website We Will Build](#the-tiny-website-we-will-build)
-2. [Project Boundaries](#project-boundaries)
-3. [Confirm the Sandbox Profile and Project Files](#confirm-the-sandbox-profile-and-project-files)
-4. [Write the Terraform Requirements](#write-the-terraform-requirements)
-5. [Add Variables, Locals, and the AWS Provider](#add-variables-locals-and-the-aws-provider)
-6. [Create the S3 Website Resources](#create-the-s3-website-resources)
-7. [Add the Website Files](#add-the-website-files)
-8. [Format, Initialize, Validate, and Plan](#format-initialize-validate-and-plan)
-9. [Apply and Verify the Website](#apply-and-verify-the-website)
-10. [Notice State and Clean Up](#notice-state-and-clean-up)
-11. [Putting It All Together](#putting-it-all-together)
-12. [After This Project](#after-this-project)
+1. [What Are We Building and What Will Terraform Own?](#what-are-we-building-and-what-will-terraform-own)
+2. [How Do You Prepare a Safe AWS Root Module?](#how-do-you-prepare-a-safe-aws-root-module)
+3. [How Do Requirements, Inputs, Locals, and the Provider Fit Together?](#how-do-requirements-inputs-locals-and-the-provider-fit-together)
+4. [How Do the S3 Website Resources Form a Dependency Graph?](#how-do-the-s3-website-resources-form-a-dependency-graph)
+5. [How Do Local Files and Outputs Complete the Desired State?](#how-do-local-files-and-outputs-complete-the-desired-state)
+6. [How Do You Format, Initialize, Plan, Apply, and Verify?](#how-do-you-format-initialize-plan-apply-and-verify)
+7. [How Do State, Change Detection, and Destroy Complete the Loop?](#how-do-state-change-detection-and-destroy-complete-the-loop)
+8. [Which Terraform Principles Should You Take Forward?](#which-terraform-principles-should-you-take-forward)
+9. [Check Your Answers](#check-your-answers)
 
-This article follows one small project from an empty folder to a cleaned-up AWS account. The project is a tiny public S3 static website for a launch notes page, with two HTML files, one bucket, website hosting settings, a read-only bucket policy, and Terraform outputs that give you the website URL.
+Terraform is not primarily a scripting language. A script says “create a bucket, change its permissions, then upload a file.” Terraform describes a bucket, permissions, and files that should exist, then calculates how to make reality match that declaration.
 
-That gives you real Terraform work without turning the first project into a giant cloud build. You will touch a real provider, create real AWS resources, read a real plan, and then remove everything at the end. The same loop appears later in bigger projects: write the desired setup, review the plan, apply the approved change, verify the result, and protect state.
+Terraform continually connects four ideas:
 
-This project also ties together the earlier syntax-building-block articles:
-
-| Earlier concept | Where it appears in this project |
+| Idea | Meaning |
 | --- | --- |
-| HCL | Every `.tf` file uses blocks, labels, arguments, expressions, and references. |
-| Provider | `versions.tf` selects the AWS provider, and `providers.tf` configures its region. |
-| Resources | `main.tf` declares the bucket, website settings, policy, and uploaded objects. |
-| Variables | `variables.tf` declares the region, environment, and unique bucket name. |
-| Locals | `locals.tf` keeps shared tags in one place. |
-| Outputs | `outputs.tf` prints the bucket name and website URL after apply. |
-| Dependencies | References connect the bucket to policy, website configuration, objects, and outputs. |
-| State | State records which AWS objects this folder owns after apply. |
+| Configuration | What you declare should exist |
+| State | Terraform's record of managed identities and attributes |
+| Real infrastructure | What currently exists in AWS |
+| Plan and apply | The calculated difference and its execution |
 
-## The Tiny Website We Will Build
-<!-- section-summary: The project creates a real S3 static website with two public HTML files and a URL you can test. -->
+A compact equation is:
 
-Imagine the DevPolaris team wants a small launch notes page before a new course release. A static page fits that job well: `index.html`, `error.html`, and a place where a browser can fetch those files are enough for this first version.
+```text
+desired configuration
+        -
+current state and infrastructure
+        =
+proposed plan
+```
 
-Amazon S3 can host static website files directly from a bucket. **Static website hosting** means S3 serves files such as HTML, CSS, JavaScript, and images over an S3 website endpoint. The page has no backend code running on a server. A browser requests an object key such as `/index.html`, and S3 returns the file.
+The desired result is a tiny S3 website:
 
-This Terraform project will create these pieces. Keep this list in mind while you read the plan, because each planned resource should map back to one row in the table below.
+```text
+Browser
+   │ HTTP
+   ▼
+S3 website endpoint
+   ├── index.html
+   └── error.html
+```
 
-| Piece | What it does |
-| --- | --- |
-| S3 bucket | Stores the two website files. |
-| Website configuration | Tells S3 which file is the home page and which file handles errors. |
-| Public access block settings | Allows this one lab bucket to use a public read policy. |
-| Bucket policy | Grants `s3:GetObject` so internet users can read the website files. |
-| S3 objects | Uploads `index.html` and `error.html` from the local `website/` folder. |
-| Outputs | Prints the bucket name and website URL after apply. |
+Keep these questions in view as you work through the lesson:
 
-This is a toy project because the website has only two files. It is still real infrastructure because Terraform calls the AWS S3 API, stores resource IDs in state, and creates something you can open in a browser. That difference matters for beginners because real provider behavior teaches habits that a fake local-only resource cannot teach.
+1. **What Are We Building and What Will Terraform Own?**
+2. **How Do You Prepare a Safe AWS Root Module?**
+3. **How Do Requirements, Inputs, Locals, and the Provider Fit Together?**
+4. **How Do the S3 Website Resources Form a Dependency Graph?**
+5. **How Do Local Files and Outputs Complete the Desired State?**
+6. **How Do You Format, Initialize, Plan, Apply, and Verify?**
+7. **How Do State, Change Detection, and Destroy Complete the Loop?**
+8. **Which Terraform Principles Should You Take Forward?**
 
-![S3 Site Project Map](/content-assets/articles/article-iac-terraform-foundations-first-safe-project/s3-site-project-map.png)
+## What Are We Building and What Will Terraform Own?
 
-*The project map keeps the lab concrete: one root module, Terraform files, two website files, one storage bucket, and one URL to verify. In the HCL below, that storage bucket is an Amazon S3 bucket.*
+Terraform will manage separate AWS concepts:
 
-For a production company website, teams usually put Amazon CloudFront in front of S3 so visitors get HTTPS, caching, custom domains, and a private bucket behind Origin Access Control. This first lab keeps the shape smaller so you can focus on the Terraform workflow. The boundary is that the bucket publishes only harmless sample HTML and gets destroyed after the lab.
+```text
+aws_s3_bucket
+├── aws_s3_bucket_website_configuration
+├── aws_s3_bucket_public_access_block
+├── aws_s3_bucket_policy
+├── aws_s3_object.index
+└── aws_s3_object.error
+```
 
-## Project Boundaries
-<!-- section-summary: A first cloud project needs a sandbox account, harmless data, narrow public access, a reviewed plan, and a planned destroy. -->
+The provider models these objects separately because AWS exposes bucket storage, website configuration, public-access controls, policy, and objects as distinct APIs. The separate `aws_s3_bucket_website_configuration` resource is the current provider shape for website settings.
 
-This project needs clear limits before any cloud change happens. The lab uses a sandbox AWS account, a unique throwaway bucket name, two harmless HTML files, and a read-only public policy for objects in that one bucket. The plan should create only the S3 resources named in the configuration.
+![The project maps one root module to the S3 objects and website endpoint it manages](/content-assets/articles/article-iac-terraform-foundations-first-safe-project/s3-site-project-map.png)
 
-Public S3 website hosting deserves a careful pause. AWS documents that public website access requires disabling the relevant Block Public Access settings and adding a bucket policy that grants public read access. Public means every internet user can read objects covered by the policy, so this lab stores only sample web pages.
+This is intentionally a sandbox design. Native S3 website endpoints require publicly readable content and use HTTP rather than HTTPS. A production website that requires HTTPS should use an architecture such as CloudFront or Amplify. Store only harmless sample HTML here and destroy it when the exercise is complete.
 
-The policy grants only `s3:GetObject` on `${bucket_arn}/*`. That lets visitors read website objects. Uploads, deletes, bucket listing, IAM changes, and access to other buckets stay outside this policy. The resource path stays tied to the bucket Terraform creates, so the policy is narrow enough for a beginner lab.
+The project directory is a Terraform **root module**. Every `.tf` file in it is combined into one configuration; Terraform does not execute `versions.tf`, then `providers.tf`, then `main.tf`. The filenames organize source for people.
 
-There is one account-level guardrail to understand before you start. S3 Block Public Access can exist at the account level and the bucket level, and S3 applies the most restrictive combination. If your AWS account or organization blocks public bucket policies centrally, the apply should fail as Terraform tries to attach the policy. That failure is useful evidence that the account has a guardrail in place, and an approved sandbox account is the right place for this lab.
+```text
+first-terraform-project/
+├── versions.tf
+├── variables.tf
+├── locals.tf
+├── providers.tf
+├── main.tf
+├── outputs.tf
+├── terraform.tfvars.example
+├── .gitignore
+└── site/
+    ├── index.html
+    └── error.html
+```
 
-The final boundary is cleanup. The destroy plan should remove the objects, bucket policy, website configuration, public access block settings, and bucket. The project uses a dedicated bucket name, so the destroy review is direct and the lab stays separate from shared application data.
+The state boundary is equally important. Terraform does not automatically manage the entire AWS account. It manages objects represented by this configuration and its state bindings. Other buckets, servers, or databases in the account remain outside this project's ownership unless explicitly brought into it.
 
-## Confirm the Sandbox Profile and Project Files
-<!-- section-summary: Terraform needs a working folder and an already-approved sandbox AWS profile before the lab creates S3 resources. -->
+## How Do You Prepare a Safe AWS Root Module?
 
-Terraform runs from your terminal or an automation runner. Install it from the official HashiCorp Terraform install instructions for your operating system. Then check that your shell can find the CLI:
+Two independent prerequisites must work:
+
+```text
+Terraform CLI + AWS credentials
+```
+
+Check the installed tools:
 
 ```bash
 terraform version
+aws --version
 ```
 
-The output should show a Terraform version that satisfies the `required_version` setting used later in this lab:
-
-```console
-Terraform v1.13.5
-on darwin_arm64
-```
-
-Your operating system line may differ. The important check is that the version is at least `1.6.0`.
-
-Assume your sandbox AWS profile already exists and is approved for temporary S3 lab work. This article is about the Terraform project, so the only AWS identity step here is a quick confirmation before the provider runs:
+If the sandbox provides a named profile, verify the identity before writing infrastructure:
 
 ```bash
-export AWS_PROFILE=sandbox
-aws sts get-caller-identity
-aws configure get region
+aws sts get-caller-identity --profile sandbox
 ```
 
-The caller should point at the sandbox account you expect, and the region should be intentional, such as `us-east-1`. A useful caller check looks like this:
+The response identifies the AWS user or role and account:
 
-```console
+```json
 {
-    "UserId": "AIDAEXAMPLE:user",
-    "Account": "123456789012",
-    "Arn": "arn:aws:iam::123456789012:user/sandbox-learner"
+  "UserId": "...",
+  "Account": "123456789012",
+  "Arn": "arn:aws:..."
 }
 ```
 
-The important field is `Account`. If it shows a production account, stop before writing any Terraform plan. Use the sandbox profile your team provides, then come back to the project files.
+An AWS account, IAM identity, and local CLI profile are different things. The profile selects local authentication and configuration information; it is not an AWS resource. If the sandbox supplies credentials through environment variables, a named profile may be unnecessary. Never place access keys in Terraform source.
 
-Now create a clean working directory. A dedicated folder keeps this lab separate from any real infrastructure code you may already have.
+Choose a globally unique throwaway bucket name and confirm that public S3 policy changes are permitted only in the intended training account. AWS can enforce Block Public Access at organization, account, and bucket levels, and the most restrictive applicable setting wins. A centrally enforced restriction can correctly reject this lab's public policy even if the HCL is valid.
 
-```bash
-mkdir terraform-s3-static-site
-cd terraform-s3-static-site
-mkdir website
-touch versions.tf variables.tf providers.tf locals.tf main.tf outputs.tf terraform.tfvars
-touch website/index.html website/error.html
-```
+Create the directory structure before initializing. Website source files are ordinary local inputs, not Terraform configuration. Terraform will later read and upload them. Keep the project isolated from shared S3 data so plan and destroy reviews have an unambiguous boundary.
 
-This folder is the **root module**. Terraform reads all `.tf` files in the folder together and treats them as one configuration. File names help people navigate the project, while references between blocks tell Terraform how values connect.
+The root-module boundary also explains the file layout. `versions.tf`, `variables.tf`, `locals.tf`, `providers.tf`, `main.tf`, and `outputs.tf` are one module even though their names suggest different concerns. Terraform loads the declarations together and builds references among them. You could combine them into one file without changing the model; the split helps people navigate the project.
 
-Before writing code, check that the folder contains only the lab files. This small habit helps you catch a wrong terminal location before Terraform reads unrelated `.tf` files.
+The `site` directory is different. Its HTML files are source artifacts read by functions and provider resource arguments, not `.tf` declarations. Editing an HTML file changes an input to the object resource through `filemd5`; it does not add a new Terraform block.
 
-```bash
-pwd
-find . -maxdepth 2 -type f | sort
-```
+Before any apply, write down the ownership boundary in plain language: this state may create, update, and destroy only the named sandbox bucket, its website settings, its policy and access controls, and its two objects. It should not import or reference shared production buckets. This statement gives the plan review a concrete acceptance rule.
 
-The file list should show the Terraform files and the two HTML files. Running Terraform from the wrong folder is a common beginner mistake, so this quick check keeps the first project boring in the best way.
+The public boundary should be equally narrow. Anonymous users receive `s3:GetObject` only for object ARNs inside this one bucket. They receive no write action and no authority over bucket configuration. The content contains no secrets or private data. If the organization-level guardrail blocks the policy, do not weaken the central control; use an approved sandbox whose policy permits the exercise or stop before apply.
 
-The output should look like this:
+Credentials and configuration remain separate. Terraform may select the `sandbox` profile, but the keys behind that profile live in standard AWS credential storage or injected environment variables. The root module records a region and optional profile choice, not raw secrets. Verifying caller identity proves which account and principal the provider will use before the plan can affect AWS.
 
-```console
-/path/to/terraform-s3-static-site
-./locals.tf
-./main.tf
-./outputs.tf
-./providers.tf
-./terraform.tfvars
-./variables.tf
-./versions.tf
-./website/error.html
-./website/index.html
-```
+## How Do Requirements, Inputs, Locals, and the Provider Fit Together?
 
-## Write the Terraform Requirements
-<!-- section-summary: versions.tf declares the Terraform CLI version and AWS provider package the project expects. -->
-
-Open `versions.tf` and add the provider requirement. This file answers the first provider question for the project: which Terraform CLI and provider package can run this configuration?
+Create `versions.tf`:
 
 ```hcl
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.5.0, < 2.0.0"
 
   required_providers {
     aws = {
@@ -173,142 +167,100 @@ terraform {
 }
 ```
 
-The `terraform` block tells Terraform which CLI versions and provider packages this project can use. The **AWS provider** is the plugin that teaches Terraform how to call AWS APIs. Terraform Core understands configuration, state, plans, and dependency graphs; the provider understands AWS resources such as S3 buckets and S3 objects.
+`required_version` constrains the Terraform CLI itself. `required_providers.aws.version` constrains the AWS plugin. Terraform Core and providers have independent release cycles. The broader constraints keep the exercise from depending on one patch release; use a sandbox-required older provider constraint when the training environment specifies one.
 
-The version constraint `~> 6.0` means the project accepts compatible AWS provider versions in the `6.x` line. During `terraform init`, Terraform selects an exact provider version and writes it into `.terraform.lock.hcl`. Team projects usually commit that lock file so another machine starts from the same provider selection.
+The source address `hashicorp/aws` identifies a Terraform Registry namespace and provider. Terraform Core does not contain S3 API behavior. It loads the provider plugin, gives it planned resource operations, and the plugin calls AWS.
 
-![Provider Version Workflow](/content-assets/articles/article-iac-terraform-foundations-first-safe-project/provider-version-workflow.png)
+```text
+Terraform Core -> AWS provider -> AWS APIs
+```
 
-*The provider workflow is generic Terraform: declare provider requirements, configure the provider target, run init, commit the lock file, and review upgrades deliberately. In this lab, the provider is `hashicorp/aws`.*
-
-This requirement file gives reviewers an early clue about what kind of project they are reading. A project that requires `hashicorp/aws` will call AWS. A project that later adds `cloudflare/cloudflare` or `integrations/github` has expanded its blast radius, and that provider change deserves review.
-
-## Add Variables, Locals, and the AWS Provider
-<!-- section-summary: variables.tf defines run-specific values, locals.tf derives shared tags, and providers.tf configures the AWS provider without hardcoded secrets. -->
-
-The bucket name must be unique across all of S3, so the project receives it as an input. Open `variables.tf` and add the values that can change between readers or accounts.
+Create `variables.tf`:
 
 ```hcl
 variable "aws_region" {
-  description = "AWS region for the lab S3 bucket."
+  description = "AWS region in which to create the website"
   type        = string
   default     = "us-east-1"
 }
 
-variable "environment" {
-  description = "Short environment label used in tags."
+variable "aws_profile" {
+  description = "Optional AWS CLI profile to use"
   type        = string
-  default     = "sandbox"
-
-  validation {
-    condition     = contains(["sandbox", "dev"], var.environment)
-    error_message = "Use sandbox or dev for this lab."
-  }
+  default     = null
+  nullable    = true
 }
 
-variable "site_bucket_name" {
-  description = "Globally unique S3 bucket name for the lab static website."
+variable "bucket_name" {
+  description = "Globally unique name for the S3 bucket"
   type        = string
 }
 ```
 
-An **input variable** lets the person running Terraform provide values without editing the resource blocks. `aws_region` is consumed by the provider block. `environment` is consumed by the local tag map. `site_bucket_name` is consumed by the S3 bucket resource.
+Variables are inputs from outside the root module. The region has an ordinary default, the profile may intentionally be absent, and the globally unique bucket name must be supplied. Bucket naming is a deployment choice rather than fixed infrastructure logic.
 
-Now open `locals.tf` and add the local values. This file keeps shared calculated values in one place.
+Create `locals.tf`:
 
 ```hcl
 locals {
+  site_dir = "${path.module}/site"
+
   common_tags = {
-    Project     = "first-terraform-project"
-    Environment = var.environment
-    ManagedBy   = "terraform"
+    Project   = "first-terraform-project"
+    ManagedBy = "Terraform"
   }
 }
 ```
 
-The `locals` block names a reusable expression inside the module. `local.common_tags` consumes `var.environment`, then the bucket resource consumes `local.common_tags`. That gives the tag values one source instead of repeating the same map inside each resource.
+Locals are reusable values defined or derived inside the module. `path.module` is the directory containing this module, so `local.site_dir` points to the `site` subdirectory regardless of the shell's current path. Locals calculate no remote object.
 
-Open `terraform.tfvars` and choose your own bucket name. This file gives the lab concrete values without hardcoding those values into the resource definitions.
-
-```hcl
-site_bucket_name = "devpolaris-first-site-yourname-20260628"
-aws_region       = "us-east-1"
-environment      = "sandbox"
-```
-
-Replace `yourname` with something unique to you. S3 bucket names are global, so a name that works for one person may already belong to someone else. A date, initials, or short team code helps make the lab name unique and easy to recognize during cleanup.
-
-Now open `providers.tf` and configure the AWS provider. The provider needs a region for S3 API calls, while credentials still come from your approved local AWS setup.
+Create `providers.tf`:
 
 ```hcl
 provider "aws" {
-  region = var.aws_region
+  region  = var.aws_region
+  profile = var.aws_profile
 }
 ```
 
-Notice where the credentials are absent. The provider block has the region because that is normal project configuration. Access keys, session tokens, and passwords stay in the approved credential flow outside the `.tf` files. That keeps secrets out of Git, plan output, and casual screenshots.
+The requirement says which provider software is needed. The provider block says how this instance should operate: region and optional local profile. Authentication should still come from the standard AWS credential mechanisms rather than embedded keys.
 
-## Create the S3 Website Resources
-<!-- section-summary: main.tf declares the bucket, website configuration, public read policy, and uploaded objects as connected Terraform resources. -->
-
-Now the project can describe the website infrastructure. `main.tf` will grow in four steps: the bucket, the public website settings, the public read policy, and the uploaded HTML objects.
-
-Here is the file outline before the details arrive:
+For a profile-based sandbox, a local `terraform.tfvars` can contain:
 
 ```hcl
-resource "aws_s3_bucket" "site" {
-  # bucket name and tags go here
-}
+aws_region  = "us-east-1"
+aws_profile = "sandbox"
+bucket_name = "your-globally-unique-bucket-name"
+```
 
-resource "aws_s3_bucket_public_access_block" "site" {
-  # bucket-level public access settings go here
-}
+If credentials are injected automatically, omit `aws_profile` and let its value remain `null`. Commit an illustrative `terraform.tfvars.example`, not credentials:
 
-resource "aws_s3_bucket_website_configuration" "site" {
-  # index and error document settings go here
-}
+```hcl
+aws_region  = "us-east-1"
+aws_profile = "sandbox"
+bucket_name = "replace-with-a-globally-unique-name"
+```
 
-resource "aws_s3_bucket_policy" "site_read" {
-  # public read policy goes here
-}
+The value flow is now clear: external choices enter through variables, locals define internal paths and tags, and the provider uses the selected AWS context.
 
-resource "aws_s3_object" "index" {
-  # index.html upload settings go here
-}
+## How Do the S3 Website Resources Form a Dependency Graph?
 
-resource "aws_s3_object" "error" {
-  # error.html upload settings go here
+Begin `main.tf` with the bucket:
+
+```hcl
+resource "aws_s3_bucket" "website" {
+  bucket = var.bucket_name
+  tags   = local.common_tags
 }
 ```
 
-This outline keeps the resource list visible before any one block grows. The file uses a few helper expressions that the next article will teach in more detail. For this project, the job of each helper matters most. `jsonencode(...)` builds a valid JSON policy from HCL values. `path.module` points at this project folder. `filemd5(...)` calculates a hash of a local file so Terraform can notice file content changes during the next plan.
+`aws_s3_bucket` is the provider-defined type and `website` is Terraform's local label. Together, `aws_s3_bucket.website` form the logical resource address. That is different from the AWS-visible bucket name supplied through `var.bucket_name`. State will bind the logical address to the real bucket identity.
 
-Start with the bucket. This is the storage container for the website files:
-
-```hcl
-resource "aws_s3_bucket" "site" {
-  bucket = var.site_bucket_name
-
-  tags = local.common_tags
-}
-```
-
-A **resource** block declares one managed object. This first resource creates the bucket. It consumes `var.site_bucket_name` for the bucket name and `local.common_tags` for the tags, so the earlier variable and local values now have a real AWS object that uses them.
-
-Next, add the public access and website configuration resources. The public access block prepares this lab bucket for a public read policy, and the website configuration tells S3 which files answer normal and error requests:
+Configure website behavior:
 
 ```hcl
-resource "aws_s3_bucket_public_access_block" "site" {
-  bucket = aws_s3_bucket.site.id
-
-  block_public_acls       = true
-  ignore_public_acls      = true
-  block_public_policy     = false
-  restrict_public_buckets = false
-}
-
-resource "aws_s3_bucket_website_configuration" "site" {
-  bucket = aws_s3_bucket.site.id
+resource "aws_s3_bucket_website_configuration" "website" {
+  bucket = aws_s3_bucket.website.id
 
   index_document {
     suffix = "index.html"
@@ -320,367 +272,560 @@ resource "aws_s3_bucket_website_configuration" "site" {
 }
 ```
 
-The public access block resource is there because public website hosting needs a bucket policy that the public internet can use. This lab keeps ACL-related public access blocked with `block_public_acls` and `ignore_public_acls`, then allows this bucket to have a public bucket policy with `block_public_policy = false` and `restrict_public_buckets = false`.
+`aws_s3_bucket.website.id` supplies data and an implicit dependency. Terraform knows the bucket must produce its ID before website configuration can use it. The source does not need an imperative “create bucket first” step.
 
-The website configuration points at the same bucket and tells S3 which object should answer the root path and which object should answer errors. Both resources read `aws_s3_bucket.site.id`, so Terraform knows the bucket must exist before it configures public access and website hosting.
-
-Now add the bucket policy. This is the part that deserves the slowest review because it grants anonymous internet users read access to objects in the lab bucket:
+Allow the educational site to use a public bucket policy while still blocking ACL-based public access:
 
 ```hcl
-resource "aws_s3_bucket_policy" "site_read" {
-  bucket = aws_s3_bucket.site.id
+resource "aws_s3_bucket_public_access_block" "website" {
+  bucket = aws_s3_bucket.website.id
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "PublicReadWebsiteObjects"
-        Effect    = "Allow"
-        Principal = "*"
-        Action    = "s3:GetObject"
-        Resource  = "${aws_s3_bucket.site.arn}/*"
-      }
-    ]
-  })
-
-  depends_on = [aws_s3_bucket_public_access_block.site]
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = false
+  restrict_public_buckets = false
 }
 ```
 
-The bucket policy uses `jsonencode` so Terraform builds valid JSON from HCL values. `Principal = "*"` means the policy applies to anonymous internet users, `Action = "s3:GetObject"` allows reads, and `Resource = "${aws_s3_bucket.site.arn}/*"` limits those reads to objects in this one bucket. That exact resource path is the part reviewers should slow down and check.
+The four settings are independent. Public ACLs remain blocked and ignored; public policy is allowed for this bucket.
 
-The policy also uses one explicit dependency:
+Build the policy as structured provider data:
 
 ```hcl
-depends_on = [aws_s3_bucket_public_access_block.site]
+data "aws_iam_policy_document" "public_read" {
+  statement {
+    sid    = "PublicReadGetObject"
+    effect = "Allow"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions = [
+      "s3:GetObject",
+    ]
+
+    resources = [
+      "${aws_s3_bucket.website.arn}/*",
+    ]
+  }
+}
 ```
 
-That line tells Terraform to configure the bucket-level public access settings before it attaches the public read policy. Most dependencies in this project come from references. This one is about S3 policy timing, so an explicit `depends_on` makes the ordering clear.
+The policy permits anyone to read objects beneath this bucket ARN. It does not grant anonymous upload, deletion, bucket listing, IAM operations, or access to other buckets.
 
-Finally, add the two object resources. These resources upload the local HTML files into the bucket:
+Attach the generated JSON:
+
+```hcl
+resource "aws_s3_bucket_policy" "public_read" {
+  bucket = aws_s3_bucket.website.id
+  policy = data.aws_iam_policy_document.public_read.json
+
+  depends_on = [
+    aws_s3_bucket_public_access_block.website
+  ]
+}
+```
+
+References already connect the policy to the bucket and policy-document data source. The explicit `depends_on` models a hidden operational prerequisite: public-access settings should be applied before installing the public policy, but the policy consumes no attribute from that access-block resource.
+
+Prefer implicit dependencies when a real value flows. Use `depends_on` only when behavior creates a prerequisite that references cannot reveal. It adds a graph edge; it is not an arbitrary sleep.
+
+The graph now branches from the bucket into website configuration, access settings, policy data, and later uploaded objects. Independent branches can proceed when their own inputs are ready. A stricter account or organization Block Public Access policy may still reject the bucket policy with `AccessDenied`; Terraform has only the authority of the authenticated identity and the platform policies around it.
+
+## How Do Local Files and Outputs Complete the Desired State?
+
+Create `site/index.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>My First Terraform Site</title>
+</head>
+<body>
+  <h1>Hello from Terraform</h1>
+  <p>This page was uploaded to Amazon S3 by Terraform.</p>
+</body>
+</html>
+```
+
+Create `site/error.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Not Found</title>
+</head>
+<body>
+  <h1>Page not found</h1>
+</body>
+</html>
+```
+
+These files are not HCL. They are inputs Terraform will upload through two managed object resources:
 
 ```hcl
 resource "aws_s3_object" "index" {
-  bucket       = aws_s3_bucket.site.id
-  key          = "index.html"
-  source       = "${path.module}/website/index.html"
+  bucket = aws_s3_bucket.website.id
+  key    = "index.html"
+
+  source       = "${local.site_dir}/index.html"
+  etag         = filemd5("${local.site_dir}/index.html")
   content_type = "text/html"
-  etag         = filemd5("${path.module}/website/index.html")
 }
 
 resource "aws_s3_object" "error" {
-  bucket       = aws_s3_bucket.site.id
-  key          = "error.html"
-  source       = "${path.module}/website/error.html"
+  bucket = aws_s3_bucket.website.id
+  key    = "error.html"
+
+  source       = "${local.site_dir}/error.html"
+  etag         = filemd5("${local.site_dir}/error.html")
   content_type = "text/html"
-  etag         = filemd5("${path.module}/website/error.html")
 }
 ```
 
-The object resources read `aws_s3_bucket.site.id`, so Terraform knows where to upload the files. `source` points at the local file, `content_type = "text/html"` tells browsers to treat the object as HTML, and `etag = filemd5(...)` lets Terraform detect a local file content change during a later plan.
+Each bucket reference connects the object to its container. `source` selects the local file, `content_type` identifies HTML, and `filemd5` turns file content into a value Terraform can compare. When the file changes, the hash changes, allowing Terraform to plan an object update.
 
-The full dependency path is now visible without needing one giant block. Bucket settings depend on the bucket. The policy depends on the bucket ARN and the public access block. The uploaded objects depend on the bucket ID. The outputs in the next file will read the bucket and website configuration after those resources exist.
-
-Open `outputs.tf` and add the values you want Terraform to print after apply. Outputs should help you verify the deployment instead of searching through the AWS console.
+Create `outputs.tf`:
 
 ```hcl
-output "site_bucket_name" {
-  description = "Name of the S3 bucket hosting the lab website."
-  value       = aws_s3_bucket.site.bucket
+output "bucket_name" {
+  description = "Name of the S3 website bucket"
+  value       = aws_s3_bucket.website.bucket
 }
 
 output "website_url" {
-  description = "HTTP URL for the S3 static website endpoint."
-  value       = "http://${aws_s3_bucket_website_configuration.site.website_endpoint}"
+  description = "S3 static website URL"
+  value       = "http://${aws_s3_bucket_website_configuration.website.website_endpoint}/"
 }
 ```
 
-An **output** publishes a useful value after apply. This project prints the bucket name and website URL so you can verify the result without searching through the AWS console. S3 static website endpoints support HTTP, and the production HTTPS pattern usually adds CloudFront in front of the bucket.
+Variables cross into the module; outputs deliberately cross back out. The endpoint may remain unknown in the plan until AWS creates the website configuration.
 
-## Add the Website Files
-<!-- section-summary: The local website files make the project visibly real because Terraform uploads content you can open in a browser. -->
+At this point, `main.tf` contains only declarations and relationships:
 
-Now give S3 something to serve. Open `website/index.html` and add a tiny page that makes the browser test obvious.
+```hcl
+resource "aws_s3_bucket" "website" {
+  bucket = var.bucket_name
+  tags   = local.common_tags
+}
 
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>DevPolaris Launch Notes</title>
-  </head>
-  <body>
-    <main>
-      <h1>DevPolaris Launch Notes</h1>
-      <p>This tiny page was published with Terraform and Amazon S3 static website hosting.</p>
-      <p>The first Terraform project created the bucket, website settings, public read policy, and uploaded objects from code.</p>
-    </main>
-  </body>
-</html>
+resource "aws_s3_bucket_website_configuration" "website" {
+  bucket = aws_s3_bucket.website.id
+
+  index_document {
+    suffix = "index.html"
+  }
+
+  error_document {
+    key = "error.html"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "website" {
+  bucket = aws_s3_bucket.website.id
+
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = false
+  restrict_public_buckets = false
+}
+
+data "aws_iam_policy_document" "public_read" {
+  statement {
+    sid    = "PublicReadGetObject"
+    effect = "Allow"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.website.arn}/*"]
+  }
+}
+
+resource "aws_s3_bucket_policy" "public_read" {
+  bucket = aws_s3_bucket.website.id
+  policy = data.aws_iam_policy_document.public_read.json
+
+  depends_on = [
+    aws_s3_bucket_public_access_block.website
+  ]
+}
+
+resource "aws_s3_object" "index" {
+  bucket       = aws_s3_bucket.website.id
+  key          = "index.html"
+  source       = "${local.site_dir}/index.html"
+  etag         = filemd5("${local.site_dir}/index.html")
+  content_type = "text/html"
+}
+
+resource "aws_s3_object" "error" {
+  bucket       = aws_s3_bucket.website.id
+  key          = "error.html"
+  source       = "${local.site_dir}/error.html"
+  etag         = filemd5("${local.site_dir}/error.html")
+  content_type = "text/html"
+}
 ```
 
-Open `website/error.html` and add the fallback page. The error document gives you a second verification path after the home page works.
+There is no “create, wait, upload, wait, change permissions” script. Facts and references form a graph, and Terraform derives a valid schedule.
 
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>Page Not Found</title>
-  </head>
-  <body>
-    <main>
-      <h1>Page Not Found</h1>
-      <p>The lab website is running, but that object key is missing.</p>
-    </main>
-  </body>
-</html>
-```
+## How Do You Format, Initialize, Plan, Apply, and Verify?
 
-The `aws_s3_object` resources use `source` to upload these files and `content_type = "text/html"` so browsers treat them as HTML. The `filemd5(...)` call is a Terraform function that calculates a local file hash. The `etag = filemd5(...)` line gives Terraform a value to compare. After a file edit, Terraform can see that the object content needs an update during the next plan.
-
-This part connects the toy project to real infrastructure. A real team might upload a built React site from CI/CD, or use Terraform only for the bucket and let the application pipeline upload files. The first project keeps the upload in Terraform because it lets one folder show the full loop from code to browser.
-
-## Format, Initialize, Validate, and Plan
-<!-- section-summary: The first project habit is to format the files, install providers, validate configuration, and review the plan before applying. -->
-
-The first command checks formatting. Start here because formatting changes are easy to review and should not be mixed into a later infrastructure surprise.
-
-![Safe Command Loop](/content-assets/articles/article-iac-terraform-foundations-first-safe-project/safe-command-loop.png)
-
-*The command loop shows the lab workflow: format, initialize, validate, save a plan, review, apply the saved plan, verify, and clean up with a destroy plan. The resource names in the diagram are generic; the S3 plan below should show six S3 resources.*
+Format the source first:
 
 ```bash
-terraform fmt
+terraform fmt -recursive
 ```
 
-`terraform fmt` rewrites the `.tf` files into standard Terraform style. A clean diff before every plan helps reviewers focus on infrastructure intent instead of spacing changes.
+`fmt` makes no AWS call. It rewrites HCL into canonical formatting, reducing irrelevant differences in reviews.
 
-The next step initializes the working directory. This is where Terraform installs the provider selected by `versions.tf`.
+Initialize the working directory:
 
 ```bash
 terraform init
 ```
 
-`terraform init` reads `required_providers`, downloads the AWS provider, and writes `.terraform.lock.hcl`. It also creates the local `.terraform/` directory for provider packages and working data. The lock file belongs in Git for team projects, while `.terraform/` stays local.
+Initialization reads provider requirements, downloads plugins, and creates working artifacts such as:
 
-The useful end of the output should look like this:
-
-```console
-Terraform has been successfully initialized!
-
-Terraform has created a lock file .terraform.lock.hcl to record the provider
-selections it made above.
+```text
+.terraform/
+.terraform.lock.hcl
 ```
 
-That tells you the AWS provider was selected and the lock file now records the exact version and checksums for future runs.
+The `.terraform/` directory contains downloaded local working data and should not be committed. The lock file records exact selected provider versions and checksums and should normally be committed for reproducible provider installation.
 
-Validate the configuration. This catches many local mistakes before Terraform asks AWS about remote resources.
+![The provider constraint guides selection while the lock file preserves the exact installed choice](/content-assets/articles/article-iac-terraform-foundations-first-safe-project/provider-version-workflow.png)
+
+Validate the initialized configuration:
 
 ```bash
 terraform validate
 ```
 
-`terraform validate` checks the configuration shape before Terraform tries to change remote infrastructure. It can catch missing arguments, wrong references, invalid block structure, and variable validation problems. A validation failure is a helpful early stop because no S3 API change has happened yet.
+A successful result means Terraform can parse the configuration and its references, argument types, and provider schemas are internally consistent. It does not prove the bucket name is available, credentials are authorized, or organization policy permits public S3 access. Validation does not test every remote API condition.
 
-Successful validation is intentionally short:
-
-```console
-Success! The configuration is valid.
-```
-
-That line means the HCL, references, variable types, provider schemas, and local configuration shape passed Terraform's local checks. Infrastructure creation still waits for the reviewed plan and apply.
-
-Now create the plan. Saving it gives you one reviewed file that can be applied exactly.
+Create a plan:
 
 ```bash
-terraform plan -out=tfplan
+terraform plan
 ```
 
-`terraform plan` reads the current state, compares it to the configuration, asks providers about existing remote objects, and proposes the actions needed to make the remote system match the files. Saving the plan as `tfplan` lets you apply the exact plan you reviewed.
+Terraform compares configuration with prior state and refreshed AWS objects, then proposes the changes needed for convergence. A summary might show:
 
-For the first run, the summary should be all creates:
-
-```console
+```text
 Plan: 6 to add, 0 to change, 0 to destroy.
 ```
 
-The `6 to add` should match the six S3 resources in this project. A different count is a signal to slow down and read the detailed plan.
+Read the details, not only the success color. `+` means create, `~` update in place, `-` destroy, and delete/create markers indicate replacement. Confirm that every planned object belongs to this small website and that no unexpected destruction appears.
 
-The plan should show creates for these resource addresses. This list gives you a quick checklist before you read the detailed plan body.
-
-- `aws_s3_bucket.site`
-- `aws_s3_bucket_public_access_block.site`
-- `aws_s3_bucket_website_configuration.site`
-- `aws_s3_bucket_policy.site_read`
-- `aws_s3_object.index`
-- `aws_s3_object.error`
-
-This is the first important review moment. Check that Terraform wants to create one bucket with your lab name, one website configuration, one public read policy for that bucket's objects, and two HTML objects. A surprise destroy, replacement, unknown bucket name, or policy attached to the wrong ARN means you should stop and fix the configuration before applying.
-
-You can inspect the saved plan in human-readable form. This is the version you would normally paste into a review note or read in a deployment job.
+For a stronger review-to-apply link, save the exact plan:
 
 ```bash
-terraform show tfplan
-```
-
-In a team workflow, this plan output often appears in a pull request or deployment job. For this lab, reading it yourself builds the habit. The plan is the last quiet moment before Terraform calls AWS to create the resources.
-
-## Apply and Verify the Website
-<!-- section-summary: Apply performs the reviewed change, and verification proves the S3 website works from the outside. -->
-
-Apply the saved plan. This command asks Terraform to perform the exact changes that were written into `tfplan`.
-
-```bash
+terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-Terraform should create the S3 resources and then print the outputs. The `website_url` output should look like an HTTP S3 website endpoint. The exact hostname depends on the region and AWS endpoint format.
+Without a saved plan, a later `terraform apply` generates a fresh plan. Applying the saved file executes the operations that were reviewed, which is especially valuable in automation.
 
-The end of a successful apply should include output values like these:
-
-```console
-Apply complete! Resources: 6 added, 0 changed, 0 destroyed.
-
-Outputs:
-
-site_bucket_name = "devpolaris-first-site-yourname-20260628"
-website_url = "http://devpolaris-first-site-yourname-20260628.s3-website-us-east-1.amazonaws.com"
-```
-
-The output names come from `outputs.tf`. The bucket name proves the output consumed `aws_s3_bucket.site.bucket`, and the URL proves the output consumed `aws_s3_bucket_website_configuration.site.website_endpoint`.
-
-The raw output form is useful for the browser test. It removes quotes and display formatting so the URL can flow into another command.
+If applying without a saved plan:
 
 ```bash
+terraform apply
+```
+
+Terraform displays the plan and requests confirmation. Enter `yes` only after reviewing it. Core then coordinates provider calls, AWS creates the objects, and Terraform records returned identities and attributes in state.
+
+```text
+.tf configuration
+       │
+       ▼
+Terraform Core
+       │ plan
+       ▼
+AWS provider
+       │ API operations
+       ▼
+AWS resources
+```
+
+Read the applied outputs:
+
+```bash
+terraform output
 terraform output -raw website_url
 ```
 
-Then test it with `curl`. This checks the public path without relying on the AWS console.
+Test the home page:
 
 ```bash
 curl "$(terraform output -raw website_url)"
 ```
 
-The response should include the `DevPolaris Launch Notes` heading from `index.html`. You can also open the URL in a browser. That browser test proves the whole path works: public internet request, S3 website endpoint, bucket policy, object lookup, and HTML response.
+The response should contain `Hello from Terraform`. Append a missing path to confirm S3 uses `error.html`. Remember that the native website endpoint is HTTP-only.
 
-```console
-<h1>DevPolaris Launch Notes</h1>
+![The safe command loop separates formatting, initialization, validation, planning, apply, and verification](/content-assets/articles/article-iac-terraform-foundations-first-safe-project/safe-command-loop.png)
+
+Run `terraform plan` again. Ideally Terraform reports that infrastructure matches configuration and no changes are required. This is convergence: Terraform is comparing desired and current state, not replaying a creation script.
+
+Each command has a different boundary. `fmt` needs only source files. `init` contacts registries or configured sources to install dependencies but does not create the declared S3 resources. `validate` checks the initialized configuration and provider schema locally. `plan` reads state and may refresh AWS information, while normal planning stops before executing the proposed mutations. `apply` is the step authorized to perform the planned transition.
+
+That separation supports debugging. If formatting changes, inspect source style. If initialization fails, inspect Core constraints, provider source, network access, and lock selections. If validation fails, inspect HCL, types, and references. If plan fails with AWS authentication or lookup errors, inspect provider context and permissions. If apply rejects the bucket policy, check account and organization public-access controls rather than assuming an HCL parser problem.
+
+The lock file deserves deliberate handling. `~> 6.0` describes an allowed range, while `.terraform.lock.hcl` records the selected provider package and checksums from initialization. Another team member can initialize against the same locked selection. Re-run and review dependency upgrades intentionally rather than letting every workstation choose a different newest compatible build.
+
+Plan symbols communicate lifecycle consequences. A create adds an object to the managed graph. An update preserves identity while changing supported properties. A destroy removes an object no longer desired. A replacement changes remote identity and may have availability consequences. Even in this simple lab, read resource addresses and affected arguments rather than trusting only the summary count.
+
+Saving `tfplan` strengthens the review boundary but creates another sensitive artifact. Saved plans can contain infrastructure values and should stay out of Git. The subsequent `terraform apply tfplan` executes that exact saved proposal; it does not accept new variable overrides or silently regenerate the reviewed set of operations.
+
+Verification is independent evidence. A successful apply means providers reported operations complete, not that the website serves the intended content. Read `website_url`, fetch it, check the heading, and request a missing path to test the configured error document. The post-apply plan then checks the reconciliation view: configuration, state, and refreshed remote objects should agree.
+
+## How Do State, Change Detection, and Destroy Complete the Loop?
+
+Edit `site/index.html` and change the heading:
+
+```html
+<h1>Terraform detected this change</h1>
 ```
 
-Test the error document too. A missing path should return the fallback HTML file from the website configuration.
+Run:
 
 ```bash
-curl "$(terraform output -raw website_url)/missing-page"
+terraform plan
 ```
 
-The response should include the `Page Not Found` heading from `error.html`. This verifies that the website configuration points at the error document you uploaded.
+`filemd5` now returns a different hash. The desired object ETag no longer matches the recorded/current value, so Terraform can propose updating only the affected S3 object. Apply and reload the page. This demonstrates the loop:
 
-```console
-<h1>Page Not Found</h1>
+```text
+change desired input
+       │
+       ▼
+calculate delta
+       │
+       ▼
+update only required infrastructure
 ```
 
-If the request returns `403 Access Denied`, start with the bucket policy and Block Public Access settings. The policy needs `s3:GetObject` on the object path, and account-level public access blocks can override bucket-level settings. If the request returns `404 Not Found`, check the object keys and the exact case of `index.html` and `error.html` because S3 object keys are case-sensitive.
+With the default local backend, apply creates `terraform.tfstate`. State is more than a disposable cache. It maps Terraform's logical address to the real remote identity:
 
-The live website is intentionally small, but the verification habit is production-shaped. After any apply, real teams check the thing users or systems depend on: a URL responds, a bucket exists, a queue receives messages, a role can assume the expected permissions, or a database endpoint accepts the expected network path.
+```text
+aws_s3_bucket.website
+          │ state binding
+          ▼
+real AWS bucket
+```
 
-## Notice State and Clean Up
-<!-- section-summary: Terraform writes state for the lab, and destroy removes the lab only after you review the destroy plan. -->
+Without that binding, Terraform could not reliably decide whether it already manages the bucket or should create another object.
 
-After apply, Terraform writes state for the resources it manages. **State** is Terraform's record that connects resource addresses in your files to real remote objects in AWS. This project may use local state in `terraform.tfstate`, while team projects usually use a remote backend with access control and locking.
-
-For this first project, the main state habit is simple: notice that Terraform created a local state file and treat it as a working artifact. Real state can contain resource IDs, generated values, configuration details, and sometimes sensitive data depending on the providers and resources involved. Later state articles will teach how to inspect, move, import, lock, and store state safely. In this lab, avoid pasting state into chat, screenshots, or commits.
-
-Before cleanup, review the destroy plan. The destroy review matters because deleting the wrong thing is still a real infrastructure change.
+Inspect managed addresses:
 
 ```bash
-terraform plan -destroy -out=destroy.tfplan
+terraform state list
 ```
 
-Destroy mode should show deletes for the same lab resources. The bucket name should be the unique name from your `terraform.tfvars`. The plan should not mention unrelated resources, because this dedicated folder should manage only the lab website.
+Expected resource addresses include:
 
-```console
-Plan: 0 to add, 0 to change, 6 to destroy.
+```text
+aws_s3_bucket.website
+aws_s3_bucket_policy.public_read
+aws_s3_bucket_public_access_block.website
+aws_s3_bucket_website_configuration.website
+aws_s3_object.error
+aws_s3_object.index
 ```
 
-Now remove the lab by applying the reviewed destroy plan. This command should clean up the temporary S3 website resources from the sandbox account.
+The IAM policy document is a data source, not a remotely created S3 resource. Inspect a particular resource or the interpreted state with:
 
 ```bash
-terraform apply destroy.tfplan
+terraform state show aws_s3_bucket.website
+terraform show
 ```
 
-Terraform applies the exact destroy actions saved in `destroy.tfplan`. If destroy fails because someone uploaded extra objects outside Terraform, remove those extra objects from the lab bucket and run the destroy plan again.
+Do not edit the state file manually. Terraform provides deliberate state commands for later operations.
 
-Remove the saved plan files after cleanup. Plan files are run artifacts, and real plans may contain sensitive provider details.
-
-```bash
-rm -f tfplan destroy.tfplan
-```
-
-This command usually prints nothing after success. The useful check comes from the file list afterward.
-
-Now check the folder before committing anything. The remaining files tell you what source material a real repository would keep.
-
-```bash
-find . -maxdepth 2 -type f | sort
-```
-
-A clean lab folder should still contain the project files you wrote and the lock file Terraform created. Plan and state artifacts should be absent from this list:
-
-```console
-./.terraform.lock.hcl
-./locals.tf
-./main.tf
-./outputs.tf
-./providers.tf
-./terraform.tfvars
-./variables.tf
-./versions.tf
-./website/error.html
-./website/index.html
-```
-
-A real Git repository should commit the `.tf` files, the website files, and `.terraform.lock.hcl`. The local `.terraform/` directory, state files, plan files, crash logs, and secret variable files should stay out of commits. A simple lab `.gitignore` can start like this:
+State can contain infrastructure details and sensitive values, so keep it out of Git. A learning project can use local state; teams normally use a protected remote backend. A `.gitignore` can include:
 
 ```gitignore
 .terraform/
+
 *.tfstate
 *.tfstate.*
+
+*.tfplan
+
 crash.log
 crash.*.log
-tfplan
-*.tfplan
-*.auto.tfvars
-*.auto.tfvars.json
-terraform.tfvars
+
+*.tfvars
+!*.tfvars.example
 ```
 
-Some teams commit non-secret `.tfvars` files for shared environments, and some keep all environment values in CI/CD variables or workspace settings. The important beginner habit is to treat variable files as review material before committing them, because the same file type can hold harmless names in one project and secrets in another.
+Commit `.tf` source, harmless website files, the example values file, and `.terraform.lock.hcl`. Do not commit downloaded providers, local state, saved plans, credential-bearing values, or access keys.
 
-## Putting It All Together
-<!-- section-summary: The first Terraform project uses real AWS resources while keeping the workflow small, reviewable, and simple to destroy. -->
+Review cleanup before performing it:
 
-You created a real Terraform project for a tiny S3 static website. The project declared the AWS provider, configured a region, accepted a unique bucket name, created a bucket, allowed a narrow public read policy for website objects, uploaded two HTML files, printed a website URL, and verified the result with `curl`.
+```bash
+terraform plan -destroy
+terraform destroy
+```
 
-The important lesson is the workflow around the resources. You formatted the code, initialized the provider, validated the configuration, saved and reviewed a plan, applied the reviewed plan, tested the live result, noticed the state file, reviewed the destroy plan, and cleaned up the lab.
+Destroy is equivalent to planning an empty desired set for all objects managed by this configuration. Dependencies reverse where necessary: uploaded objects and policies must be removed before the bucket. Review the plan and confirm that only the lab resources are targeted.
 
-That loop is the foundation for production Terraform work. The next project may create a private artifact bucket, a VPC, a database, or a deployment role. The names and providers change, but the operating habit stays the same: small readable configuration, explicit inputs, no hardcoded secrets, reviewed plans, real verification, careful state handling, and clean destroy for temporary environments.
+Destroy changes reality and state; it does not delete HCL. The configuration still declares a website. A subsequent plan therefore proposes recreating it. Keep configuration, state, and reality as separate layers.
 
-## After This Project
+State inspection makes the identity model concrete. `aws_s3_bucket.website` is the stable Terraform address chosen in source; the bucket name is a remote identity or property chosen through input. Object resources have separate addresses even though they live inside the same bucket. Terraform can therefore update `aws_s3_object.index` without treating the entire website as one indivisible object.
 
-Next, we will look at expressions and functions. The S3 lab already used `var.site_bucket_name`, `local.common_tags`, string interpolation, `jsonencode`, `path.module`, and `filemd5`. The next article steps away from the lab and slows down on that value work, because larger Terraform projects need readable names, tags, lists, maps, policies, and small environment choices.
+The data source has a state representation too, but it does not have the same managed lifecycle as the S3 resources. `aws_iam_policy_document.public_read` calculates or returns JSON for another resource to consume. Destroy targets the remote objects this configuration owns; it does not “delete” a policy-document object from AWS because no such remote object was created by the data block.
 
----
+Hash-based change detection illustrates desired state beyond HCL. The HTML content lives in an external local file, yet `filemd5` includes its content-derived value in resource configuration. When the content changes, the object declaration's desired ETag changes. The next plan can identify the precise managed object whose desired representation no longer matches.
 
-**References**
+Protecting state means protecting its entire lifecycle: the local file, backups, remote backend if introduced, access permissions, transport, and automation logs. State may include generated endpoints, policy JSON, identifiers, and potentially secret values in other projects. `.gitignore` prevents an easy accidental commit but is not access control for an already shared file.
 
-- [Tutorial: Configuring a static website on Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/HostingWebsiteOnS3Setup.html) - AWS documents S3 website hosting, index and error documents, public access requirements, HTTP-only website endpoints, and cleanup.
-- [Setting permissions for website access](https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteAccessPermissionsReqd.html) - AWS explains public read bucket policies, Block Public Access behavior, account-level restrictions, and object ownership notes.
-- [Blocking public access to your Amazon S3 storage](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html) - AWS explains how S3 Block Public Access settings work across access points, buckets, accounts, and organizations.
-- [Install Terraform](https://developer.hashicorp.com/terraform/install) - HashiCorp provides current Terraform installation instructions for supported operating systems.
-- [AWS provider documentation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs) - Terraform Registry source for AWS provider configuration, resources, and version behavior.
-- [sts get-caller-identity](https://docs.aws.amazon.com/cli/latest/reference/sts/get-caller-identity.html) - AWS CLI reference for confirming the sandbox account before Terraform runs.
-- [aws_s3_bucket](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket), [aws_s3_bucket_website_configuration](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_website_configuration), [aws_s3_bucket_public_access_block](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_public_access_block), [aws_s3_bucket_policy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_policy), and [aws_s3_object](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_object) - Terraform AWS provider resources used in the lab.
-- [Terraform input variables](https://developer.hashicorp.com/terraform/language/values/variables) - HashiCorp explains variable blocks, validation, command-line values, and variable definition files.
-- [terraform fmt](https://developer.hashicorp.com/terraform/cli/commands/fmt), [terraform init](https://developer.hashicorp.com/terraform/cli/commands/init), [terraform validate](https://developer.hashicorp.com/terraform/cli/commands/validate), [terraform plan](https://developer.hashicorp.com/terraform/cli/commands/plan), and [terraform apply](https://developer.hashicorp.com/terraform/cli/commands/apply) - HashiCorp CLI references for the main workflow commands used in the project.
-- [terraform output](https://developer.hashicorp.com/terraform/cli/commands/output) - HashiCorp documents reading applied output values with human-readable, raw, and JSON formats.
+Destroy review should follow dependency direction in reverse. Objects must leave before the bucket can be empty; the bucket policy and website configuration must stop referring to the bucket; then AWS can remove the bucket itself. Terraform derives that order from the same references used during creation. A failed partial destroy can be planned again because state records what remains managed.
+
+After cleanup, keep the source and lock file if the project is instructional. Remove or ignore local plan files and state according to the lab policy. Running plan again with intact configuration correctly proposes creation, proving that desired configuration is not an execution history. Terraform always reconciles the current three layers rather than remembering that “the script already ran.”
+
+## Which Terraform Principles Should You Take Forward?
+
+The project forms one complete reasoning chain:
+
+```text
+variables enter the root module
+        │
+locals derive internal paths and tags
+        │
+provider configuration selects AWS context
+        │
+resources declare desired AWS objects
+        │
+references build the dependency graph
+        │
+init installs and locks providers
+        │
+validate checks configuration structure
+        │
+plan compares configuration, state, and reality
+        │
+apply asks the provider to execute the transition
+        │
+state records resulting identities and attributes
+        │
+a second plan converges to no changes
+```
+
+Each HCL construct has a first-principles role:
+
+| Construct | Meaning |
+| --- | --- |
+| `terraform {}` | Rules and requirements for running Terraform |
+| `required_providers` | Provider plugin dependencies |
+| `provider "aws"` | Context for communicating with AWS |
+| `variable` | Input from outside the module |
+| `locals` | Internal calculated or reusable values |
+| `resource` | A remote object Terraform should manage |
+| `data` | Information Terraform reads or computes rather than owns |
+| `output` | A value deliberately exposed from the module |
+| Resource reference | Value flow and usually an implicit dependency |
+| `depends_on` | A hidden behavioral dependency |
+| State | Binding between Terraform identity and remote identity |
+| Plan | Proposed transition from current to desired state |
+| Apply | Execution of that transition |
+
+Configuration declares desired state rather than issuing `CreateBucket` directly. The provider translates generic Terraform operations into AWS APIs. Resource addresses give objects stable logical identity. References carry values and form a graph. State binds those addresses to actual objects. Plan is the reconciliation step, and apply performs the approved transition.
+
+Repeated execution is central. After apply, another plan should normally find no work. Change one source input and Terraform calculates the smallest necessary delta. Destroy removes managed reality but leaves the desired declaration available for recreation.
+
+The next projects should deepen one idea at a time: multiple instances with `count` or `for_each`, reusable modules, a remote backend, importing existing infrastructure, a private S3 plus CloudFront HTTPS architecture, networking, compute, and eventually saved-plan CI/CD workflows.
+
+The durable mental model is: Terraform remembers what it manages, compares that record and remote reality with configuration, creates a dependency-aware plan, and uses providers to move reality toward the declared goal.
+
+The website itself is incidental to those lessons. The bucket demonstrates logical and remote identity. Website configuration demonstrates a resource consuming a provider-generated attribute. The public-access block and policy demonstrate a hidden behavioral dependency. The object resources demonstrate local files and hashes becoming desired configuration. Outputs demonstrate a public module return value.
+
+The command loop gives those language constructs an operating discipline. Format makes reviews consistent. Initialization resolves plugins. Validation checks configuration structure. Plan calculates consequences. Apply performs approved changes. External verification tests the delivered behavior. A second plan checks convergence, and destroy exercises the dependency graph in reverse.
+
+As projects grow, preserve these boundaries. Add multiple instances without losing stable addresses. Wrap related resources in modules with focused inputs and outputs. Move state to a protected shared backend before team use. Import existing infrastructure only when this configuration should own its lifecycle. Replace the public S3 website architecture with private S3 and CloudFront when HTTPS and production controls are required.
+
+Do not measure the next exercise only by resource count. A small project that introduces one new concept and retains safe planning, verification, and cleanup teaches more than a large collection of copied blocks. The reconciliation model remains the same whether the graph contains six S3 objects or thousands of cloud resources.
+
+Keep one final checklist for every run: confirm the account, select non-secret inputs, format and initialize, validate, inspect the full plan, apply only the reviewed transition, verify the service externally, inspect state ownership, and clean up temporary infrastructure. None of those steps substitutes for another. Together they connect readable source to controlled cloud change.
+
+When a result surprises you, return to the same model. Check what configuration declares, what state says Terraform owns, what AWS currently reports, and what the plan proposes between them. Then trace references through the graph and confirm provider authority. That method scales beyond this lab and is more reliable than treating Terraform as a sequence of commands to retry until they pass.
+
+It also keeps each change reversible, attributable, and reviewable. That is the real achievement of the first project.
+
+The S3 page is temporary; the reconciliation discipline is reusable across every later Terraform system.
+
+Preserve that discipline as the infrastructure grows.
+
+It is the foundation of safe Terraform operations.
+
+Carry it forward.
+
+Always.
+
+The habit matters long after this particular sandbox is gone.
+
+Before treating the project as complete, repeat the full lifecycle from a clean shell: format and validate the configuration, initialize providers, review the saved plan, apply that exact plan, inspect outputs and state, run a no-change plan, and finally destroy only the lab resources when intended. This sequence proves not only that creation works, but that Terraform can recognize convergence and remove what it owns. Keep generated state and provider files out of accidental source control according to the repository rules, while committing the dependency lock file when the workflow expects reproducible provider selection.
+
+Keep the lab boundary visible: use an isolated account or project, recognizable names and tags, and a cost and cleanup check. Terraform should own only the objects declared in this root state. Existing shared infrastructure should be read through supported data sources or imported deliberately, never assumed to be safe because a provider can discover it.
+
+## Check Your Answers
+
+:::expand[What Are We Building and What Will Terraform Own?]{kind="recap"}
+The sandbox module manages one S3 bucket, website configuration, access controls, policy, and two objects. It owns only the resources represented by its configuration and state, not the whole AWS account.
+:::
+
+:::expand[How Do You Prepare a Safe AWS Root Module?]{kind="recap"}
+Verify Terraform, AWS CLI, the exact sandbox identity, public-access guardrails, and an isolated throwaway project. Profiles select credentials but are not AWS resources, and keys never belong in HCL.
+:::
+
+:::expand[How Do Requirements, Inputs, Locals, and the Provider Fit Together?]{kind="recap"}
+Requirements select compatible Core and provider software, variables receive deployment choices, locals define internal values, and the provider block selects the AWS operating context.
+:::
+
+:::expand[How Do the S3 Website Resources Form a Dependency Graph?]{kind="recap"}
+Bucket references create implicit edges into website settings, policies, and objects. `depends_on` adds only the hidden requirement that public-access settings precede the public policy.
+:::
+
+:::expand[How Do Local Files and Outputs Complete the Desired State?]{kind="recap"}
+S3 object resources upload the two local HTML files, and `filemd5` makes content changes visible. Outputs expose the bucket name and HTTP website endpoint.
+:::
+
+:::expand[How Do You Format, Initialize, Plan, Apply, and Verify?]{kind="recap"}
+Format source, initialize and lock providers, validate structure, review and optionally save the plan, apply the reviewed transition, test outputs, and confirm convergence with another plan.
+:::
+
+:::expand[How Do State, Change Detection, and Destroy Complete the Loop?]{kind="recap"}
+State binds Terraform addresses to AWS objects and must be protected. File hashes drive targeted updates, while destroy plans an empty managed set without erasing configuration.
+:::
+
+:::expand[Which Terraform Principles Should You Take Forward?]{kind="recap"}
+Terraform is a reconciliation engine: configuration states the goal, references form a graph, state records identity, plans calculate differences, and providers execute approved changes repeatedly.
+:::
+
+### References
+
+- [S3 bucket resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket)
+- [S3 website endpoints](https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteEndpoints.html)
+- [AWS CLI `get-caller-identity`](https://docs.aws.amazon.com/cli/latest/reference/sts/get-caller-identity.html)
+- [Provider requirements](https://developer.hashicorp.com/terraform/language/providers/requirements)
+- [Terraform installation](https://developer.hashicorp.com/terraform/install)
+- [Provider block reference](https://developer.hashicorp.com/terraform/language/block/provider)
+- [S3 public access block resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_public_access_block)
+- [S3 bucket policy resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_policy)
+- [S3 Block Public Access](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html)
+- [S3 object resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_object)
+- [`terraform init`](https://developer.hashicorp.com/terraform/cli/commands/init)
+- [`terraform validate`](https://developer.hashicorp.com/terraform/cli/commands/validate)
+- [`terraform plan`](https://developer.hashicorp.com/terraform/cli/commands/plan)
+- [`terraform apply`](https://developer.hashicorp.com/terraform/cli/commands/apply)
+- [`terraform destroy`](https://developer.hashicorp.com/terraform/cli/commands/destroy)

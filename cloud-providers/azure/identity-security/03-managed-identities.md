@@ -18,29 +18,36 @@ aliases:
 
 ## Table of Contents
 
-1. [The Access Story](#the-access-story)
-2. [Workload Identities](#workload-identities)
-3. [The Problem](#the-problem)
-4. [App Registrations And Service Principals](#app-registrations-and-service-principals)
-5. [Service Principal Credentials](#service-principal-credentials)
-6. [Managed Identities](#managed-identities)
-7. [System-Assigned And User-Assigned Identities](#system-assigned-and-user-assigned-identities)
-8. [Runtime Identity In Application Code](#runtime-identity-in-application-code)
-9. [RBAC Still Grants Permission](#rbac-still-grants-permission)
-10. [Workload Identity Federation](#workload-identity-federation)
-11. [Runtime Identity Vs Pipeline Identity](#runtime-identity-vs-pipeline-identity)
-12. [Failure Evidence](#failure-evidence)
-13. [Putting It All Together](#putting-it-all-together)
-14. [What's Next](#whats-next)
-
-## The Access Story
-<!-- section-summary: This article follows one Orders system so service principals, managed identities, workload identity federation, RBAC, and runtime evidence stay connected. -->
+1. [Why Do Workloads Need Their Own Identities?](#why-do-workloads-need-their-own-identities)
+2. [How Do App Registrations and Service Principals Represent Workloads?](#how-do-app-registrations-and-service-principals-represent-workloads)
+3. [How Do Managed Identities Work?](#how-do-managed-identities-work)
+4. [How Does Application Code Obtain and Use a Token?](#how-does-application-code-obtain-and-use-a-token)
+5. [Why Does a Managed Identity Still Need Permission?](#why-does-a-managed-identity-still-need-permission)
+6. [How Does Workload Identity Federation Replace Shared Secrets?](#how-does-workload-identity-federation-replace-shared-secrets)
+7. [Why Must Runtime and Pipeline Identities Stay Separate?](#why-must-runtime-and-pipeline-identities-stay-separate)
+8. [How Do You Debug the Full Identity Chain?](#how-do-you-debug-the-full-identity-chain)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 In the previous article, we looked at **Azure RBAC** as the place where Azure connects a known caller to a role at a scope. That gave us the authorization side. Now we need to spend a full article on the software callers themselves, because production systems have more than human users. APIs call Key Vault. Background workers write blobs. Deployment pipelines update Container Apps. Monitoring jobs read logs. Those callers need identity too.
 
 The Orders team runs `ca-orders-api-prod`, an Azure Container Apps workload that reads database credentials from `kv-devpolaris-prod` and writes invoice exports to Blob Storage. The same team also has a GitHub Actions workflow that deploys new revisions. Both pieces are software, but they have different jobs. The running API needs runtime access to Key Vault and Storage. The pipeline needs deployment access to update Azure resources.
 
-This article follows those two callers through the whole path. We will talk about **workload identities** as the broad category, **app registrations** as identity configuration for software, **service principals** as the tenant-local software principals that receive access, **managed identities** as Azure-managed workload identities for Azure-hosted resources, and **workload identity federation** as the secretless path for external automation such as GitHub Actions.
+Those callers expose several layers that are easy to blur together. **Workload identity** is the broad category. An **app registration** holds identity configuration for software, while a **service principal** is the tenant-local principal that can receive access. A **managed identity** gives an Azure-hosted workload an Azure-managed caller identity. **Workload identity federation** lets external automation such as GitHub Actions obtain temporary access without storing a client secret.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Do Workloads Need Their Own Identities?**
+2. **How Do App Registrations and Service Principals Represent Workloads?**
+3. **How Do Managed Identities Work?**
+4. **How Does Application Code Obtain and Use a Token?**
+5. **Why Does a Managed Identity Still Need Permission?**
+6. **How Does Workload Identity Federation Replace Shared Secrets?**
+7. **Why Must Runtime and Pipeline Identities Stay Separate?**
+8. **How Do You Debug the Full Identity Chain?**
+
+## Why Do Workloads Need Their Own Identities?
+<!-- section-summary: One Orders system connects service principals, managed identities, workload identity federation, RBAC, and runtime evidence without merging their responsibilities. -->
 
 ![Orders workload identity map showing GitHub Actions using a deployment service principal, the Container App using a managed identity, Azure RBAC gates, and evidence logs](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/orders-workload-identity-map.png)
 
@@ -48,9 +55,9 @@ This article follows those two callers through the whole path. We will talk abou
 
 The important thread is simple. **Identity gives software a caller name. RBAC gives that caller permission. Evidence proves which caller actually made the request.** If those three pieces blur together, teams end up with secrets in app settings, broad Contributor assignments, pipeline tests that prove the wrong identity, and production failures that feel random.
 
-So we will start with the broad word first: workload identity. After that, each section adds one production detail to the Orders story.
+The broad term is **workload identity**. App registrations, service principals, managed identities, and federation describe different ways to represent or authenticate those software callers.
 
-## Workload Identities
+### Workload Identities
 <!-- section-summary: A workload identity is an identity for software, automation, or a running service that needs to authenticate without pretending to be a human. -->
 
 A **workload identity** is an identity used by software. The workload might be an API, a batch job, a container, a virtual machine script, a CI/CD workflow, an integration service, or a scheduled cleanup process. In Microsoft Entra ID, workload identities include applications, service principals, and managed identities.
@@ -71,7 +78,7 @@ The first production habit is to name the workload identity by job and environme
 
 Once the team gives software its own identity, the next question is why this is worth the trouble. The answer is usually a secret that has already spread farther than anyone planned.
 
-## The Problem
+### The Problem
 <!-- section-summary: Long-lived application secrets create leak, rotation, ownership, and audit problems, so production teams move software access toward token-based workload identity. -->
 
 A **client secret** is a password-like value that an application can use with Microsoft Entra ID to request tokens. A **connection string** or **access key** is another kind of secret that lets software reach a service directly. These values are common because they are quick to set up. A developer can paste a value into an app setting, run a deployment, and make the first version of the app work.
@@ -93,7 +100,7 @@ Rotation is where this causes operational pain. The team has to create a new sec
 
 Azure gives us several better paths. A service principal can use a certificate instead of a secret, which improves some handling but still creates a credential lifecycle. A managed identity lets Azure-hosted workloads request tokens without developers managing the underlying credential. Workload identity federation lets external automation exchange a trusted external token for a Microsoft Entra token. To understand those paths, we first need the app registration and service principal split.
 
-## App Registrations And Service Principals
+## How Do App Registrations and Service Principals Represent Workloads?
 <!-- section-summary: An app registration describes software integration with Microsoft Entra ID, while a service principal is the tenant-local security principal that receives access. -->
 
 An **app registration** is the identity configuration for an application in Microsoft Entra ID. It describes how the software integrates with Microsoft sign-in and token flows. A registration can include the client ID, supported account types, redirect URIs, secrets or certificates, API permissions, exposed scopes, app roles, and token settings.
@@ -119,7 +126,7 @@ This is the place where portal names can confuse beginners. **App registrations*
 
 Service principals are useful, and they can still carry credentials. The Orders pipeline can authenticate as `spn-orders-deploy-prod` with a client secret or certificate. That gets us back to the credential problem, so the next section looks at when that is acceptable and where teams usually move next.
 
-## Service Principal Credentials
+### Service Principal Credentials
 <!-- section-summary: Service principals can use secrets or certificates, but those credentials need owners, expiration, rotation, and a reason they still exist. -->
 
 A **service principal credential** is proof that software can use a service principal. The most familiar credential is a client secret. A certificate is another option. In both cases, the app presents credential material to Microsoft Entra ID, and Microsoft Entra ID can issue a token if the credential is valid and the token request matches the configured application.
@@ -141,14 +148,13 @@ A cleaner service principal design has a narrow job and narrow access. `spn-orde
 
 Many teams now move CI/CD service principals from client secrets to **workload identity federation**. We will come back to that later in the article because the deployment pipeline is an external workload. First, we need the Azure-hosted runtime path, because the running Orders API has an even better option: managed identity.
 
-## Managed Identities
+## How Do Managed Identities Work?
 <!-- section-summary: A managed identity gives an Azure resource a Microsoft Entra workload identity whose credential lifecycle Azure manages. -->
 
 A **managed identity** is a Microsoft Entra workload identity that can be assigned to an Azure resource. The running code can request Microsoft Entra tokens through the Azure hosting environment, and Azure manages the underlying credential. Microsoft describes managed identities as a way for applications to obtain Microsoft Entra tokens without developers managing credentials.
 
 For the Orders API, this means `ca-orders-api-prod` can use `mi-orders-api-prod` when it needs to read `kv-devpolaris-prod` or write invoice blobs. The application code can drop `AZURE_CLIENT_SECRET`, the container image can avoid storage account keys, and the pipeline can stop pasting runtime secrets into app settings. The runtime asks Azure for a token, and Azure issues a token for the identity attached to the workload.
 
-If you know AWS, the closest anchors are EC2 instance profiles, ECS task roles, Lambda execution roles, and EKS pod identity patterns. The shared idea is short-lived cloud credentials for a running workload, while Azure packages the identity through Microsoft Entra and attaches it to Azure resources as a managed identity.
 
 ![Managed identity runtime path showing a Container App using a managed identity endpoint, Microsoft Entra token issuance, Azure RBAC, Key Vault, and Storage](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/managed-identity-runtime-path.png)
 
@@ -181,7 +187,7 @@ The useful fields are the name, client ID, principal ID, resource ID, location, 
 
 This gives the Orders API a caller identity. Key Vault and Storage access still come from roles at those target services, and the app still has to run on a hosting platform that supports the managed identity type the team selected. That takes us to the two managed identity types.
 
-## System-Assigned And User-Assigned Identities
+### System-Assigned And User-Assigned Identities
 <!-- section-summary: System-assigned identities belong to one Azure resource, while user-assigned identities are standalone resources that can attach to one or more workloads. -->
 
 A **system-assigned managed identity** is enabled directly on one Azure resource. Azure creates the identity for that resource, only that resource can use it to request tokens, and the identity lifecycle follows the resource lifecycle. If the resource is deleted, Azure deletes the system-assigned identity too.
@@ -201,7 +207,7 @@ There is also an operational reason user-assigned identities show up in larger s
 
 Now that the Orders API has an identity attached, the code has to use it. The next section moves from Azure resource setup into the application runtime.
 
-## Runtime Identity In Application Code
+## How Does Application Code Obtain and Use a Token?
 <!-- section-summary: Azure SDK credential classes let application code request tokens from the runtime identity instead of reading a stored client secret. -->
 
 Runtime code should use token-based authentication when the target Azure service supports Microsoft Entra authentication. In JavaScript and TypeScript applications, the Azure Identity library provides credential classes that can request tokens through local developer tools during development and through managed identity when the app runs in Azure.
@@ -244,7 +250,7 @@ This split keeps the production path explicit. Production uses the managed ident
 
 The code can now request a token. The next step is authorization, because Key Vault and Storage still check whether that identity has the right role at the right scope.
 
-## RBAC Still Grants Permission
+## Why Does a Managed Identity Still Need Permission?
 <!-- section-summary: Managed identity proves the workload caller, and Azure RBAC or service-specific authorization still grants what that caller can do. -->
 
 Enabling a managed identity gives the workload a caller identity. **Authorization still comes from Azure RBAC or the target service access model.** This is the most important production distinction in the whole article. Identity answers who the app is. Permission answers what that known app can do.
@@ -297,10 +303,9 @@ Broad roles deserve special attention. Granting Contributor at a resource group 
 
 The runtime path is now clear: Azure-hosted workload, managed identity, token request, RBAC at target services. The deployment path is different because GitHub Actions runs outside Azure. That takes us to workload identity federation.
 
-## Workload Identity Federation
+## How Does Workload Identity Federation Replace Shared Secrets?
 <!-- section-summary: Workload identity federation lets trusted external workloads exchange external IdP tokens for Microsoft Entra access tokens without storing client secrets. -->
 
-**Workload identity federation** lets an external workload use a trusted token from its own identity provider to get a Microsoft Entra access token. The external workload might be GitHub Actions, Azure Pipelines, a Kubernetes workload, Google Cloud, AWS, or another platform that can issue OIDC tokens. Instead of storing a Microsoft Entra client secret, the workload proves itself with a short-lived external token.
 
 For the Orders deployment pipeline, GitHub Actions can request an OIDC token from GitHub. Microsoft Entra ID can trust that token only when a configured federated identity credential matches the issuer, subject, and audience. After the match succeeds, Microsoft Entra ID issues an access token for the configured application or user-assigned managed identity. Azure RBAC then decides what that deployment identity can do.
 
@@ -350,7 +355,7 @@ This gives the Orders team a secretless CI/CD path. The GitHub workflow can use 
 
 Now we have two software callers in the same system. The running app uses managed identity. The deployment pipeline uses a federated deployment identity. The next section separates those identities because many production incidents happen when teams test one caller and ship another.
 
-## Runtime Identity Vs Pipeline Identity
+## Why Must Runtime and Pipeline Identities Stay Separate?
 <!-- section-summary: The identity that deploys a workload is different from the identity the workload uses after it starts, and both need separate evidence. -->
 
 The **pipeline identity** deploys or updates Azure resources. The **runtime identity** is the identity the running workload uses after deployment. These identities usually need different roles because their jobs are different. The pipeline might update Container Apps revisions and app settings. The runtime API might read secrets and write blobs. Each identity path needs its own release evidence.
@@ -370,8 +375,8 @@ This separation also protects production. The deployment identity can focus on d
 
 Once the two callers are separate, troubleshooting needs concrete evidence. The next section turns a runtime failure into a small set of checks.
 
-## Failure Evidence
-<!-- section-summary: Runtime identity failures become clearer when teams inspect the attached identity, its principal ID, target role assignments, token path, and denied action. -->
+## How Do You Debug the Full Identity Chain?
+<!-- section-summary: Inspect the attached identity, principal ID, target role assignments, token path, and denied action to clarify a runtime identity failure. -->
 
 **Failure evidence** is the set of records that proves which workload identity was used, which role assignments existed, and which target service denied or allowed the request. For managed identity problems, the useful evidence usually comes from the hosting resource identity, the managed identity object, Azure RBAC role assignments, target service logs, and Microsoft Entra sign-in logs.
 
@@ -430,9 +435,13 @@ The target service matters too. Key Vault has a control plane and a data plane. 
 
 The strongest troubleshooting sentence sounds like this: **the running Container App has `mi-orders-api-prod` attached, that identity has principal ID `principal-mi-orders-api-prod`, and that principal has `Key Vault Secrets User` at the `kv-devpolaris-prod` scope.** If the request still fails after that, the team can look at propagation timing, vault permission model, network access, secret name, token audience, SDK configuration, and target service logs.
 
+HTTP status codes help place the failure. A `401 Unauthorized` response usually points toward authentication: no token, an expired token, the wrong audience, or a credential chain that selected the wrong identity. A `403 Forbidden` response usually means the service recognized the caller but denied the requested operation because of RBAC, a service permission model, a condition, or another policy. Network timeouts and DNS failures happen before either authorization result, so they belong to the connectivity path.
+
+This is a compact debugging algorithm: identify the running workload, read its attached identity, compare client and principal IDs, prove how the SDK obtains a token, inspect the token audience, list role assignments at the target and parent scopes, verify network reachability, and read the target service log for the exact denied action. Each step eliminates one class of explanation.
+
 This evidence gives the team a repeatable path. The final section brings the whole article back together so the Orders design can be read as one system.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: A clean Azure workload identity design separates software callers, removes unnecessary long-lived secrets, grants narrow RBAC, and keeps evidence for each access path. -->
 
 Workload identity has a simple idea behind it: software should have its own caller identity. The Orders API gets its own runtime identity, the deployment pipeline gets its own deployment identity, and a background worker can get a separate identity when it needs different access. Each production job gets a principal that matches the work it performs.
@@ -455,7 +464,7 @@ The important habit is to keep asking four plain questions. **Which workload is 
 
 *The checklist turns the article into one repeatable review path: name the software job, attach the right identity, prove the token path, grant the narrow role, and keep evidence for the request.*
 
-## What's Next
+### What's Next
 
 Now we have the workload identity pieces: app registrations, service principals, managed identities, workload identity federation, RBAC assignments, and runtime evidence. The next step is putting those pieces into one complete production setup where the whole access path can be built, tested, and reviewed together.
 
@@ -463,7 +472,41 @@ In **Practical: Set Up Azure Identity And Access For A Startup**, we take the Or
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[Why Do Workloads Need Their Own Identities?]{kind="recap"}
+This article follows one Orders system so service principals, managed identities, workload identity federation, RBAC, and runtime evidence stay connected. A workload identity is an identity for software, automation, or a running service that needs to authenticate without pretending to be a human. Long-lived application secrets create leak, rotation, ownership, and audit problems, so production teams move software access toward token-based workload identity.
+:::
+
+:::expand[How Do App Registrations and Service Principals Represent Workloads?]{kind="recap"}
+An app registration describes software integration with Microsoft Entra ID, while a service principal is the tenant-local security principal that receives access. Service principals can use secrets or certificates, but those credentials need owners, expiration, rotation, and a reason they still exist.
+:::
+
+:::expand[How Do Managed Identities Work?]{kind="recap"}
+A managed identity gives an Azure resource a Microsoft Entra workload identity whose credential lifecycle Azure manages. System-assigned identities belong to one Azure resource, while user-assigned identities are standalone resources that can attach to one or more workloads.
+:::
+
+:::expand[How Does Application Code Obtain and Use a Token?]{kind="recap"}
+Azure SDK credential classes let application code request tokens from the runtime identity instead of reading a stored client secret.
+:::
+
+:::expand[Why Does a Managed Identity Still Need Permission?]{kind="recap"}
+Managed identity proves the workload caller, and Azure RBAC or service-specific authorization still grants what that caller can do.
+:::
+
+:::expand[How Does Workload Identity Federation Replace Shared Secrets?]{kind="recap"}
+Workload identity federation lets trusted external workloads exchange external IdP tokens for Microsoft Entra access tokens without storing client secrets.
+:::
+
+:::expand[Why Must Runtime and Pipeline Identities Stay Separate?]{kind="recap"}
+The identity that deploys a workload is different from the identity the workload uses after it starts, and both need separate evidence.
+:::
+
+:::expand[How Do You Debug the Full Identity Chain?]{kind="recap"}
+Inspecting the attached identity, principal ID, target role assignments, token path, and denied action clarifies runtime identity failures. A clean Azure workload identity design separates software callers, removes unnecessary long-lived secrets, grants narrow RBAC, and keeps evidence for each access path.
+:::
+
+## References
 
 - [What are managed identities for Azure resources?](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview)
 - [Application and service principal objects in Microsoft Entra ID](https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals)

@@ -27,12 +27,16 @@ aliases:
 6. [How Do You Choose Thresholds, Missing-Data Rules, and Anomaly Detection?](#how-do-you-choose-thresholds-missing-data-rules-and-anomaly-detection)
 7. [How Do Composite, Suppressed, and Recommended Alarms Help?](#how-do-composite-suppressed-and-recommended-alarms-help)
 8. [How Does the Complete CloudWatch Measurement System Fit Together?](#how-does-the-complete-cloudwatch-measurement-system-fit-together)
-9. [What Should You Remember?](#what-should-you-remember)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
 CloudWatch Metrics, Dashboards, and Alarms are successive parts of one measurement system. Metrics turn workload behavior into numerical evidence. Dashboards arrange that evidence for human investigation. Alarms evaluate it continuously and change operational state when a configured condition is satisfied. Notifications or automation come after that state change.
 
-The sections below answer these questions in order:
+During an incident, logs are tempting because logs contain the exact error. The problem is timing. If a flash sale sends thousands of shoppers through checkout, the log stream might contain millions of events. Searching all of that first can burn the first ten minutes of the incident.
+
+Metrics give the first shape of the problem. A **metric** is a number recorded over time. Instead of reading every checkout log event, you can look at completed checkouts per minute, p95 checkout latency, target 5xx errors from the load balancer, RDS database connections, and SQS queue age. In a few seconds, the team can see whether the issue affects all users, one service, one dependency, or one Region.
+
+Keep these questions in view as you work through the lesson:
 
 1. **What Should You Measure First?**
 2. **How Do Namespaces, Dimensions, Units, and Resolution Define a Metric?**
@@ -45,10 +49,6 @@ The sections below answer these questions in order:
 
 ## What Should You Measure First?
 <!-- section-summary: Metrics give the fast production overview that tells a team whether customers are affected and which part of the system is under pressure. -->
-
-During an incident, logs are tempting because logs contain the exact error. The problem is timing. If a flash sale sends thousands of shoppers through checkout, the log stream might contain millions of events. Searching all of that first can burn the first ten minutes of the incident.
-
-Metrics give the first shape of the problem. A **metric** is a number recorded over time. Instead of reading every checkout log event, you can look at completed checkouts per minute, p95 checkout latency, target 5xx errors from the load balancer, RDS database connections, and SQS queue age. In a few seconds, the team can see whether the issue affects all users, one service, one dependency, or one Region.
 
 Let's keep using the same checkout service from the previous article. A customer clicks pay. The request enters an Application Load Balancer, reaches an ECS service, writes to RDS, calls a payment provider, and sends an SQS message for confirmation email. The most useful first metrics are the ones that answer these questions:
 
@@ -148,7 +148,6 @@ CloudWatch cannot delete a metric directly. A metric stops appearing in normal m
 ![CloudWatch metric identity broken into namespace, metric name, dimensions, unit, and period](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/metric-identity.png)
 
 *The visual shows why dimensions matter so much. The namespace and metric name start the address, but dimensions decide the exact time series CloudWatch stores and alarms on.*
-
 
 ## How Do Namespaces, Dimensions, Units, and Resolution Define a Metric?
 <!-- section-summary: Metric identity choices control how CloudWatch stores, filters, aggregates, bills, and alarms on time-series data. -->
@@ -630,7 +629,7 @@ The production checklist is:
 *The summary image connects metric design to incident response. A number helps only after the alarm state reaches the right route and the runbook action is clear.*
 
 
-## What Should You Remember?
+## Check Your Answers
 <!-- section-summary: CloudWatch reduces workload behavior into numerical evidence, an investigative view, evaluated state, and an operational action. -->
 
 Metrics, dashboards, and alarms form a measurement-to-action system. Keep these distinctions clear:

@@ -33,7 +33,7 @@ rendered Kubernetes manifests
 
 Helm is not a process that remains between a Service and a Pod at runtime. Once Helm submits a rendered Deployment or Service, the Kubernetes API and controllers interpret those ordinary objects. This static authoring boundary is the key to debugging values: trace the input into rendered YAML, then use Kubernetes concepts from that point onward.
 
-Seven questions keep those responsibilities clear:
+Keep these questions in view as you work through the lesson:
 
 1. **What job do values and templates each perform?**
 2. **How does Helm turn values into ordinary Kubernetes YAML?**

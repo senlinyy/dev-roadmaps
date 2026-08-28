@@ -1,7 +1,7 @@
 ---
 title: "Continuous Delivery"
-description: "Learn how continuous delivery turns a tested build into a safe, repeatable, approval-ready production release."
-overview: "Continuous delivery connects CI output to production release operations. This article explains delivery vs. deployment, immutable artifacts, runtime configuration, promotion gates, health checks, failed rollouts, and rollback design."
+description: "Learn how continuous delivery keeps a tested artifact safely releasable through repeatable promotion, health checks, controlled rollout, and recovery."
+overview: "Passing CI creates a verified candidate, but releasing that candidate is a separate engineering problem. This article follows one immutable artifact through runtime configuration, promotion environments, approval gates, health checks, gradual rollout, production feedback, and recovery."
 tags: ["delivery", "environments", "rollbacks", "architecture", "deployment"]
 order: 3
 id: article-cicd-fundamentals-continuous-delivery
@@ -13,334 +13,381 @@ aliases:
 
 ## Table of Contents
 
-1. [The Release Path After CI](#the-release-path-after-ci)
-2. [Delivery and Deployment](#delivery-and-deployment)
-3. [Manual Releases and Drift](#manual-releases-and-drift)
-4. [Build Once, Promote the Same Artifact](#build-once-promote-the-same-artifact)
-5. [Runtime Configuration and Secrets](#runtime-configuration-and-secrets)
-6. [Promotion Environments and Approval Gates](#promotion-environments-and-approval-gates)
-7. [Health Checks and Rollout Deadlines](#health-checks-and-rollout-deadlines)
-8. [A Rollout That Fails Safely](#a-rollout-that-fails-safely)
-9. [Rollback and Recovery](#rollback-and-recovery)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [Why Is Releasing Software Different from Passing CI?](#why-is-releasing-software-different-from-passing-ci)
+2. [How Do Continuous Delivery and Continuous Deployment Differ?](#how-do-continuous-delivery-and-continuous-deployment-differ)
+3. [Why Should One Artifact Move Through Every Environment?](#why-should-one-artifact-move-through-every-environment)
+4. [How Do Environments and Approval Gates Add Evidence?](#how-do-environments-and-approval-gates-add-evidence)
+5. [How Do Health Checks and Gradual Rollouts Limit Failure?](#how-do-health-checks-and-gradual-rollouts-limit-failure)
+6. [How Should Rollback and Recovery Be Designed?](#how-should-rollback-and-recovery-be-designed)
+7. [How Does Production Feedback Complete the Release?](#how-does-production-feedback-complete-the-release)
+8. [How Does the Complete Continuous Delivery Loop Work?](#how-does-the-complete-continuous-delivery-loop-work)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## The Release Path After CI
-<!-- section-summary: Continuous delivery takes the tested output from CI and turns it into a repeatable release path. -->
+Passing Continuous Integration establishes a useful result: a commit satisfied the automated checks selected for joining the shared codebase. The commit may lint, test, and build successfully. Users still do not run it.
 
-The previous article focused on pipelines, runners, and artifacts. CI gives the team a trusted build result: tests passed, the package exists, and the pipeline saved the output somewhere durable. That is a huge step, but a package in a registry still has one more journey to make before users receive value from it.
+The candidate has another journey:
 
-**Continuous delivery**, usually shortened to **CD**, means the team keeps software in a state where an approved change can reach production through an automated, repeatable process. The important part is readiness. A change that passes the pipeline should already have a clear route through staging, approval, production rollout, health checks, and recovery.
-
-Let's use one production example through the article. A company called Northstar Travel runs a service named `booking-api`. Customers use it to reserve hotel rooms, apply discount codes, and pay for trips. A developer merges a discount-code fix, CI builds a container image, and the team now needs to release that exact change safely.
-
-This article follows the path that image takes. First we separate **delivery** from **deployment** so the two CD meanings stay clear. Then we look at why manual releases create drift. After that we build once, inject configuration at runtime, promote through environments, watch rollout health, and design rollback before the incident happens.
-
-## Delivery and Deployment
-<!-- section-summary: Delivery prepares a change for safe release, while deployment moves that change into a running environment. -->
-
-Two words get mixed together all the time: **delivery** and **deployment**. Delivery means the change has passed enough automated checks and release steps that the business can choose to ship it. Deployment means the platform actually places that change into a running environment, such as staging or production.
-
-Continuous delivery keeps a human decision near the final production step. The pipeline can build the image, deploy it to staging, run smoke tests, and wait at the production gate. A release manager, engineer, or change approver then reviews the evidence and clicks the production approval button.
-
-**Continuous deployment** goes one step further. Every change that passes the automated checks flows into production without a manual approval step. That can work beautifully for mature web services with strong tests, fast observability, and small changes. It can cause real pain for teams that still have flaky tests, manual database checks, or release windows tied to customer support.
-
-Northstar Travel chooses continuous delivery for `booking-api`. The team wants a person to approve production releases because payment behavior, partner hotel contracts, and support staffing all matter. The approval step confirms the release evidence, and the pipeline still performs the production deployment.
-
-That difference matters because the risky part of many old release processes was never the approval. The risky part was the manual work people performed after the approval. That takes us to the next problem.
-
-## Manual Releases and Drift
-<!-- section-summary: Manual release steps create hidden differences between servers, environments, and release attempts. -->
-
-A **manual release** means a person performs the production change by hand. They might SSH into a server, pull code from Git, install dependencies, edit a config file, restart a process, and watch logs in a terminal. This can feel simple with one service and one server, especially in the early days of a project.
-
-Here is a realistic old release path for `booking-api`. An engineer connects to `prod-app-01`, runs `git pull`, runs `npm install`, copies a `.env` file from a shared folder, restarts `systemd`, and then repeats a similar set of steps on `prod-app-02`. The release depends on memory, local shell history, and the engineer noticing every warning at the right moment.
-
-The first failure mode is **repeatability**. A repeatable process produces the same result each time because the instructions and inputs stay controlled. Manual work breaks repeatability because one missed command can leave one server running the new code with old dependencies while another server runs old code with new dependencies.
-
-The second failure mode is **environment drift**. Drift means an environment slowly drifts away from what the team believes exists. One engineer adds a hotfix file directly on the server. Another changes a process limit during an outage. A third rotates a secret on one host and forgets the second host. The next release now behaves differently on machines that the dashboard describes as identical.
-
-The third failure mode is weak recovery. A manual release often has a vague rollback plan like "put the old branch back" or "restart the previous process." During an incident, the team then has to remember which commit ran before, which dependency versions came with it, and which config files changed during the release. Recovery turns into a second manual release under stress.
-
-Continuous delivery removes those hand-built release steps from the production path. The pipeline performs the same deployment action every time, records which artifact moved, records who approved it, and gives the team one place to see the result. That only works if the artifact itself stays stable across every environment.
-
-## Build Once, Promote the Same Artifact
-<!-- section-summary: The same immutable artifact should move through staging and production so production runs what staging already tested. -->
-
-An **artifact** is the packaged output of a build. For a backend service, that artifact might be a Docker image, a JAR file, a Go binary, or a zipped serverless function bundle. An artifact should represent one specific version of the application that the pipeline can store, verify, and deploy.
-
-An **immutable artifact** keeps the same bytes after the build creates it. A container image digest is a good example. The tag `booking-api:2026-06-13` is a friendly label, but the digest `sha256:8c2f...` points to exact image bytes. If the digest stays the same, the runtime receives the same filesystem layers and application code.
-
-The core CD rule is **build once, promote the same artifact**. CI builds `booking-api` once from commit `9f4c2a1`, pushes the image to the registry, and records the digest. The staging deployment uses that digest. The production deployment uses that same digest after staging passes and the production gate receives approval.
-
-![Build once promote one digest showing commit, CI image build, image digest, staging, smoke tests, approval gate, and production](/content-assets/articles/article-cicd-fundamentals-continuous-delivery/build-once-promote-digest.png)
-
-*Build-once promotion keeps staging and production tied to the same immutable image digest, so release evidence points at the thing users actually receive.*
-
-A common mistake is rebuilding for each environment. The staging job builds an image from the commit and deploys it. Later, the production job checks out the same commit and builds again. The source commit matches, but the output can still change because a base image moved, a package registry returned a newer dependency, or a build script read a different environment variable.
-
-That mistake creates a nasty question during incidents. Did staging actually test the thing now running in production? Build-once promotion gives a clean answer. Production runs the same image digest that staging already used, so the team can focus on environment data, configuration, traffic, and runtime behavior instead of wondering whether two builds produced different bytes.
-
-Now a new question appears. If staging and production use the same image, how does the application connect to different databases and partner APIs?
-
-## Runtime Configuration and Secrets
-<!-- section-summary: Runtime configuration lets one artifact run in different environments without rebuilding it. -->
-
-**Configuration** means values that change between deployments while the application code stays the same. Database URLs, Redis hosts, feature flag keys, partner API endpoints, log levels, and public hostnames all count as configuration. **Secrets** are sensitive configuration values, such as passwords, API tokens, signing keys, and private credentials.
-
-The Twelve-Factor App guidance explains this idea clearly: config belongs in the environment because config changes between deploys while code stays stable. In practical CD work, the image for `booking-api` contains application code, dependency files, and startup commands. Production database passwords and staging API endpoints live outside the image in environment-owned configuration.
-
-Northstar's staging deployment injects staging values at runtime. These values point the same image at sandbox-style systems where the team can test behavior without touching real customers. The staging environment values look like this:
-
-```bash
-DATABASE_URL=postgres://booking_staging:***@staging-db.internal:5432/bookings
-PAYMENT_PROVIDER_URL=https://sandbox-payments.example.com
-FEATURE_DISCOUNT_CODES=true
+```text
+verified source
+      ↓
+identified release artifact
+      ↓
+pre-production environment
+      ↓
+production transition
+      ↓
+healthy service for users
 ```
 
-The production deployment injects production values into the same image digest. The variable names stay consistent, while the values point to production systems. The production environment values look like this:
+**Continuous Delivery** engineers that journey so an exact verified version can be released safely, repeatedly, and on demand. CI reduces uncertainty about combining code. Delivery reduces uncertainty about moving that code into a working environment.
 
-```bash
-DATABASE_URL=postgres://booking_prod:***@prod-db.internal:5432/bookings
-PAYMENT_PROVIDER_URL=https://payments.example.com
-FEATURE_DISCOUNT_CODES=true
+These are separate problems because correct application code can still fail through an incorrect release procedure. A manual deployer can omit an environment variable, select an old build, run the wrong database migration, copy files to three of four servers, mistype a command, or restart only part of the service. The software passed its checks; the delivery operation produced a broken system.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Is Releasing Software Different from Passing CI?**
+2. **How Do Continuous Delivery and Continuous Deployment Differ?**
+3. **Why Should One Artifact Move Through Every Environment?**
+4. **How Do Environments and Approval Gates Add Evidence?**
+5. **How Do Health Checks and Gradual Rollouts Limit Failure?**
+6. **How Should Rollback and Recovery Be Designed?**
+7. **How Does Production Feedback Complete the Release?**
+8. **How Does the Complete Continuous Delivery Loop Work?**
+
+## Why Is Releasing Software Different from Passing CI?
+<!-- section-summary: CI checks whether a change can integrate, while continuous delivery makes the verified version safely releasable. -->
+
+It helps to distinguish two forms of correctness:
+
+```text
+software correctness
+       +
+delivery correctness
+       =
+a candidate that becomes a healthy running release
 ```
 
-The application reads these values at startup. In Node.js, the code might use `process.env.DATABASE_URL`. In Python, it might use `os.environ["DATABASE_URL"]`. In Kubernetes, the values might come from a `Secret` or `ConfigMap`, and the deployment manifest maps those values into container environment variables.
+The core delivery operation can be written as `Deploy(X, Y)`: given verified artifact X, produce artifact X running correctly in environment Y. The definition is much stronger than “Dave knows the server commands.” It names the object, destination, and expected result.
 
-```yaml
-env:
-  - name: DATABASE_URL
-    valueFrom:
-      secretKeyRef:
-        name: booking-api-db
-        key: database-url
-  - name: PAYMENT_PROVIDER_URL
-    valueFrom:
-      configMapKeyRef:
-        name: booking-api-config
-        key: payment-provider-url
+Manual release instructions often begin innocently: SSH to each server, copy a directory, edit a configuration file, restart the process, run a database command, and inspect logs. Repetition introduces variation. One host remains on version `4.2` while the others run `4.3`; one migration is forgotten; one configuration differs. The actual fleet drifts away from the state the team believes it has.
+
+Continuous Delivery moves release knowledge from human memory into versioned, executable automation. The procedure becomes reviewable, repeatable, and auditable. A human may still choose whether to release, but a machine performs the steps that should be the same every time.
+
+Versioning the procedure matters because it ties release behavior to review. A change to how the service starts, where a migration runs, or which health condition blocks traffic can be proposed and inspected like application code. A release record can then show both the application artifact and the automation definition that moved it. The team no longer has to reconstruct an operator's terminal history to understand why two deployments behaved differently.
+
+Automation also makes partial execution visible. A controller can record that the artifact reached two instances, readiness failed on the third, and the fourth was never touched. A handwritten checklist often records only “deployment started” or “deployment done,” leaving ambiguous middle states during an incident.
+
+## How Do Continuous Delivery and Continuous Deployment Differ?
+<!-- section-summary: Continuous delivery maintains release readiness, while continuous deployment automatically releases every qualifying change. -->
+
+The two meanings of “CD” describe different policies at the final production boundary.
+
+**Continuous Delivery** keeps every validated change in a releasable state. Automation can build the artifact, deploy it to staging, run technical checks, collect evidence, and wait at a production gate. A human decision may still authorize the release:
+
+```text
+CI passes
+   ↓
+artifact and staging checks
+   ↓
+ready for production
+   ↓
+human approval
+   ↓
+automated production deployment
 ```
 
-This separation gives the team two useful controls. The artifact stays stable, so staging and production run the same code. The environment owns its own runtime values, so staging can safely point to a sandbox payment provider while production points to the real provider.
+**Continuous Deployment** removes that manual production decision. A qualifying change proceeds automatically after all defined delivery checks pass:
 
-![Runtime config boundary showing one image digest with separate staging and production values injected outside the image](/content-assets/articles/article-cicd-fundamentals-continuous-delivery/runtime-config-boundary.png)
-
-*Runtime configuration lets the same release artifact run in different environments while secrets and environment-specific values stay outside the image.*
-
-Configuration also needs ownership. Platform teams usually store environment values in a secrets manager, CI/CD environment settings, or Kubernetes secrets managed through a secure process. Developers can change code through pull requests, while production secret changes require a smaller set of trusted people and a clear audit trail.
-
-Once the artifact and runtime configuration are separated, the pipeline can promote the release through environments. The next step is deciding which environments the artifact must pass through before real users see it.
-
-## Promotion Environments and Approval Gates
-<!-- section-summary: Promotion pipelines move the same artifact through controlled environments with automated checks and human approvals where needed. -->
-
-An **environment** is a named place where the application runs with a specific purpose. Development catches early integration problems. Staging should look close to production and gives the team a place to test the real release artifact. Production serves real users and carries the highest risk.
-
-**Promotion** means moving the same artifact from one environment to the next. The pipeline uses the recorded digest again instead of creating a new build. The target environment then runs that digest with its own configuration and secrets.
-
-**Approval gates** add a controlled pause before a sensitive step. GitHub Actions environments, for example, can require deployment protection rules before a job that references an environment proceeds. A production environment can require reviewers, wait timers, branch restrictions, or custom checks from another system.
-
-Here is a simplified GitHub Actions release pipeline for `booking-api`. It starts from an image digest that already exists, then deploys that same digest to staging before production. A short version looks like this:
-
-```yaml
-name: booking-api-release
-
-on:
-  workflow_dispatch:
-    inputs:
-      image_digest:
-        required: true
-        type: string
-
-jobs:
-  deploy-staging:
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to staging
-        run: ./scripts/deploy.sh staging "${{ inputs.image_digest }}"
-      - name: Run staging smoke tests
-        run: ./scripts/smoke-test.sh https://staging-booking.example.com
-
-  deploy-production:
-    needs: deploy-staging
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to production
-        run: ./scripts/deploy.sh production "${{ inputs.image_digest }}"
-      - name: Run production smoke tests
-        run: ./scripts/smoke-test.sh https://booking.example.com
+```text
+CI and delivery checks pass
+            ↓
+automatic production deployment
 ```
 
-The `needs: deploy-staging` line creates the dependency. Production waits for staging to finish successfully. The `environment: production` line connects the job to the platform's production rules, so required reviewers can inspect the release before the job receives production secrets and starts the deployment.
+Continuous in Continuous Delivery refers primarily to continuous **releasability**, not to forcing every commit into production. The team can release when it chooses without assembling a special manual procedure or rebuilding the software.
 
-This is where continuous delivery is more than a YAML file. The approval screen should show useful evidence: image digest, commit SHA, pull request links, test results, staging smoke-test result, migration summary, and release notes. The approver should review a small release packet rather than guess from a job name.
+An approval gate is useful when machines cannot decide the surrounding context: a maintenance window, customer communication, business coordination, regulatory authorization, or support readiness. It is less useful when a person manually repeats the same 27 technical checks on every release. Repeatable technical verification belongs in automation. Contextual judgment belongs with a responsible human.
 
-Promotion controls reduce the blast radius of a bad change. **Blast radius** means the amount of damage a failure can cause. A broken deployment in staging affects testers and internal workflows. A broken deployment in production affects customers, revenue, and trust. The pipeline uses environments, checks, and approvals to catch problems before the blast radius grows.
+This division also clarifies what approval should do. A person decides **whether** the known candidate should move now. The pipeline decides **how** to move it. Approval should not begin an undocumented sequence of file copies and server commands.
 
-After the production gate opens, the deployment still needs runtime safety checks. A successful file copy or Kubernetes apply command proves that the platform received the desired change. Health checks prove that the application can serve traffic.
+Frequent delivery can be safer than rare delivery. A six-month release may contain 1,500 changes. Twenty daily releases may each contain one to three. The frequent team changes production more often, yet each transition has a smaller uncertainty set. When an incident begins, “What changed?” has a bounded answer.
 
-## Health Checks and Rollout Deadlines
-<!-- section-summary: Health checks teach the platform when a new version can receive traffic and when a rollout should stop. -->
+The goal is not automation for its own sake. Large batches, rare releases, manual procedures, unknown artifacts, environment drift, and slow recovery make releases risky. Small changes, repeatable automation, known artifacts, comparable environments, and practiced recovery make release work routine enough to become boring.
 
-A **health check** is a small test the platform runs against the application while it starts and while it keeps running. In a web service, this is often an HTTP endpoint such as `/healthz` or `/readyz`. The endpoint should report whether the application can do the work users need, including more than simple process existence.
+The choice between delivery and deployment can vary by service. A low-risk internal service with excellent automated checks may release every passing change. A payment system may stop for contextual approval even though every technical step is automated. Both can use the same artifact, environment, health, observation, and recovery machinery; only the policy at the production gate differs.
 
-Kubernetes uses a few probe types that show up in many production CD systems. A **readiness probe** decides whether a pod can receive traffic from services. A **liveness probe** decides whether the container has become stuck and should restart. A **startup probe** gives slow-starting applications extra time before liveness checks begin.
+## Why Should One Artifact Move Through Every Environment?
+<!-- section-summary: Build-once promotion preserves artifact identity while runtime configuration supplies environment-specific values and secrets. -->
 
-For `booking-api`, the readiness endpoint should verify that the service can accept traffic. It might check that the HTTP server has started, required configuration exists, database migrations are compatible, and the payment provider client can initialize. The liveness endpoint should stay simpler because a failed liveness check restarts the container, and aggressive restarts can make an outage worse.
+Suppose commit `abc123` is built once for tests, again for staging, and a third time for production. The three outputs share source code, but they can differ because of dependency versions, compiler versions, build flags, timestamps, generated files, network downloads, or environment variables.
 
-```yaml
-readinessProbe:
-  httpGet:
-    path: /readyz
-    port: 8080
-  initialDelaySeconds: 10
-  periodSeconds: 5
-  failureThreshold: 6
-livenessProbe:
-  httpGet:
-    path: /healthz
-    port: 8080
-  initialDelaySeconds: 30
-  periodSeconds: 10
-  failureThreshold: 3
+The object tested in staging may therefore differ from the object delivered to users. A stronger release chain follows one rule:
+
+> Build once, then promote the same artifact.
+
+```text
+commit abc123
+      ↓ one build
+artifact digest sha256:9af...
+      ├── integration tests
+      ├── staging
+      └── production
 ```
 
-A **rollout deadline** gives the deployment a time limit for progress. Kubernetes has `progressDeadlineSeconds` on Deployments. If the new ReplicaSet misses the deadline, Kubernetes reports a failed rollout condition. Higher-level deployment tooling can then mark the pipeline as failed, send notifications, and trigger the team's rollback policy.
+Promotion changes which destination is authorized to run the artifact. It does not recreate or modify the artifact. If `app:v2.7.1` with digest `sha256:abc123...` passed staging, production approval should mean “allow this digest into production,” not “rebuild tag `v2.7.1` and hope the result matches.”
 
-```yaml
-spec:
-  progressDeadlineSeconds: 600
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+The artifact should be immutable: one identity continues to refer to the same bytes. A cryptographic digest makes that identity verifiable. Release records can then connect production to an exact object, the pipeline that created it, and the commit used as input.
+
+Environments still need different database endpoints, domains, credentials, feature flags, and resource limits. Build-once promotion works by separating the application artifact from **runtime configuration**:
+
+```text
+same application artifact
+        +
+staging configuration
+        = staging behavior
+
+same application artifact
+        +
+production configuration
+        = production behavior
 ```
 
-The `maxUnavailable: 0` setting tells Kubernetes to keep the current capacity available during the update. The `maxSurge: 1` setting allows one extra pod above the desired count while the new version proves itself. These values cost a little extra capacity during rollout, but they protect customers from a release that removes healthy pods too early.
+Hard-coding `DATABASE_HOST=production.company.internal` into the build forces environment-specific bytes. Reading `DATABASE_HOST` at runtime lets staging provide `staging-db.internal` and production provide `prod-db.internal` to the same program.
 
-Health checks turn deployment from "the command succeeded" into "the new version can serve traffic." That distinction is very clear during a failed rollout.
+Configuration should not turn into two structurally different applications. Extensive `if environment == "prod"` behavior weakens staging evidence because staging no longer exercises the system production will run. Some environmental differences are unavoidable, but the application shape should remain comparable while external endpoints, credentials, domains, limits, and flags vary.
 
-## A Rollout That Fails Safely
-<!-- section-summary: A safe rollout blocks broken new pods before they take customer traffic. -->
+Secrets are sensitive configuration. Database passwords, API tokens, private keys, signing keys, and cloud credentials should not be baked into the artifact. Anyone able to inspect such an image could recover the credential, and every secret rotation would require an application rebuild. Runtime injection lets the artifact stay stable while the secret changes independently.
 
-Imagine the discount-code fix passed unit tests and staging smoke tests. The production approver reviews the release packet and approves the job. The pipeline updates the Kubernetes Deployment to use image digest `sha256:8c2f...`, and Kubernetes starts one new pod because the rolling update allows a small surge.
+Secrets also mark trust boundaries. Lint and unit-test jobs require no production credential. A staging job receives staging access. Only a protected production deployment receives production access. Least privilege prevents compromised validation code from automatically gaining the ability to modify production.
 
-The pipeline waits for the rollout. This command gives the release job a clear success or failure result instead of leaving the team to interpret scattered dashboard signals. The pipeline log then looks like this:
+Separating secrets also improves rotation. If a production database password changes, the environment can supply the replacement without rebuilding or retesting unrelated application bytes. The release artifact remains traceable, while credential lifecycle follows its own authorization and audit process. This independence is safer than coupling every secret update to a new software release.
 
-```bash
-$ kubectl rollout status deployment/booking-api -n production --timeout=10m
-Waiting for deployment "booking-api" rollout to finish: 0 of 4 updated replicas are available...
-Waiting for deployment "booking-api" rollout to finish: 0 of 4 updated replicas are available...
-error: deployment "booking-api" exceeded its progress deadline
+## How Do Environments and Approval Gates Add Evidence?
+<!-- section-summary: Each meaningful environment answers a new release question, and gates prevent risk from increasing before required evidence exists. -->
+
+Promotion environments are named places where the same artifact runs for different purposes:
+
+```text
+development → integration → staging → production
 ```
 
-The release failed, and the failure still protected customers. The old pods still serve users because the new pod never passed readiness. The platform kept customer traffic on the previous version. The pipeline now needs diagnosis rather than panic.
+Integration can answer whether components communicate. Staging can answer whether the production-like topology, configuration shape, TLS, proxies, service discovery, network policy, load balancing, and resource limits support the release. Production answers whether the artifact performs correctly for real users.
 
-The engineer checks the pods next. The label selector narrows the output to `booking-api`, so the release diagnosis stays focused. The output shows old and new pods together:
+Staging therefore tests more than application logic. CI may use controlled databases and local service containers. Staging exercises the release procedure and an environment closer to production. It provides evidence that the team can operate this artifact, not just compile it.
 
-```bash
-$ kubectl get pods -n production -l app=booking-api
-NAME                           READY   STATUS             RESTARTS   AGE
-booking-api-8467b96d6f-j8q2l   0/1     CrashLoopBackOff   5          5m
-booking-api-6dc9fd79c7-p9x7r   1/1     Running            0          12d
-booking-api-6dc9fd79c7-r4m2n   1/1     Running            0          12d
-booking-api-6dc9fd79c7-t6h8s   1/1     Running            0          12d
-booking-api-6dc9fd79c7-v1k3m   1/1     Running            0          12d
+More environments do not automatically create more confidence. `dev1`, `dev2`, `qa1`, `qa2`, `preqa`, `uat`, `preprod`, and `staging` each add cost, configuration, maintenance, delay, and drift. An environment should exist because it answers a useful question before the blast radius increases.
+
+An **approval gate** pauses the graph before sensitive work. Its release packet should identify the artifact, source commit, tests, security evidence, staging results, migration compatibility, known previous artifact, and any timing or business context. An approver can then make a bounded decision about a known candidate.
+
+The pipeline should keep technical checks on the machine side of the boundary. If staging smoke tests, schema compatibility, or artifact signature verification can be expressed objectively, run them before requesting approval. The human gate focuses on questions automation cannot settle, such as whether customers were notified or whether a high-risk change is authorized during this window.
+
+Each successful stage adds evidence:
+
+```text
+source commit
+  ↓ unit checks
+local behavior evidence
+  ↓ build
+identified deployable artifact
+  ↓ integration
+component cooperation evidence
+  ↓ staging
+production-like deployment evidence
+  ↓ controlled production exposure
+real workload evidence
 ```
 
-`CrashLoopBackOff` means the container starts, crashes, and Kubernetes waits before trying again. The new pod has zero readiness because it never stays alive long enough to serve traffic. The old ReplicaSet still has four ready pods, so customers continue using the previous version.
+The closer the artifact gets to users, the stronger and more realistic the evidence should become. Promotion is a change in confidence and authorization around the same bytes.
 
-The engineer inspects logs from the failed pod. The application error now points to the startup reason rather than only the rollout symptom. The log output gives the missing config key:
+Staging evidence has limits. It may reproduce the topology and configuration shape while using smaller data, lower traffic, or sandbox providers. Promotion should state what staging proved instead of treating the environment name as a universal guarantee. Real production behavior supplies the evidence that pre-production cannot, which is why limited exposure and observation belong to the same delivery chain.
 
-```bash
-$ kubectl logs booking-api-8467b96d6f-j8q2l -n production
-Error: required environment variable PAYMENT_PROVIDER_URL is missing
-    at loadConfig (/app/dist/config.js:17:11)
-    at startServer (/app/dist/server.js:41:18)
+## How Do Health Checks and Gradual Rollouts Limit Failure?
+<!-- section-summary: Success conditions, deadlines, and limited exposure let the delivery system detect a bad version before it replaces healthy capacity. -->
+
+Copying files or starting a process does not complete a deployment. Five seconds later the process may crash, or it may remain alive while unable to reach its database. A meaningful deployment succeeds when the new version becomes healthy enough to serve its intended workload.
+
+A health endpoint such as `GET /health` can provide part of that signal. Two distinctions are useful:
+
+- **Liveness** asks whether the process is alive enough that a restart is unnecessary.
+- **Readiness** asks whether this instance can currently receive traffic.
+
+A service loading data or establishing dependencies can be alive but not ready. A load balancer should keep user traffic away until readiness succeeds. A check that reports only “process exists” can mark an application healthy even when it cannot perform its user-facing work.
+
+Waiting also needs a failure definition. A version that remains unready forever cannot leave the pipeline hanging forever. A **rollout deadline** says the new capacity must become healthy within a bounded time or the rollout fails. Every automated wait should define both success and the point at which lack of success becomes failure.
+
+A safe strategy avoids replacing all healthy capacity at once. A **rolling deployment** replaces instances gradually:
+
+```text
+v1 v1 v1 v1
+   ↓ add and check one v2
+v2 v1 v1 v1
+   ↓ continue only while healthy
+v2 v2 v1 v1
+   ↓
+v2 v2 v2 v2
 ```
 
-The code expected `PAYMENT_PROVIDER_URL`, but the production environment settings used the old key name `PAYMENTS_URL`. The image worked in staging because staging had both keys during a previous migration. Production only had the old key, so the application crashed at startup.
+If the first `v2` fails readiness, the system stops while the `v1` fleet continues serving. Failure is contained before uncertainty reaches every instance.
 
-This failure teaches an important CD lesson. The artifact promotion path was correct, and the health checks protected traffic. The weak part was configuration compatibility between environments. The team can fix the production environment value, rerun the same image digest, and add a preflight config check to the staging smoke test so the same mistake shows up earlier next time.
+A **canary deployment** limits exposure through traffic share. Version 2 might receive 1% of requests while version 1 handles 99%. The team observes error rate, latency, CPU, and business outcomes, then moves to 10%, 50%, and 100% only when the evidence remains healthy. Production behavior becomes another validation layer with a bounded blast radius.
 
-Some failures pass startup checks and still hurt users. A discount calculation bug might return the wrong price while every pod stays healthy. That is where recovery design matters.
+A **blue-green deployment** prepares two complete groups. Blue serves users on version 1 while Green runs version 2 for verification. Traffic switches to Green after it is ready. If the release fails and Blue remains compatible, traffic can switch back quickly. The tradeoff is temporarily maintaining capacity for both groups.
 
-## Rollback and Recovery
-<!-- section-summary: Recovery design gives the team a fast path back to a known-good version during an incident. -->
+All three strategies express one principle:
 
-**Rollback** means returning production to a previous known-good version. In a CD system, rollback should redeploy an artifact the team already built, stored, and used before. A fresh build during an incident introduces new inputs at the worst possible time, so the recovery path should reuse a known artifact.
-
-**Roll forward** means shipping a new fix that corrects the problem. This can work for small defects with a clear patch. During a customer-facing incident, roll forward still has to pass CI, review, deployment, and health checks. The users keep experiencing the bug while the team builds the fix.
-
-Teams often measure recovery with **MTTR**, which means mean time to restore or mean time to recovery. The practical goal is simple: production should return to a healthy user experience quickly. DORA uses restore time and change failure rate as part of the delivery performance picture because deployment speed alone gives an incomplete view.
-
-For `booking-api`, a release record should contain the current digest and the previous digest. That record gives the rollback job a specific target instead of relying on memory during an incident. A small release record can look like this:
-
-```yaml
-service: booking-api
-environment: production
-currentDigest: ghcr.io/northstar/booking-api@sha256:8c2f...
-previousDigest: ghcr.io/northstar/booking-api@sha256:31b7...
-approvedBy: release-manager@northstar.example
-deployedAt: "2026-06-13T10:30:00Z"
+```text
+uncertain change + small initial exposure = limited potential damage
 ```
 
-The rollback job can use that record to target the previous digest. It deploys through the same automation path as the original release, so recovery still has logs and rollout checks. The command path can look like this:
+A deployment plan should define a success condition, failure condition, time limit, failure response, and recovery path before it begins. “Replace everything and hope” has none of those protections.
 
-```bash
-$ ./scripts/deploy.sh production ghcr.io/northstar/booking-api@sha256:31b7...
-$ kubectl rollout status deployment/booking-api -n production --timeout=10m
-deployment "booking-api" successfully rolled out
+Failing safely means more than marking a job red. Suppose one new instance starts, misses readiness, and repeatedly crashes. The controller halts further replacement, preserves healthy old capacity, records the artifact and failed condition, alerts the team, and optionally restores the previous state. Logs and metrics then describe one bounded failed attempt rather than a fleet-wide outage. The system expects failures to occur and arranges the transition so one failure does not automatically consume all available capacity.
+
+## How Should Rollback and Recovery Be Designed?
+<!-- section-summary: Rollback re-promotes a known previous artifact, while broader recovery planning handles state changes that cannot simply be undone. -->
+
+If production runs artifact 42 and artifact 43 causes a severe problem, **rollback** returns the environment to artifact 42. Immutable retained artifacts make that operation concrete: re-promote the known previous object instead of trying to reconstruct yesterday's build during an incident.
+
+Rollback should be designed before failure. The release record can name both the current artifact and the previous known-good artifact. The pipeline can use the same automated deployment and health-verification path for recovery, preserving logs, authorization, and evidence instead of starting an emergency manual procedure.
+
+Application rollback is not always system rollback. Suppose version 2 replaces `users.name` with `users.first_name` and `users.last_name`, then migrates the data. Redeploying version 1 may fail because its expected column no longer exists.
+
+Backward-compatible database changes reduce that risk through phases:
+
+1. Add new columns while retaining the old column.
+2. Deploy code that understands both representations.
+3. Migrate or backfill the data.
+4. Switch reads and writes fully to the new form.
+5. Remove the old column in a later release after the overlap is no longer needed.
+
+During the overlap, old and new application versions remain compatible enough for rolling deployment or rollback. Destructive schema changes are delayed until the old version no longer needs them.
+
+Some effects cannot be reversed by restoring a binary: an external payment already happened, messages were published, customer data was transformed, or an irreversible migration completed. Recovery may require a forward fix, feature disablement, backup restoration, failover, or data repair. Design for recovery rather than treating rollback as a universal undo button.
+
+Feature flags can separate technical deployment from product release. New checkout code can reach production with `NEW_CHECKOUT=false`. Later, the team can enable it for 5% of users and expand exposure. The artifact is deployed while customer access remains separately controllable. Flags still need ownership, test coverage, and eventual removal.
+
+An idempotent deployment also makes retry safer. Repeatedly applying `Deploy(X)` should converge on artifact X rather than corrupting the environment each time. Distributed operations can fail after performing some work but before returning success, so retries are unavoidable. Idempotence reduces ambiguous half-applied states.
+
+Deployments cannot always be perfectly transactional, yet the system can aim for a known transition: start from a known previous state, perform a controlled change, and end in either a known healthy new state or a known recovery state. A half-migrated, partly upgraded fleet with no recorded completion state is the outcome to avoid.
+
+Recovery authority should also be defined early. The on-call engineer may be allowed to restore a prior artifact when a customer-impacting metric crosses a threshold. A regulated change may require a release manager to authorize the rollback while an incident commander coordinates communication. The exact organization differs, but a responder should not discover during the outage that nobody knows who may trigger the recovery job.
+
+The plan should be exercised. A retained artifact and a rollback button provide little confidence if the previous version no longer starts against the current schema or configuration. Compatibility checks and occasional drills turn the theoretical path into evidence that restoration still works.
+
+## How Does Production Feedback Complete the Release?
+<!-- section-summary: Production health includes technical and business signals, and the release remains incomplete until the new state is observed. -->
+
+The delivery graph does not logically end when a deployment command returns exit code `0`. The running version must be observed under its intended workload.
+
+Technical signals can include:
+
+- request success and error rates;
+- latency distributions;
+- CPU and memory;
+- queue depth and retry rate;
+- dependency health;
+- readiness and instance availability.
+
+Business signals can reveal a failure that infrastructure health misses. HTTP success, CPU, and memory can remain normal while successful purchases fall by 90% because the new checkout logic produces an incorrect price. Production validation therefore combines system health with outcomes that express what users are trying to accomplish.
+
+Think of a release as a state transition. Production begins in state `P₁`. Applying identified release `R` produces candidate state `P₂`:
+
+```text
+P₁ + R → P₂
 ```
 
-Kubernetes also supports Deployment revision rollback through `kubectl rollout undo`. Many teams still prefer digest-based rollback in their CD tool because it creates a clear release record across clusters, dashboards, approvals, and audit logs. The important property is the same: recovery uses an artifact the system already knows.
+Continuous Delivery seeks known properties around that transition. `R` is identified and verified. The operation is automated. `P₂` is observed. Failure is detectable. A recovery path is available. The model is more precise than “the deployment script ran.”
 
-Database changes need extra care because schema migrations can make code rollback risky. A strong CD process uses backward-compatible migration patterns, such as adding a nullable column first, deploying code that writes both old and new fields, backfilling data, switching reads, and removing the old field in a later release. This pattern lets the application roll backward during the transition while the database still supports both code versions.
+Production feedback can continue staged exposure. A canary remains small while both technical and business metrics are compared with the existing version. Healthy evidence expands the rollout. Unhealthy evidence halts or reverses it. Monitoring participates in the release decision rather than becoming a dashboard someone may inspect later.
 
-A good rollback plan also defines who can trigger recovery. During business hours, the on-call engineer might trigger rollback after confirming a customer-impacting metric. During a regulated release, the release manager might approve rollback while the incident commander coordinates customer updates. The plan belongs inside the CD process and the release runbook, where the whole team can find it.
+Fast detection and recovery matter because failures cannot be eliminated. A safe system does not promise that every release succeeds. It detects failure quickly, limits the affected population, preserves healthy capacity where possible, and follows a known recovery operation.
 
-Rollback completes the release path that started with build-once promotion. The team can move forward with confidence because it also has a rehearsed way to move back.
+Frequent small releases support that response. One to three changes are easier to correlate with a shifted metric than 1,500 changes. The same small-batch principle that makes CI useful also reduces release uncertainty and shortens recovery diagnosis.
 
-## Putting It All Together
-<!-- section-summary: Continuous delivery combines stable artifacts, controlled environments, runtime checks, and recovery into one release system. -->
+Metrics need decision rules rather than passive visibility. A canary policy can define acceptable error and latency changes, the observation window, minimum request volume, and the response to missing data. Business metrics need similar baselines. Without a defined threshold and action, a dashboard may show degradation while automation continues increasing exposure.
 
-Let's connect the pieces through the `booking-api` release. CI builds one image from commit `9f4c2a1`, pushes it to the registry, and records the digest. The CD pipeline deploys that digest to staging with staging configuration, runs smoke tests, and collects release evidence.
+## How Does the Complete Continuous Delivery Loop Work?
+<!-- section-summary: Continuous Delivery promotes one known artifact through increasing evidence, controlled exposure, observation, and recovery. -->
 
-After staging passes, the production job waits at an approval gate. The approver sees the commit, digest, test status, staging result, migration notes, and rollback target. They approve the job, and the pipeline deploys the same digest to production with production configuration and secrets.
+Suppose commit `7fa92ac` passes CI and produces `checkout-service:2.8.4` with digest `sha256:98fe...`. Integration tests run against that digest. Staging receives the same digest with staging configuration and verifies API behavior, database compatibility, health endpoints, and the deployment procedure.
 
-Kubernetes starts a rolling update. Readiness checks decide which pods can receive traffic. Liveness checks restart stuck containers. The rollout deadline gives the pipeline a clear failure signal if the new version misses progress. Observability tools watch customer-facing metrics after the rollout because a healthy process can still contain a business bug.
+The production gate presents the artifact identity, source, evidence, and previous known-good digest. A release manager approves. Production initially contains four `v2.8.3` instances. A rolling strategy starts one `v2.8.4` instance and waits for readiness.
 
-The release record keeps the previous known-good digest. If the new version causes customer impact, the team can rollback through the same CD system instead of inventing a manual recovery path. The rollback receives the same monitoring, audit trail, and rollout checks as the original deployment.
+If it becomes healthy, the transition continues one bounded step at a time until all four instances run `v2.8.4`. Error rate, latency, and checkout success remain normal, so the release record marks the new digest healthy.
 
-These practices form the everyday CD checklist. **Automation** removes hand-built production changes. **Immutable artifacts** make staging evidence meaningful. **Runtime configuration** lets one artifact run safely in multiple environments. **Promotion gates** control risk before production. **Health checks** keep broken pods away from users. **Rollback design** lowers recovery time when a real defect reaches production.
+The environments supplied different endpoints and credentials, but the application digest never changed. The staging evidence refers to the same object production receives. The approval changed its authorization, the rollout changed its exposure, and the final observations changed its status from candidate to healthy production release.
 
-![Continuous Delivery summary showing immutable artifact, runtime config, staging checks, approval gate, health probes, rollback target, release evidence, and repeatable path](/content-assets/articles/article-cicd-fundamentals-continuous-delivery/continuous-delivery-summary.png)
+If the first new instance fails readiness, the deadline stops the rollout. The old instances continue serving. The system restores or retains `v2.8.3`, records the failed digest and evidence, alerts operators, and gives developers logs, metrics, release metadata, and artifact identity for diagnosis.
 
-*A continuous delivery path combines stable artifacts, environment-owned configuration, approval evidence, health checks, and a known rollback target.*
+The failure path is a first-class part of the pipeline. It does not imply that failures never happen; it ensures that a failed candidate is detected within a bounded interval, receives limited exposure, and leaves a known next action. That is the practical meaning of reducing release risk.
 
-Continuous delivery turns release work into normal engineering work. The team can ship during the day, read the evidence, approve the release, watch the system, and recover through a known path. That is the real value: production changes become visible, repeatable, and easy to review.
+```text
+developer commit
+      ↓
+CI: integrate, test, build
+      ↓
+identified candidate artifact
+      ↓
+CD: integration and staging evidence
+      ↓
+approval where contextual judgment matters
+      ↓
+limited production rollout
+      ↓
+technical + business observation
+      ├── healthy → continue and record
+      └── unhealthy → contain and recover
+```
 
-## What's Next
-<!-- section-summary: The next article adds security checks to the delivery path so fast releases also protect the software supply chain. -->
+The strongest mental model is an engineering discipline that keeps every validated change reliably releasable. Known source leads to a reproducible build and immutable artifact. External configuration adapts that artifact to environments. Controlled promotion gathers evidence. Automated deployment defines success and failure. Gradual exposure limits risk. Observation validates the running state. Recovery is planned before it is needed.
 
-The release path now has structure: build once, promote the same artifact, inject configuration, approve production, verify health, and recover quickly. That structure gives the team speed, but speed also gives mistakes less time to hide.
+CI asks whether a change can safely join the codebase under selected checks. Continuous Delivery asks whether this exact candidate can be released safely now through a repeatable path. Continuous Deployment applies a policy that automatically releases once those conditions are satisfied.
 
-The next article, **Securing the Pipeline**, adds security gates to this delivery path. It covers secret scanning, dependency scanning, SAST, DAST, SBOMs, image signing, and provenance so the pipeline can protect the software supply chain before a release reaches production.
+Together, CI and CD replace “we think the code works and someone probably knows how to deploy it” with an inspectable account of what was built, which evidence it passed, which configuration it receives, how exposure increases, how health is judged, and what happens when the transition fails.
 
----
+That account should remain usable after the release team goes home. From a running instance, an investigator can find the artifact digest and release record. From the record, they can find the pipeline, source commit, approval, configuration version, rollout observations, and recovery target. Forward traceability supports promotion; reverse traceability supports incident response. Continuous Delivery is mature when both directions depend on recorded system state instead of one operator's memory.
 
-**References**
+## Check Your Answers
 
-- [Continuous Delivery](https://continuousdelivery.com/) - Defines continuous delivery as getting changes into production or users' hands safely, quickly, and sustainably.
-- [DORA: Continuous delivery](https://dora.dev/capabilities/continuous-delivery/) - Explains continuous delivery as an on-demand, low-risk release capability and connects it to delivery performance.
-- [GitHub Actions deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments) - Documents environment protection rules, required reviewers, wait timers, environment secrets, and deployment restrictions.
-- [The Twelve-Factor App: Config](https://12factor.net/config) - Explains why deploy-specific configuration belongs in environment variables instead of application code.
-- [Kubernetes liveness, readiness, and startup probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/) - Documents probe behavior for traffic readiness, restarts, and startup protection.
-- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Documents Deployment rollout behavior, progress deadlines, failed rollout conditions, and revision history.
-- [kubectl rollout status](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_status/) - Documents how rollout status watches a Deployment until completion or timeout.
+:::expand[Why Is Releasing Software Different from Passing CI?]{kind="recap"}
+CI checks selected integration properties. Delivery must also move the identified candidate into a healthy running environment through a procedure that is itself correct and repeatable.
+:::
+
+:::expand[How Do Continuous Delivery and Continuous Deployment Differ?]{kind="recap"}
+Continuous Delivery keeps software release-ready and may retain a human production decision. Continuous Deployment automatically releases every candidate that satisfies the defined gates.
+:::
+
+:::expand[Why Should One Artifact Move Through Every Environment?]{kind="recap"}
+Build-once promotion ensures staging and production receive the same bytes. Runtime configuration and secrets adapt that immutable artifact without rebuilding it.
+:::
+
+:::expand[How Do Environments and Approval Gates Add Evidence?]{kind="recap"}
+Each environment should answer a meaningful new question, while gates prevent the blast radius from increasing until technical evidence and necessary contextual approval exist.
+:::
+
+:::expand[How Do Health Checks and Gradual Rollouts Limit Failure?]{kind="recap"}
+Readiness, failure deadlines, and rolling, canary, or blue-green exposure detect unhealthy versions before they replace or reach the entire healthy fleet.
+:::
+
+:::expand[How Should Rollback and Recovery Be Designed?]{kind="recap"}
+Rollback re-promotes a retained known-good artifact. Recovery planning also covers compatible database evolution, forward fixes, feature disablement, backups, failover, and data repair.
+:::
+
+:::expand[How Does Production Feedback Complete the Release?]{kind="recap"}
+A successful command is insufficient. Technical and business signals must show that the new production state serves its intended workload, with unhealthy evidence triggering containment.
+:::
+
+:::expand[How Does the Complete Continuous Delivery Loop Work?]{kind="recap"}
+One identified artifact moves through increasing evidence, controlled approval and exposure, production observation, and a predesigned recovery path while its bytes remain unchanged.
+:::
+
+## References
+
+- [Continuous Delivery](https://continuousdelivery.com/) - Defines the discipline of releasing changes safely, quickly, and sustainably.
+- [DORA: Continuous delivery](https://dora.dev/capabilities/continuous-delivery/) - Connects on-demand low-risk releases with delivery performance.
+- [GitHub Actions deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments) - Documents protected environments, reviewers, timers, restrictions, and environment secrets.
+- [The Twelve-Factor App: Config](https://12factor.net/config) - Explains separating deploy-specific configuration from application code.
+- [Kubernetes liveness, readiness, and startup probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/) - Documents traffic readiness, restart checks, and startup protection.
+- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Describes rolling updates, progress deadlines, failed rollout conditions, and revision history.
+- [kubectl rollout status](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_status/) - Documents waiting for a rollout to complete or time out.

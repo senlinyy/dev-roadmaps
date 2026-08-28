@@ -17,12 +17,16 @@ id: article-cloud-providers-aws-observability-lambda-ecs-eks-observability
 6. [How Do EKS Add-ons, Agents, Collectors, and Instrumentation Differ?](#how-do-eks-add-ons-agents-collectors-and-instrumentation-differ)
 7. [How Do You Correlate Logs, Metrics, and Traces Across Runtimes?](#how-do-you-correlate-logs-metrics-and-traces-across-runtimes)
 8. [What Should a Production Runtime Checklist Include?](#what-should-a-production-runtime-checklist-include)
-9. [What Should You Remember?](#what-should-you-remember)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
 Every compute platform follows the same telemetry pipeline: the workload produces evidence, instrumentation and agents collect it, exporters transport it, backends store it, and dashboards or alarms make it usable. Lambda, ECS, and EKS differ because you control different layers underneath the application.
 
-The sections below answer these questions in order:
+Imagine a production checkout system. The customer clicks **Place order**, an **ECS** service called `orders-api` receives the HTTP request, an **EKS** deployment called `inventory-worker` reserves stock, and a **Lambda** function called `receipt-renderer` creates a PDF receipt. One customer action crossed three compute models in a few seconds.
+
+This is a normal AWS production shape. **Lambda** runs code in managed execution environments, **ECS** runs containers as tasks inside services, and **EKS** runs Kubernetes pods inside a managed Kubernetes control plane. Each platform can write logs, publish metrics, and send traces, but the setup details differ because AWS manages different parts of the runtime for each one.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why Do Lambda, ECS, and EKS Need Different Starting Points?**
 2. **How Do You Observe a Lambda Function?**
@@ -35,10 +39,6 @@ The sections below answer these questions in order:
 
 ## Why Do Lambda, ECS, and EKS Need Different Starting Points?
 <!-- section-summary: The same customer request can cross Lambda, ECS, and EKS, so observability has to follow the workload shape instead of assuming one setup fits everything. -->
-
-Imagine a production checkout system. The customer clicks **Place order**, an **ECS** service called `orders-api` receives the HTTP request, an **EKS** deployment called `inventory-worker` reserves stock, and a **Lambda** function called `receipt-renderer` creates a PDF receipt. One customer action crossed three compute models in a few seconds.
-
-This is a normal AWS production shape. **Lambda** runs code in managed execution environments, **ECS** runs containers as tasks inside services, and **EKS** runs Kubernetes pods inside a managed Kubernetes control plane. Each platform can write logs, publish metrics, and send traces, but the setup details differ because AWS manages different parts of the runtime for each one.
 
 Here is the shape we will use through the article:
 
@@ -60,13 +60,11 @@ EKS    -> you also observe pods, nodes, scheduling, networking, storage, and con
 
 Across every platform, metrics answer whether behavior changed, logs preserve what happened, and traces show where one transaction spent time. Their collection mechanics change; their jobs do not.
 
-
 We will start with Lambda because it gives the most managed experience. AWS runs the host, the runtime lifecycle, and the scaling path, so your first job is to read the signals Lambda already emits and then add the missing detail.
 
 ![The runtime comparison shows how Lambda invocations, ECS tasks, and EKS pods expose different observability units for the same checkout flow](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/three-runtime-shapes.png)
 
 *The runtime comparison shows how Lambda invocations, ECS tasks, and EKS pods expose different observability units for the same checkout flow.*
-
 
 ## How Do You Observe a Lambda Function?
 <!-- section-summary: Lambda gives every invocation logs and metrics, but production troubleshooting depends on structured logs, execution-role permissions, and focused Logs Insights queries. -->
@@ -541,7 +539,7 @@ The final setup should feel practical in a real incident. A responder should mov
 
 
 
-## What Should You Remember?
+## Check Your Answers
 <!-- section-summary: Lambda, ECS, and EKS expose different runtime units, but all three need correlated metrics, logs, traces, and platform context. -->
 
 Use one mental model per platform:

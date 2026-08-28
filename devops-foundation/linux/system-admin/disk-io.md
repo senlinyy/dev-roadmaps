@@ -9,25 +9,36 @@ id: article-devops-foundation-linux-system-admin-disk-io
 
 ## Table of Contents
 
-1. [Storage, Filesystems, and I/O Pressure](#storage-filesystems-and-io-pressure)
-2. [Block Devices and Filesystems](#block-devices-and-filesystems)
-3. [Mount Points and `/etc/fstab`](#mount-points-and-etcfstab)
-4. [Space, Inodes, and Directory Usage](#space-inodes-and-directory-usage)
-5. [Deleted Files That Still Use Space](#deleted-files-that-still-use-space)
-6. [I/O Latency with `iostat`](#io-latency-with-iostat)
-7. [Per-Process I/O](#per-process-io)
-8. [Growing a Filesystem](#growing-a-filesystem)
-9. [A Disk-Full Runbook](#a-disk-full-runbook)
+1. [What Path Does a Linux File Read or Write Take?](#what-path-does-a-linux-file-read-or-write-take)
+2. [How Do Devices, Partitions, and Filesystems Differ?](#how-do-devices-partitions-and-filesystems-differ)
+3. [How Do Mounts and /etc/fstab Attach Storage?](#how-do-mounts-and-etcfstab-attach-storage)
+4. [How Do df, du, and Inodes Explain Capacity?](#how-do-df-du-and-inodes-explain-capacity)
+5. [Why Can a Deleted File Still Consume Space?](#why-can-a-deleted-file-still-consume-space)
+6. [How Do You Connect Slow I/O to a Device and Process?](#how-do-you-connect-slow-io-to-a-device-and-process)
+7. [How Do You Grow Storage Through Every Layer?](#how-do-you-grow-storage-through-every-layer)
+8. [How Do Disk-Full and Disk-Slow Runbooks Differ?](#how-do-disk-full-and-disk-slow-runbooks-differ)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-## Storage, Filesystems, and I/O Pressure
-<!-- section-summary: Disk pressure can break writes, logs, uploads, package updates, and deployments even before CPU or memory look unusual. -->
 
 A disk incident often announces itself through one ordinary write that fails. Nginx cannot append to an access log. An upload cannot save its temporary file. `apt` cannot write under `/var/cache`. CPU and memory may look calm because the failing resource is the storage path, not the processor or RAM.
 
 Follow the write one layer at a time. The application writes to a path such as `/var/log/nginx/access.log`. Linux maps that path to a mounted directory such as `/var/log` or `/`. That mount belongs to a filesystem, and the filesystem sits on a disk or virtual disk that Linux sees as a block device.
 
 Each layer answers a different question. The path tells you what the service tried to write. The mount point tells you which filesystem owns that path. The filesystem tells you whether bytes or inodes are running out. The device tells you whether reads and writes are slow or queued. For example, cleaning `/var/lib/app` will not help if the failing path is on `/` and root is the full filesystem.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Path Does a Linux File Read or Write Take?**
+2. **How Do Devices, Partitions, and Filesystems Differ?**
+3. **How Do Mounts and `/etc/fstab` Attach Storage?**
+4. **How Do `df`, `du`, and Inodes Explain Capacity?**
+5. **Why Can a Deleted File Still Consume Space?**
+6. **How Do You Connect Slow I/O to a Device and Process?**
+7. **How Do You Grow Storage Through Every Layer?**
+8. **How Do Disk-Full and Disk-Slow Runbooks Differ?**
+
+## What Path Does a Linux File Read or Write Take?
+<!-- section-summary: Disk pressure can break writes, logs, uploads, package updates, and deployments even before CPU or memory look unusual. -->
 
 The practical goal is to answer four questions in order:
 
@@ -42,7 +53,7 @@ That order keeps the response disciplined. First learn where the pressure is, th
 
 _The image separates disk incidents into space, inode, deleted-file, latency, and safe-recovery checks._
 
-## Block Devices and Filesystems
+## How Do Devices, Partitions, and Filesystems Differ?
 <!-- section-summary: A block device is storage hardware or virtual storage, while a filesystem is the structure Linux uses to store files on it. -->
 
 During a disk-full or slow-write incident, the path in the error message is only the first clue. The application writes to `/var/lib/app`, but the operational question is which device and filesystem sit behind that path. Without that link, a team can grow the wrong disk, repair the wrong filesystem, or miss that logs and application data share the same small root volume.
@@ -75,7 +86,7 @@ During an incident, the useful path through the output starts on the right:
 
 Filesystem type matters during resize and repair because each filesystem has its own on-disk layout and tools. ext4 commonly uses `resize2fs` for growth. XFS commonly uses `xfs_growfs` and can grow while mounted. Shrinking XFS usually requires a backup, rebuild, and restore plan, so sizing choices deserve care before production data lands there.
 
-## Mount Points and `/etc/fstab`
+## How Do Mounts and `/etc/fstab` Attach Storage?
 <!-- section-summary: Mount points attach filesystems into the single Linux tree, and `/etc/fstab` records mounts that should happen at boot. -->
 
 After adding a data disk, the next risk is what happens after reboot. The app may write to `/var/lib/app` today, then after a reboot that directory may come up as an ordinary folder on the root filesystem if the mount was not recorded correctly. That mistake fills `/` while the original data disk sits unused.
@@ -134,7 +145,7 @@ sudo mount -a
 
 `mount -a` often prints no output when it succeeds. A bad `/etc/fstab` entry can break boot, so verification belongs in the workflow whenever a mount is added or changed.
 
-## Space, Inodes, and Directory Usage
+## How Do `df`, `du`, and Inodes Explain Capacity?
 <!-- section-summary: `df` shows filesystem capacity, `df -i` shows inode capacity, and `du` finds which directories consume space. -->
 
 A disk-full error can mean two different resources ran out. The first resource is byte space, which is the storage capacity most people expect. A 40 GB filesystem can run out of bytes because logs, uploads, caches, package files, or backups filled the available blocks.
@@ -223,7 +234,7 @@ This output points to file count. `/var/lib/app/cache` owns far more files than 
 
 _The image shows why a filesystem can fail because of bytes, inodes, or where the data is mounted._
 
-## Deleted Files That Still Use Space
+## Why Can a Deleted File Still Consume Space?
 <!-- section-summary: A deleted file keeps using disk space until every process holding it open closes the file descriptor. -->
 
 One frustrating disk-full case goes like this: someone deletes a huge log file, `du` says the directory is smaller, and `df -h` still says the filesystem is full. The missing piece is a running process that still has the deleted file open.
@@ -267,7 +278,7 @@ sudo systemctl reload nginx
 
 This often prints no output when systemd accepts the reload. For other services, use the service's documented log reopen or reload behavior. Truncating `/proc/<pid>/fd/<fd>` can reclaim space in emergencies, but use service-aware rotation and reload whenever possible.
 
-## I/O Latency with `iostat`
+## How Do You Connect Slow I/O to a Device and Process?
 <!-- section-summary: `iostat` shows whether storage devices are busy, waiting, or serving requests slowly. -->
 
 A filesystem can have free space and still make the application slow. Storage devices handle a limited number of reads and writes at a time. If too many requests arrive, they wait in a queue. The application may look idle in CPU metrics because its threads are waiting for disk work to finish.
@@ -297,7 +308,7 @@ The useful fields answer different questions:
 
 In the sample, `vda` is busy and slow: `%util` is `92.0`, `await` is `38.4`, and the queue is building. Those numbers make the device a real suspect. If `/var/log` lives on `vda`, heavy logging can slow the whole VM. The next step is to connect that device pressure to a process.
 
-## Per-Process I/O
+### How Do You Identify the Process Behind Device Activity?
 <!-- section-summary: Per-process I/O tools connect device pressure to the service, backup, export, or log writer causing it. -->
 
 Device metrics tell you which disk is busy. Process metrics tell you who is doing the I/O. This distinction matters because the fix changes with the owner. A backup job may need a different schedule. A report export may need throttling. Nginx logs may need rotation. The main service may need code or storage design work.
@@ -376,7 +387,7 @@ This output helps you match the busy process to real files and mount points:
 - The `DEVICE` column differs between `252,1` and `252,2`, so the log file and report file may live on different mounted filesystems.
 - If `write_bytes` is rising and `lsof` shows a large report file open, the report export is a better suspect than Nginx logging.
 
-## Growing a Filesystem
+## How Do You Grow Storage Through Every Layer?
 <!-- section-summary: Storage growth requires expanding the cloud disk or volume, then expanding the partition, logical volume, and filesystem as needed. -->
 
 A common resize surprise happens after the cloud disk was increased from `100G` to `120G`, yet `df -h` still shows the application filesystem at `100G`. The cloud layer changed, and Linux still has to extend the layers above it.
@@ -471,7 +482,7 @@ df -hT /var/lib/app
 
 The verification should show the partition and filesystem at the new size. If `lsblk` grew but `df` did not, the partition step worked and the filesystem step still needs attention.
 
-## A Disk-Full Runbook
+## How Do Disk-Full and Disk-Slow Runbooks Differ?
 <!-- section-summary: A good disk runbook confirms the full filesystem, finds the owner, handles deleted files, applies safe cleanup, then plans permanent capacity. -->
 
 A disk-full alert usually sounds urgent because writes can fail quickly: logs stop appending, deployments fail, uploads break, and package tools cannot create temporary files. The first useful split is bytes versus inodes. Bytes answer "is the filesystem out of storage blocks?" Inodes answer "can the filesystem create more file records?"
@@ -568,6 +579,196 @@ journalctl -u app.service -n 50 --no-pager
 ```
 
 The permanent fix may be better log rotation, moving data to the correct mount, increasing volume size, reducing noisy logs, or moving report generation off the VM. The immediate cleanup keeps the service alive. The follow-up prevents the same filesystem from filling again.
+
+### What Happens Between a Path and Durable Storage?
+
+A directory maps a name to an inode-like filesystem object; the name is not the deepest identity of the file. The object stores metadata and points toward data blocks. A hard link can add another name for the same object, and deleting one name removes only that mapping. Space becomes reusable after the final link is gone and no process still holds the object open.
+
+Reads normally pass through the page cache. When the requested page is already in RAM, the filesystem can satisfy the read without a device operation. A cache miss asks the block layer and device to fetch it, after which later reads may be fast. Benchmarking a file twice can therefore measure cache on the second pass rather than storage.
+
+Writes are often buffered too. A successful `write()` can mean the bytes entered kernel memory, not that stable media has committed them. Modified cached pages are dirty until writeback sends them down. `fsync()` asks the system to make the relevant data and metadata durable according to the storage stack's guarantees. Applications such as databases use ordering, logs, and sync calls because “accepted by the kernel” and “survives power loss” are different promises.
+
+Filesystems update metadata as names, sizes, permissions, and block mappings change. Journaling records enough filesystem changes to restore structural consistency after a crash. It is not an application backup and does not guarantee that a partially completed business transaction is correct. Backups protect another copy; journaling protects the filesystem's own consistency rules.
+
+A mount can hide pre-existing directory contents. If files were written to `/var/lib/app` before a data filesystem was mounted there, mounting the device makes those root-filesystem files invisible through that path without deleting them. They still consume space on `/`. Unmounting reveals them again. This is one reason `df`, `findmnt`, and the boot mount state must be checked together.
+
+### How Do LVM and Partitions Add Layers?
+
+A partition divides a block device into address ranges and exposes each range as another block device. A filesystem may be placed directly on that partition. Logical Volume Manager adds a flexible mapping: physical volumes contribute storage to a volume group, and logical volumes receive ranges from that pool. The filesystem then sits on the logical volume.
+
+The complete chain might be:
+
+```text
+cloud volume -> /dev/nvme1n1 -> partition -> LVM physical volume
+             -> volume group -> logical volume -> XFS -> /var/lib/app
+```
+
+Each arrow is a separate capacity boundary. Enlarging the cloud volume does not enlarge the partition. Enlarging the partition does not tell LVM about new extents. Enlarging the logical volume does not automatically enlarge every filesystem. Inspect the actual chain before running a growth command.
+
+Device names can change with discovery order, drivers, and virtualization. `/etc/fstab` commonly uses a filesystem UUID because it identifies the formatted filesystem more stably than `/dev/sdb1`. Confirm the UUID with `blkid` or `lsblk -f`, create the mount point, test `mount -a`, and inspect `findmnt` before reboot. A syntactically wrong persistent mount can delay boot or send application writes to the root directory underneath the missing mount.
+
+### Why Do Capacity Numbers Disagree?
+
+`df` asks a mounted filesystem about its allocated and available block accounting. `du` walks reachable directory entries and sums the blocks associated with the files it can see. They answer different questions, so disagreement is evidence rather than a tool failure.
+
+Deleted-but-open files are the classic difference: the filesystem still allocates their blocks, but `du` cannot reach them by a pathname. Other differences include files hidden under a mount, permissions preventing `du` from walking a tree, filesystem metadata, snapshots, reserved blocks, sparse files, hard links, and the difference between apparent length and allocated blocks.
+
+Use both allocated and apparent views deliberately:
+
+```bash
+du -xhd1 /var | sort -h
+du -xhd1 --apparent-size /var | sort -h
+stat --format='size=%s blocks=%b block_size=%B name=%n' large-file
+```
+
+A sparse file can have a large logical length while allocating fewer physical blocks. A database or virtual-disk image can change that relationship as holes are filled. `du -x` stays on one filesystem so a search under `/` does not accidentally traverse another mount and attribute its usage to the root investigation.
+
+Inodes or equivalent metadata objects can become the limiting capacity before bytes. Millions of empty cache files may exhaust the filesystem's available inode count while gigabytes remain free. `df -i` reveals that branch. The repair is to remove or redesign the tiny-file population, not grow one large data file or chase block percentages.
+
+Reserved capacity can protect administrative recovery on some filesystems and explain why an ordinary user sees less available space than the device total suggests. Do not remove the reserve reflexively. Understand which filesystem supports it and why it exists, then size the volume and alert thresholds so production does not depend on consuming the emergency margin.
+
+Snapshots and thin provisioning add capacity outside the mounted filesystem's ordinary view. A snapshot retains old blocks as data changes; a thin pool promises logical space backed by a shared physical pool. The guest filesystem may show free blocks while the snapshot store or thin pool approaches exhaustion. Inspect the storage platform and LVM pool as well as `df`.
+
+### How Should You Interpret Storage Performance?
+
+Throughput is bytes transferred per second. IOPS is operations completed per second. Latency is time per operation. Sequential large transfers can produce high throughput with moderate IOPS, while small random database operations can require high IOPS with modest byte volume. No single threshold describes every device and workload.
+
+Queue depth counts work waiting or active at the device. As demand approaches what the storage can serve, queued operations wait behind one another and latency can rise sharply. `iostat -xz 5` exposes rates, sizes, queue information, and average completion time over repeated intervals. Ignore or label the first report when it represents averages since boot rather than the incident window.
+
+`await` includes the time an operation spends queued and serviced. Compare it with the application's latency needs and the device's normal baseline. `%util` describes how much sample time the device reported work in progress, but modern devices can serve requests in parallel; `100%` does not have one universal throughput meaning, and a lower value does not guarantee good latency.
+
+High throughput with stable `await` may be healthy bulk work. Low throughput with terrible `await` can mean a saturated or failing device serving small requests slowly. High load with idle CPU, blocked tasks, and high device latency points toward I/O waiting. Connect these signals rather than labeling any single column “bad.”
+
+Application writes do not map one-to-one to physical writes because page cache, write combining, filesystem metadata, RAID, device caches, and storage controllers sit between them. `/proc/PID/io` separates characters passed through syscalls from bytes attributed to storage. `read_bytes`, `write_bytes`, and `cancelled_write_bytes` provide useful process evidence, but they are still kernel accounting rather than a perfect ledger of media operations.
+
+Network storage changes the latency and failure assumptions. A path can wait on the local network, remote server, remote disk, or protocol recovery. RAID changes how logical operations map to physical devices. Neither changes the filesystem semantics seen by the application, so diagnosis still traces the same layers and then expands below the affected block or mount layer.
+
+Kernel logs matter when I/O looks pathological:
+
+```bash
+journalctl -k --since '1 hour ago' --no-pager |
+  grep -Ei 'I/O error|reset|timeout|nvme|scsi|xfs|ext4'
+```
+
+Device resets, filesystem errors, transport timeouts, and read-only remounts are integrity or health problems, not ordinary capacity cleanup. Preserve evidence and follow the storage and filesystem recovery procedure instead of stressing the device with an indiscriminate benchmark.
+
+### How Do You Grow the Correct Object Safely?
+
+Start with `findmnt -T PATH`, `lsblk -f`, and the relevant LVM commands. Verify the provider volume, device, partition, physical volume, volume group, logical volume, filesystem type, and mount point. Take or verify a usable backup before changing storage metadata. A snapshot can help, but it is not automatically independent of the same failure domain.
+
+For a partition-backed filesystem, grow the external disk first, then expand the partition with the platform-appropriate tool, then grow the filesystem. For LVM, make the enlarged device visible, resize the physical volume when needed, extend the logical volume, and finally grow the filesystem. ext4 commonly grows with `resize2fs`; XFS grows with `xfs_growfs` against the mounted filesystem. The precise commands depend on the inspected topology.
+
+Growth is normally easier than shrinkage. XFS does not offer the same ordinary shrink path as some filesystems, and reducing any filesystem requires careful support and data-layout checks. Plan recovery as backup, rebuild, and restore when the filesystem cannot shrink safely. Never assume a growth command has a symmetric reverse operation.
+
+After every layer, verify the new boundary before continuing. Confirm device size, partition size, LVM free extents, logical-volume size, filesystem size, and application writes. A successful provider resize with unchanged `df` means the request has not yet reached the filesystem layer.
+
+### What Makes the Two Incident Runbooks Different?
+
+A disk-full runbook begins with `findmnt -T` and `df -hT` for the failing path, then `df -i`, bounded `du -x`, and `lsof +L1`. It identifies whether the missing capacity is blocks, metadata objects, a reachable directory, an open unlinked file, a hidden path, or an outer storage pool. Reclaim the smallest safe target, verify the writing service, and create a retention or sizing follow-up.
+
+A disk-slow runbook samples `vmstat` and `iostat`, identifies the affected device and time window, then attributes activity with `pidstat -d`, `iotop`, `/proc/PID/io`, service logs, and scheduled-work history. It checks kernel errors and the remote or platform layer. The response may be to stop competing backup work, repair a failing device, reduce synchronous write pressure, increase IOPS capacity, or redesign the application's access pattern.
+
+Do not delete database files, container runtime layers, package databases, or unfamiliar logs while a process is using them. Use the owning application's cleanup and retention mechanism. A random deletion can corrupt logical state, and the deleted-open-file rule may prevent it from freeing space anyway.
+
+Storage troubleshooting is dependency tracing. Capacity, metadata capacity, performance, and integrity are separate questions. The path tells you the mount; the mount tells you the filesystem and device chain; the accounting and latency evidence identify the constrained layer; the application and process evidence identify the owner.
+
+### How Do Common Storage Scenarios Differ?
+
+If `df` and `du` both identify `/var/log` as the consumer, inspect the largest files, their owners, recent growth, and rotation policy. Use the application's supported rotation or retention path, preserve incident evidence, and reclaim only known-safe data. The permanent work is to bound growth or provide the intended capacity.
+
+If `df` is full and `du` cannot find the blocks, run `lsof +L1` and inspect mount coverage. An unlinked log held by a process needs that process to close or reopen the descriptor. Data hidden beneath a mount requires a controlled maintenance path to inspect the underlying filesystem. Neither condition is fixed by deleting additional visible files at random.
+
+If load is high but CPUs are mostly idle, inspect `vmstat` blocked tasks and `iostat` latency and queues. A process in `D` may be waiting in the kernel for the storage path. Determine whether production traffic, backup work, writeback, remote storage, or a device error owns the wait.
+
+High throughput with low, stable latency can be a healthy sequential transfer. Low throughput with large latency can be an unhealthy small-operation workload. Compare operation sizes, IOPS, queue depth, latency, and the application's required service time. Throughput alone does not rank storage health.
+
+### How Do Backups and Databases Expose the Storage Contract?
+
+A backup can read large portions of a filesystem, evict useful page cache, generate write traffic at the destination, and contend with application I/O. Compression may add CPU pressure at the same time. Schedule and limit backups using measured production impact, and verify the backup independently. A snapshot created on the same storage platform can provide a recovery point but is not automatically an off-system backup.
+
+Databases make durability and latency visible. Transaction logs and sync operations depend on acknowledged writes reaching the promised durability boundary. Deleting a database file outside the database's own procedure can corrupt logical state even if the filesystem permits it. Use the database's retention, compaction, backup, and recovery tools; use Linux evidence to show which device and operation are slow.
+
+Container storage has similar ownership. Image layers, writable layers, volumes, and runtime metadata have relationships the runtime understands. Removing files inside the runtime's data directory can orphan state or break running containers. Use supported pruning and volume lifecycle commands after identifying which workload owns the space.
+
+### How Do Integrity and Health Differ from Fullness?
+
+A filesystem can have free capacity while the device reports timeouts or media errors. A full filesystem can live on a physically healthy device. `df` answers allocation, not drive health. Device health tools, cloud volume status, RAID state, kernel logs, and filesystem error reports answer other layers.
+
+Some filesystems remount read-only after serious errors to limit damage. An application then reports permission-like write failures even though modes and free bytes look acceptable. Check `findmnt` options and kernel logs before changing permissions. Follow the filesystem's documented repair process, normally from an appropriate offline or recovery state when required.
+
+SSDs and NVMe devices have controller health and wear information that is distinct from filesystem usage. Thin pools and snapshots have outer capacity. RAID has member and rebuild state. Network storage has server and network health. A complete storage dashboard exposes these layers instead of treating “disk percent used” as the whole system.
+
+### What Should Change Verification Prove?
+
+After cleanup, confirm the exact filesystem has free blocks or inodes, the writing process can create and sync a test object where appropriate, deleted-open files are gone, and services remain healthy. After growth, confirm every expanded layer and the mounted filesystem's new total. After performance intervention, repeat the same interval sampling and user operation.
+
+Record what was removed, which owner approved it, whether it can be recovered, and what prevents recurrence. If a service was restarted to release an open log, connect that availability action to the rotation configuration that should make future reopen behavior correct. If a volume was grown, update capacity alerts and forecast so growth is not the only recurring response.
+
+The safest command map follows the question: `findmnt` maps a path to a mount, `lsblk` maps mounts to devices, `df` reports filesystem allocation, `du` walks names, `lsof` finds open references, `iostat` samples devices, `pidstat` and `/proc` attribute work, LVM commands reveal mapping, and kernel logs reveal health. Use the tool whose model matches the unknown.
+
+### How Does One Write Cross the Full Dependency Chain?
+
+An application opens a pathname. Directory lookup resolves names to a filesystem object through the mounted namespace. Permission and mount policy allow or deny the operation. The kernel copies or maps changed data into pages and marks it dirty. The filesystem allocates data and metadata, journals required structural changes, and submits block operations. A device, virtual volume, RAID layer, network target, or cloud service ultimately acknowledges them.
+
+The application can observe success at several boundaries. A buffered write can succeed before writeback. A flush can wait for the filesystem and device durability contract. Replication or database commit can add another application boundary. When a user says “the file was written,” ask which acknowledgement they mean and which failures it must survive.
+
+A read performs the reverse dependency search. Names resolve to metadata and blocks; page cache can satisfy resident data; a miss waits for the block path; readahead may fetch adjacent data; the application receives bytes after the required pages arrive. Cache can hide slow storage during a warm interval and expose it after eviction or a working-set increase.
+
+This chain explains why Linux storage feels layered: each abstraction provides a useful contract and its own accounting. Keep the layers distinct, connect them through the affected path, and change only the boundary that the evidence shows is constrained.
+
+Mount intent also has an operational lifecycle. Create the filesystem with the correct type, identify it stably, create the mount-point directory, mount it temporarily, verify ownership and application access, add and validate the persistent entry, then test the boot path. Writing application data before confirming the mount can place files on the root filesystem underneath it. Changing filesystem ownership while the intended device is absent can modify the wrong directory.
+
+Growing storage should follow the same caution. Stop when the observed topology differs from the runbook. A device may use no partition table, LVM may be absent, a cloud image may use a different device name, or the filesystem may not support the expected online operation. Commands that are correct for one chain can damage another.
+
+When space is urgent, preserve a recovery margin rather than filling it again with diagnostic output, package downloads, or a large archive created on the same filesystem. Direct evidence to another mounted filesystem or remote destination when safe. Restore enough headroom for logs, sockets, temporary files, and administrative commands, then make the durable retention or capacity change.
+
+Storage changes should be rehearsed against the actual filesystem and topology, including rollback and recovery media. Capture `lsblk`, `findmnt`, LVM state, filesystem type, and backups before mutation. If the host cannot tolerate the verified recovery procedure, the change plan is incomplete even when the growth command is familiar.
+
+Capacity alerts should leave time for investigation and recovery, not fire only at `100%`. Growth rate, inode rate, thin-pool usage, snapshot consumption, and expected deployment peaks help set the threshold. A filesystem needs working room for metadata, temporary files, journal activity, and administrative recovery before its last reported block disappears.
+
+Performance baselines should likewise separate normal devices and workloads. Compare latency under similar operation sizes and queue depth. A value acceptable for a bulk archive may violate a database commit target, while the database target may be irrelevant to a cold backup volume.
+
+Record the filesystem path beside every device metric so later reviewers can connect user impact to the correct mount and workload rather than a similarly named disk.
+
+Keep the sample interval and device name as well; rates and latency without a time window cannot be compared reliably.
+
+Tie the sample to the affected request or job whenever possible.
+
+That connection separates useful production work from accidental contention and makes the follow-up owner clear.
+
+## Check Your Answers
+
+:::expand[What Path Does a Linux File Read or Write Take?]{kind="recap"}
+A pathname resolves through directories and a mounted filesystem, while cache, writeback, and the block layer connect file operations to durable media.
+:::
+
+:::expand[How Do Devices, Partitions, and Filesystems Differ?]{kind="recap"}
+Devices store blocks, partitions divide them, LVM remaps capacity, and filesystems turn blocks into named objects and metadata.
+:::
+
+:::expand[How Do Mounts and `/etc/fstab` Attach Storage?]{kind="recap"}
+A mount attaches one filesystem to the unified tree; persistent intent should use verified identities and survive a tested boot path.
+:::
+
+:::expand[How Do `df`, `du`, and Inodes Explain Capacity?]{kind="recap"}
+`df` reports filesystem allocation, `du` walks reachable names, and inode accounting reveals tiny-file exhaustion.
+:::
+
+:::expand[Why Can a Deleted File Still Consume Space?]{kind="recap"}
+Unlinking removes a name, but blocks remain allocated until the last link and open file reference disappear.
+:::
+
+:::expand[How Do You Connect Slow I/O to a Device and Process?]{kind="recap"}
+Relate latency, throughput, IOPS, queues, blocked tasks, kernel evidence, and per-process accounting in the same sample window.
+:::
+
+:::expand[How Do You Grow Storage Through Every Layer?]{kind="recap"}
+Inspect the topology, back up, expand each actual layer in order, and verify the boundary before proceeding.
+:::
+
+:::expand[How Do Disk-Full and Disk-Slow Runbooks Differ?]{kind="recap"}
+Capacity incidents trace allocated space and metadata; performance incidents trace waiting, latency, queues, and workload ownership.
+:::
 
 ![Disk and IO summary infographic showing devices, filesystems, mount points, deleted files, latency, process IO, filesystem growth, and runbook checks](/content-assets/articles/article-devops-foundation-linux-system-admin-disk-io/disk-io-summary.png)
 

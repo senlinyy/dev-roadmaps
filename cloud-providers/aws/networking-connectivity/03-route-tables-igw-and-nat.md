@@ -1,7 +1,7 @@
 ---
 title: "Route Tables, IGW, and NAT"
 description: "Follow packets through AWS route tables, local routes, internet gateways, NAT gateways, service endpoints, and private-network targets."
-overview: "AWS routing becomes easier when every problem starts with a destination IP. This article shows how the applicable subnet route table selects the most-specific destination and sends the packet to a local, internet, NAT, endpoint, transit, peering, or VPN target."
+overview: "Start every AWS routing problem with a destination IP to clarify the routing decision. This article shows how the applicable subnet route table selects the most-specific destination and sends the packet to a local, internet, NAT, endpoint, transit, peering, or VPN target."
 tags: ["aws", "vpc", "route-tables", "internet-gateway", "nat-gateway", "networking"]
 order: 3
 id: article-cloud-providers-aws-networking-connectivity-route-tables-igw-nat
@@ -33,20 +33,6 @@ Destination: 8.8.8.8
 
 The first network question is not whether the packet is trusted. It is, **"Given this destination address, where should the packet go next?"** The route table answers that question.
 
-The sections below answer these questions in order:
-
-1. **What Question Does a Route Table Answer?**
-2. **Which Route Table Does a Subnet Use?**
-3. **How Does an Internet Gateway Provide a Direct Internet Path?**
-4. **How Does a NAT Gateway Provide Private IPv4 Egress?**
-5. **Why Does the Most-Specific Route Win?**
-6. **How Do VPC Endpoints Avoid the NAT Path?**
-7. **How Do You Trace a Route With the AWS CLI?**
-8. **How Do You Debug One Packet From Start to Finish?**
-
-## What Question Does a Route Table Answer?
-<!-- section-summary: A route maps a destination address range to the target that should receive matching packets. -->
-
 Conceptually, a route table acts like this function:
 
 ```text
@@ -70,6 +56,20 @@ Destination       Target
 ```
 
 The **destination** defines which packets match. The **target** is the next AWS networking object or path that receives those packets. Targets can include `local`, an internet gateway, NAT gateway, gateway endpoint, Transit Gateway, VPC peering connection, VPN gateway, or network interface.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Question Does a Route Table Answer?**
+2. **Which Route Table Does a Subnet Use?**
+3. **How Does an Internet Gateway Provide a Direct Internet Path?**
+4. **How Does a NAT Gateway Provide Private IPv4 Egress?**
+5. **Why Does the Most-Specific Route Win?**
+6. **How Do VPC Endpoints Avoid the NAT Path?**
+7. **How Do You Trace a Route With the AWS CLI?**
+8. **How Do You Debug One Packet From Start to Finish?**
+
+## What Question Does a Route Table Answer?
+<!-- section-summary: A route maps a destination address range to the target that should receive matching packets. -->
 
 ![The route table decision view shows how destination CIDRs choose between local VPC routing, internet gateways, NAT gateways, and endpoints](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-route-tables-igw-nat/route-table-decision.png)
 

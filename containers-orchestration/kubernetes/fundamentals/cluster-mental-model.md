@@ -20,14 +20,25 @@ id: article-containers-orchestration-kubernetes-fundamentals-cluster-mental-mode
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## Why Does One Application Use Several Kubernetes Objects?
-<!-- section-summary: Kubernetes separates one application into objects with distinct responsibilities and lifecycles, then controllers keep their relationships current. -->
-
 The previous article explained the central Kubernetes idea: a team stores a desired state, and controllers keep comparing that request with the cluster's observed state. We can now look inside that process. The important question changes from “why use Kubernetes?” to “what exactly does Kubernetes create and connect?”
 
 Kubernetes uses several objects because the promises that make up one application have different lifetimes. A traffic address may remain stable for months. Individual application copies may last minutes or hours. A release introduces a new version while the previous version still serves requests. Node capacity changes as machines join, drain, or fail. Readiness can change within seconds while a process initializes.
 
 Combining all of those facts in one giant application record would tie unrelated changes together. Replacing one runtime copy would modify the same record that callers use as a stable destination. A release controller, scheduler, and networking controller would also compete to update different parts of that record. Separate objects let each component own a smaller decision while preserving the relationships between them.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Does One Application Use Several Kubernetes Objects?**
+2. **What Job Does Each Object Own?**
+3. **Why Does a Deployment Create ReplicaSets?**
+4. **How Do Ownership and Selection Connect Different Objects?**
+5. **How Do Ready Pods Become Service Backends?**
+6. **How Does a Pending Pod Become a Running Process?**
+7. **Which Path Changes the Cluster, and Which Path Carries Requests?**
+8. **How Do You Find the First Broken Relationship?**
+
+## Why Does One Application Use Several Kubernetes Objects?
+<!-- section-summary: Kubernetes separates one application into objects with distinct responsibilities and lifecycles, then controllers keep their relationships current. -->
 
 Kubernetes represents these independent concerns as separate API objects:
 
@@ -41,17 +52,6 @@ Kubernetes represents these independent concerns as separate API objects:
 This separation gives each controller a small, precise job. The Deployment controller can coordinate revisions while preserving the Service. The scheduler can place a new Pod while preserving the Deployment. The EndpointSlice controller can remove an unready backend while preserving the Pod for inspection and recovery. Each object changes at the pace of the concern it represents.
 
 The result is one logical application expressed as a graph of records and relationships. Some relationships describe **responsibility**: a ReplicaSet owns the Pods it creates. Other relationships describe **membership**: a Service selects Pods whose labels match. A third relationship records **placement**: a Pod is bound to one Node. Understanding those different meanings is the foundation for reading a cluster.
-
-These questions guide the article:
-
-1. **Why does one application use several Kubernetes objects?**
-2. **What job does each object own?**
-3. **Why does a Deployment create ReplicaSets?**
-4. **How do ownership and selection connect different objects?**
-5. **How do ready Pods become Service backends?**
-6. **How does a pending Pod become a running process?**
-7. **Which path changes the cluster, and which path carries requests?**
-8. **How do you find the first broken relationship?**
 
 The sections below use a high-volume product-search API as a worked example. Search traffic needs several ready copies, predictable placement, gradual releases, and one stable address, which makes every core relationship visible without determining the article structure.
 
@@ -261,7 +261,7 @@ kubectl get endpointslice -n catalog \
 
 The Service output shows the selector and port mapping. The Pod list shows which objects match and whether they are ready. The EndpointSlice output shows the addresses and endpoint conditions the control plane has published for networking components.
 
-EndpointSlice is a control-plane record. Cluster networking components watch these records and program the forwarding rules or load-balancing state used by real connections. Requests then use that programmed data plane. This distinction becomes important when we separate the control path from the data path.
+EndpointSlice is a control-plane record. Cluster networking components watch these records and program the forwarding rules or load-balancing state used by real connections. Requests then use that programmed data plane. Separating the control path from the data path makes this distinction important.
 
 ## How Does a Pending Pod Become a Running Process?
 <!-- section-summary: The scheduler binds an unscheduled Pod to a suitable Node, then the kubelet and container runtime turn that stored Pod specification into running containers. -->
@@ -410,35 +410,35 @@ This method scales beyond Services. Start with the user's failed action, identif
 ## Check Your Answers
 <!-- section-summary: Revisit object responsibilities, revision ownership, selection, Service backends, Pod placement, control and data paths, and relationship-first debugging. -->
 
-:::expand[Why does one application use several Kubernetes objects?]{kind="recap"}
+:::expand[Why Does One Application Use Several Kubernetes Objects?]{kind="recap"}
 An application needs promises with different lifetimes: a stable traffic identity, a requested population, revision history, replaceable runtime copies, current backend addresses, and machine placement. Kubernetes gives each concern its own API object and controller so one part can change while the other contracts remain stable.
 :::
 
-:::expand[What job does each object own?]{kind="recap"}
+:::expand[What Job Does Each Object Own?]{kind="recap"}
 The Deployment stores the release and population request. A ReplicaSet maintains Pods for one template revision. A Pod represents one scheduled runtime unit. A Service gives callers a stable name and port. EndpointSlices publish current backend addresses and conditions. Nodes supply the resources and runtime environment where Pods execute.
 :::
 
-:::expand[Why does a Deployment create ReplicaSets?]{kind="recap"}
+:::expand[Why Does a Deployment Create ReplicaSets?]{kind="recap"}
 Each ReplicaSet holds the Pod template and population for one revision. During a rollout, the Deployment can preserve ready Pods from the previous ReplicaSet while measuring and growing the new ReplicaSet. Separate revision populations support controlled replacement, progress tracking, and rollback.
 :::
 
-:::expand[How do ownership and selection connect different objects?]{kind="recap"}
+:::expand[How Do Ownership and Selection Connect Different Objects?]{kind="recap"}
 Owner references record lifecycle responsibility, such as a ReplicaSet owning the Pods it creates. Labels and selectors form dynamic sets, such as a Service finding every product-search API Pod. One Pod can have an owner relationship for management and a selector relationship for traffic at the same time.
 :::
 
-:::expand[How do ready Pods become Service backends?]{kind="recap"}
+:::expand[How Do Ready Pods Become Service Backends?]{kind="recap"}
 The Service selector identifies candidate Pods. Pod readiness describes which candidates can serve ordinary traffic. The control plane publishes their addresses, ports, and conditions in EndpointSlices, and networking components use those records to program the Service data plane.
 :::
 
-:::expand[How does a pending Pod become a running process?]{kind="recap"}
+:::expand[How Does a Pending Pod Become a Running Process?]{kind="recap"}
 The scheduler filters and scores Nodes, then records a binding for a suitable Node. The kubelet on that Node observes the assigned Pod and asks the container runtime to create its containers. The Pod then progresses through image retrieval, process startup, and readiness before it becomes an ordinary Service backend.
 :::
 
-:::expand[Which path changes the cluster, and which path carries requests?]{kind="recap"}
+:::expand[Which Path Changes the Cluster, and Which Path Carries Requests?]{kind="recap"}
 The control path uses the API, controllers, scheduler, kubelet, and EndpointSlice controller to build and maintain runtime state. The data path resolves a Service, chooses a ready backend through the programmed Service data plane, and reaches the application process at the Pod IP and target port.
 :::
 
-:::expand[How do you find the first broken relationship?]{kind="recap"}
+:::expand[How Do You Find the First Broken Relationship?]{kind="recap"}
 Start from the failed caller contract, inspect the Service selector and ports, resolve the selector into Pods, compare Pod readiness with EndpointSlices, verify the target port and listener, then follow missing Pods through ReplicaSet ownership and scheduler events. Stop where the expected relationship first differs from observed state.
 :::
 

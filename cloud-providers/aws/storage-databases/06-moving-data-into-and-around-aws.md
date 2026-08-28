@@ -22,23 +22,10 @@ aliases:
 6. [What Changes When Data Is Far Away or the Network Is Too Slow?](#what-changes-when-data-is-far-away-or-the-network-is-too-slow)
 7. [How Do You Prove That a Migration Is Correct?](#how-do-you-prove-that-a-migration-is-correct)
 8. [How Do You Choose the Right AWS Data Movement Service?](#how-do-you-choose-the-right-aws-data-movement-service)
-9. [References](#references)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Moving data sounds simple until the source changes during the copy. If a source contains 100 GB when copying begins but users add another 4 GB before it ends, a destination containing the original 100 GB is already behind. Files may also carry permissions and timestamps, while database rows belong to transactions. A successful transfer therefore has to preserve more than an amount of data.
-
-The sections below answer these questions in order:
-
-1. **What Does Moving Data Actually Mean?**
-2. **How Do Size, Bandwidth, and Dataset Shape Affect a Move?**
-3. **Why Do Objects, Files, and Databases Need Different Tools?**
-4. **How Do You Move File Shares or Keep Their Existing Interface?**
-5. **How Do You Move a Live Database with Little Downtime?**
-6. **What Changes When Data Is Far Away or the Network Is Too Slow?**
-7. **How Do You Prove That a Migration Is Correct?**
-8. **How Do You Choose the Right AWS Data Movement Service?**
-
-## What Does Moving Data Actually Mean?
-<!-- section-summary: A migration must reproduce meaningful state, catch changes, validate the destination, and transfer authority for future writes. -->
 
 At the lowest level, data movement begins with state at one location and the need for equivalent state somewhere else:
 
@@ -57,6 +44,20 @@ t1: 101 GB    copy in progress   t1:  30 GB
 t2: 103 GB  ----------------->   t2:  70 GB
 t3: 104 GB                       t3: 100 GB
 ```
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Does Moving Data Actually Mean?**
+2. **How Do Size, Bandwidth, and Dataset Shape Affect a Move?**
+3. **Why Do Objects, Files, and Databases Need Different Tools?**
+4. **How Do You Move File Shares or Keep Their Existing Interface?**
+5. **How Do You Move a Live Database with Little Downtime?**
+6. **What Changes When Data Is Far Away or the Network Is Too Slow?**
+7. **How Do You Prove That a Migration Is Correct?**
+8. **How Do You Choose the Right AWS Data Movement Service?**
+
+## What Does Moving Data Actually Mean?
+<!-- section-summary: A migration must reproduce meaningful state, catch changes, validate the destination, and transfer authority for future writes. -->
 
 The destination reached the source's old size, but it did not reach the source's current state. A production migration therefore usually means all of the following:
 
@@ -819,6 +820,8 @@ Three ideas hold this entire topic together. First, migration transfers meaningf
 ![The runbook summary shows the checks around validation, cutover, rollback, monitoring, and ownership for a safe data move](/content-assets/articles/article-cloud-providers-aws-storage-databases-moving-data-into-around-aws/migration-runbook-summary.png)
 
 *A safe migration connects the movement mechanism to validation, cutover, rollback, observation, and a single owner for future writes.*
+
+## Check Your Answers
 
 :::expand[What Does Moving Data Actually Mean?]{kind="recap"}
 A migration must reproduce meaningful state, catch changes, validate the destination, and transfer authority for future writes.

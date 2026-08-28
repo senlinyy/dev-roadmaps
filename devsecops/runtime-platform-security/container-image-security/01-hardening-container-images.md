@@ -9,579 +9,389 @@ id: article-devsecops-container-image-security-minimal-base-images
 
 ## Table of Contents
 
-1. [The Shipping Box We Are Hardening](#the-shipping-box-we-are-hardening)
-2. [Choose a Trusted Minimal Base](#choose-a-trusted-minimal-base)
-3. [Pin The Parts That Must Repeat](#pin-the-parts-that-must-repeat)
-4. [Use Multi-stage Builds](#use-multi-stage-builds)
-5. [Reduce Packages And Files](#reduce-packages-and-files)
-6. [Run As A Non-root User](#run-as-a-non-root-user)
-7. [Own The Files The App Needs](#own-the-files-the-app-needs)
-8. [Keep Build Secrets Out Of Layers](#keep-build-secrets-out-of-layers)
-9. [Make The Image Read-only Friendly](#make-the-image-read-only-friendly)
-10. [Inspect And Scan Before Push](#inspect-and-scan-before-push)
-11. [A Local And CI Checklist](#a-local-and-ci-checklist)
-12. [What's Next](#whats-next)
-13. [References](#references)
+1. [Why Does Image Hardening Start with Attack Surface?](#why-does-image-hardening-start-with-attack-surface)
+2. [How Do You Choose a Trusted and Repeatable Base?](#how-do-you-choose-a-trusted-and-repeatable-base)
+3. [Why Should Build and Runtime Environments Be Separate?](#why-should-build-and-runtime-environments-be-separate)
+4. [How Do Layers, Files, and Secrets Change Exposure?](#how-do-layers-files-and-secrets-change-exposure)
+5. [How Do Non-root and Read-only Design Limit Compromise?](#how-do-non-root-and-read-only-design-limit-compromise)
+6. [What Should You Inspect and Scan Before Release?](#what-should-you-inspect-and-scan-before-release)
+7. [How Do Immutable Images Change Maintenance and Response?](#how-do-immutable-images-change-maintenance-and-response)
+8. [What Does a Complete Hardened Image Workflow Look Like?](#what-does-a-complete-hardened-image-workflow-look-like)
+9. [Check Your Answers](#check-your-answers)
 
-## The Shipping Box We Are Hardening
-<!-- section-summary: A container image is the shipping box for the app, so the team first decides what belongs in that box before it reaches the registry. -->
+A container image is a packaged filesystem plus metadata that tells a container runtime what to execute. The filesystem can contain an application binary, language runtime, shared libraries, operating-system packages, configuration defaults, user and group records, and supporting files. The metadata supplies details such as the entrypoint, command, working directory, declared user, and environment defaults.
 
-A **container image** is the shipping box for an application. It holds the files and startup instructions that a container runtime uses later. For `payments-api`, the box needs the compiled app, the Node.js runtime, production dependencies, CA certificates for HTTPS calls, a normal Linux user, and the command that starts the service.
+Starting a container turns that package into a process. That creates two connected security questions:
 
-The build can use the compiler, test tools, source-control client, package-manager tokens, local `.env` files, and debugging helpers, then keep them outside the runtime box that production pulls.
+1. What software and data are present in the package?
+2. What authority will the resulting process receive?
 
-Here is the smallest Dockerfile skeleton for the story. This first version is intentionally small. It shows the four ideas every later section will improve: start from a base image, put files in `/app`, choose a runtime user, and start the process.
+Image hardening concentrates on the first question and establishes useful defaults for the second. Its purpose is not merely to produce a small download. It is to remove unnecessary software, privilege, secrets, data, and uncontrolled variation from the artifact that will enter production.
 
-```dockerfile
-FROM node:22-bookworm-slim
-WORKDIR /app
-COPY . .
-USER node
-CMD ["node", "dist/server.js"]
+Suppose an API needs only a Node.js runtime, its compiled application, production dependencies, and two native libraries. A convenient development image might additionally contain Bash, Git, cURL, wget, Python, compilers, package managers, SSH clients, debuggers, and unrelated operating-system packages. Those programs do not necessarily create the original application vulnerability, but they enlarge the set of tools available after exploitation.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Does Image Hardening Start with Attack Surface?**
+2. **How Do You Choose a Trusted and Repeatable Base?**
+3. **Why Should Build and Runtime Environments Be Separate?**
+4. **How Do Layers, Files, and Secrets Change Exposure?**
+5. **How Do Non-root and Read-only Design Limit Compromise?**
+6. **What Should You Inspect and Scan Before Release?**
+7. **How Do Immutable Images Change Maintenance and Response?**
+8. **What Does a Complete Hardened Image Workflow Look Like?**
+
+## Why Does Image Hardening Start with Attack Surface?
+<!-- section-summary: An image packages a filesystem and execution metadata, so every unnecessary program, privilege, secret, and variable input expands what defenders must trust and what an attacker can use. -->
+
+The post-compromise difference matters:
+
+```text
+application flaw
+  -> attacker gains code execution
+  -> available programs and credentials determine the next moves
+  -> image and runtime controls determine the blast radius
 ```
 
-`FROM` names the starting image. `WORKDIR` sets the application directory. `COPY` puts files into the image. `USER` chooses the Linux user for the process. `CMD` tells the runtime how to start the API. The rest of the article turns this rough box into a production-ready one.
+In a broad image, the attacker may discover the network, download another payload, compile code, unpack archives, inspect credentials, or modify startup files with tools already installed. In a narrow image, the application flaw remains serious, but many convenient follow-on actions disappear. Hardening therefore aims to reduce what a successful compromise can become.
 
-Let's follow one small team. They build `payments-api` in CI, push the image into a private registry, and run it on Kubernetes. The service handles payment requests, calls a database, writes logs to standard output, and exposes an HTTP port for the cluster. If the image carries an old base image, a shell full of debugging tools, a leaked package token, or a process that runs as root, that risk travels from laptop to CI to registry to Kubernetes.
+This is the attack-surface principle: every component placed in the image becomes something the team may need to trust, inventory, patch, monitor, and defend. The application, base operating-system packages, language runtime, system libraries, package-manager output, certificates, configuration, and copied files all join the production trust boundary.
 
-So this first article stays before the registry. The team has one job: make the `payments-api` image smaller, clearer, and safer before scanners, registry policy, admission controllers, and Kubernetes deployments have to evaluate it. Later articles handle trust, SBOMs, signing, registry controls, and runtime policy. Right now, the Dockerfile itself is the main place where the team can remove unnecessary risk.
-
-Here is the path we will take. Each row names the image-hardening choice first, then connects it to the reason the team checks it before push.
-
-| Step | What the team checks | Pre-registry result |
-|---|---|---|
-| **Base image** | The image starts from a trusted, maintained, minimal base | The runtime box starts from a known supplier and package family |
-| **Pins and digests** | Versions repeat in CI, and digest updates happen through review | Rebuilds produce explainable changes |
-| **Multi-stage builds** | Build tools stay in builder stages | Compilers, test tools, and caches stay out of production |
-| **Package reduction** | The final image carries only runtime dependencies | Fewer packages create fewer vulnerability and maintenance findings |
-| **Non-root user** | The app process runs as a numeric non-root UID | A compromised process receives fewer permissions inside the container |
-| **File ownership** | The app user owns only the paths it needs | Permissions match the runtime user without relying on root |
-| **Secret hygiene** | Build tokens never land in layers or history | Private package tokens stay out of the image |
-| **Read-only layout** | Writable paths are explicit and temporary | Kubernetes can later lock the root filesystem |
-| **Local and CI checks** | Build, inspect, scan, and smoke-test happen before push | The private registry receives an image that already passed basic safety checks |
+Image size can reveal accidental excess, but it is only a signal. One small vulnerable library can be more dangerous than a large harmless data file. A larger image can still have a carefully controlled dependency set, while a tiny unknown image can have weak provenance. Review contents and capabilities rather than treating megabytes as a security score.
 
 ![Image hardening path infographic showing payments-api moving through trusted base, pinned digest, multi-stage build, non-root user, clean secrets, and read-only readiness before the private registry](/content-assets/articles/article-devsecops-container-image-security-minimal-base-images/image-hardening-path.png)
 
-*The image-hardening path is easiest to review as a pre-registry gate: the team removes risky defaults before the image is a shared release artifact.*
+The first practical step is to write down the minimum runtime contract. Name the executable, required libraries, certificates, configuration inputs, user identity, ports, read paths, and write paths. Anything outside that contract needs a reason to remain.
 
-The rest of the article walks through those steps with the same `payments-api` example. We will start small, then add the production controls one at a time.
+## How Do You Choose a Trusted and Repeatable Base?
+<!-- section-summary: A useful base is maintained, understood, compatible, minimal for the workload, and identified precisely enough that the same build does not silently inherit different software. -->
 
-## Choose a Trusted Minimal Base
-<!-- section-summary: Base images set the first layer of risk, so the team starts with a maintained image that contains only the runtime family they need. -->
+The base image supplies the starting filesystem and frequently the language runtime. Choosing it is a supply-chain decision, not just a Dockerfile convenience. A trusted base has a known publisher, a maintenance and update path, an understandable package source, and enough documentation for the team to know what it contains.
 
-A **base image** is the image named in a Dockerfile `FROM` line. Every file and package from that base image travels into your image unless a later stage changes the structure. If `payments-api` starts from `node:latest`, it inherits whatever `node:latest` points to at build time. If it starts from a random image maintained by an unknown account, it inherits that maintainer's patch habits and packaging decisions too.
+“Minimal” means no more than the workload and its operations require. It does not mean selecting the smallest unfamiliar artifact on a registry. A randomly tiny image can create different risks: unknown origin, missing security updates, incompatible libraries, no reliable certificate store, or an emergency debugging path that the team has never tested. The goal is a deliberately small and supportable base.
 
-For a small team, the first safe choice is usually a current official or verified image for the language runtime. Docker Official Images and verified publisher images have clearer ownership and maintenance than a random image that happens to work today. For `payments-api`, a reasonable starting point is a current Node.js image with a slim operating system base:
+Every dependency expands the trust boundary. An image based on a language runtime inherits the runtime, its operating-system layer, installed packages, certificate authorities, and build decisions of the publisher. Application packages add their own transitive dependency trees. Native extensions may bring compilers into the build and shared libraries into production. Hardening begins by making those inherited choices visible.
 
-```dockerfile
-# syntax=docker/dockerfile:1.8
-ARG NODE_VERSION=22.12.0
+Repeatability is also a security property. If the same source revision produces a different artifact on Tuesday than it did on Monday, the team cannot cleanly answer what was reviewed, tested, or deployed. Mutable tags and unconstrained package ranges allow build inputs to move without a source change.
 
-FROM node:${NODE_VERSION}-bookworm-slim AS base
-WORKDIR /app
-```
+Pin the inputs that must repeat. Depending on the toolchain, that can include:
 
-The `node` image gives the app the Node.js runtime it needs. The `bookworm-slim` part says the image uses a smaller Debian 12 family base rather than a fuller general-purpose distribution. The version argument keeps the major runtime choice visible in one place, so a review can discuss "we are moving from Node 22.11 to 22.12" instead of trying to infer that from a long Dockerfile.
+- a base-image version or, for exact identity, a digest;
+- application dependency versions through a committed lockfile;
+- operating-system package versions when reliable repositories and maintenance practices support it;
+- toolchain and build-tool versions;
+- external downloads by version and checksum.
 
-**Minimal** means the image includes fewer operating system packages, command-line tools, libraries, and helper programs. This reduces the attack surface, which is the set of things an attacker could try to use after finding a weakness. A minimal image will usually have fewer shell tools, fewer package-manager leftovers, and fewer libraries that can show up in vulnerability reports.
-
-There is a tradeoff the team should discuss in plain terms. A very small runtime image, such as a distroless image or a `scratch` image for a static binary, can reduce packages a lot. It also removes familiar debugging tools like `sh`, `curl`, and package managers. That is often great for production, but the team needs a separate debugging path, such as Kubernetes ephemeral debug containers, logs, metrics, traces, and local reproduction. For this first build, we can still get most of the value by separating build tools from runtime tools and keeping the final image narrow.
-
-The team should also avoid base images that hide too much ownership. A private internal base image can be excellent if a platform team patches it, scans it, publishes release notes, and gives application teams an update process. The same private base image can create drift if nobody owns it. The question is simple: when the next OpenSSL or glibc vulnerability lands, who updates the base image and how does `payments-api` receive the fix?
-
-Now the image starts from a trusted runtime family. The next problem is repeatability. The same Dockerfile should produce an image the team can explain next week, and that brings us to tags, versions, and digests.
-
-## Pin The Parts That Must Repeat
-<!-- section-summary: Tags help humans read versions, while digests make important builds repeatable and auditable. -->
-
-A **tag** is a readable label on an image, such as `node:22-bookworm-slim`. Tags help people understand the runtime family and version line. The catch is that many tags can move over time, because publishers rebuild images with patch updates and point the same tag to newer image content.
-
-A **digest** is the content address for an image. It looks like `sha256:...`, and it identifies one exact image artifact. If the team builds from `node:22-bookworm-slim@sha256:<digest>`, Docker pulls that exact content instead of whatever the tag points to today.
-
-The team does not need to treat tags and digests as enemies. A practical production pattern uses both: the tag keeps the Dockerfile readable, and the digest keeps the build repeatable. In a reviewed update, a dependency bot or platform engineer changes the digest after the publisher releases a new patched image, CI scans the result, and the pull request shows the exact base-image change.
+For example, a versioned base is more controlled than a floating family name:
 
 ```dockerfile
-# syntax=docker/dockerfile:1.8
-ARG NODE_VERSION=22.12.0
-
-FROM node:${NODE_VERSION}-bookworm-slim@sha256:<reviewed-base-image-digest> AS base
-WORKDIR /app
+FROM node:24-bookworm-slim
 ```
 
-The `<reviewed-base-image-digest>` marker appears in this learning example because a real digest changes by platform and update cycle. In a real repository, the team would paste the actual digest from the registry or let tooling update it. The important behavior is that CI receives a known base image instead of silently accepting a different one during a rebuild.
-
-The same idea applies to package managers. If `payments-api` uses Node.js, `package-lock.json` records exact dependency versions. In a Docker build, `npm ci` installs from that lockfile and fails if `package.json` and the lockfile disagree. That gives the team a repeatable dependency install instead of an install that floats every time CI runs.
+A digest adds exact content identity:
 
 ```dockerfile
-FROM base AS deps
-COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+FROM node:24-bookworm-slim@sha256:<reviewed-digest>
 ```
 
-The cache mount speeds up repeated builds by caching npm downloads for the builder. It does not need to appear in the final image. The important part for hardening is `npm ci`, because it follows the lockfile and gives the team a clearer review trail when dependencies change.
+Tags remain useful human labels, but a digest states exactly which manifest the build consumed. The tradeoff is deliberate: a digest-pinned image will not silently receive a repaired base. That is good for reproducibility and creates a maintenance duty.
 
-Pinned digests create one more operating habit: rebuilds need planned updates. A digest can hold an old base image in place after security fixes exist, so the team needs a scheduled update path. Docker Scout, Renovate, Dependabot, or an internal platform process can open pull requests when a newer digest exists. The team reviews the update, runs tests and scans, and then ships a new `payments-api` image.
+Pinning and updating solve different problems. Pinning makes change explicit; scheduled updates keep explicit inputs from becoming stale. A sound process discovers new base releases, reviews their provenance and changes, rebuilds the application, reruns tests and scans, and publishes a new immutable application image. “Pinned forever” converts stability into unpatched debt.
 
-Now the base is trusted and repeatable. The next source of risk sits inside the build itself, because building a service needs tools that production should never carry.
+Dependency locks need the same treatment. A lockfile should enter the build before dependency installation so the package manager resolves the reviewed graph. A command intended for reproducible installation, such as `npm ci`, should fail rather than silently rewrite that graph. Updating the lockfile becomes a reviewable supply-chain event.
 
-## Use Multi-stage Builds
-<!-- section-summary: Multi-stage builds let the team use compilers and install tools during the build, then copy only runtime artifacts into the final image. -->
+Trusted selection also includes architecture and runtime compatibility. The base must support the target CPU, system calls, native libraries, certificates, time-zone behavior, and language features. If the application requires a component, hiding that fact to make the image smaller only moves failure into production. Minimalism should remove unnecessary requirements, not deny real ones.
 
-A **multi-stage build** is a Dockerfile with more than one `FROM` line. Each `FROM` starts a separate stage, and the final stage can copy selected files from earlier stages. This lets `payments-api` use Node.js package tools, TypeScript compilation, test helpers, and caches during the build, while the runtime stage receives only the files needed to start the API.
+## Why Should Build and Runtime Environments Be Separate?
+<!-- section-summary: Multi-stage builds let compilers, package managers, tests, and source exist in temporary build stages while the final runtime contains only production dependencies and executable output. -->
 
-Think about a common Node.js service. During the build, the team may need TypeScript, ESLint, a test runner, native build tooling for dependencies, and package-manager credentials for a private package. At runtime, the Kubernetes pod needs the compiled `dist` directory, production dependencies, a few metadata files, CA certificates from the base image, and the Node runtime.
+Building software and running software require different things. A build may need source code, compilers, header files, package managers, test frameworks, linters, code generators, and caches. A running service often needs only compiled output, production libraries, certificates, and a runtime.
 
-Here is a practical Dockerfile shape for `payments-api`. The stage names make the build readable, and the `COPY --from` lines show exactly what moves into the runtime image.
+Putting both sets into one image joins two trust domains. Development tools remain available to an attacker, source and test fixtures may be disclosed, and the patch surface grows. Multi-stage builds separate them.
 
-```dockerfile
-# syntax=docker/dockerfile:1.8
-ARG NODE_VERSION=22.12.0
+Each `FROM` instruction begins a stage. Early stages can be broad because they exist to transform source into artifacts. The final stage starts from a clean runtime base and receives only selected outputs with `COPY --from=...`. Files not explicitly copied do not appear merely because they existed in the builder.
 
-FROM node:${NODE_VERSION}-bookworm-slim@sha256:<reviewed-base-image-digest> AS base
-WORKDIR /app
-
-FROM base AS deps
-COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
-
-FROM deps AS build
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
-RUN npm prune --omit=dev
-
-FROM base AS runtime
-ENV NODE_ENV=production
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/node_modules ./node_modules
-EXPOSE 8080
-CMD ["node", "dist/server.js"]
+```text
+source + compiler + tests + package manager
+                  |
+                  v
+             build output
+                  |
+                  v
+runtime base + production dependencies + selected output
 ```
-
-The `deps` stage installs dependencies from the lockfile. The `build` stage compiles the source and removes development dependencies with `npm prune --omit=dev`. The `runtime` stage starts again from the base runtime image and copies only `package.json`, `dist`, and production `node_modules`.
-
-This build already removes a lot of clutter. The final image does not include the TypeScript source directory unless the app needs it. It does not include the npm download cache. It does not include test output or a local `.git` directory. It also gives CI a place to stop early if the team wants to debug the build stage:
-
-```bash
-docker buildx build --target build -t payments-api:build-check .
-```
-
-That command asks Docker Buildx to build the Dockerfile only through the `build` stage and tag the result as `payments-api:build-check`. Developers can use it when a TypeScript build fails in CI, because they can inspect the stage that compiles the app without building the final runtime image first.
 
 ![Builder versus runtime infographic showing build tools, tests, compilers, and cache staying in the builder stage while only runtime files move into the smaller payments-api runtime image](/content-assets/articles/article-devsecops-container-image-security-minimal-base-images/builder-vs-runtime.png)
 
-*Multi-stage builds create a clean boundary: the builder can be busy and tool-heavy, while the runtime image carries only the files needed to start the service.*
+The important principle is selective transfer. Do not copy the builder's whole filesystem into the final stage. Copy the compiled application, verified production dependencies, and specifically required runtime files. Broad operations such as `COPY . .` in the runtime stage can bring tests, local configuration, `.git`, editor settings, credentials, or build outputs that were never meant for production.
 
-Now the Dockerfile has a clean build shape. The next step is to check what the final image still contains, because packages and files often sneak in through base images, dependency installs, and broad `COPY` commands.
+A `.dockerignore` helps narrow the build context before any stage begins. It should exclude version-control data, local environment files, dependency caches, test results, editor metadata, and credentials. This both limits accidental inclusion and reduces what the build service receives.
 
-## Reduce Packages And Files
-<!-- section-summary: Package and file reduction removes tools, caches, source files, and accidental build-context content from the production image. -->
-
-**Package reduction** means the final image contains only the operating system packages, language packages, and files the service needs at runtime. Every extra package can add vulnerabilities, licenses, update work, and tools an attacker can use after compromising the app. If `payments-api` ships `curl`, `git`, `bash`, compilers, and a package manager, a shell inside that container has more tools available than the API needs.
-
-The first place to reduce files is `.dockerignore`. The **build context** is the set of files Docker sends to the builder before the build starts. A broad context can send local secrets, test fixtures, coverage reports, Git history, and editor files into the build environment. A careful `.dockerignore` keeps that accidental material away from the builder.
-
-```gitignore
-.git
-.github
-.env
-.env.*
-coverage
-node_modules
-npm-debug.log
-Dockerfile*
-README.md
-test
-tmp
-```
-
-This `.dockerignore` tells Docker to leave local dependencies, environment files, Git metadata, coverage output, and test folders out of the context. The team can tune it for their repository, but the pattern stays the same: CI should send only the files the Dockerfile needs. When the build context is smaller, the chance of copying the wrong thing also drops.
-
-The second place is the Dockerfile itself. Broad `COPY . .` works in quick demos, but production images should copy narrow paths. In the earlier Dockerfile, the dependency stage copies only `package.json` and `package-lock.json`, the build stage copies `tsconfig.json` and `src`, and the runtime stage copies only runtime artifacts from the build stage. That gives reviewers a short list of what can enter the final image.
-
-The third place is package installation. If the team must install operating system packages, `--no-install-recommends` keeps Debian-based images from installing suggested extras. The cleanup at the end removes apt package lists from the final layer.
+The following simplified Node.js pattern separates compilation, production dependency installation, and execution:
 
 ```dockerfile
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates tini \
-  && rm -rf /var/lib/apt/lists/*
-```
-
-This example installs only `ca-certificates` and `tini`. The certificates let the app make HTTPS calls to services like a payment gateway. `tini` can help a container handle Unix signals and child processes correctly for workloads that need it. If `payments-api` does not spawn child processes and already handles signals well, the team can skip `tini` too.
-
-The team should inspect the image size and layer history before pushing. These commands give a quick local review before the image reaches the private registry.
-
-```bash
-docker buildx build --pull --load -t payments-api:local .
-docker image ls payments-api:local
-docker image history --no-trunc payments-api:local
-```
-
-The first command builds the image, asks Docker to check for a fresh base image with `--pull`, and loads the result into the local Docker image store. The second command shows the image size. The third command shows the layer history, including the command that created each layer. `docker image history` helps reviewers catch accidental package installs, copied secrets, and large steps that deserve a closer look.
-
-At this point, the image is smaller and cleaner, but the process still runs with whatever user the image defines by default. Many base images default to root, so the next hardening step is the runtime user.
-
-## Run As A Non-root User
-<!-- section-summary: A non-root runtime user limits what the app process can change inside the container and aligns the image with Kubernetes hardening controls. -->
-
-A **container user** is the Linux user account that runs the process inside the container. In Dockerfiles, the `USER` instruction sets that default user for later build steps and for the final container command. If the Dockerfile never sets `USER`, the runtime often starts as root, depending on the base image.
-
-Root inside a container is still powerful inside that container. It can write to root-owned paths, change file permissions, bind privileged ports in some configurations, and interact with any mounted files according to the container's permissions. Container isolation reduces the boundary compared with a normal host process, but a compromised root process still gives an attacker more room than a compromised non-root process.
-
-For `payments-api`, the team can create a dedicated user and group in the runtime stage. This keeps the user definition close to the final image that will actually run in Kubernetes.
-
-```dockerfile
-FROM base AS runtime
-ENV NODE_ENV=production
-WORKDIR /app
-
-RUN groupadd --system --gid 10001 payments \
-  && useradd --system --uid 10001 --gid payments --home-dir /app --shell /usr/sbin/nologin payments
-
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/node_modules ./node_modules
-
-USER 10001:10001
-EXPOSE 8080
-CMD ["node", "dist/server.js"]
-```
-
-The UID and GID are numeric and stable. Kubernetes can later use the same numbers in `runAsUser` and `runAsGroup`, and security policies can check that the container does not run as UID `0`. The username `payments` still helps humans read the Dockerfile, while the numeric user gives runtime systems a clear value.
-
-The shell path `/usr/sbin/nologin` communicates that this user exists for the application process, not for interactive login. Some minimal images may not include `useradd` or `groupadd`; Alpine uses different commands, and distroless images often provide a pre-created `nonroot` user. The exact command changes by base image, but the outcome stays the same: the final image declares a non-root runtime user.
-
-The team can verify the image configuration locally. This gives the reviewer evidence that the Dockerfile and the built image agree.
-
-```bash
-docker image inspect payments-api:local --format '{{.Config.User}}'
-docker run --rm payments-api:local id
-```
-
-The first command prints the user configured in the image. The second command runs the image and asks the container to print its process identity. If the image has no `id` binary because the team picked a very minimal runtime, the image inspect command still tells them what Docker will use as the default runtime user.
-
-Now the process runs as a non-root user. The next issue is file ownership, because a non-root process can fail at startup if every copied file and writable directory still belongs to root.
-
-## Own The Files The App Needs
-<!-- section-summary: File ownership makes the non-root user practical, because the process can read app files and write only to the small paths designed for runtime data. -->
-
-**File ownership** controls which user and group can read, write, or execute each path in the image. Files copied into an image often land as root-owned unless the Dockerfile says otherwise. If `payments-api` runs as UID `10001`, it can read world-readable files, but it cannot write to root-owned directories without write permissions.
-
-Production services should need very few writable paths. A payment API should write logs to standard output so the platform can collect them. It should read configuration from environment variables or mounted files. It may need a temporary directory for a short-lived upload, cache, or socket, but that directory should be explicit and small.
-
-The Dockerfile can use `COPY --chown` so copied runtime files have the correct owner. This keeps ownership attached to the copy operation instead of requiring a broad recursive ownership change later.
-
-```dockerfile
-COPY --from=build --chown=10001:10001 /app/package.json ./package.json
-COPY --from=build --chown=10001:10001 /app/dist ./dist
-COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
-```
-
-This tells Docker to copy the files from the `build` stage and set the owner to UID `10001` and GID `10001` in the runtime stage. The team can still choose stricter permissions later, but this line removes a common startup problem where a non-root process cannot read its own app files or cannot access a required directory.
-
-For writable paths, create only what the app needs. The `payments-api` container can have one temporary path instead of write access across the application directory.
-
-```dockerfile
-RUN mkdir -p /tmp/payments-api \
-  && chown -R 10001:10001 /tmp/payments-api
-
-ENV PAYMENTS_TMP_DIR=/tmp/payments-api
-USER 10001:10001
-```
-
-This creates one temporary directory and gives it to the app user. The app can use `PAYMENTS_TMP_DIR` for temporary files. The rest of the image can stay read-only in Kubernetes later.
-
-The team can check ownership with a temporary debug command. This works best while the team still uses a shell-based runtime image for learning and debugging.
-
-```bash
-docker run --rm --entrypoint sh payments-api:local -c 'ls -ld /app /app/dist /tmp/payments-api'
-```
-
-This command starts the image with `sh` as the entrypoint and lists ownership for important paths. It works for shell-based images like Debian slim. For images without a shell, the team can test ownership by running the app under the expected user and making the app's health check exercise the temporary directory.
-
-The image now has a specific user and a specific writable path. The next problem comes from the build process itself, because CI often needs private package credentials, and those secrets must stay outside final image layers.
-
-## Keep Build Secrets Out Of Layers
-<!-- section-summary: Build secrets should appear only during the build step that needs them, never in Dockerfile arguments, environment variables, copied files, or final layers. -->
-
-A **build secret** is sensitive data needed while building an image. For `payments-api`, that might be an npm token for a private package, a Git token for a private dependency, or credentials for an internal artifact repository. The build needs the secret long enough to download dependencies, and then the secret should disappear.
-
-Docker images store filesystem changes as layers. A layer records what a build step added, changed, or deleted. If a Dockerfile copies `.npmrc` into the image and deletes it later, an earlier layer may still contain that file. If a Dockerfile passes a token through `ARG` or `ENV`, the value can leak through history, provenance, or build logs.
-
-Here is the risky pattern the team should avoid. The token enters the Dockerfile instruction stream, so cleanup after the install cannot remove every trace from build metadata and history.
-
-```dockerfile
-ARG NPM_TOKEN
-RUN npm config set //registry.npmjs.org/:_authToken=${NPM_TOKEN}
+FROM node:24-bookworm-slim AS build
+WORKDIR /src
+COPY package.json package-lock.json ./
 RUN npm ci
-RUN npm config delete //registry.npmjs.org/:_authToken
-```
-
-This pattern makes the token part of the build command stream. Even if a later step deletes the npm config, the team still has to worry about layer history, caches, logs, and provenance metadata. It also trains developers to pass secrets as build arguments, which creates more places for secrets to appear.
-
-BuildKit secret mounts give a safer pattern. The secret appears as a temporary file only for the `RUN` instruction that needs it, and the mount disappears when that instruction finishes.
-
-```dockerfile
-FROM base AS deps
-COPY package.json package-lock.json ./
-RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
-  --mount=type=cache,target=/root/.npm \
-  npm ci
-```
-
-The matching local build command can pass a local `.npmrc` file as a secret. The file stays on the developer machine or CI runner, and BuildKit exposes it only to the dependency install step.
-
-```bash
-docker buildx build \
-  --secret id=npmrc,src=.npmrc \
-  --load \
-  -t payments-api:local \
-  .
-```
-
-The `--secret` flag sends the secret to the builder for that build. The Dockerfile line mounts it at `/root/.npmrc` only while `npm ci` runs. The final image does not receive `.npmrc`, and later stages copy only compiled artifacts and production dependencies.
-
-The team can also inspect layer history after building. This check belongs near the build step, because it gives fast feedback while the Dockerfile change is still fresh.
-
-```bash
-docker image history --no-trunc payments-api:local
-```
-
-This command cannot prove every possible secret path is clean, but it catches obvious mistakes like tokens in command text or a `COPY .npmrc` layer. CI should combine this with secret scanning in source control and image scanning in the build pipeline, because one check rarely catches every leak.
-
-Now the build no longer leaves obvious secrets behind. The image still needs to cooperate with Kubernetes hardening, especially read-only filesystems.
-
-## Make The Image Read-only Friendly
-<!-- section-summary: A read-only-friendly layout lets Kubernetes lock the root filesystem later while still giving the app a deliberate temporary path. -->
-
-A **read-only root filesystem** means the container cannot write to its image filesystem after it starts. In Kubernetes, this is commonly configured with `readOnlyRootFilesystem: true`. The app can still write to explicitly mounted volumes, such as an `emptyDir` mounted at `/tmp`, but it cannot quietly create files anywhere in `/app`, `/usr`, or other image paths.
-
-For `payments-api`, accidental writes can hide inside application code. A framework might write compiled templates to the current directory. A library might create a cache under the user's home directory. A developer might configure file logging to `/app/logs` during local testing. Those choices work while the filesystem is writable, then fail when the platform team enables a read-only root filesystem.
-
-The image can prepare for this by making app code read-only in practice and moving runtime writes to a known temporary path. These environment variables also give application code a clear place to look for temporary storage.
-
-```dockerfile
-ENV NODE_ENV=production
-ENV PAYMENTS_TMP_DIR=/tmp/payments-api
-ENV XDG_CACHE_HOME=/tmp/payments-api/cache
-
-RUN mkdir -p /tmp/payments-api/cache \
-  && chown -R 10001:10001 /tmp/payments-api
-
-USER 10001:10001
-CMD ["node", "dist/server.js"]
-```
-
-`PAYMENTS_TMP_DIR` gives the application an explicit place for temporary files. `XDG_CACHE_HOME` gives libraries that honor the XDG cache convention a writable cache path under `/tmp`. The app should still log to standard output and standard error, because Kubernetes and the cluster logging stack expect container logs there.
-
-A local read-only smoke test gives the team fast feedback. It proves the app can start with a locked root filesystem before Kubernetes enforces the same idea.
-
-```bash
-docker run --rm \
-  --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
-  -e PAYMENTS_TMP_DIR=/tmp/payments-api \
-  -p 8080:8080 \
-  payments-api:local
-```
-
-The `--read-only` flag makes the container root filesystem read-only. The `--tmpfs /tmp:...` option gives the container a writable in-memory `/tmp` with a size limit and safer mount options. The port mapping lets a developer call the health endpoint locally while testing the read-only behavior.
-
-Kubernetes can later express the same idea in a pod or deployment. The image hardening work makes these runtime settings practical instead of surprising.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: payments-api
-spec:
-  template:
-    spec:
-      containers:
-        - name: payments-api
-          image: registry.internal.example.com/payments-api:2026-06-21-a1b2c3
-          ports:
-            - containerPort: 8080
-          env:
-            - name: PAYMENTS_TMP_DIR
-              value: /tmp/payments-api
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 10001
-            runAsGroup: 10001
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-      volumes:
-        - name: tmp
-          emptyDir: {}
-```
-
-This manifest belongs to runtime security, so later articles can go deeper. For image hardening, the key point is that the image layout made this manifest realistic. The app has a non-root user, a known UID, and a writable temp path that can come from a Kubernetes `emptyDir`.
-
-Now the Dockerfile has the major hardening pieces. Before the image reaches the registry, the team needs repeatable checks that prove those pieces are present.
-
-## Inspect And Scan Before Push
-<!-- section-summary: Inspection checks the image shape, while scanning checks known vulnerabilities and gives CI a gate before registry push. -->
-
-**Image inspection** means checking the image metadata, layers, user, size, environment, and startup command. It answers questions like: which user runs by default, what command starts the service, how large is the image, and what did each layer do? These checks catch Dockerfile mistakes that a vulnerability scanner may never care about.
-
-```bash
-docker image inspect payments-api:local --format '{{json .Config}}'
-docker image inspect payments-api:local --format 'user={{.Config.User}} cmd={{json .Config.Cmd}}'
-docker image history --no-trunc payments-api:local
-```
-
-The first command prints the image runtime configuration as JSON. The second command prints the default user and command in a short format, which works well in CI logs. The third command prints full layer history so reviewers can see package installs, broad copies, and suspicious command text.
-
-**Image scanning** means checking the image contents against vulnerability and policy data. Docker Scout can scan a local image for CVEs, and other organizations may use Trivy, Grype, Snyk, Prisma Cloud, or a registry-native scanner. The exact scanner can vary, but the workflow should stay consistent: scan before push, fail on the severities the team agreed to block, and keep an exception process for vulnerabilities that have context.
-
-```bash
-docker scout cves payments-api:local \
-  --only-severity critical,high \
-  --exit-code
-```
-
-This command asks Docker Scout to report only critical and high CVEs and return a failing exit code when vulnerabilities match. That makes the command useful in CI, because the pipeline can stop before pushing a risky image to the private registry. The team can tune severity, fixability, exploitability, and exception rules over time, but the first useful gate is simply "critical and high findings need attention before this image moves forward."
-
-Scanning should feed review, not replace review. A small image can still contain a dangerous app bug. A large image can sometimes have a CVE in a package the app never calls. The scanner gives evidence, and the team still decides how to update the base image, bump an application dependency, remove a package, or document a temporary exception.
-
-The team should also scan for base-image freshness. A digest-pinned Dockerfile can intentionally hold an old base image, so a tool like Docker Scout's base-image policy or a dependency bot should open pull requests for newer secure replacements. That keeps repeatability and patching connected instead of choosing one and forgetting the other.
-
-Now the team has the checks. The final section turns those checks into a local and CI routine the team can reuse for every `payments-api` image.
-
-## A Local And CI Checklist
-<!-- section-summary: The checklist turns image hardening into a repeatable routine that developers and CI can run before the private registry receives the image. -->
-
-The practical goal is a boring pipeline. Every pull request that changes the Dockerfile, dependencies, or application startup should build the image, inspect the result, run a basic smoke test, scan the image, and push only after the checks pass. This keeps hardening out of memory and puts it into the normal shipping path.
-
-Here is a local checklist for a developer before opening a pull request. The commands are short enough to run during normal Dockerfile work, and CI should repeat the important ones.
-
-| Check | Command or file | What the team learns |
-|---|---|---|
-| Build from current base | `docker buildx build --pull --load -t payments-api:local .` | The image builds locally and Docker checks for a fresh base tag |
-| Confirm default user | `docker image inspect payments-api:local --format '{{.Config.User}}'` | The image declares the non-root runtime user |
-| Review layers | `docker image history --no-trunc payments-api:local` | The layer history has no obvious token, broad copy, or surprise package install |
-| Smoke-test as read-only | `docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m -p 8080:8080 payments-api:local` | The app starts without writing into the image filesystem |
-| Scan high-risk CVEs | `docker scout cves payments-api:local --only-severity critical,high --exit-code` | Critical and high CVEs stop the local readiness check |
-| Check build context | `.dockerignore` | Local secrets, Git metadata, test output, and dependencies stay outside the build context |
-
-The CI version should use the same ideas. This GitHub Actions example builds without pushing first, passes the npm credential as a BuildKit secret, inspects the resulting image, and scans before the registry push step would run.
-
-```yaml
-name: payments-api-image
-
-on:
-  pull_request:
-    paths:
-      - Dockerfile
-      - package.json
-      - package-lock.json
-      - src/**
-
-jobs:
-  image:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Build local image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          load: true
-          tags: payments-api:${{ github.sha }}
-          secrets: |
-            npmrc=${{ secrets.NPMRC }}
-
-      - name: Inspect runtime user
-        run: |
-          test "$(docker image inspect payments-api:${{ github.sha }} --format '{{.Config.User}}')" = "10001:10001"
-
-      - name: Review layer history
-        run: |
-          docker image history --no-trunc payments-api:${{ github.sha }}
-
-      - name: Scan critical and high CVEs
-        run: |
-          docker scout cves payments-api:${{ github.sha }} --only-severity critical,high --exit-code
-```
-
-The build step uses `load: true` so later shell commands can inspect the local image by tag. The `secrets` block passes the npm configuration as a BuildKit secret instead of putting it in a Dockerfile argument. The inspect step makes the non-root user a hard pipeline rule. The scan step blocks the pull request if Docker Scout reports critical or high vulnerabilities.
-
-A production pipeline would add tests, labels, provenance or attestations, SBOM generation, signing, and then a push to the private registry after the pre-push checks pass. Those topics belong to the next articles in the module. For this first article, the team has already done the essential image hardening work before the registry sees anything.
-
-Here is the full hardened Dockerfile shape assembled in one place. Treat it as a reference baseline that the team can adapt for the real `payments-api` repository.
-
-```dockerfile
-# syntax=docker/dockerfile:1.8
-ARG NODE_VERSION=22.12.0
-ARG BASE_DIGEST=<reviewed-base-image-digest>
-
-FROM node:${NODE_VERSION}-bookworm-slim@sha256:${BASE_DIGEST} AS base
-WORKDIR /app
-
-FROM base AS deps
-COPY package.json package-lock.json ./
-RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
-  --mount=type=cache,target=/root/.npm \
-  npm ci
-
-FROM deps AS build
-COPY tsconfig.json ./
-COPY src ./src
+COPY . .
 RUN npm run build
-RUN npm prune --omit=dev
 
-FROM base AS runtime
+FROM node:24-bookworm-slim AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
-ENV PAYMENTS_TMP_DIR=/tmp/payments-api
-ENV XDG_CACHE_HOME=/tmp/payments-api/cache
-
-RUN groupadd --system --gid 10001 payments \
-  && useradd --system --uid 10001 --gid payments --home-dir /app --shell /usr/sbin/nologin payments \
-  && mkdir -p /tmp/payments-api/cache \
-  && chown -R 10001:10001 /tmp/payments-api
-
-COPY --from=build --chown=10001:10001 /app/package.json ./package.json
-COPY --from=build --chown=10001:10001 /app/dist ./dist
-COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
-
-USER 10001:10001
-EXPOSE 8080
+WORKDIR /app
+COPY --from=deps --chown=10001:10001 /app/node_modules/ ./node_modules/
+COPY --from=build --chown=10001:10001 /src/dist ./dist
+COPY --chown=10001:10001 package.json ./
+USER 10001
 CMD ["node", "dist/server.js"]
 ```
 
-This Dockerfile gives the team a concrete baseline. It starts from a reviewed base image, installs from the lockfile, separates build and runtime stages, copies only runtime files, runs as a stable non-root user, assigns ownership intentionally, keeps build secrets out of layers, and prepares the app for a read-only root filesystem.
+This is a pattern, not a universal Dockerfile. A compiled static binary may need no language runtime. A native program may require selected shared libraries. An interpreted application may need source files as runtime input. The invariant is that every item in the final stage exists for a stated runtime reason.
+
+Remove package-manager caches and temporary material in the same layer where they are created. Installing packages in one layer and deleting caches in a later layer can leave their bytes in the earlier layer. Combine installation and cleanup when the package manager supports it, and avoid keeping package indexes that production will never use.
+
+Development tools should not enter production merely for convenience. If operational diagnosis requires them, decide explicitly whether to use a separate diagnostic image or controlled ephemeral debugging process. Permanently shipping a general-purpose toolbox changes the post-compromise environment for every container instance.
+
+## How Do Layers, Files, and Secrets Change Exposure?
+<!-- section-summary: Container layers preserve build history, so narrow copies, correct cleanup, and secret-aware build mounts are necessary to keep sensitive or unnecessary material out of the final artifact. -->
+
+Container images are assembled from content-addressed layers. A Dockerfile instruction often creates a new filesystem change set. Later layers can hide or delete a path from the final merged view, but the bytes may remain retrievable from an earlier layer.
+
+That behavior explains a common secret failure:
+
+```dockerfile
+COPY .env /app/.env
+RUN use-secret-from /app/.env
+RUN rm /app/.env
+```
+
+The final directory listing may not show `.env`, yet the layer created by `COPY` can still contain it. The correct conclusion is not “delete secrets more carefully.” It is “do not copy secrets into an image layer.”
+
+Build secrets and runtime secrets are different. A build secret may authenticate to a private package repository or source service while dependencies are fetched. A runtime secret may be a database password or API token used by the running process. Neither belongs baked into the published image.
+
+Use the build system's secret-mount mechanism so the credential exists only for the relevant build step and is not committed to a layer. Keep build logs from printing it. Limit the secret's permissions and lifetime to the exact repository and operation required. Then verify the produced history and filesystem rather than assuming the mount was used correctly.
+
+Runtime secrets should arrive when the container starts through the platform's secret mechanism. The image can contain the path or environment-variable name the application expects, but not the secret value. This lets the same immutable artifact move between environments while credentials remain environment-specific and independently rotatable.
+
+Environment variables are not automatically safe just because they are metadata. A Dockerfile `ENV` or build argument can persist in image configuration, build history, cache records, or logs. Build arguments are especially unsuitable as a secret transport because the build system was not designed to make them confidential.
+
+Review every `COPY` boundary. Prefer named files or output directories over the entire build context. Use ownership flags during copy rather than copying as root and recursively changing permissions later. Narrow copies reduce both the final contents and the chance that an unrelated local file silently alters the artifact.
+
+Layer design also affects remediation. Shared base layers can make distribution efficient, but an application image still needs rebuilding when the base changes. Deleting an unsafe package in a later application layer does not rewrite the inherited base history. Select a repaired base and rebuild the final artifact.
+
+Inspect build history for unexpected installation commands, URLs, environment values, and large layers. Inspect the final filesystem for shells, package managers, credentials, source, tests, caches, and temporary files. A successful build only proves that the builder produced an image, not that the image contains what security reviewers intended.
+
+## How Do Non-root and Read-only Design Limit Compromise?
+<!-- section-summary: A fixed non-root identity, precise ownership, separated writable data, and a read-only-friendly filesystem reduce what compromised application code can modify or turn into further privilege. -->
+
+Containers provide isolation mechanisms, but a process is still a Linux process using the host kernel. Root inside a container is not automatically identical to unrestricted host root, yet it begins with a broader authority model than most applications need. Runtime configuration mistakes, excessive capabilities, dangerous mounts, or kernel flaws make that distinction important.
+
+Declare a fixed non-root user in the image. A numeric user and group work even when the runtime image has no account database entry:
+
+```dockerfile
+RUN mkdir -p /app /tmp/app && chown -R 10001:10001 /app /tmp/app
+USER 10001:10001
+```
+
+Place `USER` near the end, after privileged installation and ownership setup. Later Dockerfile instructions run as the current user. That is useful because it exposes unexpected root requirements during the build, but it can also break installation if changed too early without a plan.
+
+Do not return to root simply to silence permission errors. A failure to write is information about the application's filesystem contract. Determine which paths actually need mutation, create those paths deliberately, and grant the runtime identity only the required access.
+
+Avoid permission shortcuts such as world-writable application directories or set-user-ID utilities. They can effectively recreate broad authority. Ownership should be narrow enough that the application cannot overwrite its executable, dependency tree, entrypoint, or static configuration.
+
+Separate executable code from writable data:
+
+```text
+/app/bin and /app/lib     read-only application material
+/app/config               read-only defaults
+/tmp/app                  temporary writable data
+/var/lib/app              persistent data only if required
+```
+
+This separation supports a read-only root filesystem at runtime. The image remains the software record; explicitly mounted paths provide temporary or persistent storage. An attacker who controls the process has fewer places to install a modified binary, replace a library, alter startup files, or leave durable tools.
+
+Read-only containers also reveal hidden application assumptions. An application might write logs beside its executable, create a cache under its package directory, place a PID file in an undeclared location, or modify configuration at startup. Those patterns may work in a writable development container and fail under a read-only runtime.
+
+Fix each assumption according to intent. Send logs to standard output or a designated writable sink. Mount an ephemeral directory for cache or temporary files. Provide a volume for genuine durable state. Generate configuration outside the image or into a bounded writable location. The goal is not to make all writes impossible; it is to make every write destination explicit.
+
+Non-root and read-only settings change an attack chain in different ways. Non-root limits the starting identity. Correct ownership prevents that identity from altering trusted code. A read-only root prevents filesystem persistence outside declared mounts. Runtime capability, syscall, network, and resource controls add further boundaries, but they belong to runtime hardening rather than image contents alone.
+
+A hardened image makes those runtime controls easier. It already declares a non-root user, does not require package installation during startup, keeps mutable paths separate, and avoids privileged ports or device access. The platform can then enforce a strong baseline without breaking an image designed around root and a writable filesystem.
+
+## What Should You Inspect and Scan Before Release?
+<!-- section-summary: Inspect and scan the final immutable image—not just source or an intermediate stage—then interpret findings using contents, exploitability, ownership, and available remediation. -->
+
+Scan the artifact that will actually run. Source dependency checks are useful, but the final image may include base packages, native libraries, language packages copied from another stage, certificates, and accidental files that source analysis does not represent. Scanning an intermediate builder can also report tools that never ship while missing mistakes in the final stage.
+
+A pre-push inspection should answer:
+
+- Which base and digest did the final stage use?
+- Which operating-system and language packages remain?
+- Which user and command are declared?
+- Does the filesystem contain shells, package managers, source, tests, caches, or credentials unexpectedly?
+- Can the container start as the declared non-root user?
+- Which paths must be writable?
+- Does it operate with a read-only root when expected?
+- What does the vulnerability scanner report for this exact image digest?
+
+Run the image locally using production-like controls. Confirm that startup, health checks, normal requests, shutdown, logging, certificate access, DNS, and temporary writes work. A hardening control that immediately forces operators to re-enable root or broad write access during deployment has not been integrated successfully.
+
+Vulnerability scanning is not binary truth. A database can gain new findings after the image is built even though the artifact digest is unchanged. Package detection can miss statically linked or manually copied software. A reported vulnerable package may be present but unreachable in the running application. Severity, exploitability, exposure, available fixes, and ownership are separate inputs to a risk decision.
+
+Do not use that uncertainty as a reason to ignore results. Record the image digest, scanner and database state, package location, finding, decision, owner, and remediation or bounded exception. Rebuild rather than modifying a running container when a base or dependency needs repair.
+
+Inspection should include negative tests. Attempt to run as an arbitrary non-root user if the platform will assign one. Try writing outside declared paths. Confirm build credentials are absent from environment metadata, history, and files. Check that omitted development commands are genuinely unavailable. These tests verify security properties rather than only application success.
 
 ![Pre-push image checklist infographic with base reviewed, secrets clean, runs non-root, writable paths known, scan passes, and ready for registry checks around payments-api](/content-assets/articles/article-devsecops-container-image-security-minimal-base-images/pre-push-image-checklist.png)
 
-*The final pre-push check turns Dockerfile hardening into release behavior: the registry receives an image that already passed the basic safety review.*
+Image hardening and runtime hardening should remain distinct in the review. The image controls shipped software, default user, ownership, and filesystem layout. Runtime policy controls capabilities, syscall filters, mandatory access control, mounts, resources, network access, and stronger sandboxes. A good artifact supports those restrictions, but an image cannot enforce every property of the environment in which it runs.
 
-## What's Next
+## How Do Immutable Images Change Maintenance and Response?
+<!-- section-summary: Treat images as replaceable immutable release artifacts: rebuild for every repair, preserve digest identity, and reason about compromise across build, storage, and runtime boundaries. -->
 
-Hardening the image reduces what the team ships. The next question is how the team proves what it built and how other systems decide whether to trust it.
+A production image should not be a long-lived pet. Do not start a container, install a package inside it, edit a configuration file, and treat that mutated instance as the new release. Those changes are difficult to reproduce, review, scan, and roll back.
 
-The next article moves from image contents to image trust and SBOMs. We will follow the same `payments-api` image into the private registry and look at package inventories, provenance, signing, and the checks that tell Kubernetes and security teams where the image came from.
+Instead, change the source or build inputs, produce a new image, test it, scan it, and deploy its immutable digest. The old digest remains a record of exactly what ran. This pattern makes incident response more deterministic because responders can identify affected artifacts rather than guessing which instances were manually changed.
 
-## References
+Immutability does not mean software never changes. It means change creates a new identified artifact. A repaired base, upgraded dependency, configuration default, ownership fix, or removed tool all produce a new digest. Promotion should move the already-tested digest between environments rather than rebuild source separately for staging and production.
 
-- [Docker build best practices](https://docs.docker.com/build/building/best-practices/) - Covers base-image choice, pinned base images, `.dockerignore`, package reduction, frequent rebuilds, and CI builds.
-- [Docker base images](https://docs.docker.com/build/building/base-images/) - Explains what a base image is, Docker Official Images, verified publisher images, and minimal `scratch` images.
-- [Docker multi-stage builds](https://docs.docker.com/build/building/multi-stage/) - Documents multiple `FROM` stages and copying selected artifacts into a final image.
-- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/) - Documents `USER`, `ARG`, `ENV`, `COPY --from`, and other Dockerfile instructions used in hardened builds.
-- [Docker Build secrets](https://docs.docker.com/build/building/secrets/) - Explains BuildKit secret mounts and why build arguments and environment variables are a poor fit for secrets.
-- [Docker Scout CVE command](https://docs.docker.com/reference/cli/docker/scout/cves/) - Documents `docker scout cves`, severity filters, supported artifact types, and the `--exit-code` option.
-- [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html) - Provides practical container guidance for non-root users, read-only filesystems, CI scanning, secrets, and supply chain security.
-- [NIST SP 800-190: Application Container Security Guide](https://csrc.nist.gov/pubs/sp/800/190/final) - Defines container security concerns and recommendations across images, registries, runtimes, orchestrators, and hosts.
-- [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) - Documents restricted controls such as non-root users, dropped capabilities, and privilege escalation controls.
-- [Kubernetes security context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) - Shows how pod and container security settings are expressed in Kubernetes manifests.
+Threat-model the image across its lifecycle:
+
+1. **Before build:** source, base references, dependency locks, and external downloads can be changed.
+2. **During build:** the runner, build tool, network, caches, and credentials can influence output.
+3. **At rest:** registry permissions, mutable tags, retention, signing, and metadata determine whether the stored artifact can be replaced or misidentified.
+4. **At runtime:** user identity, filesystem writes, secrets, network, kernel controls, and resources determine what compromise can reach.
+
+Hardening the Dockerfile addresses only part of that chain, but it creates several strong invariants. Production contains only declared runtime material. Build credentials are not present in the result. The default identity is not root. Trusted code is not writable by that identity. Required mutable paths are known. The artifact is inspected and scanned by digest.
+
+Consider compromise in both a weak and hardened image. In the weak version, the attacker finds a shell and download tool, runs as root, rewrites the application, stores a payload in the root filesystem, and uses inherited credentials to reach other systems. In the hardened version, several of those steps fail or require a different exploit. No single control makes the application invulnerable, but each removed option reduces blast radius and improves detection.
+
+Maintenance should continuously revisit the base and dependency graph. A previously clean digest can become associated with newly disclosed vulnerabilities. That does not change the bytes, but it changes what defenders know. Rebuild with repaired inputs when necessary, preserve the old digest and evidence for investigation, and update deployments through the normal controlled path.
+
+## What Does a Complete Hardened Image Workflow Look Like?
+<!-- section-summary: A complete workflow defines the runtime contract, controls every build input, creates a minimal non-root artifact, verifies negative properties, and publishes a new digest with evidence for every change. -->
+
+For a payments API, begin with the runtime need rather than a convenient development environment:
+
+```text
+required:
+  Node.js runtime
+  compiled server
+  production dependency graph
+  CA certificates
+  non-root identity 10001
+  read-only application files
+  writable /tmp/app
+
+not required:
+  source history
+  test framework
+  compiler
+  Git client
+  package manager at runtime
+  build credentials
+```
+
+The local development loop is:
+
+1. Choose and record a maintained base.
+2. Build with committed dependency locks and narrow context.
+3. Use separate build, dependency, and runtime stages.
+4. Copy only production outputs with final ownership.
+5. Run the image as its declared non-root identity.
+6. Test a read-only root with only documented writable paths.
+7. Inspect contents, configuration, and layer history.
+8. Scan the exact final image and review findings.
+
+The CI path repeats those properties in a controlled environment. It verifies base and dependency identities, blocks accidental secrets, builds without persistent credentials, runs application and negative hardening tests, produces the final artifact once, records its digest, creates inventory and scan evidence, and pushes only after required checks pass.
+
+```text
+reviewed source and locked inputs
+  -> isolated multi-stage build
+  -> minimal final filesystem
+  -> fixed non-root identity and ownership
+  -> secret and history inspection
+  -> application plus read-only tests
+  -> final-image scan
+  -> immutable digest and evidence
+  -> protected registry
+```
+
+The local and CI checklist should cover both contents and behavior:
+
+- trusted, maintained, compatible base;
+- explicit version or digest selection;
+- locked application dependencies;
+- reviewed external downloads and checksums;
+- narrow build context and copy operations;
+- no build tools, caches, source, or credentials in the final stage;
+- no runtime secrets stored in the image;
+- fixed non-root user and group;
+- precise file ownership without world-writable shortcuts;
+- executable material separated from writable data;
+- successful read-only-root test;
+- inspection and scanning of the exact published digest;
+- recorded owner and remediation for findings;
+- rebuild process for base and dependency updates.
+
+Review the workflow again from an attacker's position. Before the build, a changed base reference or dependency lock can alter everything downstream. During the build, a compromised package source, overpowered credential, or poisoned cache can influence the result. After publication, weak registry controls can let a familiar tag point somewhere new. During execution, excessive privilege and writable code can turn one application flaw into persistence. The artifact review should preserve enough identity at every transition to determine where an unexpected component entered.
+
+Also verify that the runtime stage does not repeat work that belongs in the build. Installing packages, downloading plugins, compiling native modules, or generating executable code when the container starts makes each instance a new unreviewed build. It also requires network access and write permission that the service may not otherwise need. Perform those transformations once in the controlled build, inspect their output, and start production from the resulting immutable filesystem.
+
+Operational convenience should use a separate path. If responders need network or process tools, attach a short-lived diagnostic environment under explicit authorization instead of leaving the tools in every service image. If a rare migration requires broader filesystem access, run a separately reviewed job rather than granting the long-running API that authority. Removing an exceptional requirement from the normal container is often stronger than trying to constrain it forever.
+
+Finally, treat hardening failures as design feedback. A non-root error identifies an undeclared ownership need. A read-only error identifies an undeclared write. A minimal-image error identifies a hidden runtime dependency. Resolve the need narrowly, update the runtime contract, and add a regression test so the next refactor does not silently restore broad permissions or packages.
+
+The core mental model is:
+
+```text
+hardened image
+  = necessary software
+  + controlled and repeatable inputs
+  + no embedded secrets
+  + least-privileged defaults
+  + explicit writable boundaries
+  + verified final contents
+```
+
+An image built this way is not “secure forever.” It is a smaller, more explainable artifact whose identity and behavior can be connected to registry controls, deployment policy, and runtime isolation. That is the useful DevSecOps outcome: fewer hidden powers and a controlled way to create the next repaired image.
+
+## Check Your Answers
+
+:::expand[Why Does Image Hardening Start with Attack Surface?]{kind="recap"}
+An image becomes a process, so unnecessary programs, files, privilege, secrets, and variable inputs expand both the production trust boundary and an attacker's options after compromise.
+:::
+
+:::expand[How Do You Choose a Trusted and Repeatable Base?]{kind="recap"}
+Choose a maintained and understood base that is minimal for the real workload, identify inputs precisely, and pair pinning with a deliberate update-and-rebuild process.
+:::
+
+:::expand[Why Should Build and Runtime Environments Be Separate?]{kind="recap"}
+Multi-stage builds keep compilers, tests, source, package managers, and caches in temporary stages while copying only justified runtime material into production.
+:::
+
+:::expand[How Do Layers, Files, and Secrets Change Exposure?]{kind="recap"}
+Deleted files can remain in earlier layers, so narrow copy boundaries, same-layer cleanup, and secret mounts are required to keep sensitive or unnecessary material out of the artifact.
+:::
+
+:::expand[How Do Non-root and Read-only Design Limit Compromise?]{kind="recap"}
+A fixed non-root identity, precise ownership, non-writable code, and declared write paths remove several persistence and privilege options from compromised application code.
+:::
+
+:::expand[What Should You Inspect and Scan Before Release?]{kind="recap"}
+Inspect, exercise, and scan the exact final image by digest, then interpret findings with package location, exposure, exploitability, ownership, and remediation context.
+:::
+
+:::expand[How Do Immutable Images Change Maintenance and Response?]{kind="recap"}
+Repairs create new digests instead of mutating running containers, which preserves release identity, makes promotion reproducible, and gives incidents an exact artifact record.
+:::
+
+:::expand[What Does a Complete Hardened Image Workflow Look Like?]{kind="recap"}
+Define the runtime contract, control build inputs, produce a minimal non-root image, verify positive and negative behavior, scan it, and publish one immutable digest with evidence.
+:::

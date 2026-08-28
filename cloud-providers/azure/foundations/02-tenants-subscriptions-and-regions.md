@@ -25,27 +25,36 @@ aliases:
 
 ## Table of Contents
 
-1. [The Placement Story](#the-placement-story)
-2. [Tenants](#tenants)
-3. [Subscriptions](#subscriptions)
-4. [Resource Groups](#resource-groups)
-5. [Scope Inheritance](#scope-inheritance)
-6. [Regions](#regions)
-7. [Availability Zones](#availability-zones)
-8. [Placement Review](#placement-review)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
-
-## The Placement Story
-<!-- section-summary: The first Azure placement story connects identity, billing, lifecycle, governance, geography, and failure boundaries before the Orders API gets deployed. -->
+1. [What Coordinates Does Azure Give Every Workload?](#what-coordinates-does-azure-give-every-workload)
+2. [What Is a Microsoft Entra Tenant?](#what-is-a-microsoft-entra-tenant)
+3. [Why Do Azure Subscriptions Exist?](#why-do-azure-subscriptions-exist)
+4. [How Do Management Groups and Resource Groups Organize Resources?](#how-do-management-groups-and-resource-groups-organize-resources)
+5. [How Do Scope, RBAC, and Policy Work Together?](#how-do-scope-rbac-and-policy-work-together)
+6. [How Do Regions Place Workloads?](#how-do-regions-place-workloads)
+7. [How Do Availability Zones Limit Failure?](#how-do-availability-zones-limit-failure)
+8. [How Do You Review a Workload’s Placement?](#how-do-you-review-a-workloads-placement)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 For this first Azure foundations article, the story is one app: `orders-api-prod`. The Orders API receives checkout requests, reads secrets from Key Vault, writes order events to Storage, and talks to a database that keeps customer purchase history. Before the team creates a single resource, they need to decide where the workload belongs.
 
 Azure placement has several layers, and each layer answers a different production question. A **tenant** answers which identity directory the company trusts. A **subscription** answers which billing, quota, access, and governance boundary owns the resources. A **resource group** answers which resources share a lifecycle. A **scope** answers where permissions and policies apply. A **region** answers which geographic Azure location hosts the service. An **availability zone** answers how the workload survives a failure inside one supported region.
 
-If you have used AWS before, the rough shape is familiar, but the boundaries land in different places. A Microsoft Entra tenant is the identity directory Azure subscriptions trust, a subscription plays the same broad operating role as an AWS account, and management groups fill the governance grouping role that AWS Organizations organizational units often fill.
-
 The Orders API gives us a concrete target for each layer. The table below names the placement choice and the part of Azure behavior that choice controls.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Coordinates Does Azure Give Every Workload?**
+2. **What Is a Microsoft Entra Tenant?**
+3. **Why Do Azure Subscriptions Exist?**
+4. **How Do Management Groups and Resource Groups Organize Resources?**
+5. **How Do Scope, RBAC, and Policy Work Together?**
+6. **How Do Regions Place Workloads?**
+7. **How Do Availability Zones Limit Failure?**
+8. **How Do You Review a Workload’s Placement?**
+
+## What Coordinates Does Azure Give Every Workload?
+<!-- section-summary: The first Azure placement story connects identity, billing, lifecycle, governance, geography, and failure boundaries before the Orders API gets deployed. -->
 
 | Layer | Orders choice | What the choice controls |
 |---|---|---|
@@ -64,7 +73,7 @@ This placement story matters because many Azure mistakes start with a resource c
 
 This ladder is useful because it gives the team an order for the conversation. We start with the tenant because every Azure resource operation needs a trusted identity. Then we move into subscriptions, resource groups, scopes, regions, zones, and a final placement review that the team can repeat before Bicep, Terraform, the Azure CLI, or the portal creates anything.
 
-## Tenants
+## What Is a Microsoft Entra Tenant?
 <!-- section-summary: A Microsoft Entra tenant is the organization's identity directory, and Azure subscriptions trust one tenant to authenticate users, groups, applications, and workload identities. -->
 
 A **Microsoft Entra tenant** is an isolated cloud identity directory for an organization. You will still hear the older name, Azure Active Directory or Azure AD, because years of screenshots, scripts, and blog posts use it. In current Microsoft naming, Microsoft Entra ID is the identity service, and a tenant is one organization's directory inside that service.
@@ -81,12 +90,11 @@ Tenant choices become serious during mergers, spinouts, vendor access, and direc
 
 So the tenant names the people and software. The next layer gives those known callers a production resource boundary to work inside, and that boundary is the subscription.
 
-## Subscriptions
+## Why Do Azure Subscriptions Exist?
 <!-- section-summary: An Azure subscription is the main production boundary for billing, quota, resource ownership, Azure RBAC, Azure Policy, and environment isolation. -->
 
 An **Azure subscription** is the container where Azure resources, billing records, quotas, access assignments, policies, and provider registrations meet. It is the first place most engineers feel Azure as an operating system for cloud work. If the tenant answers who the caller is, the subscription answers which Azure resource estate that caller is trying to manage.
 
-For AWS readers, treat a subscription as the closest everyday match to an AWS account for resource ownership, billing visibility, quotas, and isolation. Azure Policy at a management group or subscription scope gives governance guardrails that feel similar to AWS service control policies, while Azure RBAC role assignments still decide which known principals can act inside the allowed boundary.
 
 For the Orders team, one shared subscription would create messy operations. Development load tests could consume quota needed by production. A broad Contributor assignment for a test environment could accidentally reach production resources. Monthly cost reports would mix experiments, staging, and real customer traffic into the same bill. Production policy rules would slow down harmless development experiments, while loose development rules would put production at risk.
 
@@ -128,7 +136,7 @@ That simple check prevents a very real class of Azure mistakes. The command afte
 
 A subscription is still too large for daily application lifecycle work. The Orders team needs a smaller container for the resources that deploy, update, and clean up together, and that is where resource groups enter the story.
 
-## Resource Groups
+## How Do Management Groups and Resource Groups Organize Resources?
 <!-- section-summary: A resource group is a flat lifecycle container inside a subscription, and teams use it to group resources that deploy, update, protect, and delete together. -->
 
 A **resource group** is a logical container for related Azure resources inside a subscription. Microsoft describes it as a container that holds related resources for an Azure solution, and the usual practice is to place resources with the same lifecycle into the same group. In beginner terms, a resource group is the box you use when a set of resources should move together during deployment and cleanup.
@@ -182,7 +190,7 @@ The tags in that command give the first hint of the next foundation article. Tag
 
 Now the Orders resources have a tenant, a subscription, and resource groups. The next question is where access and governance flow from, because Azure role assignments and policies use scopes that form a parent-child hierarchy.
 
-## Scope Inheritance
+## How Do Scope, RBAC, and Policy Work Together?
 <!-- section-summary: Azure scope is the hierarchy where role assignments and policies apply, with management groups, subscriptions, resource groups, and resources forming parent-child boundaries. -->
 
 A **scope** is the Azure boundary where a management rule applies. Azure RBAC uses scope to decide how widely a role assignment reaches. Azure Policy also uses scopes so governance rules can apply to a management group, subscription, resource group, or specific resource.
@@ -224,7 +232,7 @@ grp-orders-oncall                 Reader       /subscriptions/.../resourceGroups
 
 At this point, the Orders team knows who can touch the work, where the resources live logically, and where governance flows from. The next placement decision moves from management structure into physical geography.
 
-## Regions
+## How Do Regions Place Workloads?
 <!-- section-summary: An Azure region is the geographic placement choice for service latency, data residency, service availability, SKU availability, quota, and recovery planning. -->
 
 An **Azure region** is a geographic Azure location where Microsoft operates datacenter capacity and service endpoints. `uksouth`, `westeurope`, `eastus`, and `australiaeast` are programmatic region names you use in CLI commands, Bicep, Terraform, ARM templates, and resource IDs. The display name may say "UK South", while the deployment value is `uksouth`.
@@ -293,7 +301,7 @@ Region pairs deserve a careful explanation. Microsoft pairs some Azure regions w
 
 For many production systems, the first strong design is one good region with availability zones. That gives the Orders API low-latency regional placement and protection from a zone-level failure inside the region, which leads directly to the next layer.
 
-## Availability Zones
+## How Do Availability Zones Limit Failure?
 <!-- section-summary: Availability zones are physically separate locations inside supported Azure regions, and teams use zonal or zone-redundant services to reduce facility-level failure risk. -->
 
 An **availability zone** is a physically separate location inside a supported Azure region. Microsoft describes zones as separate groups of datacenters with independent power, cooling, and networking. In an availability-zone-enabled region, the zones sit close enough for low-latency regional architecture and separate enough to reduce the chance that one local incident affects every copy of the workload.
@@ -310,7 +318,7 @@ Availability zones also set the boundary between single-region resilience and mu
 
 The Orders team now has all the coordinates. The final placement review ties tenant, subscription, resource group, scope, region, and zones into one short conversation before the deployment runs.
 
-## Placement Review
+## How Do You Review a Workload’s Placement?
 <!-- section-summary: A placement review turns tenant, subscription, resource group, scope, region, zone, quota, and recovery choices into a repeatable pre-deployment checklist. -->
 
 A **placement review** is a short pre-deployment check that asks where the workload belongs and which evidence proves that choice. It is useful before a new workload launches, before a subscription split, before a region move, and before a production access change. The review keeps the team from discovering placement mistakes through bills, outages, access failures, or compliance reports later.
@@ -333,7 +341,7 @@ The team chooses the shape before resources drift. Azure gives a lot of freedom 
 
 The placement review turns that freedom into a map the team can explain. If an incident starts at 2 a.m., the on-call engineer can see the tenant, subscription, resource group, scope, region, and zone plan, then work from a known design instead of hunting through portal pages.
 
-## Putting It All Together
+### Putting It All Together
 <!-- section-summary: Azure placement is practical when the team connects identity, resource ownership, governance, geography, and resilience as one deployment path. -->
 
 The Orders API now has a clear Azure home. The `devpolaris.com` Microsoft Entra tenant stores the people and software identities. The `sub-orders-prod` subscription owns the production resources, cost, quota, policies, and provider registrations. The app and data resource groups split release-heavy resources from long-lived state.
@@ -346,13 +354,47 @@ Availability zones add in-region resilience where the chosen services support th
 
 That is the first Azure foundation. Tenant, subscription, resource group, scope, region, and zone are the coordinates that keep a workload understandable. Every later Azure topic builds on those coordinates, because resources, networking, compute, identity, observability, and cost all need a known home.
 
-## What's Next
+### What's Next
 
 After the Orders team knows where the workload belongs, the next job is naming and finding the exact things created there. The next article covers Azure resources, resource IDs, names, tags, and locks so alerts, bills, deployment plans, and access reviews point at the right object before anyone changes it.
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[What Coordinates Does Azure Give Every Workload?]{kind="recap"}
+The first Azure placement story connects identity, billing, lifecycle, governance, geography, and failure boundaries before the Orders API gets deployed.
+:::
+
+:::expand[What Is a Microsoft Entra Tenant?]{kind="recap"}
+A Microsoft Entra tenant is the organization's identity directory, and Azure subscriptions trust one tenant to authenticate users, groups, applications, and workload identities.
+:::
+
+:::expand[Why Do Azure Subscriptions Exist?]{kind="recap"}
+An Azure subscription is the main production boundary for billing, quota, resource ownership, Azure RBAC, Azure Policy, and environment isolation.
+:::
+
+:::expand[How Do Management Groups and Resource Groups Organize Resources?]{kind="recap"}
+A resource group is a flat lifecycle container inside a subscription, and teams use it to group resources that deploy, update, protect, and delete together.
+:::
+
+:::expand[How Do Scope, RBAC, and Policy Work Together?]{kind="recap"}
+Azure scope is the hierarchy where role assignments and policies apply, with management groups, subscriptions, resource groups, and resources forming parent-child boundaries.
+:::
+
+:::expand[How Do Regions Place Workloads?]{kind="recap"}
+An Azure region is the geographic placement choice for service latency, data residency, service availability, SKU availability, quota, and recovery planning.
+:::
+
+:::expand[How Do Availability Zones Limit Failure?]{kind="recap"}
+Availability zones are physically separate locations inside supported Azure regions, and teams use zonal or zone-redundant services to reduce facility-level failure risk.
+:::
+
+:::expand[How Do You Review a Workload’s Placement?]{kind="recap"}
+A placement review turns tenant, subscription, resource group, scope, region, zone, quota, and recovery choices into a repeatable pre-deployment checklist. Azure placement is practical when the team connects identity, resource ownership, governance, geography, and resilience as one deployment path.
+:::
+
+## References
 
 - [Associate or add an Azure subscription to your Microsoft Entra tenant](https://learn.microsoft.com/en-us/entra/fundamentals/how-subscriptions-associated-directory) - Documents the trust relationship between Azure subscriptions and Microsoft Entra tenants.
 - [Understand the billing and tenant relationship](https://learn.microsoft.com/en-us/azure/cost-management-billing/understand/understand-billing-tenant-relationship) - Explains how a subscription trusts a Microsoft Entra tenant and how tenants can relate to multiple subscriptions.

@@ -1,8 +1,8 @@
 ---
 title: "Drift and Perimeter Security"
-description: "Detect console changes, cloud drift, exposed network paths, and unauthorized perimeter changes after IaC review."
-overview: "Start with a database rule changed in the console after a reviewed Terraform apply, then compare desired files, IaC state, and live cloud data. You will use drift plans, perimeter review, audit logs, and explicit revert, codify, or import decisions to bring production back under control."
-tags: ["devsecops", "drift", "network-exposure", "cloud-security"]
+description: "Learn how to compare desired, recorded, and live cloud state; reason about reachability and identity perimeters; investigate drift with plans and audit logs; and choose whether to revert, codify, or import changes."
+overview: "Treat drift as a configuration-integrity problem and the perimeter as the set of paths by which actors, networks, and identities can reach assets. Learn why plans and audit logs answer different questions, how emergency and accidental changes diverge from IaC, how to review inbound, outbound, and identity paths, and how a controlled loop chooses the source of truth without unsafe automatic remediation."
+tags: ["devsecops", "drift", "perimeter-security", "cloud-security"]
 order: 3
 id: article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection
 aliases:
@@ -19,312 +19,327 @@ aliases:
 
 ## Table of Contents
 
-1. [The Console Change After Review](#the-console-change-after-review)
-2. [Desired File, State, and Live Cloud](#desired-file-state-and-live-cloud)
-3. [Finding Drift With Plans](#finding-drift-with-plans)
-4. [Reviewing the Perimeter](#reviewing-the-perimeter)
-5. [Audit Logs Explain Who Changed What](#audit-logs-explain-who-changed-what)
-6. [Revert, Codify, or Import](#revert-codify-or-import)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
-9. [References](#references)
+1. [What Is the Difference Between Desired, Recorded, and Live State?](#what-is-the-difference-between-desired-recorded-and-live-state)
+2. [Why Is Drift a Configuration-Integrity Problem?](#why-is-drift-a-configuration-integrity-problem)
+3. [How Do Plans and Audit Logs Explain Different Parts of Drift?](#how-do-plans-and-audit-logs-explain-different-parts-of-drift)
+4. [How Should You Model the Cloud Security Perimeter?](#how-should-you-model-the-cloud-security-perimeter)
+5. [How Do You Decide Whether to Revert, Codify, or Import Drift?](#how-do-you-decide-whether-to-revert-codify-or-import-drift)
+6. [Why Can Automatic Remediation Be Dangerous?](#why-can-automatic-remediation-be-dangerous)
+7. [How Do You Review Reachability and Perimeter Change?](#how-do-you-review-reachability-and-perimeter-change)
+8. [What Does a Complete Drift Control Loop Look Like?](#what-does-a-complete-drift-control-loop-look-like)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## The Console Change After Review
-<!-- section-summary: Drift starts after live cloud changes bypass the reviewed infrastructure path that approved the intended design. -->
+Infrastructure as Code introduces a desired-state model, but production has three relevant views:
 
-The Northstar customer portal passed its infrastructure review. Terraform created a private database security group, OPA checked the plan, the pull request merged, and the deployment role applied the change. The approved design was simple: the application security group can reach PostgreSQL on port `5432`, and the internet cannot.
-
-Then an incident happens at 02:15. The portal cannot write payment records. The on-call engineer sees database connection timeouts and opens the cloud console during the outage. To debug quickly, they add a temporary database ingress rule from a broad source range. The service recovers. The incident queue moves on. The rule remains.
-
-Here is the kind of rule the live cloud now has:
-
-```hcl
-resource "aws_security_group_rule" "database_debug" {
-  type              = "ingress"
-  security_group_id = aws_security_group.database.id
-  from_port         = 5432
-  to_port           = 5432
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-}
+```text
+desired state  -> what reviewed code declares
+recorded state -> what the IaC tool believes it manages
+live state     -> what the cloud currently runs
 ```
 
-The HCL block shows the shape of the risky rule, even though the engineer created it in the console. `from_port` and `to_port` set PostgreSQL. `cidr_blocks = ["0.0.0.0/0"]` allows traffic from any IPv4 address. A production database rule with that source deserves immediate review.
+**Drift** is a meaningful difference among those views. A security group may allow only application traffic in Git while the live cloud allows the entire Internet. State may still record the earlier private rule. The code review history looks safe, but runtime exposure is not.
 
-**Drift** means the live cloud no longer matches the reviewed infrastructure code or the IaC state record. **Perimeter security** means checking the paths that decide who can reach a resource: security groups, firewall rules, route tables, public IPs, load balancers, storage public access, private endpoints, service endpoints, and metadata service settings.
+Desired state answers what the organization intends. Recorded state connects configuration addresses to provider resource identities and attributes. Live state is operational reality. No single view can replace the others.
 
-The important lesson is practical. A pull request gate can prove the planned change was safe at apply time. It cannot prove the account stayed safe afterward. Drift and perimeter security handle the after part.
+Drift can be simple value change, missing resource, extra unmanaged resource, replaced object, policy change, identity grant, route, encryption setting, or disabled logging. Some differences are operationally harmless; others create direct attack paths.
 
-![Incident exposure path showing a break-glass console change opening database ingress from the internet and the safer target of application-only access](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/incident-exposure-path.png)
+The comparison should identify exact resource, attribute, expected value, observed value, environment, owner, detection time, and confidence. “Production drift detected” is not enough for response.
 
-*The exposure path makes the incident concrete: a break-glass console change opens a database port, and the safe target is traffic from the application group only.*
+Keep these questions in view as you work through the lesson:
 
-To find and fix this cleanly, the team needs to compare three records.
+1. **What Is the Difference Between Desired, Recorded, and Live State?**
+2. **Why Is Drift a Configuration-Integrity Problem?**
+3. **How Do Plans and Audit Logs Explain Different Parts of Drift?**
+4. **How Should You Model the Cloud Security Perimeter?**
+5. **How Do You Decide Whether to Revert, Codify, or Import Drift?**
+6. **Why Can Automatic Remediation Be Dangerous?**
+7. **How Do You Review Reachability and Perimeter Change?**
+8. **What Does a Complete Drift Control Loop Look Like?**
 
-## Desired File, State, and Live Cloud
-<!-- section-summary: Drift detection compares the reviewed code, the IaC state mapping, and the actual cloud resource data. -->
+## What Is the Difference Between Desired, Recorded, and Live State?
+<!-- section-summary: Infrastructure integrity depends on comparing code's desired state, the IaC system's recorded state, and the cloud provider's live resources. -->
 
-IaC drift work uses three records. Beginners should keep them separate because each one answers a different question.
+![Drift triangle compares Git configuration, IaC state, and live cloud while audit logs explain out-of-band events](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-triangle.png)
 
-**Desired file** is the infrastructure code in the repository. For Terraform and OpenTofu, this means HCL files, modules, variables, provider settings, and reviewed policy choices. The desired file says what the team intends to run.
+_Code expresses intention, state records management history, live cloud shows reality, and audit events help reconstruct the transition._
 
-**State** is the IaC tool's record of managed resources. Terraform and OpenTofu use state to map a resource address such as `aws_security_group.database` to a real cloud object such as `sg-08abc123`. State also stores many attributes from the last read or apply.
+Drift is not always unauthorized. An incident responder may deliberately open access through a break-glass procedure. A cloud service may add a computed property. An operator may make an emergency repair. The difference still needs reconciliation because the next plan may remove it or the temporary exposure may become permanent.
 
-**Live cloud** is what the provider API returns right now. It includes the actual security group rules, route tables, bucket policies, IAM attachments, database flags, public IPs, and audit events in the account, subscription, or project.
+The core question is not “Which view is automatically right?” It is “Which state should become authoritative now, and what evidence supports that decision?”
 
-For the Northstar database, the three records disagree:
+Recorded state can itself drift from reality because refresh has not run, access failed, or a backend was restored from an older version. Treat state as a security-sensitive operational database, not unquestionable truth. Protect its backend, locking, version history, encryption, and access logs.
 
-| Record | What it says |
-|---|---|
-| Desired file | Database accepts port `5432` from `aws_security_group.app.id` |
-| State | Last Terraform apply recorded the reviewed security group |
-| Live cloud | Console edit added port `5432` from `0.0.0.0/0` |
+Some live attributes are intentionally computed or maintained by the provider. Configuration can ignore selected changes, but every ignore rule removes a comparison signal. Document why the provider owns the field and review whether a security-relevant value is being hidden.
 
-That disagreement is the drift. The approved design is still in Git. The live account has an extra path. A scheduled drift check, provider posture tool, or audit alert should bring that gap back to the team.
+## Why Is Drift a Configuration-Integrity Problem?
+<!-- section-summary: Drift means infrastructure reality changed outside or after the reviewed desired-state transition, weakening the guarantee that production matches approved code. -->
 
-![Drift triangle showing Git code, IaC state, and live cloud compared together with audit logs explaining out-of-band changes](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-triangle.png)
+Configuration integrity is the property that important runtime settings match authorized intent. Drift breaks the chain from reviewed code to real cloud state.
 
-*The triangle shows why drift review compares Git code, IaC state, and the live cloud, then uses audit logs to explain the change.*
+Common causes include:
 
-The first detection method is a plan that refreshes from the cloud.
+- Manual console or CLI changes.
+- Emergency break-glass response.
+- Another automation system modifying the same resource.
+- Provider or managed-service behavior.
+- Incomplete import or IaC ownership.
+- A failed or partial apply.
+- State loss or corruption.
+- Compromised credentials.
+- Deliberate unauthorized change.
 
-## Finding Drift With Plans
-<!-- section-summary: Refresh and plan commands compare managed resources with live provider data and produce reviewable drift evidence. -->
+Security drift includes public exposure, broader IAM, disabled encryption, weakened logging, new trust relationships, unapproved regions, deleted backups, or changed protection settings. Availability and cost drift can also carry security consequences if they remove redundancy or monitoring.
 
-A **drift plan** is an IaC plan used to find changes made outside the normal IaC path. Terraform and OpenTofu ask providers for current live resource data, compare it with state and code, and report differences.
+The problem is not merely that Git is untidy. Reviewers, scanners, and policy engines evaluated one state while production uses another. Incident responders may trust the wrong network map. The next apply may produce surprising destructive change because it tries to restore an outdated declaration.
 
-Northstar can run a scheduled drift check for Terraform like this:
+Drift is also evidence of an alternate authority path. If an administrator can change production directly, IaC is not the only enforcement boundary. Determine whether that path is intended, who can use it, how access is approved, and whether changes are logged and reconciled.
 
-```bash
-terraform init
-terraform plan -refresh-only -out=drift.tfplan -detailed-exitcode
-terraform show -json drift.tfplan > drift.tfplan.json
+Prevention is stronger than detection where practical. Restrict direct mutation, use workload identities for controlled apply, separate environments, require protected workflows, and use cloud policies that reject forbidden state. Detection remains necessary because emergency and provider-driven changes can still occur.
+
+Not all drift is security drift. A harmless description field and a public database rule should not page responders equally. Classify affected property, exposure, authority, data, availability, and compliance consequence.
+
+Prioritize drift that expands who can act or what can be reached. New public routes, wildcard trust, disabled logging, changed key policy, and removed deletion protection alter security boundaries. Shrinking a resource count may be operational drift without the same urgency, though lost redundancy can still affect resilience.
+
+Drift detection needs ownership. The platform may detect the difference, but the service or resource owner determines intended behavior and impact. Route findings automatically and escalate unowned production resources as a governance gap.
+
+## How Do Plans and Audit Logs Explain Different Parts of Drift?
+<!-- section-summary: A refresh or plan shows how declared and live state differ, while audit logs identify the actor, API call, time, source, and outcome that changed reality. -->
+
+A Terraform or OpenTofu refresh and plan can compare configuration, state, and provider observations. If live ingress changed, the plan may propose restoring the declared rule.
+
+```text
+live public ingress
+  -> refresh reads provider
+  -> plan compares desired private ingress
+  -> proposed update removes public path
 ```
 
-`terraform init` prepares the backend, providers, and modules. `terraform plan -refresh-only` focuses on changes detected by reading live resources. `-out=drift.tfplan` saves the plan for review. `-detailed-exitcode` gives automation three useful outcomes: exit code `0` for no changes, `2` for detected changes, and `1` for an error. `terraform show -json` creates structured output for dashboards or policy checks.
+The plan is a useful drift detector because it expresses the semantic change the IaC system would make. It can show creates, updates, replacements, and deletes.
 
-OpenTofu uses the same workflow shape:
+A plan is not a complete security monitor. It covers resources the configuration and state know about, under the identity and refresh behavior used. An unmanaged resource, hidden control-plane setting, another account, a deleted logging trail, or drift outside provider coverage may not appear. Plans are periodic unless continuously run.
 
-```bash
-tofu init
-tofu plan -refresh-only -out=drift.tfplan -detailed-exitcode
-tofu show -json drift.tfplan > drift.tfplan.json
+Audit logs answer a different question: who called which cloud API, when, from which identity or source, with what parameters and result? They help distinguish an authorized emergency change, accidental console edit, automation conflict, or credential compromise.
+
+```text
+plan -> what differs and what reconciliation would do
+audit log -> how the live change occurred
 ```
 
-A drift finding for the incident might look like this:
+Case A may show a named responder using approved temporary access during an incident. Case B may show an administrator accidentally changing the wrong security group. Case C may show a service account calling an unexpected API from an unusual source. The same drift value requires different response.
 
-```bash
-Objects have changed outside of Terraform
+Audit quality depends on identity quality. A shared administrator account makes attribution weak. Logs need durable actor identity, timestamps, resource identifiers, request and outcome, and integrity protection. Restrict who can disable, alter, or delete them and retain them beyond the likely discovery window.
 
-  # aws_security_group.database has changed
-  ~ resource "aws_security_group" "database" {
-      ingress = [
-        {
-          from_port   = 5432
-          to_port     = 5432
-          protocol    = "tcp"
-          cidr_blocks = ["0.0.0.0/0"]
-          description = "temporary debug access"
-        }
-      ]
-    }
+Plan output can itself be sensitive, containing resource names, addresses, identity details, or values. Protect CI artifacts and logs while preserving the fields investigators need.
+
+Cloud audit logs must cover every account, project, subscription, and region in scope. Centralize or replicate them into a security-controlled destination so compromise of one workload account cannot erase the only evidence. Monitor gaps, disabled trails, changed sinks, and retention reductions.
+
+Data-plane logs may be optional or high volume, while control-plane logs usually record configuration changes. Decide which sensitive data reads or writes also require audit and control cost and privacy carefully. Drift investigation begins with control-plane events but an incident may need data-access evidence too.
+
+Correlate IaC apply identity and run ID with audit events. Expected automation changes should appear under the controlled workload role. A matching resource update by a human administrator or another service account is evidence of an alternate path even if the final value matches code.
+
+## How Should You Model the Cloud Security Perimeter?
+<!-- section-summary: The perimeter is the set of network and identity paths by which an actor can reach a resource, including inbound, outbound, control-plane, and trusted-service relationships. -->
+
+A cloud perimeter is not one firewall at the edge. It is a reachability boundary around assets.
+
+```text
+actor or workload
+  -> network route and policy
+  -> identity and authorization
+  -> service endpoint
+  -> protected resource or capability
 ```
 
-The finding gives the team the first fact: the live security group changed outside the reviewed code path. It also names the resource and the risky field.
+Inbound paths include public IPs, load balancers, firewall rules, security groups, ingress gateways, private links, VPNs, peering, and service endpoints. Minimize the attack surface: expose only required protocols to required sources and terminate public traffic at intended controls.
 
-One caution belongs here. A refresh-only apply can update state to match live cloud data. That can help when the live change is legitimate and reviewed. It can also record an unsafe console edit as accepted state. For security drift, the team should investigate first, decide the right remediation, and then update state only when the reviewed decision calls for it.
+Outbound access matters too. A compromised workload can exfiltrate data, download payloads, or call control services through egress. Define required destinations, use proxies or private endpoints where appropriate, and monitor unexpected outbound behavior.
 
-Plan-based drift detection covers resources Terraform or OpenTofu already manages. It will miss unmanaged cloud objects. The team also needs perimeter review that looks directly at live exposure.
+Identity is part of the perimeter. A private API with a wildcard IAM policy may be widely reachable through credentials. A public endpoint with strong authentication still has a network attack surface. Evaluate both path and capability.
 
-## Reviewing the Perimeter
-<!-- section-summary: Perimeter review checks public and private reachability, provider posture findings, and metadata-service protections. -->
+Control-plane and data-plane paths differ. An application may read data through the service endpoint. An administrator or CI role can change the database, firewall, keys, or logging through provider APIs. Protect both.
 
-A **cloud perimeter** is the set of boundaries that control reachability. In the Northstar portal, public traffic should reach the load balancer. The load balancer should reach the application. The application should reach the database. Receipt storage should block public reads and accept access from approved identities.
+Trusted services and third parties create paths: CI runners, monitoring, backups, support access, webhooks, managed services, cross-account roles, and federated identities. Record why each relationship exists and who owns it.
 
-Perimeter review starts with public exposure. Which resources can receive traffic from the internet? Which storage services allow public access? Which databases have public network access? Which public load balancers route to sensitive backends?
+The perimeter should be derived from actual routes, policies, DNS, service exposure, and identity grants, not only architectural diagrams. Drift can create a path that documentation never shows.
 
-For AWS security groups, a focused query can find internet-wide ingress:
+Think in terms of effective reachability rather than individual rules. A private subnet may reach the Internet through NAT. A public load balancer can forward to a private service. Peering and transit networks connect address spaces. A resource policy can grant cross-account access without changing a firewall. Graph the combined path.
 
-```bash
-aws ec2 describe-security-groups \
-  --filters Name=ip-permission.cidr,Values=0.0.0.0/0 \
-  --query 'SecurityGroups[*].{GroupId:GroupId,GroupName:GroupName,Ingress:IpPermissions}'
+Minimize attack surface by reducing listeners, protocols, source ranges, identities, and administrative endpoints. Prefer application-specific access through authenticated services over direct database or host access. Remove old test paths and vendor access when their use ends.
+
+Egress and identity can combine. A workload with permission to read secrets and unrestricted outbound network can exfiltrate them. A workload with no direct secret permission may call an overly trusted metadata or internal service. Review capability paths, not isolated control checklists.
+
+## How Do You Decide Whether to Revert, Codify, or Import Drift?
+<!-- section-summary: Drift response chooses which representation becomes truth: restore reality to reviewed code, update code to an authorized live change, or bring an unmanaged existing resource under IaC ownership. -->
+
+A drift alert begins an investigation. After identifying the change and actor, choose among three broad actions.
+
+**Revert reality to code** when the live change is unauthorized, accidental, malicious, expired, or no longer required. Apply the reviewed private state or make an emergency correction, verify the path closes, and investigate access.
+
+**Codify the live change** when the runtime change was authorized and should remain. Update IaC through review, scanning, policy, plan, and controlled apply so desired state catches up with reality. Preserve the original emergency event and reconciliation.
+
+**Import existing infrastructure** when the resource legitimately exists but is not managed in recorded state. Write the intended configuration, import the provider resource into state, review the resulting plan, and verify that future changes are controlled.
+
+```text
+revert -> code was right; reality should change
+codify -> live change is desired; code should change
+import -> legitimate reality lacks IaC ownership
 ```
 
-`describe-security-groups` asks EC2 for security group data. The filter selects rules with `0.0.0.0/0`. The query trims the output to group ID, name, and ingress rules so the reviewer can inspect the exposure quickly.
+This is a truth decision. Automatically preferring Git can destroy an authorized emergency fix. Automatically accepting live state can normalize compromise. Evidence from incident context, audit logs, ownership, business need, and security policy determines the result.
 
-Private reachability needs review too. A database rule that allows an entire VPC may still be too broad if many workloads live there. A safer database path references the application security group:
+After any choice, verify code, state, and live cloud converge and that the perimeter matches intended reachability. Close temporary access and exceptions.
 
-```hcl
-resource "aws_security_group_rule" "database_from_app" {
-  type                     = "ingress"
-  security_group_id        = aws_security_group.database.id
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-  source_security_group_id = aws_security_group.app.id
-}
+Codifying a live change does not mean copying raw console state into code without review. Translate the operational need into the safest durable design, run scanners and policy, and evaluate whether a narrower route or identity can replace the emergency change.
+
+Import requires careful planning. Writing incomplete configuration and importing a production resource can cause the next plan to remove properties that were previously unmanaged. Inventory the resource, protect state, review the proposed reconciliation, and avoid automatic apply until the diff is understood.
+
+Rollback requires IaC reasoning. Infrastructure change may be destructive or irreversible: data deletion, address replacement, key rotation, or migration. “Apply the previous commit” may not reconstruct destroyed state. Backups, restore tests, state versions, and service-specific recovery are part of the decision.
+
+## Why Can Automatic Remediation Be Dangerous?
+<!-- section-summary: Automatic reconciliation can restore safe state quickly, but without context it can remove incident containment, destroy data, fight another controller, or repeatedly reapply a compromised declaration. -->
+
+Auto-remediation seems simple:
+
+```text
+drift detected -> immediately apply desired state
 ```
 
-`source_security_group_id` says the application tier can reach the database. It avoids broad network ranges and ties the network path to a workload group.
+That can close an accidental public firewall rule quickly. It can also remove an emergency isolation rule responders added, revert a legitimate service recovery, replace a stateful resource, or enter a loop with another controller.
 
-Provider posture tools add a live-account view. AWS Config can record configuration changes and evaluate rules. Azure Policy can audit or deny resource configurations in subscriptions and management groups. Google Cloud Security Command Center can surface misconfigurations, vulnerabilities, and risky exposure across projects. These tools inspect the current cloud account, including resources that IaC may not manage yet.
+The desired declaration itself may be compromised. Blind reconciliation then restores the attacker's state whenever an operator repairs production manually. Protect source and policy before treating them as automatic truth.
 
-Metadata service settings also belong in perimeter review. Cloud metadata services can provide temporary credentials to workloads. On AWS EC2, IMDSv2 requires session-oriented requests and should be required for instances that use metadata:
+Use risk tiers. Low-impact, well-understood, reversible properties may be safe for automatic correction. Identity expansion, network exposure, encryption removal, deletion, and stateful replacement often need approval or a tightly designed emergency control.
 
-```hcl
-resource "aws_instance" "worker" {
-  ami           = var.worker_ami
-  instance_type = "t3.micro"
+Guardrails for automated repair include exact scope, plan preview, policy evaluation, current-state preconditions, change limits, rate control, conflict detection, owner notification, rollback method, and evidence. Stop after repeated failure rather than thrashing production.
 
-  metadata_options {
-    http_tokens                 = "required"
-    http_put_response_hop_limit = 1
-  }
-}
+Prevention can reject dangerous API calls before drift occurs. Cloud organization policy, service control policy, resource policy, IAM boundaries, or admission rules can forbid public storage or wildcard production administration. Prevention and detection complement each other because not every undesirable change can be encoded without false positives.
+
+The control loop should improve the system. Repeated manual drift may reveal missing IaC functionality, an unusable emergency path, excessive privileges, poor module design, or automation conflict. Fix the cause instead of closing the same alert repeatedly.
+
+Prevention should not create a second unreviewed policy truth. Version and test organization constraints, IAM boundaries, and cloud policy. Record denials so developers know which rule stopped the request. Emergency override of prevention deserves the same narrow identity, time, and evidence as IaC break-glass.
+
+When auto-remediation is appropriate, verify outcome from live state rather than assuming the apply succeeded. Re-run reachability or policy checks and ensure the actor that caused drift no longer has an unmanaged path to restore it.
+
+## How Do You Review Reachability and Perimeter Change?
+<!-- section-summary: Perimeter review traces exact actors through network and identity paths to sensitive capabilities, then evaluates exposure, necessity, ownership, monitoring, and recovery. -->
+
+For every protected asset, ask:
+
+1. Which users, workloads, accounts, networks, and services can initiate a path?
+2. Which routes, gateways, firewall rules, endpoints, and peers carry it?
+3. Which authentication and authorization are required?
+4. Which data or control capability becomes reachable?
+5. Is the path necessary in this environment?
+6. Who owns it, and how is use logged?
+7. Which change can broaden it, and who can make that change?
+8. How is the path removed during containment or decommissioning?
+
+Review changes semantically. Adding `0.0.0.0/0` to database ingress is not just a string diff; it creates an Internet path to a stateful data service. Adding a cross-account role can create a control-plane path even when no network rule changes.
+
+![Incident exposure path shows an emergency console change opening database ingress and the safer intended application-only path](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/incident-exposure-path.png)
+
+_Perimeter risk is the complete reachability path, including identity and control-plane authority._
+
+Consider a responder who temporarily opens database access during an incident. Audit logs show the named break-glass identity and ticket. The path may be justified for thirty minutes but unsafe as permanent state. The response can preserve the incident evidence, close the public rule, codify a safer diagnostic path, and reduce future need for console access.
+
+Monitor both exposure and attempted use. Connection logs, flow logs, identity events, denied requests, and control-plane changes help distinguish dormant misconfiguration from active probing or compromise.
+
+Review perimeter exceptions on expiry. A temporary vendor IP, migration peer, or public test endpoint often survives the project that created it. Ownership and time bounds convert cleanup from memory into policy.
+
+Review the perimeter from both asset and actor directions. Starting from a database, enumerate every path that reaches it. Starting from a CI role, compromised workload, vendor network, or administrator group, enumerate every protected capability it can reach. The two searches expose overlooked shared routes and privilege chains.
+
+Test important denials. From an unauthorized network and identity, attempt the connection or API call and confirm it fails. Configuration review says what should be blocked; a controlled test shows the effective perimeter enforces it.
+
+## What Does a Complete Drift Control Loop Look Like?
+<!-- section-summary: The complete loop detects divergence, validates security impact, reconstructs the actor and reason, chooses the source of truth, reconciles safely, verifies reality, and removes the alternate path that caused drift. -->
+
+A complete loop is:
+
+```text
+desired code + recorded state + live cloud
+                 |
+                 v
+          detect meaningful difference
+                 |
+                 v
+      classify asset, reachability, identity, data, and impact
+                 |
+                 v
+       query audit events and incident context
+                 |
+                 v
+            revert / codify / import
+                 |
+                 v
+       review plan and execute controlled change
+                 |
+                 v
+       verify live state and perimeter
+                 |
+                 v
+       improve permissions, policy, and process
 ```
 
-`http_tokens = "required"` requires IMDSv2 tokens. `http_put_response_hop_limit = 1` limits how far metadata responses can travel. These fields reduce the chance that an application flaw gives an attacker easy access to instance credentials.
+![Drift review loop moves from detection through audit investigation, truth decision, verification, and process improvement](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-review-loop.png)
 
-The drift plan and perimeter review now show what changed. The audit logs explain who or what changed it.
+_Reconciliation is not complete until intended code, managed state, live cloud, and access evidence agree._
 
-## Audit Logs Explain Who Changed What
-<!-- section-summary: Cloud audit logs connect drift findings to an identity, timestamp, API call, source, and incident record. -->
+The strongest invariant is that ordinary production changes come through one controlled, identity-bound IaC path. Direct authority is narrow and temporary. Cloud audit events connect every apply or exception to the caller and change record.
 
-**Audit logs** are the provider's control plane record. They answer questions such as who called the API, when the call happened, what operation ran, which resource changed, which source IP made the request, and which parameters were sent.
+Test the loop. Make a safe controlled change outside IaC in a test environment, confirm detection, retrieve the actor event, exercise revert or import, and verify convergence. Simulate missing audit data and auto-remediation conflict so failure modes are known.
 
-AWS CloudTrail records management events such as `AuthorizeSecurityGroupIngress`, `PutBucketPolicy`, `CreateAccessKey`, and `AttachRolePolicy`. Azure Activity Log records subscription-level management operations. Microsoft Entra audit logs record identity and role activity. Google Cloud Audit Logs record admin activity and data access when those logs are enabled.
+Measure time to detect, identify actor, classify impact, choose truth, reconcile, and verify. Long detection suggests polling or coverage gaps. Long attribution suggests weak identity or logs. Repeated reconciliation suggests prevention, permissions, or workflow design needs improvement.
 
-For the Northstar incident, the security team can look up the AWS event that authorized the database ingress:
+Preserve the full event chain: drift finding, compared states, audit event, owner decision, plan, approval, apply identity, verification, and process change. That chain proves more than a final green plan because it explains why reality diverged and how authority was corrected.
 
-```bash
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=EventName,AttributeValue=AuthorizeSecurityGroupIngress \
-  --start-time 2026-06-20T00:00:00Z \
-  --end-time 2026-06-21T00:00:00Z
+The core mental model is:
+
+```text
+drift asks: does reality match authorized intent?
+perimeter asks: who or what can reach this asset and capability?
+audit asks: who changed reality and how?
+response asks: which state should become truth now?
 ```
 
-`lookup-events` searches CloudTrail events. The lookup attribute selects the ingress API call. The start and end times narrow the search to the incident window.
+## Check Your Answers
 
-A useful event record contains the actor, source IP, user agent, time, and request parameters:
+:::expand[What Is the Difference Between Desired, Recorded, and Live State?]{kind="recap"}
+Compare reviewed configuration, IaC state, and actual cloud resources because each view answers a different part of infrastructure truth.
+:::
 
-```json
-{
-  "eventTime": "2026-06-20T02:21:17Z",
-  "eventSource": "ec2.amazonaws.com",
-  "eventName": "AuthorizeSecurityGroupIngress",
-  "userIdentity": {
-    "type": "AssumedRole",
-    "arn": "arn:aws:sts::111122223333:assumed-role/break-glass-network-admin/maya-dev"
-  },
-  "sourceIPAddress": "203.0.113.24",
-  "userAgent": "console.amazonaws.com",
-  "requestParameters": {
-    "groupId": "sg-0dbportal",
-    "ipPermissions": [
-      {
-        "ipProtocol": "tcp",
-        "fromPort": 5432,
-        "toPort": 5432,
-        "ipRanges": [
-          {
-            "cidrIp": "0.0.0.0/0",
-            "description": "temporary debug access"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+:::expand[Why Is Drift a Configuration-Integrity Problem?]{kind="recap"}
+Drift breaks the evidence that production matches reviewed intent and reveals an alternate path capable of changing cloud state.
+:::
 
-The event tells a concrete story. The role was `break-glass-network-admin`. The session name points to `maya-dev`. The user agent says the console made the change. The parameters show port `5432` from `0.0.0.0/0`. The team can compare that event with an incident ticket and an emergency access approval.
+:::expand[How Do Plans and Audit Logs Explain Different Parts of Drift?]{kind="recap"}
+Plans show the semantic difference and proposed reconciliation; audit logs show the identity, API event, time, and outcome behind the change.
+:::
 
-Audit logs should live in a security-controlled place with retention and restricted delete access. Many teams forward logs to a separate account, subscription, project, workspace, or SIEM. If a caller can change infrastructure and erase the logs in the same place, investigation evidence is too fragile.
+:::expand[How Should You Model the Cloud Security Perimeter?]{kind="recap"}
+Model every network, identity, inbound, outbound, control-plane, and trusted-service path by which an actor can reach a capability.
+:::
 
-Now the team has the resource, risk, actor, time, and API call. The final step is deciding what to do with the drift.
+:::expand[How Do You Decide Whether to Revert, Codify, or Import Drift?]{kind="recap"}
+Use evidence to decide whether live reality returns to code, code adopts an authorized live change, or a legitimate resource enters IaC state.
+:::
 
-## Revert, Codify, or Import
-<!-- section-summary: Every drift finding needs an explicit decision so live cloud, state, and reviewed code line up again. -->
+:::expand[Why Can Automatic Remediation Be Dangerous?]{kind="recap"}
+Automate only bounded reversible corrections because blind reconciliation can remove containment, destroy state, fight controllers, or restore compromised intent.
+:::
 
-A drift finding should end with a decision. The three common outcomes are **revert**, **codify**, and **import**.
+:::expand[How Do You Review Reachability and Perimeter Change?]{kind="recap"}
+Trace actors through routes and authorization to protected assets, then evaluate necessity, exposure, ownership, monitoring, expiry, and removal.
+:::
 
-**Revert** means the live change was unsafe, temporary, or unapproved. For the Northstar database rule, revert is the likely answer. The team removes the public ingress and applies the reviewed configuration:
-
-```bash
-terraform plan -out=revert.tfplan
-terraform apply revert.tfplan
-```
-
-`terraform plan -out=revert.tfplan` previews the remediation and saves it. `terraform apply revert.tfplan` applies exactly that saved plan. The incident record should include the drift finding, audit event, risk, remediation command or pull request, and the time the exposure closed.
-
-**Codify** means the live change was valid and should enter the reviewed design. A network migration might add a new private CIDR, or a new diagnostic endpoint might be approved during a maintenance window. The team should open a pull request, update Terraform or OpenTofu code, run scanners and policies, and record the reason.
-
-**Import** means a live resource should be managed by IaC but is missing from state. During an incident, an engineer might create a log group, diagnostic bucket, or security group. The team can map that existing object into state and add matching code:
-
-```bash
-terraform import aws_cloudwatch_log_group.portal_incident /aws/ecs/customer-portal/incident-debug
-terraform plan
-```
-
-`terraform import` connects the Terraform address to the existing cloud object. `terraform plan` checks whether the code and imported object match. Import is only the mapping step. The repository still needs the resource block, tags, retention, encryption, ownership, and policy checks.
-
-OpenTofu supports the same remediation shape for imported resources:
-
-```bash
-tofu import aws_cloudwatch_log_group.portal_incident /aws/ecs/customer-portal/incident-debug
-tofu plan
-```
-
-A short remediation record keeps the operational story attached to the technical fix:
-
-```markdown
-### Drift remediation record
-
-- Resource: `aws_security_group.database`
-- Finding: PostgreSQL ingress allowed from `0.0.0.0/0`
-- Detected by: scheduled drift plan and AWS Config rule
-- Actor: `break-glass-network-admin/maya-dev`
-- Incident: `INC-4092`
-- Decision: revert
-- Remediation: Terraform apply restored application security group source
-- Verification: follow-up drift plan returned no changes
-- Follow-up: add break-glass expiry alert and database ingress policy test
-```
-
-This record gives future reviewers a clear answer: what changed, who changed it, why it was risky, how it was fixed, and what improved afterward.
-
-## Putting It All Together
-<!-- section-summary: A healthy drift program combines scheduled plans, live posture tools, audit evidence, and explicit remediation decisions. -->
-
-Northstar now has a complete after-apply loop. IaC scanners and Policy as Code check the planned change before apply. Scheduled Terraform or OpenTofu drift checks compare managed resources with live cloud data. Provider tools such as AWS Config, Azure Policy, and Google Cloud Security Command Center inspect the real environment. Audit logs explain who made out-of-band changes. The remediation path decides whether to revert, codify, or import.
-
-The database incident also improves operations. Emergency console changes need an incident ticket, a short-lived role session, and a follow-up drift check. Public ingress on production databases should alert the owning team. Metadata service settings should be part of VM and container baselines. Storage public access should be checked in IaC and in provider posture tools.
-
-The practical value is that the team treats the repository as the approved design, state as the IaC mapping, live cloud as current reality, and audit logs as evidence. Security work then follows a steady loop: detect the gap, understand the change, close the exposure, and improve the process that allowed it.
-
-![Drift review loop showing detection, audit log review, revert or codify or import decision, verification, and process improvement](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-review-loop.png)
-
-*The loop summarizes the response pattern: detect drift, check logs, choose whether to revert, codify, or import, then verify the account is clean.*
-
-## What's Next
-<!-- section-summary: The next article focuses on identity because every drift event came from a caller. -->
-
-Drift investigation usually leads to identity questions. Who opened the rule? Which role allowed it? How long did the session last? Was it a human break-glass path, a workload role, or a deployment pipeline? Did the permission fit the job?
-
-The final article in this module focuses on **Cloud Identity and Access Management** from a DevSecOps angle. It covers human federation, workload identity, CI/CD OIDC, least-privilege deployment roles, temporary elevation, break-glass access, access reviews, and the evidence teams need after a change.
+:::expand[What Does a Complete Drift Control Loop Look Like?]{kind="recap"}
+Detect, classify, investigate, choose truth, reconcile, verify, and improve the authority and process that allowed divergence.
+:::
 
 ## References
 
-- [Terraform plan command](https://developer.hashicorp.com/terraform/cli/commands/plan) - Official Terraform documentation for planning, refresh behavior, saved plans, and `-detailed-exitcode`.
-- [Terraform import command](https://developer.hashicorp.com/terraform/cli/import) - Official Terraform documentation for associating existing infrastructure with Terraform state.
-- [Terraform state purpose](https://developer.hashicorp.com/terraform/language/state/purpose) - Official Terraform documentation explaining how state maps configuration to real infrastructure.
-- [OpenTofu plan command](https://opentofu.org/docs/cli/commands/plan/) - Official OpenTofu documentation for planning and refresh behavior.
-- [OpenTofu import command](https://opentofu.org/docs/cli/commands/import/) - Official OpenTofu documentation for importing existing infrastructure into state.
-- [AWS Config Developer Guide](https://docs.aws.amazon.com/config/latest/developerguide/WhatIsConfig.html) - Official AWS documentation for recording resource configuration and evaluating compliance.
-- [AWS CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Official AWS documentation for control plane audit logging.
-- [AWS EC2 instance metadata options](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html) - Official AWS documentation for IMDSv2 and instance metadata configuration.
-- [Azure Activity Log](https://learn.microsoft.com/en-us/azure/azure-monitor/essentials/activity-log) - Official Microsoft documentation for Azure subscription-level management events.
-- [Azure Policy overview](https://learn.microsoft.com/en-us/azure/governance/policy/overview) - Official Microsoft documentation for evaluating and enforcing Azure resource rules.
-- [Google Cloud Audit Logs](https://cloud.google.com/logging/docs/audit) - Official Google Cloud documentation for admin activity, data access, system event, and policy denied audit logs.
-- [Google Cloud Security Command Center overview](https://cloud.google.com/security-command-center/docs/concepts-security-command-center-overview) - Official Google Cloud documentation for posture findings and security risk visibility.
+- [Terraform resource drift](https://developer.hashicorp.com/terraform/tutorials/state/resource-drift) - Demonstrates refresh, plan, and reconciliation of live changes.
+- [OpenTofu planning](https://opentofu.org/docs/cli/run/) - Describes plan and apply behavior for desired and current state.
+- [AWS CloudTrail concepts](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-concepts.html) - Describes control-plane audit events and identity context.
+- [Google Cloud audit logs](https://cloud.google.com/logging/docs/audit) - Describes administrative, data-access, and system-event audit records.
+- [Azure activity log](https://learn.microsoft.com/en-us/azure/azure-monitor/platform/activity-log) - Describes subscription-level control-plane events.

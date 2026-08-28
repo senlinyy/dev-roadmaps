@@ -16,19 +16,16 @@ aliases:
 
 ## Table of Contents
 
-1. [What We Are Building](#what-we-are-building)
-2. [Write The Access Workbook First](#write-the-access-workbook-first)
-3. [Create The Groups And Azure Boundary](#create-the-groups-and-azure-boundary)
-4. [Protect Human Sign-In](#protect-human-sign-in)
-5. [Connect The Support Dashboard To Entra ID](#connect-the-support-dashboard-to-entra-id)
-6. [Give The Runtime Apps Managed Identities](#give-the-runtime-apps-managed-identities)
-7. [Grant Production Permissions](#grant-production-permissions)
-8. [Connect Azure DevOps For Deployment](#connect-azure-devops-for-deployment)
-9. [Run The Launch Rehearsal](#run-the-launch-rehearsal)
-10. [The Final Walkthrough](#the-final-walkthrough)
-
-## What We Are Building
-<!-- section-summary: We start with the exact startup system, tenant, subscriptions, apps, identities, and production resources we will configure during the walkthrough. -->
+1. [What Identity Architecture Is the Startup Building?](#what-identity-architecture-is-the-startup-building)
+2. [Why Should You Write an Access Workbook First?](#why-should-you-write-an-access-workbook-first)
+3. [How Do Groups and Azure Boundaries Limit Human Access?](#how-do-groups-and-azure-boundaries-limit-human-access)
+4. [How Should You Protect Human Sign-In?](#how-should-you-protect-human-sign-in)
+5. [How Does the Support Dashboard Use Entra ID?](#how-does-the-support-dashboard-use-entra-id)
+6. [How Do Runtime Applications Receive Production Access?](#how-do-runtime-applications-receive-production-access)
+7. [How Should Azure DevOps Deploy Without a Stored Secret?](#how-should-azure-devops-deploy-without-a-stored-secret)
+8. [How Do You Rehearse and Verify the Identity Design?](#how-do-you-rehearse-and-verify-the-identity-design)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 Imagine we are the Azure DevOps engineer at DevPolaris, a startup launching its first production Orders platform. We are presenting the production identity setup to the company, but we are also building it step by step. The goal is simple: by the end, everyone can see who signs in, which identity each app uses, what each identity can touch, and what evidence proves it.
 
@@ -64,9 +61,21 @@ production_targets:
   deployment_service_connection: sc-orders-prod-deploy
 ```
 
-The rule for the whole walkthrough is this: **every production action needs a caller, a role, a scope, and evidence**. A support engineer opening the dashboard has a caller, a sign-in control, an app assignment, and a sign-in log. The API reading a secret has a caller, a Key Vault role, a vault scope, and a role assignment. The pipeline deploying production has a caller, a deployment role, a resource group scope, and an activity log.
+Keep these questions in view as you work through the lesson:
 
-AWS readers can anchor the setup to familiar production pieces: IAM Identity Center groups for human access, IAM roles for workload and pipeline access, Secrets Manager or KMS for sensitive material, and OIDC federation for CI/CD. The walkthrough uses the Azure versions of those jobs: Microsoft Entra groups, Azure RBAC roles, managed identities, Key Vault, and an Azure DevOps service connection.
+1. **What Identity Architecture Is the Startup Building?**
+2. **Why Should You Write an Access Workbook First?**
+3. **How Do Groups and Azure Boundaries Limit Human Access?**
+4. **How Should You Protect Human Sign-In?**
+5. **How Does the Support Dashboard Use Entra ID?**
+6. **How Do Runtime Applications Receive Production Access?**
+7. **How Should Azure DevOps Deploy Without a Stored Secret?**
+8. **How Do You Rehearse and Verify the Identity Design?**
+
+## What Identity Architecture Is the Startup Building?
+<!-- section-summary: We start with the exact startup system, tenant, subscriptions, apps, identities, and production resources we will configure during the walkthrough. -->
+
+The rule for the whole walkthrough is this: **every production action needs a caller, a role, a scope, and evidence**. A support engineer opening the dashboard has a caller, a sign-in control, an app assignment, and a sign-in log. The API reading a secret has a caller, a Key Vault role, a vault scope, and a role assignment. The pipeline deploying production has a caller, a deployment role, a resource group scope, and an activity log.
 
 ![DevPolaris Orders production access board](/content-assets/articles/article-cloud-providers-azure-identity-security-practical-startup-identity-access/production-access-board.png)
 
@@ -74,7 +83,7 @@ AWS readers can anchor the setup to familiar production pieces: IAM Identity Cen
 
 We also keep Microsoft guidance in mind while we build. Azure RBAC guidance says to grant only the access needed for the job, assign roles to groups where possible, use narrow scopes, and use PIM for privileged access. Key Vault guidance recommends a vault per application per environment with roles assigned at the vault scope. Managed identity guidance recommends user-assigned identities for many app scenarios because their lifecycle is separate from the compute resource. Those rules shape the tutorial.
 
-## Write The Access Workbook First
+## Why Should You Write an Access Workbook First?
 <!-- section-summary: Before creating Azure permissions, we write a small access workbook that names the real callers, resources, owners, permissions, scopes, and evidence. -->
 
 We start with a file called `orders-production-access.yml`. This is the first artifact because production access should have a written shape before it is stored as a portal setting. The file stays small. It names the people, groups, software identities, resources, reasons, and evidence we expect to see later.
@@ -178,7 +187,7 @@ This workbook changes the access conversation. A vague request like "the API nee
 
 Now we can create the real group and resource boundary. This is the moment where the workbook starts turning into real Azure objects.
 
-## Create The Groups And Azure Boundary
+## How Do Groups and Azure Boundaries Limit Human Access?
 <!-- section-summary: We create Microsoft Entra security groups and the production Azure resource group so every later assignment points at a real team and a real scope. -->
 
 A **Microsoft Entra security group** is a named group of users that can receive app access and Azure role assignments. In plain English, it lets us attach access to a team through one shared object. We create one group for support access, one for engineering visibility, one for deployment approval, and one for people who can activate privileged admin work.
@@ -279,7 +288,7 @@ This is where the production standard matters. Azure RBAC guidance says to grant
 
 The groups and resource boundary are ready. Now we protect sign-in before granting useful access.
 
-## Protect Human Sign-In
+## How Should You Protect Human Sign-In?
 <!-- section-summary: We add Conditional Access, emergency accounts, and PIM so human access uses MFA, device checks, recovery accounts, and time-bound privileged activation. -->
 
 **Conditional Access** is Microsoft Entra ID's sign-in policy system. It can use signals such as user, group, application, device, location, and risk to require MFA, require a compliant device, block risky paths, or allow a session after controls pass. We use it before production launch because app assignment alone leaves the sign-in path too weak.
@@ -358,7 +367,7 @@ For production, keep privileged roles rare and time-bound. Azure RBAC guidance s
 
 Human sign-in and admin access now have controls. Next we connect the support dashboard to Microsoft Entra ID.
 
-## Connect The Support Dashboard To Entra ID
+## How Does the Support Dashboard Use Entra ID?
 <!-- section-summary: We register the support dashboard, assign the support group, configure redirect URIs, and show how the app checks access after sign-in. -->
 
 An **app registration** is the Microsoft Entra record that describes how an application signs users in. It contains a client ID, redirect URIs, supported account type, app roles, scopes, and optional credentials. The related **service principal** is the tenant-local identity for that app, and it appears under Enterprise applications for assignment, consent, sign-in logs, and review.
@@ -386,7 +395,7 @@ MICROSOFT_ENTRA_CLIENT_ID=client-orders-admin-web
 MICROSOFT_ENTRA_REDIRECT_URI=https://orders-admin.devpolaris.com/auth/callback
 ```
 
-Now the app needs its own authorization check after Microsoft Entra ID signs the user in. For the tutorial, we show a group check because it is easy to see. In production, app roles can be cleaner for application authorization, especially when group claims become large or when the app wants business-focused roles like `Orders.SupportAgent`.
+Now the app needs its own authorization check after Microsoft Entra ID signs the user in. For the tutorial, we show a group check because it is easy to see. In production, app roles can be cleaner for application authorization, especially with large group claims or business-focused roles such as `Orders.SupportAgent`.
 
 ```ts
 type SignedInUser = {
@@ -406,7 +415,7 @@ The support flow now looks like this. Maya opens `orders-admin-web`, Microsoft E
 
 The human-facing app is ready. Now we set up the runtime apps.
 
-## Give The Runtime Apps Managed Identities
+## How Do Runtime Applications Receive Production Access?
 <!-- section-summary: We create user-assigned managed identities for the API and worker so Azure can issue runtime tokens through Azure-managed identity paths. -->
 
 A **managed identity** is a Microsoft Entra identity attached to an Azure resource. The running workload asks Azure for a token through the hosting environment, and Azure manages the credential behind that path. Microsoft describes managed identities as a way for Azure resources to access services that support Microsoft Entra authentication while Azure handles the credential lifecycle.
@@ -492,7 +501,7 @@ const databasePassword = await secrets.getSecret("orders-db-password");
 
 At this point the API has identity, but it still needs authorization. Microsoft Entra ID can issue a token for `mi-orders-api-prod`; Azure RBAC decides whether that identity can read the Key Vault secret or write blobs.
 
-## Grant Production Permissions
+### Grant Production Permissions
 <!-- section-summary: We grant Azure RBAC roles at the Key Vault and Storage scopes, keep tutorial shortcuts explicit, and store remaining secrets in a per-app production vault. -->
 
 **Azure RBAC** is Azure's authorization system for Azure resources. A role assignment connects a **principal**, a **role**, and a **scope**. The principal is the caller, the role is the permission bundle, and the scope is where the permission applies. For production, Microsoft guidance says to grant least privilege and use narrow scopes.
@@ -640,7 +649,7 @@ The useful output is metadata. The secret value stays out of screenshots, ticket
 
 The runtime side now has identity, permission, and a target secret. The final production caller is Azure DevOps.
 
-## Connect Azure DevOps For Deployment
+## How Should Azure DevOps Deploy Without a Stored Secret?
 <!-- section-summary: We connect Azure DevOps through workload identity federation, scope deployment access to the production resource group, and call out the tutorial bootstrap role. -->
 
 An **Azure DevOps service connection** lets a pipeline authenticate to Azure. We create an Azure Resource Manager service connection named `sc-orders-prod-deploy`. The service connection uses **workload identity federation**, which lets Azure DevOps exchange trusted pipeline identity proof for a Microsoft Entra token. Azure DevOps documentation recommends workload identity federation for app registration connections, and it removes the stored service principal secret from the pipeline setup.
@@ -709,7 +718,7 @@ stages:
 
 Now deployment has its own caller. Runtime API access comes from `mi-orders-api-prod`. Deployment access comes from `spn-azdo-orders-deploy-prod`. Human support access comes from Maya through `grp-orders-support`. The activity log can tell those jobs apart.
 
-## Run The Launch Rehearsal
+## How Do You Rehearse and Verify the Identity Design?
 <!-- section-summary: We prove each access path with sign-in logs, app assignments, identity attachment, RBAC output, pipeline evidence, activity logs, and one intentional failure. -->
 
 The launch rehearsal is where the team proves the setup. We take each access path, run the check, show expected output, and store the evidence. This keeps the walkthrough close to a company presentation because we are testing the actual production paths the team will use.
@@ -807,6 +816,10 @@ failure_drill:
     - logs should point to the workload identity that made the request
 ```
 
+The sixth test rehearses offboarding. Disable a non-production employee account or remove it from the Orders groups, then confirm that it can no longer open the support dashboard, activate eligible production access, or reach Azure resources through inherited group assignments. Existing sessions and token lifetimes mean the team should test both a fresh sign-in and the organization's session-revocation process. The expected result is loss of access with audit evidence naming the account and group change.
+
+This test matters because a launch-day membership export proves only one moment. A real identity system must remove access when a person changes teams or leaves the company. The owner of the group, the HR or identity lifecycle signal, the maximum removal time, and the evidence record all belong in the access workbook.
+
 The launch evidence folder now has real records. We keep this list small enough that the team can collect it during every release review.
 
 ```yaml
@@ -825,7 +838,7 @@ launch_evidence_pack:
 
 This rehearsal is the practical heart of the setup. We can explain who made each production request, which role allowed it, which scope contained it, and which evidence proves it.
 
-## The Final Walkthrough
+### The Final Walkthrough
 <!-- section-summary: The final picture ties the production setup together as three access paths: support engineer, runtime API, and deployment pipeline. -->
 
 Now we can walk through one normal production day. Maya signs in to `orders-admin-web` from a managed laptop. Microsoft Entra ID requires MFA and checks the device. Enterprise application assignment allows `grp-orders-support`, and the dashboard checks support access before showing customer orders.
@@ -857,7 +870,41 @@ This is the full 0-to-1 identity setup. We created named groups, a production sc
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[What Identity Architecture Is the Startup Building?]{kind="recap"}
+We start with the exact startup system, tenant, subscriptions, apps, identities, and production resources we will configure during the walkthrough.
+:::
+
+:::expand[Why Should You Write an Access Workbook First?]{kind="recap"}
+Before creating Azure permissions, we write a small access workbook that names the real callers, resources, owners, permissions, scopes, and evidence.
+:::
+
+:::expand[How Do Groups and Azure Boundaries Limit Human Access?]{kind="recap"}
+We create Microsoft Entra security groups and the production Azure resource group so every later assignment points at a real team and a real scope.
+:::
+
+:::expand[How Should You Protect Human Sign-In?]{kind="recap"}
+We add Conditional Access, emergency accounts, and PIM so human access uses MFA, device checks, recovery accounts, and time-bound privileged activation.
+:::
+
+:::expand[How Does the Support Dashboard Use Entra ID?]{kind="recap"}
+We register the support dashboard, assign the support group, configure redirect URIs, and show how the app checks access after sign-in.
+:::
+
+:::expand[How Do Runtime Applications Receive Production Access?]{kind="recap"}
+We create user-assigned managed identities for the API and worker so Azure can issue runtime tokens through Azure-managed identity paths. We grant Azure RBAC roles at the Key Vault and Storage scopes, keep tutorial shortcuts explicit, and store remaining secrets in a per-app production vault.
+:::
+
+:::expand[How Should Azure DevOps Deploy Without a Stored Secret?]{kind="recap"}
+We connect Azure DevOps through workload identity federation, scope deployment access to the production resource group, and call out the tutorial bootstrap role.
+:::
+
+:::expand[How Do You Rehearse and Verify the Identity Design?]{kind="recap"}
+We prove each access path with sign-in logs, app assignments, identity attachment, RBAC output, pipeline evidence, activity logs, and one intentional failure. The final picture ties the production setup together as three access paths: support engineer, runtime API, and deployment pipeline.
+:::
+
+## References
 
 - [Best practices for Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices)
 - [Understand Azure role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments)

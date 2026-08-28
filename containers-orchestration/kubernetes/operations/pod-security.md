@@ -21,21 +21,6 @@ id: article-containers-orchestration-kubernetes-operations-pod-security
 
 A container is not a small independent machine. It is a Linux process isolated with namespaces, cgroups, filesystem mounts, capabilities, seccomp, and related controls, and it normally shares the Node's kernel. Pod security asks one practical question: if application code is compromised, what can that process do next?
 
-Seven questions turn that threat model into configuration and policy:
-
-1. **Which Linux identity and permissions does a container receive when it starts?**
-2. **How do `runAsNonRoot` and `runAsUser` keep the process away from UID 0?**
-3. **Why should a workload drop capabilities and block privilege escalation?**
-4. **How do seccomp and a read-only root filesystem limit what a process can reach?**
-5. **Why are privileged containers, host namespaces, and `hostPath` volumes high-risk?**
-6. **How do Pod Security Standards and Admission apply a shared policy to namespaces?**
-7. **How can a team roll out, exempt, and verify policy safely?**
-
-## Which Linux identity and permissions does a container receive when it starts?
-<!-- section-summary: Pod and container security contexts describe the identity, kernel powers, syscall profile, and filesystem access that the runtime applies to Linux processes. -->
-
-### Begin with the process, not the container image
-
 Kubernetes has not created a tiny independent machine. It has asked the container runtime to start Linux processes with particular namespaces, resource controls, mounts, identities, capabilities, and syscall restrictions. Unless another sandboxing layer is involved, those processes ultimately share the Node's Linux kernel.
 
 The useful threat path is therefore:
@@ -49,6 +34,21 @@ compromised application code
 ```
 
 Every control below reduces what the compromised process can do along that path. The practical question is not “does this YAML look secure?” but “after code execution inside the container, which identity, kernel powers, files, and host interfaces remain reachable?”
+
+Keep these questions in view as you work through the lesson:
+
+1. **Which Linux identity and permissions does a container receive when it starts?**
+2. **How do `runAsNonRoot` and `runAsUser` keep the process away from UID 0?**
+3. **Why should a workload drop capabilities and block privilege escalation?**
+4. **How do seccomp and a read-only root filesystem limit what a process can reach?**
+5. **Why are privileged containers, host namespaces, and `hostPath` volumes high-risk?**
+6. **How do Pod Security Standards and Admission apply a shared policy to namespaces?**
+7. **How can a team roll out, exempt, and verify policy safely?**
+
+## Which Linux identity and permissions does a container receive when it starts?
+<!-- section-summary: Pod and container security contexts describe the identity, kernel powers, syscall profile, and filesystem access that the runtime applies to Linux processes. -->
+
+### Begin with the process, not the container image
 
 The shared kernel is the reason these controls compose. A container process still asks the Node's Linux kernel to open files, create sockets, clone processes, change ownership, and mount filesystems. Namespaces change what the process can see, cgroups constrain resources, and security controls constrain what the process can ask the shared kernel to do. A container image packages a filesystem and program; it does not replace the kernel with a private one.
 

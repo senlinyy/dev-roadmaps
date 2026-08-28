@@ -1,94 +1,90 @@
 ---
 title: "Zero-Downtime Deployments"
-description: "Terraform rollout patterns reduce service interruption during infrastructure changes, including server replacements."
-overview: "Updating a running server with Terraform often means replacing the old one with a new one. Without planning for traffic handoff and health checks, your application can go offline during the switch. This article covers the create_before_destroy lifecycle setting, blue-green deployments, and how to roll out changes to auto-scaling groups while keeping service interruption to a minimum."
-tags: ["zero-downtime", "create_before_destroy", "lifecycle", "blue-green", "terraform"]
+description: "Learn how replacement overlap, readiness, traffic control, state identity, and rollback boundaries work together in Terraform deployments."
+overview: "Terraform can describe both the old and new infrastructure, but availability depends on the transition between them. This article derives low-downtime deployment patterns from one invariant: enough healthy capacity must remain available throughout every change."
+tags: ["zero-downtime", "create-before-destroy", "lifecycle", "blue-green", "terraform"]
 order: 4
 id: article-iac-terraform-advanced-zero-downtime
 ---
 
 ## Table of Contents
 
-1. [One Replacement Outage](#one-replacement-outage)
-2. [Replacement Before Destruction](#replacement-before-destruction)
-3. [Health Checks Before Traffic Moves](#health-checks-before-traffic-moves)
-4. [Deliberate Traffic Movement](#deliberate-traffic-movement)
-5. [Rolling Replacement for Fleets](#rolling-replacement-for-fleets)
-6. [State and Import Boundaries](#state-and-import-boundaries)
-7. [Rollback Boundaries](#rollback-boundaries)
-8. [Putting It All Together](#putting-it-all-together)
+1. [Why Is Availability About the Transition?](#why-is-availability-about-the-transition)
+2. [What Does Replacement Overlap Actually Guarantee?](#what-does-replacement-overlap-actually-guarantee)
+3. [How Do Readiness Checks Protect the Handoff?](#how-do-readiness-checks-protect-the-handoff)
+4. [How Should Traffic Move Between Versions?](#how-should-traffic-move-between-versions)
+5. [How Do Fleets Roll Out Changes Safely?](#how-do-fleets-roll-out-changes-safely)
+6. [Why Do State Identity and Boundaries Affect Deployments?](#why-do-state-identity-and-boundaries-affect-deployments)
+7. [What Makes Rollback Possible?](#what-makes-rollback-possible)
+8. [How Do You Design the Complete Deployment?](#how-do-you-design-the-complete-deployment)
+9. [Check Your Answers](#check-your-answers)
 
-The previous articles showed how meta-arguments, loops, and conditionals change Terraform's plan. This article applies those ideas to one production problem: replacing infrastructure while users are still sending requests.
+The goal of a zero-downtime deployment is not that Terraform finishes without an error. It is that, at every moment during the change, some healthy version of the application can still serve the required traffic. Terraform moves infrastructure between desired states, but users experience the steps in between.
 
-Terraform can create the new infrastructure, keep state aligned, and change routing resources. The runtime systems still have their own jobs. A load balancer proves whether a target is healthy. Auto Scaling decides whether a rolling refresh can continue. Application metrics show whether real requests are succeeding. A zero-downtime rollout needs evidence from all of those layers.
+Suppose users currently reach server A running version 1, and the desired result is server B running version 2:
 
-## One Replacement Outage
-<!-- section-summary: A replacement can cause downtime if Terraform removes the old object before the new object is ready to serve traffic. -->
+```text
+before                         after
 
-Picture a small web application running on one EC2 instance. The instance uses an AMI variable, and the team changes that AMI to roll out a patched image. Terraform reads the new value, compares it with state, and plans to replace the instance.
+Users                          Users
+  |                              |
+  v                              v
+Server A                       Server B
+version 1                      version 2
+```
+
+Those end states do not reveal the path. A dangerous replacement can destroy A, create B, boot its operating system, start the application, and wait for it to become usable. Between the first and final steps, users have no healthy destination.
+
+The deployment invariant is continuous service while old and new capacity overlap during the transition.
+
+Keep these questions in view as you work through the lesson:
+
+1. **Why Is Availability About the Transition?**
+2. **What Does Replacement Overlap Actually Guarantee?**
+3. **How Do Readiness Checks Protect the Handoff?**
+4. **How Should Traffic Move Between Versions?**
+5. **How Do Fleets Roll Out Changes Safely?**
+6. **Why Do State Identity and Boundaries Affect Deployments?**
+7. **What Makes Rollback Possible?**
+8. **How Do You Design the Complete Deployment?**
+
+## Why Is Availability About the Transition?
+<!-- section-summary: Terraform describes end states, while users experience every intermediate step between the old and new service. -->
+
+```text
+healthy capacity >= capacity required to serve traffic
+```
+
+It must hold for the entire transition, not merely before and after `terraform apply`. That makes zero downtime a systems property involving Terraform, the provider platform, application startup, health checks, routing, and operational decisions.
+
+Consider a generic server resource:
 
 ```hcl
-resource "aws_instance" "app" {
-  ami           = var.ami_id
-  instance_type = "t3.small"
-  subnet_id     = aws_subnet.web.id
-
-  tags = {
-    Name = "billing-app"
-  }
+resource "some_server" "app" {
+  image = "app-v1"
 }
 ```
 
-In the plan, a replacement often shows as a destroy-and-create action. The exact marker depends on the CLI output, but reviewers should look for actions that include both delete and create for the same address. For a single server, that can mean the old instance is terminated, then the new instance boots, installs packages, starts the app, and finally passes health checks.
+Changing the image to `app-v2` can be an in-place update if the provider supports it, or it can require replacement. Provider schemas and remote API behavior decide which attributes can update and which force a new object. A replacement is conceptually two operations: destroy the old object and create a new one.
 
-Users only care about the gap. If all traffic points at the old instance and Terraform removes it first, the application has no healthy target while the new instance starts. The first protection layer is to change the replacement order.
+The smallest replacement outage comes from performing those operations in the wrong order:
 
-In a plan, reviewers should pause on replacement markers:
-
-```console
-  # aws_instance.app must be replaced
- -/+ resource "aws_instance" "app" {
-      ~ ami = "ami-older" -> "ami-newer"
-    }
-
-Plan: 1 to add, 0 to change, 1 to destroy.
+```text
+A(v1) -> destroy -> no server -> create B(v2) -> ready
 ```
 
-The plan tells you Terraform needs a new instance. A zero-downtime review also needs the traffic path, health check, state address, and rollback plan beside the plain Terraform action count.
+The first low-downtime principle follows directly: replacement can avoid a capacity gap only if the old and new objects are able to overlap. If the platform cannot host both at once, Terraform syntax cannot invent the missing capacity.
 
-## Replacement Before Destruction
-<!-- section-summary: create_before_destroy changes Terraform's replacement order, but the new object still needs unique names and real readiness checks. -->
+Availability also depends on what “required capacity” means. For a lightly used single-instance service, one healthy server may be enough. For a busy fleet, keeping one instance alive may still overload it. The invariant should be expressed in terms of useful service capacity, not merely a positive object count.
 
-Terraform's **lifecycle** block changes how Terraform handles a resource during create, update, and destroy operations. The most common setting for replacement safety is `create_before_destroy`.
+## What Does Replacement Overlap Actually Guarantee?
+<!-- section-summary: create_before_destroy changes object ordering, but overlap alone does not prove readiness, route traffic, or preserve enough capacity. -->
 
-![Create Before Destroy Timeline](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/create-before-destroy-timeline.png)
-
-*The timeline shows the intended low-downtime sequence: create the replacement, prove it is ready, then remove the old object.*
+Terraform's `create_before_destroy` lifecycle rule asks Terraform to create a replacement before removing the object currently associated with the address:
 
 ```hcl
-resource "aws_instance" "app" {
-  ami           = var.ami_id
-  instance_type = "t3.small"
-  subnet_id     = aws_subnet.web.id
-
-  lifecycle {
-    create_before_destroy = true
-  }
-
-  tags = {
-    Name = "billing-app"
-  }
-}
-```
-
-With this setting, Terraform creates the replacement instance first and destroys the old instance later. That removes the Terraform-managed gap where the old object disappears before the new object exists.
-
-This setting has an important practical limit. The cloud provider must allow the old and new objects to exist at the same time. If a resource name must be globally or regionally unique, the replacement needs a generated name, a suffix, or a `name_prefix` style argument so both copies can coexist during the handoff.
-
-```hcl
-resource "aws_security_group" "app" {
-  name_prefix = "billing-app-"
-  vpc_id      = aws_vpc.main.id
+resource "some_server" "app" {
+  image = var.image
 
   lifecycle {
     create_before_destroy = true
@@ -96,375 +92,394 @@ resource "aws_security_group" "app" {
 }
 ```
 
-A provider-created object only proves the API accepted the object. Application readiness for users needs a separate signal. The next safety layer is health checking.
+The desired ordering becomes:
 
-There are two common mistakes with `create_before_destroy`. The first is using a fixed unique name, such as a security group name or target group name that the cloud API will reject while the old object still exists. The second is assuming the lifecycle setting moves traffic. It only changes Terraform's create and destroy order for that resource and its dependency graph. Traffic still needs a load balancer, service discovery update, DNS change, or release step.
+```text
+old remains available
+        |
+        v
+create replacement
+        |
+        v
+old + new overlap
+        |
+        v
+destroy old
+        |
+        v
+new remains
+```
 
-The plan should show both clues. A healthy replacement plan creates the new object before removing the old one, and the configuration gives the new and old copies room to coexist.
+![Create before destroy timeline](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/create-before-destroy-timeline.png)
 
-## Health Checks Before Traffic Moves
-<!-- section-summary: Terraform can create infrastructure, while load balancer and application health checks prove whether the new target can receive users. -->
+*The lifecycle rule creates an overlap opportunity; readiness and routing still decide whether users remain safe.*
 
-The billing instance should sit behind a load balancer rather than receive traffic directly. The load balancer can keep sending users to healthy targets while a new target is starting. This gives the deployment a place to test readiness before traffic moves.
+Overlap is necessary for many replacement patterns, but it is not sufficient. A remote API returning “created” may mean that a virtual machine record exists, not that the operating system has booted, the application has started, dependencies are reachable, and requests succeed. Terraform can create B and then remove A while B is still warming up unless some dependency or controller connects destruction and traffic movement to real readiness.
+
+The platform must also allow both generations to coexist. A globally unique fixed name cannot belong to the old and new objects at the same time. Other blockers include quotas, fixed addresses, exclusive attachments, and capacity limits. Generated names or name prefixes often make overlap possible, but naming is only one constraint.
+
+Think of `create_before_destroy` as providing this one capability:
+
+```text
+old and replacement may exist concurrently
+```
+
+It does not provide these capabilities by itself:
+
+```text
+replacement is healthy
+replacement receives traffic
+old connections drain
+enough capacity remains
+rollback remains available
+```
+
+A real zero-downtime sequence has three broad phases. First, create the new capacity without disturbing the old. Second, prove readiness and move traffic. Third, retire the old capacity only after the handoff is safe. Each phase needs a component that can observe and enforce its condition.
+
+`prevent_destroy` can protect a critical object from an accidental Terraform destroy, but it is not a rollout engine. It rejects destruction while the rule is present; it does not coordinate traffic or make a replacement healthy. Likewise, `depends_on` can order operations but cannot prove that a process inside a server is ready.
+
+## How Do Readiness Checks Protect the Handoff?
+<!-- section-summary: Readiness must represent the ability to serve real work, and each check must be interpreted according to the component that enforces it. -->
+
+Creation and readiness answer different questions:
+
+```text
+created
+    Did the infrastructure API accept and materialize the object?
+
+ready
+    Can this generation safely perform the work users will send to it?
+```
+
+A replacement may exist while its application cannot reach a database, has not loaded configuration, is still running migrations, or returns errors. A meaningful readiness check should cover the dependencies required to serve traffic rather than only report that a process is alive.
+
+A load balancer is often the best runtime judge because it repeatedly checks the same target that would receive requests. It can keep an unhealthy target out of rotation and continue routing to the old healthy generation. Readiness might require:
+
+```text
+process started
+expected port listening
+health endpoint returning success
+database or cache reachable when essential
+startup and migration work complete
+```
+
+Terraform can configure a load balancer and its health-check policy, but the load balancer performs the ongoing observations. That boundary is useful: Terraform declares infrastructure and relationships, while a runtime traffic controller evaluates changing health.
+
+Terraform also offers checks, and their semantics matter. A `check` block can evaluate an assertion and report a warning without necessarily blocking the overall operation. That makes checks useful for continuous validation and diagnostic signals, but a warning is not automatically a release gate.
+
+A resource `postcondition` is stronger for dependency ordering:
 
 ```hcl
-resource "aws_lb_target_group" "app" {
-  name     = "billing-app"
-  port     = 8080
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.main.id
+resource "some_server" "app" {
+  image = var.image
 
-  health_check {
-    path                = "/health"
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    interval            = 15
-    timeout             = 5
-    matcher             = "200"
-  }
-}
-```
-
-A health check should test something the application needs in order to serve real traffic. A shallow "process is running" endpoint can miss broken database credentials or failed migrations. A production-ready `/health` endpoint usually checks the app process, essential dependencies, and any startup work that must finish before requests arrive.
-
-Terraform can declare the target group and health check settings. The load balancer performs the repeated health checks during the rollout. That separation matters because Terraform is an infrastructure planner, while the load balancer is the traffic controller.
-
-A practical rollout checks the target group directly after apply:
-
-```bash
-aws elbv2 describe-target-health \
-  --target-group-arn "$TARGET_GROUP_ARN"
-```
-
-The useful field is `TargetHealth.State`. A value of `healthy` means the load balancer can send traffic to that target. `Reason` and `Description` explain states such as failed health checks, registration delay, or draining, which helps separate a Terraform change from an application startup problem.
-
-A healthy response might look like this:
-
-```console
-TargetId        Port  State    Reason
-i-0abc12345     8080  healthy
-i-0def67890     8080  healthy
-```
-
-An unhealthy response gives the next investigation step:
-
-```console
-TargetId        Port  State      Reason
-i-0def67890     8080  unhealthy  Target.ResponseCodeMismatch
-```
-
-That output means Terraform may have created the instance and target attachment correctly, while the application health endpoint is returning the wrong status. The fix might be application config, database connectivity, security group access, or a bad image. Terraform is part of the rollout, but the health check tells you whether users can safely reach the new target.
-
-For an Auto Scaling group, the group should also use load balancer health checks if the load balancer is the real readiness gate:
-
-```hcl
-resource "aws_autoscaling_group" "app" {
-  health_check_type         = "ELB"
-  health_check_grace_period = 120
-  target_group_arns         = [aws_lb_target_group.app.arn]
-}
-```
-
-The grace period gives new instances time to boot before Auto Scaling judges them. If the period is too short, healthy instances can churn during deployment. If it is too long, a bad version can sit behind slow feedback. Teams usually tune this from real startup time and load balancer health history.
-
-## Deliberate Traffic Movement
-<!-- section-summary: A safe cutover prepares the new target, proves health, changes routing, and keeps the old target available long enough for rollback. -->
-
-Once the app is behind a load balancer, the deployment can move traffic deliberately. A common approach is blue-green deployment. Blue is the current group serving users. Green is the new group prepared with the new AMI or configuration.
-
-![Traffic Cutover Boundary](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/traffic-cutover-boundary.png)
-
-*The traffic boundary keeps Terraform actions separate from runtime readiness and user-facing routing.*
-
-```hcl
-resource "aws_lb_listener_rule" "green" {
-  listener_arn = aws_lb_listener.https.arn
-  priority     = 20
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.green.arn
-  }
-
-  condition {
-    path_pattern {
-      values = ["/*"]
+  lifecycle {
+    postcondition {
+      condition     = self.status == "ready"
+      error_message = "The replacement must be ready before dependent changes continue."
     }
   }
 }
 ```
 
-The exact routing shape depends on the platform. Some teams switch an ALB listener from the blue target group to the green target group. Some use weighted target groups and shift from 10 percent to 50 percent to 100 percent. Some use DNS for a service boundary larger than one load balancer.
+A failed postcondition can stop downstream actions that depend on the resource. It still does not turn the entire apply into a transaction: operations already completed are not automatically undone. The check also depends on what the provider's `status` actually means. If it represents only API-level creation, it remains weaker than application health.
 
-The important steps stay the same: green capacity comes up, health checks and smoke tests pass, traffic moves, error rate and latency stay under review, and blue stays available until the team has confidence that green is serving real production traffic.
+The strongest design connects the health signal to the traffic system. New capacity registers as a target, remains excluded until it passes health checks, begins receiving controlled traffic, and is monitored under real load. The old generation remains available until the new one has demonstrated sufficient readiness.
 
-Terraform can model the listener rule, target groups, and desired capacities. The pipeline or release process should decide the cutover time because that decision depends on health, monitoring, and human approval.
+![Traffic cutover boundary](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/traffic-cutover-boundary.png)
 
-Weighted forwarding is a useful intermediate shape for services that can tolerate gradual exposure:
+*Terraform, readiness checks, and routing have different responsibilities during a handoff.*
+
+## How Should Traffic Move Between Versions?
+<!-- section-summary: A stable front door lets replaceable backends overlap, prove health, and receive traffic through an explicit cutover. -->
+
+If users connect directly to one replaceable server, replacing that server also replaces the user-facing destination. A stable front door separates service identity from backend identity:
+
+```text
+Users
+  |
+  v
+stable load balancer or service endpoint
+  |
+  +--> old backend
+  +--> new backend
+```
+
+The front door remains stable while backends change. This makes the traffic switch an explicit deployment step instead of an accidental consequence of object creation or destruction.
+
+Blue/green deployment follows naturally. Blue is the current generation, green is the candidate generation:
+
+```text
+1. traffic -> blue
+2. create green
+3. verify green
+4. traffic -> green
+5. observe
+6. retire blue after the rollback window
+```
+
+The old version is not destroyed merely because the new version exists. It stays available until the release has earned confidence. If green fails before the cutover, users remain on blue. If green fails soon after the cutover, traffic can move back while blue still exists.
+
+Canary deployment makes the traffic step smaller. Instead of switching 100 percent at once, the controller might send 5 percent to green, then 25 percent, then 50 percent, and finally 100 percent. Each stage asks whether error rate, latency, saturation, and business outcomes remain within an acceptable release window.
+
+Terraform can model weights or routing configuration, but this reveals an important boundary. A full `terraform apply` is not necessarily the best feedback loop for rapid traffic control during an incident. A deployment controller or load balancer API may own the staged movement while Terraform defines the durable routing structure. Whichever tool moves traffic, ownership must be explicit so Terraform does not later fight an intentional runtime decision.
+
+The safe traffic sequence is:
+
+```text
+prepare candidate
+    -> prove readiness
+    -> expose a small amount of traffic
+    -> evaluate runtime evidence
+    -> increase or reverse traffic
+    -> drain old connections
+    -> remove old capacity
+```
+
+Dependencies can ensure that a routing resource is considered after a target exists, but ordering is not readiness. The routing step should depend on a signal that actually means the candidate can serve. Otherwise the graph only proves “created first,” not “healthy first.”
+
+## How Do Fleets Roll Out Changes Safely?
+<!-- section-summary: Fleet rollouts preserve a capacity threshold while replacing members gradually, usually through a platform controller. -->
+
+One machine and a fleet present different problems. For a single server, overlap means temporarily having A and B. For ten servers, replacing all ten simultaneously can still remove too much healthy capacity even if replacements are created first.
+
+A rolling deployment divides the fleet into batches:
+
+```text
+old old old old old
+        |
+replace a bounded group
+        v
+new new old old old
+        |
+verify capacity and health
+        v
+new new new new old
+        |
+verify again
+        v
+new new new new new
+```
+
+The safety control is a minimum healthy capacity or maximum unavailable count. The rollout pauses when new members fail readiness rather than continuing until every healthy old member is gone. Warm-up time also matters because a newly started instance may pass an infrastructure check before it can sustain normal load.
+
+Terraform can model each machine directly, but a provider's fleet controller is usually better at runtime orchestration. Auto Scaling Groups, Managed Instance Groups, Kubernetes Deployments, and similar controllers continually observe members and already understand batch replacement, health, retry, and capacity.
+
+The responsibility split becomes:
+
+```text
+Terraform
+    declares the fleet controller, template, capacity, and rollout policy
+
+fleet controller
+    performs the rolling replacement and reacts to member health
+
+monitoring and release process
+    evaluates user-facing success and decides to continue or stop
+```
+
+An apply can finish after configuring or initiating a provider-side rollout while the fleet is still converging. Operators must inspect the controller's status after Terraform returns. “Terraform completed” and “all new members are healthy” are distinct pieces of evidence.
+
+Resource identity remains important inside a fleet. Treating instances as individually meaningful Terraform addresses can make routine rotation harder. When the domain cares about desired capacity and a launch template rather than one named VM, the fleet controller should own member identity. Terraform then manages the stable controller rather than every transient worker.
+
+The chosen rollout threshold must reflect actual load. Keeping 80 percent healthy is safe only if that remaining capacity can carry traffic. Quotas must also allow temporary surge capacity if new and old members overlap. Health-check timing should be derived from observed startup behavior rather than guessed.
+
+## Why Do State Identity and Boundaries Affect Deployments?
+<!-- section-summary: State addresses determine what Terraform believes is being replaced, while state boundaries determine the risk and concurrency scope of an apply. -->
+
+Terraform state associates a resource address with a remote object. A harmless-looking refactor can become a deployment if it changes that address. Renaming:
 
 ```hcl
-resource "aws_lb_listener_rule" "app" {
-  listener_arn = aws_lb_listener.https.arn
-  priority     = 20
-
-  action {
-    type = "forward"
-
-    forward {
-      target_group {
-        arn    = aws_lb_target_group.blue.arn
-        weight = var.green_weight == 100 ? 0 : 100 - var.green_weight
-      }
-
-      target_group {
-        arn    = aws_lb_target_group.green.arn
-        weight = var.green_weight
-      }
-    }
-  }
-
-  condition {
-    path_pattern {
-      values = ["/*"]
-    }
-  }
+resource "aws_instance" "app" {
+  # ...
 }
 ```
 
-The release runbook can move `green_weight` from `10` to `50` to `100` with a plan and approval at each step. After each step, target health, HTTP 5xx rate, latency, and application error logs should be checked. The blue target group and its capacity should stay alive until the rollback window closes.
-
-A staged Terraform run can make the traffic decision visible:
-
-```bash
-terraform plan -var='green_weight=10' -out=tfplan
-terraform show -no-color tfplan
-terraform apply tfplan
-```
-
-The rendered plan should show only the listener rule weight change and any intended capacity changes. If it also shows target group replacement, subnet replacement, or a destroy of the blue fleet, stop the rollout and split those changes into a separate review.
-
-After the 10 percent step, the verification should use runtime signals:
-
-```console
-green target health: healthy
-HTTP 5xx rate:       below rollback threshold
-p95 latency:         within release window target
-error logs:          no new startup or dependency errors
-```
-
-Those lines can come from the team's monitoring tool, AWS CLI output, or CI release checks. The important part is that traffic moves only after both Terraform plan review and runtime checks agree.
-
-## Rolling Replacement for Fleets
-<!-- section-summary: Auto Scaling instance refresh replaces fleet members in batches while preserving a configured amount of healthy capacity. -->
-
-Many services run more than one instance. For those fleets, replacing every instance at once can cause an outage even if each individual replacement is created first. AWS Auto Scaling groups can roll a launch template change through the fleet with an instance refresh.
+to:
 
 ```hcl
-resource "aws_launch_template" "app" {
-  name_prefix   = "billing-app-"
-  image_id      = var.ami_id
-  instance_type = "t3.small"
-}
-
-resource "aws_autoscaling_group" "app" {
-  name                = "billing-app"
-  min_size            = 3
-  max_size            = 6
-  desired_capacity    = 3
-  vpc_zone_identifier = values(aws_subnet.web)[*].id
-  target_group_arns   = [aws_lb_target_group.app.arn]
-
-  launch_template {
-    id      = aws_launch_template.app.id
-    version = aws_launch_template.app.latest_version
-  }
-
-  instance_refresh {
-    strategy = "Rolling"
-
-    preferences {
-      min_healthy_percentage = 80
-      instance_warmup        = 120
-    }
-  }
+resource "aws_instance" "application" {
+  # ...
 }
 ```
 
-The launch template describes how to build a new instance. The Auto Scaling group describes how many instances should run and where they should attach. The instance refresh tells AWS to replace instances gradually after the template changes.
-
-`min_healthy_percentage` is the guardrail. With desired capacity `3` and a value of `80`, AWS keeps most of the fleet healthy while it replaces instances. `instance_warmup` gives a new instance time to boot and start the app before AWS treats it as healthy for the rollout.
-
-Terraform configures and starts this provider operation, while AWS performs the rolling replacement. The pipeline should still watch the Auto Scaling activity, load balancer health, and application metrics after apply.
-
-The runbook should include the provider-side commands because Terraform apply may finish before the whole fleet has settled:
-
-```bash
-aws autoscaling describe-instance-refreshes \
-  --auto-scaling-group-name billing-app
-
-aws autoscaling describe-auto-scaling-groups \
-  --auto-scaling-group-names billing-app
-```
-
-The first command reads refresh progress: `Status`, `PercentageComplete`, and any `StatusReason` explain whether the replacement is still moving. The second command shows current desired capacity, in-service instance count, and launch template details for the group. If the refresh fails, stop the release, inspect Auto Scaling activities, and decide whether to roll traffic back, cancel the refresh, or push a corrected launch template.
-
-A healthy refresh output might show steady progress:
-
-```console
-InstanceRefreshId  Status      PercentageComplete
-ir-0123456789      InProgress  66
-```
-
-A finished refresh should show a changed status:
-
-```console
-InstanceRefreshId  Status      PercentageComplete
-ir-0123456789      Successful  100
-```
-
-A failed refresh needs a different response:
-
-```console
-InstanceRefreshId  Status  PercentageComplete  StatusReason
-ir-0123456789      Failed  33                  Instance failed ELB health checks
-```
-
-That failure is a runtime rollout failure. Terraform configured the Auto Scaling group, but AWS stopped the replacement because the new instances did not pass health checks. The rollback path may be to send traffic back to blue, cancel the refresh, or publish a corrected launch template. Do not treat a completed `terraform apply` as proof that the whole fleet finished rolling.
-
-## State and Import Boundaries
-<!-- section-summary: Low-downtime changes can fail if Terraform state does not match reality or if imported resources use addresses that force replacement. -->
-
-Replacement safety depends on Terraform knowing which object it manages. If state points at the wrong object, or a resource was renamed without a state move, a tidy code change can produce a risky plan.
-
-For a simple rename, use a `moved` block so Terraform understands the address changed while the real object stayed the same:
+changes `aws_instance.app` to `aws_instance.application`. Without migration information, Terraform may interpret that as the old object disappearing and a new object being declared. A `moved` block records the intended identity-preserving refactor:
 
 ```hcl
 moved {
-  from = aws_lb_target_group.app
-  to   = aws_lb_target_group.blue
+  from = aws_instance.app
+  to   = aws_instance.application
 }
 ```
 
-For an existing cloud object that Terraform should start managing, import it before changing its configuration:
+The same risk appears when introducing `count`, changing `for_each` keys, moving a resource into a module, or reorganizing module addresses. Review the resulting plan as a deployment, not as a cosmetic code diff.
+
+Import is also an identity operation. If an existing remote server should become `aws_instance.production`, import associates the real object with that address. The first plan after import is reconciliation: configuration must be aligned with reality before any replacement or rollout change is mixed into the work.
 
 ```bash
-terraform import aws_lb_target_group.blue arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/billing-blue/abc123
+terraform import aws_instance.production i-0123456789abcdef0
 terraform plan
 ```
 
-The first argument is the Terraform address that will manage the object. The second argument is the provider import ID, which is the existing AWS target group ARN in this example. A successful import adds the object to state; the follow-up plan should then show only configuration differences that need reconciliation.
+State boundaries are deployment boundaries because one apply can affect everything in the selected state. A state containing network, database, fleet, load balancer, DNS, and observability resources gives one run a broad failure and locking domain. A small canary weight adjustment and a database replacement do not share the same risk profile.
 
-A successful import usually prints a short confirmation:
+Separating state can reduce blast radius and allow independent deployment cadence, but it introduces contracts between states. Outputs, remote-state reads, or another discovery mechanism must connect them. The right boundary groups resources that need coordinated lifecycle while separating components whose ownership, approval, and failure modes differ.
 
-```console
-Import successful!
+State protection and locking prevent concurrent writers from racing over the same ownership record. They do not make a large transition atomic. Backends, identities, variables, and state selection must all point at the intended environment before a deployment plan has meaning.
 
-The resources that were imported are shown above. These resources are now in
-your Terraform state and will henceforth be managed by Terraform.
+## What Makes Rollback Possible?
+<!-- section-summary: Rollback is easiest while the old healthy generation still exists, because Terraform apply does not automatically undo completed operations. -->
+
+Terraform apply is not a database transaction. It walks a dependency graph and performs remote operations. If an action fails midway, earlier successful actions may remain. A failed postcondition can stop downstream work, but it does not reverse everything Terraform already changed.
+
+This changes the meaning of rollback. Application rollback often means routing traffic back to an old healthy generation. Infrastructure rollback usually means changing configuration again, producing a new plan, and applying another forward transition. Restoring an old Git commit does not by itself reverse cloud operations or data changes.
+
+Rollback is easiest before destruction:
+
+```text
+blue healthy + green unhealthy
+    -> keep or restore traffic to blue
+    -> investigate or remove green
 ```
 
-The first plan after import should be treated as reconciliation work. The team checks which settings Terraform wants to change, updates configuration to match the intended state, and only then plans the rollout change. Importing and replacing in the same review makes the risky action difficult to isolate.
+It becomes harder after blue is gone:
 
-State also matters for `create_before_destroy`. Terraform records enough lifecycle behavior in state to keep dependency ordering safe. That is helpful, but it means teams should review lifecycle changes carefully and avoid editing state by hand except through an explicit state workflow.
-
-Two lifecycle settings often appear near low-downtime work, and they need careful review:
-
-```hcl
-resource "aws_db_instance" "primary" {
-  identifier = "billing-prod"
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
+```text
+green unhealthy + blue destroyed
+    -> recreate old capacity
+    -> wait for boot and readiness
+    -> recover traffic under pressure
 ```
 
-`prevent_destroy` protects critical resources from accidental destroy plans. It is useful for databases, long-lived buckets, and production keys. The tradeoff is operational: a planned decommission now needs an explicit code change that removes or changes the guardrail, so the review should include backup and ownership evidence.
+That is why an overlap window is also a rollback window. Keep the previous generation until the candidate has handled enough real traffic to justify retirement. Define the rejection metrics and the person or controller authorized to reverse traffic before the deployment begins.
 
-```hcl
-resource "aws_autoscaling_group" "app" {
-  desired_capacity = 3
+Stateful resources are a different category. Two stateless application generations can often run side by side. Two databases are not interchangeable merely because both exist; data, writes, schema, authority, and replication must cross the transition correctly.
 
-  lifecycle {
-    ignore_changes = [desired_capacity]
-  }
-}
+Database migration exposes the deeper problem. Old application code may need the old schema while new code needs a changed schema. Safe deployment can require expand-and-contract changes: add backward-compatible schema first, deploy code that works with both forms, migrate data, switch authority, then remove the old form later. Terraform can manage database infrastructure, but it does not make an incompatible schema transition reversible.
+
+For critical stateful objects, `prevent_destroy` is a useful Terraform guardrail, not a recovery strategy. Backups, tested restore procedures, replication, provider protections, and application compatibility planning carry the actual rollback burden.
+
+## How Do You Design the Complete Deployment?
+<!-- section-summary: A complete design preserves healthy capacity by coordinating creation, readiness, traffic, state, observation, and retirement. -->
+
+The complete model has several layers:
+
+```text
+desired configuration
+        |
+        v
+Terraform graph and state identity
+        |
+        v
+provider creates overlapping capacity
+        |
+        v
+runtime controller proves readiness
+        |
+        v
+traffic moves in controlled stages
+        |
+        v
+monitoring accepts or rejects the release
+        |
+        v
+old capacity drains and is retired
 ```
 
-`ignore_changes` can keep Terraform from fighting an autoscaler that adjusts capacity during the day. It should only cover fields another controller intentionally owns. If a team hides broad attributes with `ignore_changes = all`, Terraform may stop reporting drift that matters during a rollout.
+Terraform contributes most directly to desired configuration, addresses, dependency ordering, provider operations, and lifecycle policy. It can also configure health and traffic resources. Runtime controllers supply continuous readiness and fleet convergence. The release process supplies approval, observation windows, and rollback decisions.
 
-## Rollback Boundaries
-<!-- section-summary: Terraform rollback usually means a new plan, while failed traffic cutovers often need provider or deployment controls first. -->
+![Zero-downtime deployment summary](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/zero-downtime-summary.png)
 
-Rollback means different things at different layers. If the cutover sends traffic to green and error rates spike, the fastest rollback is usually to send traffic back to blue. That is a load balancer or release-control action, and it should happen before the team spends time reshaping Terraform code.
+*Availability comes from the full transition, not from any single lifecycle setting.*
 
-If Terraform changed infrastructure incorrectly, rollback usually means a new code change and a new plan. The team can restore the AMI variable, the old listener target, or the previous capacity values, then run the normal plan and approval flow. This keeps state, code, and cloud resources aligned.
+Use this hierarchy when choosing a pattern:
 
-Databases need a separate boundary. Engine upgrades, schema migrations, and data changes can have their own rollback rules. Terraform can create database infrastructure, but the application team still needs migration plans, backups, restore testing, and compatibility checks before a deployment that changes stored data.
+```text
+single replaceable object
+    require overlap and readiness
 
-The safest rollout has a written stop point. Before apply, the team knows which metric fails the rollout, which person can move traffic back, how long blue stays alive, and which Terraform change will reconcile the final state after the incident is stable.
+stable endpoint with replaceable backends
+    add explicit traffic handoff
 
-A simple rollback record for the billing service should include the previous AMI, the previous listener target or weight, the Auto Scaling group name, the target group health output, the dashboard link used for error rate, and the commit that will reconcile Terraform afterward. This evidence lets the team move quickly during the incident and still clean up state and code after users are safe.
+multiple interchangeable members
+    use a rolling fleet controller and capacity threshold
 
-For a weighted blue-green rollout, the fastest Terraform-shaped traffic rollback is usually the previous weight:
+high-risk release
+    use blue/green or canary traffic stages with rollback window
 
-```bash
-terraform plan -var='green_weight=0' -out=tfplan
-terraform show -no-color tfplan
-terraform apply tfplan
+stateful system
+    add data migration, compatibility, backup, and authority planning
 ```
 
-The plan should show the listener forwarding all traffic back to blue. If the incident is active and the team has an approved emergency control in the load balancer or release tool, use that control first, then reconcile Terraform afterward so state and code describe the recovered traffic path.
+Before a production apply, verify:
 
-For an Auto Scaling instance refresh that is still running, AWS has a provider-side stop button:
-
-```bash
-aws autoscaling cancel-instance-refresh \
-  --auto-scaling-group-name billing-app
+```text
+Which changes update in place, and which require replacement?
+Can old and new resources coexist under names, quotas, and attachments?
+What health signal means the application can serve real work?
+Which component enforces that signal before traffic moves?
+How much healthy capacity is required throughout the rollout?
+Does the plan preserve intended resource addresses?
+Do any refactors require moved blocks or imports first?
+Is the selected state boundary appropriately narrow?
+Can the old generation remain through an observation window?
+Which signal triggers rollback, and how is traffic reversed?
+Are database and other stateful migrations backward-compatible?
+Who verifies runtime convergence after Terraform finishes?
 ```
 
-The follow-up command should show the refresh is no longer replacing instances:
+The sequence should also have explicit observation points. Before creation, confirm that quotas and naming permit the overlap. After creation, inspect infrastructure status without moving traffic. After readiness passes, expose only the intended share of requests and compare the new generation with the established baseline. Before destruction, confirm that old connections have drained and that the rollback window has actually closed. These are different decisions, so one successful command should not silently authorize all of them.
 
-```console
-InstanceRefreshId  Status     PercentageComplete
-ir-0123456789      Cancelled  33
-```
+Dependencies require the same care. A listener reference to a new target can ensure that the target object is created first, but that dependency says nothing about successful requests. A postcondition may block dependent Terraform work if its assertion fails, yet earlier provider operations remain completed. A runtime controller may declare a member healthy according to a shallow probe while user-visible latency is already unacceptable. Tie every signal to the claim it can actually support, and do not infer a stronger guarantee from it.
 
-Canceling the refresh stops the rolling operation. The team still needs the load balancer health output, the previous launch template or AMI value, and a Terraform plan that reconciles any traffic changes or unhealthy instances already launched.
+Finally, plan cleanup instead of treating it as an afterthought. Keeping every old generation forever avoids immediate destruction but consumes quota, preserves outdated software, and makes ownership confusing. Retirement is a real deployment phase: stop new traffic, allow in-flight work to finish, capture necessary evidence, remove old capacity, and verify that state describes the surviving generation. Safe rollback needs temporary redundancy; safe operations also need an intentional end to that redundancy.
 
-## Putting It All Together
-<!-- section-summary: Low-downtime Terraform work combines replacement order, health checks, traffic control, state hygiene, and clear rollback ownership. -->
+The first-principles conclusion is straightforward: `create_before_destroy` offers overlap, not availability. Zero downtime requires overlap plus readiness, controlled traffic, sufficient capacity, correct state identity, observation, and a rollback path that still exists. When those pieces are explicit, Terraform becomes a reliable participant in deployment rather than being mistaken for the whole deployment system.
 
-The small outage started with one replaced EC2 instance. `create_before_destroy` fixed the resource ordering problem. Health checks added a readiness signal. Traffic cutover kept users on the healthy path while the new version warmed up. Instance refresh handled the same idea for a fleet.
+Availability depends on the provider's real replacement sequence, load-balancer behavior, quotas, health checks, and application compatibility—not the wording “zero downtime.” `create_before_destroy` can overlap old and new capacity only when names, addresses, quotas, and dependencies permit two copies. Review the plan for replacement actions, verify temporary capacity and mixed-version compatibility, and observe the service path during apply. When infrastructure cannot overlap safely, design a separate blue-green, rolling, or maintenance workflow rather than assuming a lifecycle setting removes disruption.
 
-![Zero Downtime Summary](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/zero-downtime-summary.png)
+## Check Your Answers
 
-*The summary board gathers the checks a team needs before calling a Terraform replacement safe for users.*
+:::expand[Why Is Availability About the Transition?]{kind="recap"}
+Terraform defines desired end states, but users experience intermediate operations. Healthy service capacity must remain above the required level throughout the transition.
+:::
 
-The last pieces are operational. State and import work should be clean before the rollout. Rollback should name the layer that can recover fastest: load balancer routing for bad traffic, Terraform code for bad infrastructure configuration, and database procedures for data changes.
+:::expand[What Does Replacement Overlap Actually Guarantee?]{kind="recap"}
+`create_before_destroy` lets old and new objects coexist when the platform permits it. It does not prove health, move traffic, or preserve enough usable capacity by itself.
+:::
 
-Before a production replacement, run:
+:::expand[How Do Readiness Checks Protect the Handoff?]{kind="recap"}
+Readiness should represent the ability to serve real work. Interpret Terraform checks, postconditions, provider status, and load-balancer health according to what each can actually prove.
+:::
 
-```bash
-terraform plan -out=tfplan
-terraform show -no-color tfplan
-terraform state list
-```
+:::expand[How Should Traffic Move Between Versions?]{kind="recap"}
+A stable front door supports blue/green or canary movement. Prepare, verify, expose gradually, observe, drain, and only then retire the previous generation.
+:::
 
-`plan -out=tfplan` saves the exact proposed actions into a binary plan file. `show -no-color tfplan` renders that saved plan in a review-friendly form without terminal color codes. `state list` shows the currently tracked addresses, which should match the important objects in the rendered plan. The review should confirm replacement order, resource addresses, and the absence of surprise destroys before apply.
+:::expand[How Do Fleets Roll Out Changes Safely?]{kind="recap"}
+A fleet controller replaces bounded batches while maintaining a healthy-capacity threshold. Terraform configures the controller, while runtime status proves convergence.
+:::
 
-Then check the non-Terraform readiness signals: load balancer health checks, Auto Scaling refresh status, application metrics, and rollback ownership. The plan is necessary evidence, but zero downtime comes from combining the plan with the traffic system that keeps healthy capacity in front of users.
+:::expand[Why Do State Identity and Boundaries Affect Deployments?]{kind="recap"}
+Address changes can cause unintended replacement, and one state defines the resources a run can affect. Use moves, isolated imports, locking, and risk-aware state boundaries.
+:::
 
-The production runbook should end with three decisions. Roll forward after green is healthy and metrics stay inside the release window. Roll back traffic if users are at risk. Reconcile Terraform after the service is stable so state, code, and cloud resources agree again.
+:::expand[What Makes Rollback Possible?]{kind="recap"}
+Terraform does not automatically undo completed operations. Rollback is fastest while the old generation still exists, and stateful changes require separate data and compatibility plans.
+:::
+
+:::expand[How Do You Design the Complete Deployment?]{kind="recap"}
+Coordinate Terraform's graph with overlap, runtime readiness, traffic control, sufficient capacity, observation, state hygiene, and an explicit rollback decision.
+:::
 
 ---
 
 **References**
 
-- [Terraform lifecycle meta-argument](https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle)
-- [Terraform resource lifecycle tutorial](https://developer.hashicorp.com/terraform/tutorials/state/resource-lifecycle)
-- [Terraform import command](https://developer.hashicorp.com/terraform/cli/import)
-- [Terraform moved blocks for refactoring](https://developer.hashicorp.com/terraform/language/modules/develop/refactoring)
-- [AWS Auto Scaling instance refresh](https://docs.aws.amazon.com/autoscaling/ec2/userguide/asg-instance-refresh.html)
-- [Elastic Load Balancing target group health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)
-- [Amazon RDS Blue/Green Deployments](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/blue-green-deployments.html)
+- [Terraform: Resource behavior](https://developer.hashicorp.com/terraform/language/resources/behavior)
+- [Terraform: Lifecycle meta-argument](https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle)
+- [Terraform: Checks](https://developer.hashicorp.com/terraform/language/checks)
+- [Terraform: Custom conditions](https://developer.hashicorp.com/terraform/language/expressions/custom-conditions)
+- [Terraform: Refactor modules and resources](https://developer.hashicorp.com/terraform/language/modules/develop/refactoring)
+- [Terraform CLI: Import](https://developer.hashicorp.com/terraform/cli/commands/import)
+- [Terraform: State](https://developer.hashicorp.com/terraform/language/state)

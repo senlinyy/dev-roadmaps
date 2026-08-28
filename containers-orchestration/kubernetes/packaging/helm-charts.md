@@ -23,19 +23,6 @@ Kubernetes does not understand Helm charts. It understands concrete API objects.
 
 The central model is that a chart is a parameterized program that generates Kubernetes manifests. Helm's work belongs to the delivery layer; Kubernetes begins reconciling only after it receives the concrete objects.
 
-Seven questions explain that transformation:
-
-1. **What does Helm package for one application?**
-2. **How does the chart directory divide its responsibilities?**
-3. **How do chart version and application version describe different things?**
-4. **How do release inputs become fields in Kubernetes objects?**
-5. **How can helpers keep related objects consistent?**
-6. **When do dependencies or CRDs change the chart boundary?**
-7. **How can a team inspect the full result before install or upgrade?**
-
-## What does Helm package for one application?
-<!-- section-summary: A chart packages metadata, default inputs, rendering logic, reusable helpers, and optional dependencies or CRDs—not the application binary itself. -->
-
 Start with an application that needs only a Deployment and a Service. Applying two ordinary manifests is simple:
 
 ```yaml
@@ -71,9 +58,22 @@ spec:
       targetPort: 8080
 ```
 
+Keep these questions in view as you work through the lesson:
+
+1. **What does Helm package for one application?**
+2. **How does the chart directory divide its responsibilities?**
+3. **How do chart version and application version describe different things?**
+4. **How do release inputs become fields in Kubernetes objects?**
+5. **How can helpers keep related objects consistent?**
+6. **When do dependencies or CRDs change the chart boundary?**
+7. **How can a team inspect the full result before install or upgrade?**
+
+## What does Helm package for one application?
+<!-- section-summary: A chart packages metadata, default inputs, rendering logic, reusable helpers, and optional dependencies or CRDs—not the application binary itself. -->
+
 The packaging problem appears when the same application must run in development, staging, and production. Development may need one replica and a moving image tag, staging two replicas and a pinned tag, and production ten replicas and the same pinned tag. Copying both manifests three times works, but every shared change must now be repeated.
 
-The scale becomes clearer when the application also needs an Ingress, ConfigMap, ServiceAccount, HPA, PodDisruptionBudget, NetworkPolicy, and Secret—and when the organization deploys it to twenty environments. Most of those documents express the same application structure. Only a smaller set of values differs.
+The scale is clearer once the application also needs an Ingress, ConfigMap, ServiceAccount, HPA, PodDisruptionBudget, NetworkPolicy, and Secret, especially across twenty deployment environments. Most of those documents express the same application structure. Only a smaller set of values differs.
 
 A useful model is:
 

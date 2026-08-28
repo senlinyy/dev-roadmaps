@@ -21,19 +21,6 @@ id: article-containers-orchestration-kubernetes-configuration-storage-secrets
 
 The easiest way to understand a Kubernetes Secret is to begin with the difference between ordinary configuration and authority. An application may need a database host, port, username, and password. The first three describe how to connect. Possessing the password may let someone impersonate the application.
 
-That difference drives seven questions:
-
-1. **What problem does a Secret solve?**
-2. **What does Kubernetes store inside a Secret?**
-3. **How should a Pod receive a Secret value?**
-4. **Who can read a Secret?**
-5. **Which protections surround a stored Secret?**
-6. **How does a team rotate a credential safely?**
-7. **How can a team diagnose Secret delivery safely?**
-
-## What problem does a Secret solve?
-<!-- section-summary: A Secret separates sensitive bytes from images and workload manifests so access, delivery, and replacement can be controlled independently. -->
-
 Consider these application inputs:
 
 ```text
@@ -46,6 +33,19 @@ database password = <credential>
 The host, port, and username describe the system. The password is a **credential**: a value whose possession grants authority. Learning `DATABASE_HOST=db.production.svc` reveals architecture; learning the database password may grant the ability to act as the application.
 
 That property gives a sensitive value different handling requirements. It should stay out of the container image and the Pod manifest, receive tighter access control, reach only the workloads that need it, remain protected while stored, and be replaceable without rebuilding the image.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What problem does a Secret solve?**
+2. **What does Kubernetes store inside a Secret?**
+3. **How should a Pod receive a Secret value?**
+4. **Who can read a Secret?**
+5. **Which protections surround a stored Secret?**
+6. **How does a team rotate a credential safely?**
+7. **How can a team diagnose Secret delivery safely?**
+
+## What problem does a Secret solve?
+<!-- section-summary: A Secret separates sensitive bytes from images and workload manifests so access, delivery, and replacement can be controlled independently. -->
 
 Embedding the value directly in a workload violates those requirements:
 

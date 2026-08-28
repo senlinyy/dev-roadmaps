@@ -23,22 +23,8 @@ aliases:
 6. [How Do Streams and TTL Support Workflows?](#how-do-streams-and-ttl-support-workflows)
 7. [How Do Capacity, Indexes, and Key Shape Affect Cost?](#how-do-capacity-indexes-and-key-shape-affect-cost)
 8. [How Should You Design and Review a DynamoDB Table?](#how-should-you-design-and-review-a-dynamodb-table)
-9. [Check Your Understanding](#check-your-understanding)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
-
-The sections below answer these questions in order:
-
-1. **What Problem Does DynamoDB Solve?**
-2. **Why Does DynamoDB Design Start with Access Patterns?**
-3. **Why Does DynamoDB Use Denormalization and Single-Table Design?**
-4. **How Do Secondary Indexes Add Access Paths?**
-5. **How Do Conditional Writes and Transactions Protect State?**
-6. **How Do Streams and TTL Support Workflows?**
-7. **How Do Capacity, Indexes, and Key Shape Affect Cost?**
-8. **How Should You Design and Review a DynamoDB Table?**
-
-## What Problem Does DynamoDB Solve?
-<!-- section-summary: DynamoDB distributes key-addressed data and request load across physical partitions for predictable large-scale retrieval. -->
 
 On one machine, a program can keep users in a map:
 
@@ -71,6 +57,20 @@ hash("USER#789") → partition 19
 This idea sits underneath **Amazon DynamoDB**, a managed key-value and document database designed for predictable low-latency access at large scale.
 
 The label **NoSQL** does not simply mean “cannot use SQL.” The more useful distinction is where design begins.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Problem Does DynamoDB Solve?**
+2. **Why Does DynamoDB Design Start with Access Patterns?**
+3. **Why Does DynamoDB Use Denormalization and Single-Table Design?**
+4. **How Do Secondary Indexes Add Access Paths?**
+5. **How Do Conditional Writes and Transactions Protect State?**
+6. **How Do Streams and TTL Support Workflows?**
+7. **How Do Capacity, Indexes, and Key Shape Affect Cost?**
+8. **How Should You Design and Review a DynamoDB Table?**
+
+## What Problem Does DynamoDB Solve?
+<!-- section-summary: DynamoDB distributes key-addressed data and request load across physical partitions for predictable large-scale retrieval. -->
 
 A relational approach often models facts and relationships first and lets the database answer many later queries through joins and indexes. DynamoDB starts with the important application queries and organizes keys so those exact paths are cheap and predictable.
 
@@ -552,7 +552,7 @@ The team deliberately transforms application questions into key lookups that Dyn
 
 *The table is the physical access design for known application questions, not a container for entities chosen before queries are known.*
 
-## Check Your Understanding
+## Check Your Answers
 
 :::expand[What Problem Does DynamoDB Solve?]{kind="recap"}
 DynamoDB distributes key-addressed data and request load across physical partitions for predictable large-scale retrieval.

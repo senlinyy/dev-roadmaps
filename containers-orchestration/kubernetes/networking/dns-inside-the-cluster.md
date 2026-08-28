@@ -22,7 +22,15 @@ Kubernetes DNS is a dynamically generated address book built from Kubernetes API
 
 That is why a frontend can call `http://payments:8080` instead of storing `http://10.96.42.17:8080`. The name expresses which application the frontend needs, while Kubernetes maintains the changing network locations behind it.
 
-This article follows six questions:
+Start with a system outside Kubernetes. If `payments` always ran on one machine at `10.20.30.40`, ordinary DNS could map the name `payments` to that permanent address. The application identity and its network location would remain together.
+
+Kubernetes deliberately separates those two ideas. Imagine that three Pods currently run the `payments` application:
+
+- Pod A has IP address `10.244.1.18`.
+- Pod B has IP address `10.244.2.31`.
+- Pod C has IP address `10.244.3.7`.
+
+Keep these questions in view as you work through the lesson:
 
 1. **Why does Kubernetes need its own address book?**
 2. **What does a Service name actually identify?**
@@ -33,14 +41,6 @@ This article follows six questions:
 
 ## Why does Kubernetes need its own address book?
 <!-- section-summary: Kubernetes DNS gives a changing set of Pods a stable application name derived from Kubernetes API state. -->
-
-Start with a system outside Kubernetes. If `payments` always ran on one machine at `10.20.30.40`, ordinary DNS could map the name `payments` to that permanent address. The application identity and its network location would remain together.
-
-Kubernetes deliberately separates those two ideas. Imagine that three Pods currently run the `payments` application:
-
-- Pod A has IP address `10.244.1.18`.
-- Pod B has IP address `10.244.2.31`.
-- Pod C has IP address `10.244.3.7`.
 
 Pod A can disappear because its process crashes, its node is drained, or a rollout replaces it. Kubernetes may create Pod D at `10.244.4.22`. The application remains `payments` even though one of its locations changed. Its identity therefore has to remain separate from any one Pod IP.
 

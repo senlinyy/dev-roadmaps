@@ -23,7 +23,7 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-Manifest packaging sits between the Kubernetes configuration humans maintain and the ordinary resource objects the API server receives. It becomes useful when one application contains several related resources, is deployed more than once, or needs controlled differences between environments.
+Manifest packaging sits between the Kubernetes configuration humans maintain and the ordinary resource objects the API server receives. It is useful for an application with several related resources, repeated deployments, or controlled differences between environments.
 
 A direct manifest needs no packaging layer:
 
@@ -44,7 +44,7 @@ application intent
 
 The package is a human and delivery-system abstraction. It organizes a related collection and produces a deployment-specific object set; it does not replace Kubernetes reconciliation.
 
-Eight questions define that boundary:
+Keep these questions in view as you work through the lesson:
 
 1. **What problem does manifest packaging solve?**
 2. **Where does packaging end and Kubernetes begin?**

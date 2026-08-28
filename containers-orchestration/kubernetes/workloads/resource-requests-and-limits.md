@@ -39,7 +39,7 @@ The central model is:
 
 > **A request answers “how much capacity should the cluster plan for?” A limit answers “how far may this container or Pod go at runtime?”**
 
-The article follows seven questions:
+Keep these questions in view as you work through the lesson:
 
 1. **What decisions do requests and limits control?**
 2. **How does the scheduler decide whether a Pod fits on a node?**

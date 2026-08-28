@@ -12,31 +12,38 @@ aliases:
 
 ## Table of Contents
 
-1. [What Is App Service](#what-is-app-service)
-2. [The App Service Shape](#the-app-service-shape)
-3. [App Service Plan](#app-service-plan)
-4. [Web App](#web-app)
-5. [Runtime Settings and Secrets](#runtime-settings-and-secrets)
-6. [Managed Identity](#managed-identity)
-7. [Deployment Slots](#deployment-slots)
-8. [Networking](#networking)
-9. [Scaling and Availability](#scaling-and-availability)
-10. [Logs and Health](#logs-and-health)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
-
-## What Is App Service
-<!-- section-summary: App Service runs web apps and APIs on Azure-managed infrastructure, while the team still owns the application process, configuration, identity, and production evidence. -->
+1. [What Is App Service and How Is It Structured?](#what-is-app-service-and-how-is-it-structured)
+2. [How Do Plans, Apps, and Runtimes Divide Responsibility?](#how-do-plans-apps-and-runtimes-divide-responsibility)
+3. [How Should Configuration, Secrets, and Identity Work?](#how-should-configuration-secrets-and-identity-work)
+4. [How Do Deployment Slots Make Releases Safer?](#how-do-deployment-slots-make-releases-safer)
+5. [How Does App Service Connect to Networks?](#how-does-app-service-connect-to-networks)
+6. [How Do Scaling and Availability Work?](#how-do-scaling-and-availability-work)
+7. [What Logs and Health Signals Explain Runtime Behavior?](#what-logs-and-health-signals-explain-runtime-behavior)
+8. [When Is App Service the Right Fit?](#when-is-app-service-the-right-fit)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
 **Azure App Service** is Azure's managed hosting platform for HTTP applications such as web apps, REST APIs, and mobile back ends. Managed hosting means Azure operates the underlying server fleet, front-end routing layer, operating system patching, platform runtime, TLS support, and scaling machinery. Your team brings the application code or container image, then configures how that application starts, what settings it receives, how it authenticates to other Azure services, and how operators prove that it is healthy.
 
-For AWS readers, the closest anchors are Elastic Beanstalk for managed web-app hosting and App Runner for a simpler managed app runtime. The Azure detail to notice is the **App Service plan**, because it is the regional worker capacity and pricing boundary that one or more Web Apps can share.
-
 We will follow one production example through the whole article. The Orders team runs `app-orders-api-prod`, a Node.js API that receives checkout requests, reads secrets from Key Vault, writes order records to Azure SQL, stores receipt PDFs in Blob Storage, and ships a new version every week. A virtual machine could run that API too, but the team would then own the operating system, web server setup, process supervisor, patching routine, and most of the release wiring. App Service lets the team work at the web application layer while Azure handles the platform layer.
+
+Keep these questions in view as you work through the lesson:
+
+1. **What Is App Service and How Is It Structured?**
+2. **How Do Plans, Apps, and Runtimes Divide Responsibility?**
+3. **How Should Configuration, Secrets, and Identity Work?**
+4. **How Do Deployment Slots Make Releases Safer?**
+5. **How Does App Service Connect to Networks?**
+6. **How Do Scaling and Availability Work?**
+7. **What Logs and Health Signals Explain Runtime Behavior?**
+8. **When Is App Service the Right Fit?**
+
+## What Is App Service and How Is It Structured?
+<!-- section-summary: App Service runs web apps and APIs on Azure-managed infrastructure, while the team still owns the application process, configuration, identity, and production evidence. -->
 
 The managed part does a lot, but it leaves real production choices in your hands. The team still decides the App Service plan size, whether several apps share compute, which app settings belong to production, which identity can read which secret, how a staging slot gets warmed before a swap, which network paths are public or private, how many instances should run, and which logs prove a release is safe. Those choices are the practical App Service story.
 
-## The App Service Shape
+### The App Service Shape
 <!-- section-summary: A production App Service app needs separate names for the plan, web app, settings, identity, slots, network paths, scale rules, and health evidence. -->
 
 Before we zoom into individual features, it helps to name the pieces in the order you usually meet them during a real deployment. The App Service plan gives the app CPU and memory. The Web App resource tells Azure what to run on that capacity. Settings, identity, slots, networking, scale, and health checks then turn that runnable app into something a team can operate with evidence.
@@ -59,7 +66,7 @@ That table also shows the order of responsibility. The plan answers where the co
 
 *The runtime map keeps the App Service pieces separate: the plan supplies capacity, the Web App describes the process, and settings, identity, slots, and evidence make the API operable.*
 
-## App Service Plan
+## How Do Plans, Apps, and Runtimes Divide Responsibility?
 <!-- section-summary: The App Service plan is the compute and billing boundary, so apps, slots, logs, and background jobs inside one plan share the same workers. -->
 
 An **App Service plan** is the compute home for one or more App Service apps. It defines the Azure region, operating system family, pricing tier, worker size, and worker count. Every App Service app runs inside a plan, and every running app in that plan uses the workers that the plan provides.
@@ -90,7 +97,7 @@ resource plan 'Microsoft.Web/serverfarms@2022-03-01' = {
 
 Once the plan exists, the next question is what Azure should run on those workers. That is the job of the Web App resource.
 
-## Web App
+### Web App
 <!-- section-summary: The Web App resource is the runnable application profile that connects code, runtime stack, hostnames, settings, identity, and health behavior to a plan. -->
 
 A **Web App** is the App Service resource for one running HTTP application. In Azure Resource Manager, it belongs to the `Microsoft.Web/sites` resource type. It points at an App Service plan and stores the application-level choices: runtime stack, container image or deployment package, startup command, environment settings, custom domains, TLS settings, authentication options, managed identity, logging, and health check path.
@@ -126,7 +133,7 @@ resource app 'Microsoft.Web/sites@2022-03-01' = {
 
 The Web App can now start code, but code usually needs environment-specific values. The same package should know which database belongs to production, which telemetry endpoint to use, and which feature flags are enabled. App settings handle that part.
 
-## Runtime Settings and Secrets
+## How Should Configuration, Secrets, and Identity Work?
 <!-- section-summary: App settings become environment variables at startup, and production teams keep environment-specific values, secrets references, and slot-sticky settings explicit. -->
 
 **App settings** are key-value records stored by App Service and injected into your app as environment variables. They let one deployment package run in different environments from one build artifact. The Orders API can use the same artifact in staging and production while receiving different values for `ORDERS_DB_HOST`, `PAYMENTS_BASE_URL`, `FEATURE_CHECKOUT_V2`, and `APPLICATIONINSIGHTS_CONNECTION_STRING`.
@@ -201,7 +208,7 @@ The healthy result shows `ORDERS_DB_HOST` and `ORDERS_DB_PASSWORD` as slot setti
 
 Settings explain what the process knows. The next question is how the process proves who it is when it calls Key Vault, Storage, SQL, or another Azure service. That is where managed identity enters the story.
 
-## Managed Identity
+### Managed Identity
 <!-- section-summary: Managed identity gives the Web App a Microsoft Entra workload identity, but permissions still come from RBAC or service-specific authorization on the target resource. -->
 
 A **managed identity** is a Microsoft Entra identity that Azure attaches to an Azure resource. For App Service, it lets the Web App request tokens for Azure services through Azure-managed credentials. Azure manages the underlying credential lifecycle, and your code uses an Azure SDK credential class to ask the platform for a token.
@@ -256,7 +263,7 @@ The first command proves Azure created the workload identity for the app. The se
 
 Now the app can receive configuration and call other Azure services through Azure-managed credentials. The next production problem is release safety. A team needs a way to start the new version, warm it, check it, and then move traffic while customers continue using the current version.
 
-## Deployment Slots
+## How Do Deployment Slots Make Releases Safer?
 <!-- section-summary: Deployment slots are live sibling apps that let a team warm and verify a release before swapping it into production traffic. -->
 
 A **deployment slot** is a live App Service app that sits beside the production slot. It has its own hostname, app content, settings, identity configuration, and deployment history, while sharing the underlying App Service plan workers with the parent app. Slots are available on Standard, Premium, and Isolated App Service plan tiers.
@@ -314,7 +321,7 @@ The values here become operational evidence. `staging` is the release target, `/
 
 Slots solve release movement. Networking decides who can reach the app and what the app can reach, so that is the next piece.
 
-## Networking
+## How Does App Service Connect to Networks?
 <!-- section-summary: App Service networking separates inbound access to the app from outbound access from the app to private resources, and each direction uses different Azure features. -->
 
 **App Service networking** has two directions. **Inbound networking** controls who can reach the app. **Outbound networking** controls what the app can reach. Keeping those two directions separate prevents a lot of confusion because the Azure features have different jobs.
@@ -329,7 +336,7 @@ An **App Service Environment**, often shortened to ASE, is the single-tenant App
 
 Now the request path is clearer. A customer reaches the Orders API through the approved inbound path. The app reaches data services through the approved outbound path. Managed identity proves the app's caller identity, while networking proves the packet path.
 
-## Scaling and Availability
+## How Do Scaling and Availability Work?
 <!-- section-summary: Scaling changes the App Service plan workers, so production scale design must consider every app and slot that shares the plan. -->
 
 **Scaling up** changes the worker size for the App Service plan. The plan receives workers with more CPU, memory, or feature capacity. This helps when one instance needs more memory for each process, more CPU for heavy request handling, or a tier feature such as deployment slots.
@@ -344,7 +351,7 @@ The scale rule should also respect downstream systems. If `app-orders-api-prod` 
 
 Scaling gives the app capacity. Health and observability tell the team whether that capacity is actually serving users.
 
-## Logs and Health
+## What Logs and Health Signals Explain Runtime Behavior?
 <!-- section-summary: App Service operations depend on health checks, logs, metrics, traces, and alerts that prove the process started and user requests are succeeding. -->
 
 **Logs** are records of what happened. **Metrics** are numeric measurements over time. **Traces** connect work across services so one checkout request can be followed through the API, database call, storage write, and downstream payment call. App Service gives platform logs and log streaming, while Application Insights and Azure Monitor give deeper application telemetry, alerts, dashboards, and queryable history.
@@ -372,7 +379,7 @@ Always On belongs in this same operational picture. When Always On is enabled, t
 
 At this point the pieces are connected. The plan gives capacity, the Web App starts the code, settings shape the environment, identity gives the workload a caller, slots handle release movement, networking controls paths, scaling changes capacity, and health evidence tells the team what happened.
 
-## Putting It All Together
+## When Is App Service the Right Fit?
 <!-- section-summary: A solid App Service design connects compute, runtime profile, configuration, identity, release path, network path, scale behavior, and evidence before production traffic arrives. -->
 
 Let's put the Orders API back together as one production shape. `asp-orders-prod-eus` gives the app two or more Premium workers. `app-orders-api-prod` defines the runtime, startup command, HTTPS behavior, managed identity, Always On, and health endpoint. App settings provide environment-specific values, Key Vault references keep secrets in the vault, and slot-sticky settings keep production configuration attached to production during swaps.
@@ -466,13 +473,47 @@ App Service is beginner-friendly because it removes a lot of server work. A prod
 
 *The production checklist turns the article into a review habit: confirm capacity, runtime startup, configuration, access, network paths, and operating evidence before trusting the App Service app.*
 
-## What's Next
+### What's Next
 
 The next article moves from App Service to Azure Container Apps. App Service is a strong fit when a web app or API matches the supported runtime and App Service release model. Container Apps is interesting when the team wants container-first revisions, event-driven scale rules, sidecars, and a managed environment that feels closer to modern container platforms while avoiding full Kubernetes cluster responsibility.
 
 ---
 
-**References**
+## Check Your Answers
+
+:::expand[What Is App Service and How Is It Structured?]{kind="recap"}
+App Service runs web apps and APIs on Azure-managed infrastructure, while the team still owns the application process, configuration, identity, and production evidence. A production App Service app needs separate names for the plan, web app, settings, identity, slots, network paths, scale rules, and health evidence.
+:::
+
+:::expand[How Do Plans, Apps, and Runtimes Divide Responsibility?]{kind="recap"}
+The App Service plan is the compute and billing boundary, so apps, slots, logs, and background jobs inside one plan share the same workers. The Web App resource is the runnable application profile that connects code, runtime stack, hostnames, settings, identity, and health behavior to a plan.
+:::
+
+:::expand[How Should Configuration, Secrets, and Identity Work?]{kind="recap"}
+App settings become environment variables at startup, and production teams keep environment-specific values, secrets references, and slot-sticky settings explicit. Managed identity gives the Web App a Microsoft Entra workload identity, but permissions still come from RBAC or service-specific authorization on the target resource.
+:::
+
+:::expand[How Do Deployment Slots Make Releases Safer?]{kind="recap"}
+Deployment slots are live sibling apps that let a team warm and verify a release before swapping it into production traffic.
+:::
+
+:::expand[How Does App Service Connect to Networks?]{kind="recap"}
+App Service networking separates inbound access to the app from outbound access from the app to private resources, and each direction uses different Azure features.
+:::
+
+:::expand[How Do Scaling and Availability Work?]{kind="recap"}
+Scaling changes the App Service plan workers, so production scale design must consider every app and slot that shares the plan.
+:::
+
+:::expand[What Logs and Health Signals Explain Runtime Behavior?]{kind="recap"}
+App Service operations depend on health checks, logs, metrics, traces, and alerts that prove the process started and user requests are succeeding.
+:::
+
+:::expand[When Is App Service the Right Fit?]{kind="recap"}
+A solid App Service design connects compute, runtime profile, configuration, identity, release path, network path, scale behavior, and evidence before production traffic arrives.
+:::
+
+## References
 
 - [Azure App Service overview](https://learn.microsoft.com/en-us/azure/app-service/overview) - Microsoft Learn overview of App Service for web apps, REST APIs, and mobile back ends.
 - [Azure App Service plans](https://learn.microsoft.com/en-us/azure/app-service/overview-hosting-plans) - Microsoft Learn explanation of plans, tiers, shared resources, scaling, and cost behavior.
