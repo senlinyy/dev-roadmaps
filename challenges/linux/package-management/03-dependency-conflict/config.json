@@ -1,0 +1,31 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["packages"],
+  "packages": {
+    "manager": "apt",
+    "indexFresh": true,
+    "held": ["libfoo"],
+    "repositories": [
+      { "id": "noble", "name": "Ubuntu", "family": "apt", "url": "http://archive.ubuntu.com/ubuntu noble", "enabled": true, "trusted": true }
+    ],
+    "packages": [
+      { "name": "libfoo", "architecture": "amd64", "installedVersion": "1.7.4", "candidateVersion": "2.1.0", "repository": "noble", "summary": "Shared application support library" },
+      { "name": "app-server", "architecture": "amd64", "candidateVersion": "4.6.0", "repository": "noble", "summary": "Internal application server", "dependencies": [{ "name": "libfoo", "minVersion": "2.0.0" }] }
+    ]
+  },
+  "grader": {
+    "strategy": "package-state",
+    "expectedPackages": {
+      "installed": { "libfoo": "2.1.0", "app-server": "4.6.0" },
+      "diagnostics": ["dependency-conflict"]
+    },
+    "requireCommands": ["apt", "apt-cache", "apt-mark"],
+    "requireCommandPatterns": [
+      "^apt-cache\\s+policy\\s+libfoo$",
+      "^sudo\\s+apt-mark\\s+unhold\\s+libfoo$"
+    ],
+    "minCommandCount": 4
+  }
+}

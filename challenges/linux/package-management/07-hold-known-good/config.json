@@ -1,0 +1,34 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["packages"],
+  "packages": {
+    "manager": "apt",
+    "indexFresh": true,
+    "repositories": [
+      { "id": "noble-updates", "name": "Ubuntu Updates", "family": "apt", "url": "http://archive.ubuntu.com/ubuntu noble-updates", "enabled": true, "trusted": true }
+    ],
+    "packages": [
+      { "name": "database-agent", "architecture": "amd64", "installedVersion": "5.8.2", "candidateVersion": "5.9.0", "repository": "noble-updates", "summary": "Database telemetry agent" },
+      { "name": "curl", "architecture": "amd64", "installedVersion": "8.5.0-2ubuntu10.4", "candidateVersion": "8.5.0-2ubuntu10.6", "repository": "noble-updates", "summary": "Command line data transfer tool" }
+    ]
+  },
+  "grader": {
+    "strategy": "package-state",
+    "expectedPackages": {
+      "installed": {
+        "database-agent": "5.8.2",
+        "curl": "8.5.0-2ubuntu10.6"
+      },
+      "held": ["database-agent"]
+    },
+    "requireCommands": ["apt-cache", "apt-mark", "apt"],
+    "requireCommandPatterns": [
+      "^sudo\\s+apt-mark\\s+hold\\s+database-agent$",
+      "^sudo\\s+apt\\s+upgrade$",
+      "^apt-mark\\s+showhold$"
+    ],
+    "minCommandCount": 4
+  }
+}

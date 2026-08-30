@@ -12,442 +12,1134 @@ aliases:
 
 ## Table of Contents
 
-1. [What A Serving Pattern Decides](#what-a-serving-pattern-decides)
-2. [Start With The Decision And Its Deadline](#start-with-the-decision-and-its-deadline)
-3. [How Requests Arrive And How Much Work They Contain](#how-requests-arrive-and-how-much-work-they-contain)
-4. [The Six Serving Patterns](#the-six-serving-patterns)
-5. [Use Freshness And Computation Time To Narrow The Choice](#use-freshness-and-computation-time-to-narrow-the-choice)
-6. [How Traffic And Scale Affect Cost](#how-traffic-and-scale-affect-cost)
-7. [Decide Where Inference Runs](#decide-where-inference-runs)
-8. [Plan Failure And Fallback Behaviour](#plan-failure-and-fallback-behaviour)
-9. [Choose The Pattern In A Deliberate Order](#choose-the-pattern-in-a-deliberate-order)
-10. [Map The Pattern To A Current Production Stack](#map-the-pattern-to-a-current-production-stack)
-11. [Understand The Operating Work For Each Pattern](#understand-the-operating-work-for-each-pattern)
-12. [Revisit The Choice As The Product Changes](#revisit-the-choice-as-the-product-changes)
-13. [The Main Idea](#the-main-idea)
-14. [References](#references)
+1. [What Timing and Request Pattern Does a Serving Design Need to Satisfy?](#what-timing-and-request-pattern-does-a-serving-design-need-to-satisfy)
+2. [How Do Synchronous, Asynchronous, Batch, Streaming, and Precomputed Inference Differ?](#how-do-synchronous-asynchronous-batch-streaming-and-precomputed-inference-differ)
+3. [When Does Freshness or Device Locality Matter More than Network Latency?](#when-does-freshness-or-device-locality-matter-more-than-network-latency)
+4. [How Do Traffic, Throughput, Latency, and Placement Shape the Economics?](#how-do-traffic-throughput-latency-and-placement-shape-the-economics)
+5. [What Decision Order Selects a Serving Pattern?](#what-decision-order-selects-a-serving-pattern)
+6. [Why Are Hybrid Architectures and Several Infrastructure Layers Normal?](#why-are-hybrid-architectures-and-several-infrastructure-layers-normal)
+7. [Where Does Each Serving Pattern Move Its Complexity?](#where-does-each-serving-pattern-move-its-complexity)
+8. [When Should the Product Revisit Its Serving Pattern?](#when-should-the-product-revisit-its-serving-pattern)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## What A Serving Pattern Decides
-<!-- section-summary: A serving pattern defines how a prediction reaches a product decision, including timing, input arrival, result delivery, failure behavior, and runtime ownership. -->
+A fraud decision must return before a payment is authorized. A nightly recommendation list can be computed hours earlier, while a document-analysis job may take several minutes after upload. All three systems run inference, but they need different schedules.
 
-Training produces a model artifact, but the artifact still needs a path to the person or system that will use its prediction. A **serving pattern** describes that path. It defines how work arrives, how long the consumer can wait, where the result goes, and what the product does after a failure.
+A **serving pattern** decides when inference runs, how work arrives, where the computation happens, and how the result reaches the consumer. The right choice follows from the decision deadline, freshness, traffic shape, interaction model, failure tolerance, privacy, and cost.
 
-Several familiar situations show why one pattern rarely suits every model:
+Use these questions to choose the logical pattern before selecting infrastructure or optimization tools:
 
-A support team wants a priority score for every open case before the morning shift. The full population is known ahead of time, and supervisors consume a finished list. A scheduled batch run fits that promise.
+1. **What Timing and Request Pattern Does a Serving Design Need to Satisfy?**
+2. **How Do Synchronous, Asynchronous, Batch, Streaming, and Precomputed Inference Differ?**
+3. **When Does Freshness or Device Locality Matter More than Network Latency?**
+4. **How Do Traffic, Throughput, Latency, and Placement Shape the Economics?**
+5. **What Decision Order Selects a Serving Pattern?**
+6. **Why Are Hybrid Architectures and Several Infrastructure Layers Normal?**
+7. **Where Does Each Serving Pattern Move Its Complexity?**
+8. **When Should the Product Revisit Its Serving Pattern?**
 
-A payment service needs a fraud score before it authorizes a card transaction. One request is already in progress, and a late score has no value for that transaction. A synchronous online endpoint fits that promise.
+## What Timing and Request Pattern Does a Serving Design Need to Satisfy?
+<!-- section-summary: A serving pattern schedules inference around the decision deadline, request arrival, freshness need, response path, and acceptable cost. -->
 
-A user uploads a long document for classification. Processing may take a minute, so the application accepts the upload, returns a job ID, and displays progress. An asynchronous queue fits that promise.
+Serving begins with the moment a prediction can still influence a decision, not with a preferred platform.
 
-A stream of sensor events may reveal a fault as it develops. Each new event updates state and can trigger a fresh anomaly score. Streaming inference fits that promise.
+A model is useful only when its prediction becomes available **at the moment a product or another system can use it**. That gives us the first-principles view of model serving:
 
-A field device may lose its network connection for hours. Local inference keeps image or audio classification available and can reduce the amount of sensitive data sent to a server. Edge or on-device inference fits that promise.
+> **Model serving is the problem of scheduling inference so that the right prediction exists at the right place, before its usefulness expires, at an acceptable cost.**
 
-These patterns answer the same broad question—how does a model support a decision?—through different delivery contracts. A synchronous API promises a response inside a live request. A queue promises durable progress and a result later. A batch job promises a complete result set by a cutoff. A stream promises continuously updated state. A device runtime promises local availability within its hardware limits.
+Everything people call *real-time inference, batch inference, asynchronous inference, streaming inference, precomputed predictions,* or *edge inference* is a different solution to that scheduling problem. Suppose we have a model
 
-```mermaid
-flowchart TD
-    A["Trained Model<br/>(approved prediction logic)"] --> B["Serving Pattern<br/>(delivery contract)"]
-    B --> C["Trigger<br/>(request schedule event or device input)"]
-    B --> D["Timing<br/>(deadline and freshness)"]
-    B --> E["Result Path<br/>(response table stream or local action)"]
-    B --> F["Failure Policy<br/>(fallback retry hold or review)"]
-    C --> G["Product Decision<br/>(action that uses the score)"]
-    D --> G
-    E --> G
-    F --> G
+$$
+y = f(x)
+$$
 
-    class A input
-    class B,C,D,E,F,G process
+Training gives us $$f$$. Serving has to answer a different question:
+
+$$
+\text{When, where, and under what conditions should } f(x) \text{ be computed?}
+$$
+
+For every prediction, there are roughly four moments:
+
+```text
+input becomes known
+        │
+        ▼
+inference can begin
+        │
+        ▼
+prediction becomes available
+        │
+        ▼
+decision uses prediction
 ```
 
-The contract comes first in a strong design. Tool selection follows after the team understands the decision it must support.
+A serving architecture controls the gaps between those events. For example, imagine a fraud model.
 
-## Start With The Decision And Its Deadline
-<!-- section-summary: The actor, action, and latest useful answer determine whether prediction belongs inside a request, behind a queue, in a data run, in an event processor, or on a device. -->
-
-The first design question is about the product: **who uses the prediction, and what action changes because of it?** A numerical score has no deadline by itself. The action determines how soon the score must arrive.
-
-For a morning case-review queue, supervisors need a ranked list before their shift starts. A score produced several hours earlier may be perfectly useful, provided the input data meets the agreed cutoff. Making every score available in 100 milliseconds would add infrastructure without improving the review decision.
-
-For payment authorization, the actor is the transaction service. Its action can approve the transaction, decline it, or send it for review. The fraud model receives only part of the end-to-end request budget. Network calls and account checks need time too. Policy evaluation and response delivery consume the remaining budget. A model endpoint with low average latency can still fail this product if its slowest requests consume the whole budget.
-
-For document classification, the user may accept a result after a minute if the interface clearly shows `queued`, `processing`, `complete`, or `failed`. The deadline describes total completion time. The initial HTTP response only acknowledges the durable job. Holding the upload request open would couple the user connection to a long-running model process.
-
-The **latest useful answer** is the final moment at which the prediction can still influence its intended action. It is more precise than “real time” or “fast.” A live request might allow 80 milliseconds. An investigation alert might allow 20 seconds. A planning table might need publication before a daily cutoff. The serving pattern should match that product clock.
-
-```mermaid
-flowchart TD
-    A["Decision Actor<br/>(person service or device)"] --> B["Product Action<br/>(what the score changes)"]
-    B --> C["Latest Useful Answer<br/>(decision deadline)"]
-    C --> D{"Connection Must Stay Open<br/>(caller waits for result)"}
-    D -->|Yes| E["Synchronous Online<br/>(response inside request)"]
-    D -->|No| F["Deferred Delivery<br/>(queue batch stream or device)"]
-
-    class A,B input
-    class C,E,F process
-    class D gate
+```text
+Customer clicks "Pay"
+        ↓
+Transaction information becomes known
+        ↓
+Fraud model runs
+        ↓
+Risk score produced
+        ↓
+Payment accepted/rejected
 ```
 
-## How Requests Arrive And How Much Work They Contain
-<!-- section-summary: Known populations, individual requests, durable jobs, continuous events, and local device inputs create different units of work and recovery boundaries. -->
+The prediction must exist **before the payment decision**. Now compare that with customer-churn prediction:
 
-After the deadline, examine how inputs arrive. The arrival shape tells the platform what it must schedule, scale, retry, and observe.
-
-A **known population** already exists as a table, a set of objects, or a bounded collection. Every active account at a cutoff is one example. The system can split that population into partitions, score it in parallel, validate coverage, and publish one result generation. Batch inference follows this shape.
-
-An **individual live request** appears at an unpredictable moment. The request usually carries a small payload or references online features. The serving system needs ready capacity and bounded concurrency because another service is waiting. Synchronous online inference follows this shape.
-
-A **durable job request** also arrives individually, though it can finish after the initial connection closes. A document URI, media file, or large feature payload can enter a queue. Workers claim jobs, record attempts, and publish results through status storage or callbacks. Asynchronous serving follows this shape.
-
-A **continuous event flow** has no natural end. Each event may update keyed state or contribute to a time window. Sensor readings, clicks, payments, and account changes can drive this flow. Streaming inference follows this shape if the model output must update as the events arrive.
-
-A **local device input** starts on a phone, browser, vehicle, camera, or embedded controller. The device runtime owns preprocessing and model execution. Edge inference follows this shape if network, privacy, or response requirements make a server round trip unsuitable.
-
-Arrival shape and volume are separate. Ten million records in one bounded table can still be batch work. Ten events per second can still need a stream if each event must update durable state. A single long document can still need a queue because processing outlives a sensible request connection.
-
-```mermaid
-flowchart TD
-    A["Input Arrival<br/>(natural unit of work)"] --> B{"Arrival Shape<br/>(bounded live durable continuous or local)"}
-    B --> C["Known Population<br/>(batch generation)"]
-    B --> D["Live Request<br/>(synchronous response)"]
-    B --> E["Durable Job<br/>(asynchronous result)"]
-    B --> F["Continuous Event<br/>(stream update)"]
-    B --> G["Device Input<br/>(local prediction)"]
-
-    class A input
-    class B gate
-    class C,D,E,F,G process
+```text
+Nightly warehouse snapshot
+        ↓
+Predict churn for 20 million customers
+        ↓
+Store predictions
+        ↓
+Marketing system reads them tomorrow
 ```
 
-## The Six Serving Patterns
-<!-- section-summary: Six common patterns cover immediate responses, deferred jobs, bounded populations, continuous events, local devices, and products that combine more than one path. -->
+The model may be exactly as complicated, but the serving architecture should be completely different. So don't start with:
 
-Production teams commonly use six delivery shapes. Each shape places waiting and durable state in a different part of the system. It also gives operators a different unit to scale and recover. The definitions below describe those contracts independently of any vendor.
+"Should we use Kubernetes, Kafka, Triton, or Spark?"
 
-### Synchronous online inference
+Start with:
 
-**Synchronous online inference** returns a prediction inside the same request that asked for it. A product API calls the model path, waits, and continues only after receiving a result or fallback.
+**When must the prediction exist?**
 
-A fraud check inside payment authorization is a clear example. The request path needs input validation, a strict timeout, ready capacity, and a reviewed action for model failure. The endpoint's p95 and p99 latency matter because slow-tail requests affect real transactions even if the average remains low.
+Let
 
-This pattern fits immediate decisions with small enough payloads and computation to stay inside the product deadline. It creates an always-available service responsibility.
+$$
+D = \text{maximum useful time between input availability and prediction availability}
+$$
 
-### Asynchronous request and queue inference
+This is the **decision deadline**. For an interactive product:
 
-**Asynchronous inference** accepts work quickly, records it durably, and completes it through a worker later. The initial response contains a job ID or accepted status. The final result reaches the caller through polling, a webhook, a notification, or a result record.
+$$
+D \approx 100\text{ ms} - \text{a few seconds}
+$$
 
-Long document processing illustrates the difference. The user uploads a file and receives a visible status. A worker can spend a minute extracting text and running several models. A retry can resume from durable input, and a poison job can move to a dead-letter queue for investigation.
+For document processing:
 
-This pattern fits large payloads, longer computation, bursty arrivals, and products that can show progress. Queue age and completion time replace request latency as the main timing signals.
+$$
+D \approx \text{seconds or minutes}
+$$
 
-### Batch inference
+For overnight recommendations:
 
-**Batch inference** scores a known population and publishes a complete result set for later use. The trigger may be a schedule, a completed upstream dataset, or an approved model release.
+$$
+D \approx \text{hours}
+$$
 
-A morning support queue can read all open cases from a governed snapshot, calculate priority scores, validate coverage, and publish the new ranking before the shift starts. A failed partition can be replayed under the same run identity while the interface retains the last complete generation.
+For monthly forecasting:
 
-This pattern fits bounded data, repeatable snapshots, high total throughput, and decisions that consume results after publication. Completion time, coverage, and output freshness define success.
+$$
+D \approx \text{days}
+$$
 
-### Streaming and event-driven inference
+Now decompose serving latency:
 
-**Streaming inference** consumes an ongoing event flow and updates predictions or state continuously. The runtime may evaluate one event at a time or combine events into windows. Event time records the source occurrence. Processing time records the platform's handling of that event.
+$$
+L =
+L_{network}
++
+L_{queue}
++
+L_{preprocess}
++
+L_{inference}
++
+L_{postprocess}
++
+L_{network-return}
+$$
 
-An anomaly detector can update its score from recent sensor readings. Apache Kafka can carry the durable event log, and Apache Flink can maintain keyed windows or state, execute the scoring logic, and recover from checkpoints. The output can enter another topic, alerting system, or low-latency state store.
+Your serving architecture is feasible only if approximately
 
-This pattern fits decisions that need state updated by each event or short window. Consumer lag, late events, replay behavior, state checkpoints, and idempotent sinks become central responsibilities.
+$$
+P99(L) \le D
+$$
 
-### Edge and on-device inference
+Notice the **P99**. Average latency is often nearly irrelevant. If your checkout model usually takes 40 ms but occasionally takes 3 seconds, customers experience the 3-second version. So the serving question is not merely:
 
-**Edge inference** runs the model close to the data source, often on a phone, browser, gateway, camera, vehicle, or embedded device. The prediction can continue through poor connectivity and may keep raw data local.
+"How fast is the model?"
 
-An inspection tablet can classify equipment images in a remote facility. The device needs a model small enough for its memory and storage, an acceptable battery and thermal cost, and a signed update path. It may upload only the prediction and selected evidence after connectivity returns.
+It is:
 
-LiteRT and ONNX Runtime Mobile are current cross-platform runtime choices. Platform-native runtimes such as Core ML can offer close integration with device hardware. Edge inference shifts effort toward model compression, hardware testing, version rollout, and fleet observability.
+"Can the entire system reliably finish before the decision deadline?"
 
-### Intentional hybrid inference
+Two systems with identical latency requirements can still need different serving patterns because their workloads arrive differently. Imagine 1 million predictions.
 
-**Hybrid inference** divides one product decision across two or more patterns. The division should reduce total work or satisfy a constraint beyond one path's reach.
+### Workload A
 
-A recommendation system can generate user embeddings and candidate items in batch. A synchronous endpoint then applies current context and re-ranks a small candidate set. A mobile application can run a local classifier during disconnection and request a larger cloud model for uncertain cases after connectivity returns.
+They arrive gradually:
 
-Hybrid design is valuable because expensive stable work can move out of the live path. It also creates a consistency obligation: model versions, feature meaning, freshness limits, and fallback rules must line up across the paths.
-
-```mermaid
-flowchart TD
-    A["Immediate Decision<br/>(caller waits)"] --> B["Synchronous Online<br/>(live response)"]
-    C["Long Individual Work<br/>(connection can close)"] --> D["Asynchronous Queue<br/>(durable job)"]
-    E["Known Population<br/>(results consumed later)"] --> F["Batch Inference<br/>(published generation)"]
-    G["Continuous Events<br/>(state changes over time)"] --> H["Streaming Inference<br/>(ongoing updates)"]
-    I["Local Constraint<br/>(network privacy or device latency)"] --> J["Edge Inference<br/>(device runtime)"]
-    B --> K["Hybrid Boundary<br/>(combine useful paths)"]
-    D --> K
-    F --> K
-    H --> K
-    J --> K
-
-    class A,C,E,G,I input
-    class B,D,F,H,J,K process
+```text
+request
+   request
+      request
+  request
+       request
 ```
+
+Maybe 100 requests per second.
+
+### Workload B
+
+They already exist as a dataset:
+
+```text
+1,000,000 rows
+available simultaneously
+```
+
+These workloads should not necessarily use the same architecture. A few properties matter especially.
+
+| Property            | Question                                                             |
+| ------------------- | -------------------------------------------------------------------- |
+| Arrival pattern     | Individual requests, bursts, continuous events, or bounded datasets |
+| Deadline            | Milliseconds, seconds, minutes, hours                               |
+| Work per prediction | Tiny classifier or expensive generative model                       |
+| Reuse               | Will many consumers want the same prediction                        |
+| Freshness           | How old may a prediction be                                         |
+| State               | Does prediction depend on previous events                           |
+| Locality            | Where does the input data live                                      |
+| Connectivity        | Is a network connection guaranteed                                  |
+
+From these constraints the serving pattern starts to emerge.
+
+## How Do Synchronous, Asynchronous, Batch, Streaming, and Precomputed Inference Differ?
+<!-- section-summary: Synchronous, asynchronous, batch, streaming, and precomputed inference differ in who waits, how work arrives, and when results must exist. -->
+
+Once the deadline and arrival pattern are clear, the common serving modes can be compared by who waits and how work is scheduled.
+
+There isn't a universal law saying there must be exactly six. A useful production taxonomy is:
+
+| Pattern                        | When inference happens        |                Caller waits | Typical use                               |
+| ------------------------------ | ----------------------------- | ---------------------------: | ----------------------------------------- |
+| **Synchronous online**         | On request                    |                          Yes | Search ranking, fraud, interactive APIs   |
+| **Asynchronous**               | After a submitted request     |                           No | Document processing, expensive generation |
+| **Batch**                      | Over a bounded dataset        |                           No | Nightly scoring, embeddings, forecasts    |
+| **Streaming / event-driven**   | As events continuously arrive |                   Usually no | Fraud streams, anomaly detection          |
+| **Precomputed / materialized** | Before the request            | No inference at request time | Recommendations, risk scores              |
+| **Edge / on-device**           | Near the user/data            |                      Depends | Camera, speech, mobile personalization    |
+
+These aren't perfectly orthogonal. Edge describes **placement**, while batch/online/streaming mostly describe **timing**. That's intentional: production architectures frequently combine them. The simplest mental model is:
+
+```text
+Client
+  │
+  │ request x
+  ▼
+Model service
+  │
+  │ f(x)
+  ▼
+prediction y
+  │
+  ▼
+Client continues
+```
+
+The caller is blocked until inference completes. Think:
+
+```python
+prediction = model_service.predict(x)
+do_something(prediction)
+```
+
+This is appropriate when the prediction depends on information that became known **right now** and the decision also needs to happen **right now**. Examples include search ranking, authorization, fraud checks, recommendation reranking and interactive LLM requests. Its fundamental constraint is
+
+$$
+L_{end-to-end} < D
+$$
+
+Because the deadline is tight, synchronous serving forces you to care about things like capacity reservations, autoscaling, overload protection, tail latency and cold starts. There's an important optimization here: **synchronous doesn't mean one request per GPU execution**. An inference server can briefly collect concurrent requests:
+
+```text
+r1 ─┐
+r2 ─┼──► batch ──► GPU
+r3 ─┤
+r4 ─┘
+```
+
+This is dynamic batching. NVIDIA Triton, for example, can dynamically combine requests to increase throughput while limiting how long requests wait for a batch. ([NVIDIA Docs][1]) So:
+
+**Serving pattern and hardware batching strategy are different decisions.**
+
+Sometimes the input becomes known now, but the answer doesn't have to return in the current request.
+
+Instead:
+
+```text
+Client
+   │
+   │ submit job
+   ▼
+ Queue
+   │
+   ▼
+Inference workers
+   │
+   ▼
+Result store
+   │
+   ▼
+Client polls / webhook / event
+```
+
+The API might behave like:
+
+```text
+POST /generate-report
+
+→ 202 Accepted
+→ job_id = 83921
+```
+
+Later:
+
+```text
+GET /jobs/83921
+
+→ completed
+```
+
+This is useful when
+
+$$
+T_{inference} \gg \text{reasonable HTTP request time}
+$$
+
+or when workload bursts shouldn't immediately force massive compute provisioning. The queue fundamentally changes the system. Without a queue:
+
+```text
+incoming traffic → required compute immediately
+```
+
+With a queue:
+
+```text
+incoming traffic → backlog → compute processes backlog
+```
+
+You have exchanged **latency for elasticity**. That is often a very good trade. The operational problems also change. Instead of obsessing only over millisecond latency, you now care about retries, duplicate processing, job status, priority, timeouts, idempotency and dead-letter handling. Now suppose nobody actually generates individual prediction requests. Instead you already have:
+
+```text
+customers.parquet
+
+customer_1
+customer_2
+customer_3
+...
+customer_20,000,000
+```
+
+Running an HTTP request twenty million times is usually solving the wrong problem. You have a bounded dataset:
+
+$$
+X=\{x_1,x_2,\ldots,x_N\}
+$$
+
+so compute
+
+$$
+Y=f(X)
+$$
+
+as a data-processing job.
+
+```text
+Data lake / warehouse
+        │
+        ▼
+     partitions
+   ┌────┼────┐
+   ▼    ▼    ▼
+ worker worker worker
+   │    │    │
+   └────┼────┘
+        ▼
+ prediction table
+```
+
+Because users aren't waiting for each item, the system can optimize primarily for
+
+$$
+\text{throughput}
+$$
+
+rather than individual-request latency. That permits large batches, cheaper compute, aggressive parallelization and better accelerator utilization. AWS Batch illustrates the general queue-and-compute model: jobs wait in queues until capacity is available in an appropriate compute environment. ([AWS Documentation][2]) Batch is therefore often the cheapest architecture when the product deadline permits it. Consider credit-card activity. There isn't a fixed dataset:
+
+```text
+transaction
+transaction
+transaction
+transaction
+...
+```
+
+The input is conceptually unbounded. You want:
+
+```text
+event stream
+     │
+     ▼
+feature/state computation
+     │
+     ▼
+model
+     │
+     ▼
+prediction event
+```
+
+The important difference from an HTTP service is **who is waiting**. With synchronous serving:
+
+```text
+caller → prediction → caller continues
+```
+
+With streaming:
+
+```text
+event → prediction → another event
+```
+
+The producer generally doesn't block waiting for the model. Streaming is particularly useful for predictions that depend on accumulated state.
+
+For example:
+
+$$
+\text{fraud risk}
+=
+f(
+\text{transaction},
+\text{transactions in previous 10 minutes},
+\text{customer state}
+)
+$$
+
+Now the architecture may maintain state continuously:
+
+```text
+transaction events
+       ↓
+last-10-minute state
+       ↓
+feature calculation
+       ↓
+model
+       ↓
+fraud event
+```
+
+Kafka is commonly used as the durable event backbone, while stream processors such as Flink can continuously process stateful event streams. Flink also explicitly distinguishes event time from processing time, which matters for late or out-of-order events. ([Apache Kafka][3]) This is one of the most important patterns because sometimes the best way to serve a model is:
+
+**Don't run the model when the request arrives.**
+
+Suppose your product needs a "likelihood to purchase" score for each customer. You could do:
+
+```text
+request
+  ↓
+load customer data
+  ↓
+run model
+  ↓
+return score
+```
+
+But imagine each customer receives 100 page views per day while their purchasing propensity changes slowly.
+
+Instead:
+
+```text
+every hour
+   ↓
+score every customer
+   ↓
+store score
+```
+
+Then:
+
+```text
+request
+   ↓
+lookup score
+   ↓
+return
+```
+
+Inference latency disappears from the request path. The important equation is reuse. Let
+
+$$
+R = \text{number of requests}
+$$
+
+and
+
+$$
+E = \text{number of unique entities that need predictions}
+$$
+
+If
+
+$$
+R \gg E
+$$
+
+then repeatedly calculating predictions may be wasteful.
+
+For example:
+
+$$
+R=100\,000\,000\text{ page views/day}
+$$
+
+but only
+
+$$
+E=2\,000\,000\text{ customers}.
+$$
+
+Precomputing two million scores may replace tens of millions of repeated inferences. But you've paid for that efficiency with **staleness**. Which leads to an extremely important variable.
 
 ![Six concrete product promises map to synchronous online, asynchronous queue, batch, streaming, edge, and hybrid serving patterns](/content-assets/articles/article-mlops-model-serving-choosing-serving-pattern/serving-pattern-product-promises.png)
 
 *The useful pattern follows the actor, deadline, and arrival shape: a payment caller waits, a document enters a durable job queue, a known population runs as a batch, events update state, a disconnected device runs locally, and hybrid work crosses deliberate boundaries.*
 
-## Use Freshness And Computation Time To Narrow The Choice
-<!-- section-summary: Source-data age, prediction age, processing duration, and result deadline remove serving patterns unable to satisfy the product promise. -->
+## When Does Freshness or Device Locality Matter More than Network Latency?
+<!-- section-summary: A prediction can need fresh data or local execution even when raw server latency appears acceptable, especially at the edge or without connectivity. -->
 
-Freshness describes how old the evidence or prediction may be before it loses value. Computation time describes how long the model path needs to produce a result. These two constraints often remove unsuitable patterns quickly.
+Latency is only one clock; some systems care more about data freshness or placing the decision on the device itself.
 
-Suppose a customer-support priority model uses case age, recent messages, and escalation status. A batch score from the start of the shift may remain useful for several hours. A new urgent message can trigger a small event-driven update for that case. The product has accepted a hybrid freshness policy: batch supplies the baseline, and important events refresh selected entities.
+Define
 
-Now consider a video model that needs forty seconds to process a large clip. A synchronous endpoint would keep a connection and request worker occupied for too long. A queue allows the product to acknowledge the upload, store the input durably, and expose progress. The model can still run on an endpoint behind the worker; the user-facing delivery contract remains asynchronous.
+$$
+F = \text{maximum acceptable age of a prediction}
+$$
 
-Three clocks deserve separate limits. **Data freshness** measures the age of input facts. **Prediction freshness** measures the age of a stored score. **Delivery delay** measures the time from trigger to usable result. A 50-millisecond endpoint can return a stale prediction, while a 15-minute batch job can meet a daily planning deadline with current data.
+Suppose recommendation scores may be 30 minutes old. Then
 
-Computation can also be divided. Batch or streaming pipelines can precompute embeddings and aggregates. The online path then executes only the final ranker or policy calculation. This boundary reduces live latency while preserving current request context.
+$$
+F=30\text{ minutes}.
+$$
 
-```mermaid
-flowchart TD
-    A["Source Fact<br/>(data is created)"] --> B["Feature Ready<br/>(data freshness)"]
-    B --> C["Prediction Ready<br/>(computation duration)"]
-    C --> D["Result Consumed<br/>(prediction freshness)"]
-    D --> E{"Decision Deadline Met<br/>(still useful to act)"}
-    E -->|Yes| F["Pattern Fits<br/>(timing promise is viable)"]
-    E -->|No| G["Move The Boundary<br/>(precompute defer or run locally)"]
+You don't necessarily need online inference. Perhaps:
 
-    class A input
-    class B,C,D,F process
-    class E gate
-    class G failure
+```text
+every 10 minutes
+    ↓
+recompute recommendations
+    ↓
+store results
 ```
 
-## How Traffic And Scale Affect Cost
-<!-- section-summary: Traffic variability, work size, accelerator utilization, and idle capacity determine how each serving pattern spends compute. -->
+is perfectly adequate. Conversely, fraud detection may have
 
-Traffic volume matters, though its shape matters just as much. A system can process the same daily number of predictions through a concentrated batch run or through live requests spread across the day. The infrastructure cost will look different.
+$$
+F \approx 0
+$$
 
-Synchronous online endpoints keep enough capacity ready for live traffic. Steady demand can justify provisioned replicas because predictable capacity protects tail latency. Intermittent demand may suit a serverless endpoint if the product accepts cold-start variation. Sudden bursts need autoscaling headroom, bounded queues, or admission control; scaling begins only after demand is observed.
+because the current transaction itself changes the answer. A useful mental matrix is therefore:
 
-Asynchronous queues absorb bursts and let workers process at a sustainable rate. The queue separates arrival rate from processing rate. This helps a media-processing service survive a sudden upload spike without provisioning every worker for the peak. The trade is visible waiting time, so queue age and completion SLOs must reach the product interface.
+|                             | **Low freshness requirement** | **Very fresh data required** |
+| --------------------------- | ----------------------------- | ---------------------------- |
+| **Tight decision deadline** | Precompute/cache              | Sync online / edge           |
+| **Moderate deadline**       | Precompute or batch           | Async                        |
+| **Continuous events**       | Periodic materialization      | Streaming                    |
+| **Long deadline**           | Batch                         | Batch using newest snapshot  |
 
-Batch jobs concentrate compute into a bounded window. Vectorized scoring and large accelerator batches can improve utilization. The team can release workers after publication. Cost still depends on data scans, partition layout, model loading, shuffle, and output writes.
+This is why starting with "real time sounds better" is dangerous. Real time usually costs more. Use it when the product actually requires it. So far we've assumed:
 
-Streaming systems keep consumers and state available continuously. Their baseline cost can exceed a periodic batch job even at modest traffic. The pattern earns that cost only if continuous updates change the product decision. Kafka partitions and Flink parallelism must match event volume and state size, while checkpoints protect recovery.
-
-Edge inference moves compute cost onto devices and adds fleet engineering. A small quantized model can provide excellent local latency. A model that drains a battery, overheats low-end devices, or exceeds application size budgets is still a failed serving design.
-
-```mermaid
-flowchart TD
-    A["Workload Shape<br/>(volume bursts and duration)"] --> B["Online Cost<br/>(warm capacity and peak headroom)"]
-    A --> C["Queue Cost<br/>(workers follow backlog)"]
-    A --> D["Batch Cost<br/>(concentrated compute window)"]
-    A --> E["Stream Cost<br/>(continuous consumers and state)"]
-    A --> F["Edge Cost<br/>(device resources and fleet rollout)"]
-
-    class A input
-    class B,C,D,E,F process
+```text
+device → network → server → model
 ```
 
-## Decide Where Inference Runs
-<!-- section-summary: Network availability, data-movement rules, local response needs, and device limits can make edge or hybrid inference the only practical delivery contract. -->
+But suppose the input is a camera frame. Sending every frame to a server introduces
 
-A central endpoint assumes the caller can reach it, send permitted inputs, and wait for a round trip. Some products lack one or more of those conditions.
+$$
+L_{network}
+$$
 
-Connectivity matters across industrial sites and field operations. Moving vehicles and ships can lose reliable links too. A camera that detects a safety hazard may need to act during a network outage. Local inference keeps the essential decision available. The device can synchronize predictions and diagnostics after the connection returns. Approved evidence can follow the same delayed path.
+and may introduce privacy, bandwidth and connectivity problems.
 
-Privacy and data residency can also favor local processing. An audio feature extractor can run on a phone and transmit a compact approved representation. A hospital device may keep raw sensor data inside a controlled boundary. Local inference still leaves governance work. Consent and retention need explicit policies. Access, model updates, and incident response need owners.
+Instead:
 
-Hardware then sets a hard budget. The exported model must fit device storage and memory. Inference must meet its latency target across the oldest supported hardware. Battery use and thermal pressure add separate limits. Quantization or pruning can reduce the model, while a smaller architecture may offer a stronger improvement. Hardware accelerators help only after quality and compatibility tests pass.
-
-ONNX Runtime Mobile runs ONNX models on iOS and Android. Its execution providers include CPU, XNNPACK, NNAPI, and Core ML. LiteRT targets mobile, web, desktop, and embedded platforms with hardware acceleration. The runtime choice follows the model format and device fleet. Product-specific testing remains necessary.
-
-An edge design also needs model delivery. Signed artifacts protect the update source. Staged rollout and local version reporting show which devices received the release. Rollback and minimum-supported application versions give the team control after devices leave the lab. A cloud endpoint can handle uncertain cases or larger models. It can also centralize policy checks, creating a deliberate hybrid.
-
-```mermaid
-flowchart TD
-    A["Source Input<br/>(image audio sensor or interaction)"] --> B{"Local Constraint<br/>(connectivity privacy or response time)"}
-    B -->|Strict| C["Device Runtime<br/>(local model execution)"]
-    B -->|Flexible| D["Cloud Runtime<br/>(central model service)"]
-    C --> E["Fleet Controls<br/>(signed rollout version and rollback)"]
-    C --> F["Hybrid Route<br/>(approved uncertain cases use cloud)"]
-    D --> F
-
-    class A input
-    class B gate
-    class C,D,E,F process
+```text
+camera
+   ↓
+model on device
+   ↓
+prediction
 ```
 
-## Plan Failure And Fallback Behaviour
-<!-- section-summary: A pattern is incomplete until the team defines its failure unit, safe fallback, retry boundary, and evidence for recovery. -->
+Now
 
-Every serving pattern fails at a different unit. The fallback should protect the product decision first and preserve enough evidence for investigation.
+$$
+L_{network}\approx0
+$$
 
-A synchronous online failure affects one live request. A short timeout can route to a cached score, smaller model, conservative rule, or manual-review state. The caller needs a stable response contract and a signal that fallback was used. Unbounded retries amplify overload and consume the remaining deadline.
+for inference. This can be ideal for computer vision, speech recognition, sensor processing, mobile personalization, robotics and disconnected environments. But the constraints move elsewhere:
 
-An asynchronous failure affects a durable job. The worker can retry transient errors under the same idempotency key. Exhausted jobs move to a dead-letter queue, and the product displays a failed or review-required state. Losing the job record would strand the user with no trustworthy status.
+```text
+Cloud:
+large GPU
+lots of memory
+central deployment
 
-A batch failure affects a partition or result generation. Consumers can keep the last complete output while the team repairs and replays failed partitions. Publication advances only after coverage and quality checks pass, unless a reviewed partial-publication policy explicitly allows missing entities.
-
-A streaming failure affects consumer progress and state. Kafka retains replayable events, and Flink checkpoints operator state plus source positions. End-to-end exactly-once behavior also requires transactional or idempotent sinks. After recovery, consumer lag and state freshness show how far the system remains behind.
-
-An edge failure affects a device or fleet segment. The application can fall back to a rule or disable the feature. It may call a cloud path if connectivity exists. Fleet telemetry should expose the model version and rollout cohort. Supported hardware and inference-failure counts help isolate the affected segment. Raw user inputs stay outside general fleet telemetry.
-
-```mermaid
-flowchart TD
-    A["Serving Failure<br/>(delivery promise breaks)"] --> B{"Failure Unit<br/>(request job generation stream or device)"}
-    B --> C["Protect The Decision<br/>(fallback hold retry or review)"]
-    C --> D["Preserve Identity<br/>(request job run offset or model version)"]
-    D --> E["Recover Safely<br/>(bounded replay rollback or route)"]
-    E --> F["Verify Evidence<br/>(timing coverage and product impact)"]
-
-    class A input
-    class B gate
-    class C,D,E,F process
+Edge:
+limited RAM
+limited power
+limited compute
+many device types
+harder model upgrades
 ```
 
-## Choose The Pattern In A Deliberate Order
-<!-- section-summary: A reliable selection process moves from product action to deadline, arrival shape, freshness, computation, constraints, failure policy, and only then to a serving runtime. -->
+So models may need quantization, compression or hardware-specific optimization. Modern runtimes explicitly target this use case. ONNX Runtime Mobile supports inference on iOS and Android, while Google's LiteRT targets on-device ML and GenAI across edge hardware. ([ONNX Runtime][4]) And remember:
 
-Serving-pattern reviews work best in a fixed order because each answer removes options. The order also keeps the discussion anchored to the product. A team first defines the decision and timing, then narrows the delivery shape, and only later debates frameworks or cloud services.
+> **Edge is a placement decision, not necessarily an interaction pattern.**
 
-Start with the actor and action. Identify the person, service, or device that consumes the result. State the action the score changes and the consequence of a missing or late answer.
+You might have synchronous edge inference:
 
-Set the latest useful answer. A caller waiting inside the current request points toward synchronous online inference. A durable individual task with a later completion promise points toward a queue. A known population with a publication cutoff points toward batch. Continuous events that must update state point toward streaming. Local availability, privacy, or round-trip needs point toward edge inference.
-
-Define acceptable data and prediction age. A reusable score with a long freshness window may move into batch or cache. Request-time facts may keep a small final stage online. Event-driven refresh can update only entities affected by important changes.
-
-Measure computation and payload size. A long model run or large media object often belongs behind durable storage and a queue. Small bounded payloads and predictable execution suit synchronous endpoints. Device models must fit memory, energy, and hardware-operator support.
-
-Describe traffic and scale. The team should estimate steady rate, peaks, concurrency, total population, event partitions, and device fleet size. These measurements shape capacity and cost; they rarely change the underlying delivery contract on their own.
-
-Finish with failure behavior. Name the last good result and the permitted fallback. Define the retry unit, human-review route, and product status. A design with no safe failure path remains incomplete.
-
-```mermaid
-flowchart TD
-    A["Actor And Action<br/>(who uses the result)"] --> B["Latest Useful Answer<br/>(deadline)"]
-    B --> C["Arrival Shape<br/>(known live durable event or local)"]
-    C --> D["Freshness And Duration<br/>(data age and compute time)"]
-    D --> E["Constraints<br/>(traffic connectivity privacy hardware)"]
-    E --> F["Failure Policy<br/>(fallback retry and recovery)"]
-    F --> G["Serving Pattern<br/>(delivery contract)"]
-    G --> H["Runtime Choice<br/>(tool that supports the contract)"]
-
-    class A input
-    class B,C,D,E,F,G,H process
+```text
+photo → classifier → result
 ```
 
-## Map The Pattern To A Current Production Stack
-<!-- section-summary: Industrial tools implement parts of a delivery contract, so selection should follow the pattern and the operations a team is prepared to own. -->
+or streaming edge inference:
 
-A serving platform implements parts of the delivery contract. The product team still defines that contract. The shortlist should stay small and follow the selected pattern. Each category below solves a different operating responsibility, so tools from separate categories are often complementary.
-
-For synchronous online inference, an ordinary FastAPI, Go, or Java service can be enough for a small CPU model inside an existing application. Managed endpoints are the practical default for a dedicated model service: SageMaker AI real-time inference, Gemini Enterprise Agent Platform (formerly Vertex AI) online endpoints, Azure Machine Learning managed online endpoints, and Databricks Model Serving provide managed deployment and scaling primitives.
-
-KServe fits organisations that already operate Kubernetes as an internal platform and want a common `InferenceService` control layer. Its scaling behavior depends on deployment mode and cluster configuration. NVIDIA Triton fits high-throughput CPU or GPU model execution and can add dynamic batching. Triton usually sits behind the product API or gateway that owns authentication, rate limits, and business fallbacks.
-
-For asynchronous requests, a durable queue plus object storage and workers provides a portable architecture. Cloud queues such as Amazon SQS, Google Cloud Pub/Sub, and Azure Service Bus can carry job references. SageMaker AI Asynchronous Inference offers a managed option for large payloads and long processing; it queues requests and can scale endpoint instances to zero.
-
-For batch inference, start close to governed data. Warehouses can apply models directly to tables, while Spark supports distributed preparation and scoring. Databricks Jobs can publish a versioned result from lakehouse data. Airflow and Dagster coordinate data intervals and retries; managed ML pipelines provide the same broad control near their cloud runtimes.
-
-Provider batch services include SageMaker AI Batch Transform and Agent Platform batch inference. Azure Machine Learning batch endpoints expose a durable batch interface. Databricks AI Functions integrate Model Serving with batch queries. Their current Public Preview status requires an explicit production-readiness review.
-
-For streaming inference, Kafka commonly provides the durable event log and consumer groups. Flink commonly provides stateful event-time processing, checkpoints, and recovery. Managed Kafka and Flink services reduce control-plane work while preserving the same responsibilities around schemas, event time, lag, state, and sinks.
-
-For edge inference, LiteRT and ONNX Runtime Mobile are current cross-platform choices. Core ML serves Apple-native applications. The runtime must support the exported model operators and target accelerators across the real device fleet.
-
-This stack map is intentionally responsibility-led. A managed endpoint still needs a product timeout and fallback. Kafka still needs a stateful processor if scores depend on history. Triton still needs a service boundary. A mobile runtime still needs model rollout and rollback.
-
-```mermaid
-flowchart TD
-    A["Delivery Contract<br/>(selected serving pattern)"] --> B{"Primary Runtime Duty<br/>(request job data event or device)"}
-    B --> C["Request Runtime<br/>(ordinary API managed endpoint or KServe)"]
-    B --> D["Durable Work Runtime<br/>(queue workers or managed async)"]
-    B --> E["Data Runtime<br/>(warehouse Spark or managed batch)"]
-    B --> F["Event Runtime<br/>(Kafka and Flink)"]
-    B --> G["Device Runtime<br/>(LiteRT ONNX Runtime or Core ML)"]
-    C --> H["Product Boundary<br/>(security fallback observability and ownership)"]
-    D --> H
-    E --> H
-    F --> H
-    G --> H
-
-    class A input
-    class B gate
-    class C,D,E,F,G,H process
+```text
+camera frame
+camera frame
+camera frame
+     ↓
+continuous detection
 ```
 
-## Understand The Operating Work For Each Pattern
-<!-- section-summary: Pattern selection changes the primary service objective, scaling signal, recovery unit, and evidence an on-call team needs. -->
+## How Do Traffic, Throughput, Latency, and Placement Shape the Economics?
+<!-- section-summary: Traffic shape, batching, utilization, queueing, and placement determine the latency-throughput-cost trade rather than pattern names alone. -->
 
-The delivery contract tells the operations team what healthy service looks like. It selects the timing promise, the unit of recovery, and the evidence needed during an incident. A shared model registry may connect every model version, though the endpoint, queue, batch job, stream, and device fleet still create different responsibilities.
+Those timing requirements interact with traffic and utilization, which determine whether the pattern is economically sustainable.
 
-For synchronous online inference, the core service objective covers request availability and tail latency. Request rate, errors, p95/p99 latency, queue time, saturation, and fallback rate explain live behavior. Capacity tests establish the number of ready replicas needed for expected traffic.
+Suppose a model requires 10 ms of GPU time. At first glance you might estimate maximum throughput as
 
-For asynchronous inference, the main objective covers accepted jobs completing within a promised duration. Queue age, backlog, worker throughput, retry count, dead-letter volume, and status-record consistency become the key signals. Recovery replays a durable job under the same identity.
+$$
+100\text{ predictions/sec}.
+$$
 
-For batch inference, the objective covers a complete result generation reaching consumers before a cutoff. Input freshness, eligible-row count, scored-row count, failed partitions, completion time, and publication state provide the evidence. Recovery operates on an interval or partition.
+Real systems are more complicated because batching and concurrency matter, but the important quantity remains:
 
-For streaming inference, the objective covers event lag and state freshness. Consumer offsets, watermark delay, checkpoint health, backpressure, late events, and sink failures show whether scores reflect the intended event window. Recovery restores state and replays from durable positions.
+$$
+\text{utilization}
+=
+\frac{\text{useful inference compute}}
+{\text{available inference compute}}
+$$
 
-For edge inference, the objective covers success across supported devices and local latency. Resource use and model-rollout health explain fleet behavior. Telemetry needs careful privacy limits. Recovery may roll back a model bundle or disable a feature cohort. Eligible requests can route to the cloud if policy and connectivity permit it.
+Imagine traffic looks like:
 
-Hybrid systems inherit every path's responsibilities plus consistency checks across them. A batch candidate generator and online ranker need shared entity identity and model lineage. A device/cloud fallback pair needs compatible output meaning and visible route selection.
+```text
+requests/sec
 
-```mermaid
-flowchart TD
-    A["Selected Pattern<br/>(delivery contract)"] --> B["Service Objective<br/>(deadline freshness or availability)"]
-    B --> C["Scaling Signal<br/>(traffic backlog partitions lag or fleet)"]
-    C --> D["Recovery Unit<br/>(request job generation offset or device)"]
-    D --> E["Operational Evidence<br/>(proof the decision path worked)"]
-
-    class A input
-    class B,C,D,E process
+1000 |             █
+ 800 |             █
+ 600 |        █    █
+ 400 |    █   █    █
+ 200 | █  █   █ █  █
+   0 +----------------
 ```
+
+A synchronous system must maintain enough capacity for peaks if it wants tight latency. So you may provision near:
+
+$$
+C_{peak}
+$$
+
+while average demand is only
+
+$$
+C_{avg}.
+$$
+
+Your utilization becomes roughly
+
+$$
+U \approx \frac{C_{avg}}{C_{provisioned}}.
+$$
+
+If demand averages 20 GPUs but you need 80 GPUs available for peak latency:
+
+$$
+U\approx25\%.
+$$
+
+Queues change this. If the deadline is loose, work can accumulate during peaks and execute later:
+
+```text
+burst
+ ↓
+queue ███████████
+       ↓↓↓↓↓
+constant worker pool
+```
+
+Now provisioning can move closer to average load. That is why, in general,
+
+```text
+tight latency
+    ↓
+extra capacity
+    ↓
+lower utilization
+    ↓
+higher cost
+```
+
+while
+
+```text
+loose latency
+    ↓
+batching / queueing
+    ↓
+higher utilization
+    ↓
+lower cost
+```
+
+Imagine a GPU runs one example in 8 ms. Four examples individually:
+
+$$
+4\times8=32\text{ ms}
+$$
+
+Perhaps a batch of four takes only 12 ms. Then throughput improves substantially. But the first request may have to wait for others:
+
+```text
+request 1 ─────────┐
+request 2 ──────┐  │
+request 3 ───┐  │  │
+request 4 ─┐ │  │  │
+           ▼ ▼  ▼  ▼
+             batch
+```
+
+So you trade
+
+$$
+\text{queue delay}
+$$
+
+for
+
+$$
+\text{compute efficiency}.
+$$
+
+This trade-off exists throughout serving:
+
+$$
+\boxed{\text{latency} \leftrightarrow \text{utilization} \leftrightarrow \text{cost}}
+$$
+
+There is rarely a serving architecture that simultaneously minimizes all three. Another common mistake is deciding infrastructure first:
+
+"Should this run on Kubernetes?"
+
+That's downstream of the real decision. First determine:
+
+```text
+decision deadline
+      ↓
+freshness requirement
+      ↓
+arrival pattern
+      ↓
+computation size
+      ↓
+reuse opportunity
+```
+
+Then determine placement:
+
+```text
+cloud
+regional datacenter
+customer environment
+browser
+mobile device
+embedded device
+```
+
+Placement is largely controlled by four forces:
+
+$$
+\text{latency}+\text{data locality}+\text{privacy}+\text{compute availability}.
+$$
+
+For example:
+
+```text
+Very large model
++ tiny phone
+→ probably cloud
+
+Camera frames
++ privacy requirement
++ capable NPU
+→ probably device
+
+Huge warehouse dataset
+→ compute near warehouse
+
+Interactive service
++ GPU cluster
+→ regional/cloud inference service
+```
+
+## What Decision Order Selects a Serving Pattern?
+<!-- section-summary: A deliberate decision tree starts from the product deadline and arrivals, then considers freshness, interaction, scale, privacy, and failure tolerance. -->
+
+The tradeoffs become manageable when the team follows a fixed decision order rather than choosing from product labels.
+
+A practical serving decision can therefore be made in this order:
+
+1. **Identify the decision.** What consumes the prediction
+2. **Set its deadline $$D$$.** When does the prediction become useless
+3. **Set freshness $$F$$.** How old may the input or prediction be
+4. **Inspect arrivals.** Individual requests, continuous events, or bounded datasets
+5. **Measure computation.** Can inference reliably finish inside the deadline
+6. **Look for reuse.** Could one prediction satisfy many future requests
+7. **Choose placement.** Does data/privacy/connectivity require edge or local execution
+8. **Estimate traffic.** Average rate, peak rate, burstiness and concurrency.
+9. **Choose the cheapest architecture satisfying the above constraints.**
+10. **Benchmark the complete system at P95/P99, not merely the model kernel.**
+
+That order prevents a surprising amount of unnecessary infrastructure. You can compress most of the reasoning into this:
+
+```text
+                         Prediction needed
+                                │
+                                ▼
+                  Does it depend on new information
+                     │                     │
+                    NO                    YES
+                     │                     │
+                     ▼                     ▼
+               PRECOMPUTE          How soon is it needed
+                                   │
+                    ┌──────────────┼──────────────┐
+                    ▼              ▼              ▼
+              milliseconds      seconds        hours
+                    │              │              │
+                    ▼              ▼              ▼
+              SYNC / EDGE        ASYNC          BATCH
+
+But:
+
+Are inputs a continuous event stream
+             │
+            YES
+             │
+             ▼
+         STREAMING
+
+Does data need to remain on device,
+or must inference work offline
+             │
+            YES
+             │
+             ▼
+           EDGE
+```
+
+And real systems commonly combine branches.
 
 ![Five primary serving patterns compared by their health signal, failure unit, and recovery responsibility, with hybrid systems inheriting every path they combine](/content-assets/articles/article-mlops-model-serving-choosing-serving-pattern/serving-pattern-operating-work.png)
 
 *Online, queue, batch, streaming, and edge contracts give on-call teams different clocks and recovery units. A hybrid owns all of the duties created by its component paths.*
 
-## Revisit The Choice As The Product Changes
-<!-- section-summary: Serving patterns are architecture decisions tied to product constraints, so new deadlines, traffic, features, costs, or device needs can justify a new boundary. -->
+## Why Are Hybrid Architectures and Several Infrastructure Layers Normal?
+<!-- section-summary: Real products combine patterns and map the logical timing choice onto queues, jobs, services, streams, devices, and storage. -->
 
-A serving pattern is a current answer to current constraints. Product behavior can change the deadline, freshness need, traffic shape, or connectivity assumption that supported the original design. Any such change should trigger a boundary review. Preserving the original pattern as a permanent platform rule can hide a better fit.
+A single pattern rarely covers every path, so hybrid designs and multiple infrastructure components are expected.
 
-A daily priority list may gain an interactive re-score button after agents edit a case. The system can keep the full batch generation and add an asynchronous or online refresh for the changed case. This is often safer than replacing the entire batch path.
+Consider recommendations. You might compute candidate recommendations nightly:
 
-A synchronous document model may grow from a few seconds to a minute after a larger model release. Moving the user contract to a durable job can protect gateway connections and make retries visible. The model can remain on the same compute platform behind the worker.
+```text
+BATCH
+users × products
+      ↓
+top 500 candidates/user
+```
 
-A streaming score may prove valuable only once per hour. A micro-batch or scheduled job can reduce continuous infrastructure cost while meeting the actual action deadline. The team should compare product outcomes, freshness, and recovery work before changing the path.
+Then store them:
 
-A device feature may need better quality than the local model can supply for uncertain cases. Confidence-based routing can keep obvious decisions local and send approved hard cases to a cloud endpoint. Connectivity and privacy policy decide which inputs may leave the device.
+```text
+PRECOMPUTE
+candidate store
+```
 
-Migration should preserve prediction meaning. The old and new paths can run side by side, record model and feature identity, compare outputs, and move a small decision segment first. Rollback returns the segment to the earlier delivery path under the same product contract.
+When the user opens the app:
 
-## The Main Idea
-<!-- section-summary: The right serving pattern follows the product decision, deadline, arrival shape, freshness, computation, constraints, and failure policy before any framework enters the design. -->
+```text
+SYNC
+current context
+      +
+cached candidates
+      ↓
+online reranker
+      ↓
+top 20
+```
 
-Choosing a serving pattern means choosing how prediction work reaches a real decision. Synchronous online inference serves a caller waiting now. Asynchronous inference completes a durable individual job. Batch inference publishes results for a known population. Streaming inference updates state from continuing events. Edge inference runs near the data source. Hybrid inference divides one decision across useful boundaries.
+Meanwhile user interactions flow through:
 
-Start with the actor and action, then define the latest useful answer. Arrival shape, acceptable staleness, computation time, traffic, connectivity, privacy, hardware, and fallback remove unsuitable choices. Those requirements narrow the implementation. The remaining choice may be a managed endpoint, queue, warehouse, lakehouse, stream processor, Kubernetes serving layer, model server, or device runtime.
+```text
+STREAMING
+click/view/purchase events
+        ↓
+real-time features
+```
+
+So one product can simultaneously contain:
+
+```text
+batch
++ streaming
++ precomputation
++ synchronous inference
+```
+
+This is often better than forcing the entire ML system into one serving model. Don't interpret these as mandatory stacks; they're examples of how today's systems implement the underlying patterns.
+
+| Pattern     | Typical architecture                                               |
+| ----------- | ------------------------------------------------------------------ |
+| Synchronous | API gateway → inference service → CPU/GPU replicas                 |
+| Async       | API → durable queue → workers → result store                       |
+| Batch       | Orchestrator → distributed compute → warehouse/object store        |
+| Streaming   | Kafka-like log → stream processor → inference → output topic/store |
+| Precompute  | Batch/stream inference → DB/feature store/cache                    |
+| Edge        | App/device → local inference runtime                               |
+
+For Kubernetes-centric online serving, KServe provides inference services and more specialized generative serving primitives, while Ray Serve supports scalable online inference, model composition, batching and streaming responses. ([KServe][5]) For GPU-heavy services, Triton provides scheduling and dynamic batching primitives. ([NVIDIA Docs][1]) For continuous stateful processing, stacks commonly combine an event log such as Kafka with a stream processor such as Flink. ([Apache Kafka][3]) For mobile and edge deployment, ONNX Runtime Mobile and LiteRT are representative runtimes. ([ONNX Runtime][6]) The product requirement should choose among these tools—not the reverse.
+
+## Where Does Each Serving Pattern Move Its Complexity?
+<!-- section-summary: Every pattern simplifies one boundary while creating operational work elsewhere, and inference-engine optimization remains a separate decision. -->
+
+Each choice moves complexity between callers, queues, storage, services, and devices, while engine tuning solves a different layer.
+
+There is no free serving pattern.
+
+| Pattern        | Main thing you optimize  | Main operational burden              |
+| -------------- | ------------------------ | ------------------------------------ |
+| **Sync**       | Immediate answers        | P99 latency, autoscaling, overload   |
+| **Async**      | Elastic expensive work   | Queues, retries, idempotency         |
+| **Batch**      | Cost and throughput      | Scheduling, partitioning, backfills  |
+| **Streaming**  | Fresh continuous state   | Ordering, state, replay, late events |
+| **Precompute** | Extremely cheap reads    | Staleness, refreshes, invalidation   |
+| **Edge**       | Locality/privacy/latency | Device compatibility and rollout     |
+
+This is a useful engineering principle:
+
+**You don't eliminate complexity. You choose where you want complexity to live.**
+
+For example, precomputation removes model latency from the request path but creates cache-refresh complexity. Async removes strict execution latency but creates job-management complexity. Edge removes network dependency but creates model-distribution complexity. Especially with LLMs, you'll hear terms such as:
+
+```text
+continuous batching
+tensor parallelism
+pipeline parallelism
+prefill/decode disaggregation
+prefix-aware routing
+KV-cache routing
+```
+
+These are important, but they answer a lower-level question:
+
+**How should an inference cluster execute requests efficiently?**
+
+They don't usually answer the higher-level product question:
+
+**When should the product request inference?**
+
+For example:
+
+```text
+Product architecture:
+SYNCHRONOUS
+
+        ↓
+
+Serving layer:
+Ray Serve / KServe
+
+        ↓
+
+Inference engine:
+vLLM / Triton / etc.
+
+        ↓
+
+Execution optimizations:
+continuous batching
+tensor parallelism
+prefill/decode separation
+```
+
+Modern Ray Serve LLM documentation, for example, uses "serving patterns" for techniques such as data-parallel attention and prefill/decode disaggregation. Those are valuable cluster-level patterns, but they're a different abstraction layer from the six application-level patterns discussed here. ([Ray][7]) Keeping those layers separate makes architecture conversations much clearer.
+
+## When Should the Product Revisit Its Serving Pattern?
+<!-- section-summary: Serving choices should change when deadlines, traffic, freshness, cost, privacy, or product interaction change. -->
+
+The selected pattern is a product assumption that needs review as the workload and value deadline evolve.
+
+The best pattern at launch may be completely wrong a year later. Imagine an application starts with 1,000 predictions/day. A synchronous service is simple:
+
+```text
+API → model
+```
+
+Then it grows to 100 million predictions/day. You discover that 90% of requests repeatedly ask for predictions about the same entities. Now:
+
+```text
+batch/stream
+     ↓
+precompute
+     ↓
+cache
+     ↓
+API lookup
+```
+
+might be dramatically cheaper. Or perhaps a nightly fraud model starts losing money because attacks happen faster.
+
+Then:
+
+```text
+nightly batch
+```
+
+may need to become:
+
+```text
+streaming features
+       +
+online inference
+```
+
+Serving architecture therefore isn't a permanent property of a model. It is a property of the relationship between
+
+$$
+\boxed{
+\text{model}
++
+\text{product}
++
+\text{data}
++
+\text{traffic}
++
+\text{hardware}
+}
+$$
+
+and all five change over time. If you remember only one framework, use this:
+
+```text
+                     WHEN IS THE INPUT KNOWN
+                              │
+                              ▼
+                     WHEN IS THE OUTPUT NEEDED
+                              │
+                              ▼
+                     HOW FRESH MUST IT BE
+                              │
+                              ▼
+              HOW EXPENSIVE IS IT TO COMPUTE
+                              │
+                              ▼
+              CAN THE RESULT BE REUSED
+                              │
+                              ▼
+                  WHERE CAN IT BE COMPUTED
+                              │
+                              ▼
+                 WHAT DOES TRAFFIC LOOK LIKE
+                              │
+                              ▼
+                   choose serving pattern
+```
+
+And the resulting intuition is:
+
+$$
+\boxed{
+\begin{aligned}
+\text{need answer immediately} &\rightarrow \text{synchronous} \\
+\text{can wait for a job} &\rightarrow \text{asynchronous} \\
+\text{many bounded records} &\rightarrow \text{batch} \\
+\text{continuous events} &\rightarrow \text{streaming} \\
+\text{same answer reused} &\rightarrow \text{precompute} \\
+\text{data/decision belongs locally} &\rightarrow \text{edge}
+\end{aligned}}
+$$
+
+The deeper principle is simpler:
+
+**Choose the least real-time, least distributed, least operationally complex serving architecture that still delivers a sufficiently fresh prediction before the decision deadline.**
+
+That principle tends to produce systems that are cheaper, easier to operate, and easier to evolve.
 
 ![Six-step serving-pattern selection starts with the product actor and action, then evaluates deadline, arrival shape, freshness, constraints, and failure policy before choosing a delivery contract and runtime](/content-assets/articles/article-mlops-model-serving-choosing-serving-pattern/serving-pattern-selection-summary.png)
 
 *The delivery contract is a product promise. Runtime and tool selection comes after the team can state who acts, when the answer is useful, how work arrives, and what happens when the path fails.*
 
+## Check Your Answers
+
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Timing and Request Pattern Does a Serving Design Need to Satisfy?]{kind="recap"}
+A serving pattern schedules inference around the decision deadline, request arrival, freshness need, response path, and acceptable cost.
+:::
+
+:::expand[How Do Synchronous, Asynchronous, Batch, Streaming, and Precomputed Inference Differ?]{kind="recap"}
+Synchronous, asynchronous, batch, streaming, and precomputed inference differ in who waits, how work arrives, and when results must exist.
+:::
+
+:::expand[When Does Freshness or Device Locality Matter More than Network Latency?]{kind="recap"}
+A prediction can need fresh data or local execution even when raw server latency appears acceptable, especially at the edge or without connectivity.
+:::
+
+:::expand[How Do Traffic, Throughput, Latency, and Placement Shape the Economics?]{kind="recap"}
+Traffic shape, batching, utilization, queueing, and placement determine the latency-throughput-cost trade rather than pattern names alone.
+:::
+
+:::expand[What Decision Order Selects a Serving Pattern?]{kind="recap"}
+A deliberate decision tree starts from the product deadline and arrivals, then considers freshness, interaction, scale, privacy, and failure tolerance.
+:::
+
+:::expand[Why Are Hybrid Architectures and Several Infrastructure Layers Normal?]{kind="recap"}
+Real products combine patterns and map the logical timing choice onto queues, jobs, services, streams, devices, and storage.
+:::
+
+:::expand[Where Does Each Serving Pattern Move Its Complexity?]{kind="recap"}
+Every pattern simplifies one boundary while creating operational work elsewhere, and inference-engine optimization remains a separate decision.
+:::
+
+:::expand[When Should the Product Revisit Its Serving Pattern?]{kind="recap"}
+Serving choices should change when deadlines, traffic, freshness, cost, privacy, or product interaction change.
+:::
+
 ## References
 
-- [Amazon SageMaker AI: Inference options](https://docs.aws.amazon.com/sagemaker/latest/dg/deploy-model-options.html)
-- [Amazon SageMaker AI: Asynchronous inference](https://docs.aws.amazon.com/sagemaker/latest/dg/async-inference.html)
-- [Gemini Enterprise Agent Platform: Prediction guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/start/predictions-guide)
-- [Azure Machine Learning: Online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online)
-- [Azure Machine Learning: Batch endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-batch)
-- [Databricks: Model Serving](https://docs.databricks.com/aws/en/machine-learning/model-serving)
-- [Databricks: Batch inference](https://docs.databricks.com/aws/en/machine-learning/model-inference)
-- [KServe: Predictive inference framework overview](https://kserve.github.io/website/docs/model-serving/predictive-inference/frameworks/overview)
-- [NVIDIA Triton Inference Server: Dynamic batching](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html)
-- [Apache Flink: Streaming analytics](https://nightlies.apache.org/flink/flink-docs-stable/docs/learn-flink/streaming_analytics/)
-- [Apache Flink: Checkpointing](https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/fault-tolerance/checkpointing/)
-- [ONNX Runtime Mobile](https://onnxruntime.ai/docs/get-started/with-mobile.html)
-- [LiteRT](https://developers.google.com/edge/litert)
+[1]: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html "Batchers — NVIDIA Triton Inference Server"
+[2]: https://docs.aws.amazon.com/batch/latest/userguide/job_queues.html "Job queues - AWS Batch"
+[3]: https://kafka.apache.org/documentation/ "Introduction | Apache Kafka"
+[4]: https://onnxruntime.ai/docs/tutorials/mobile/ "Deploy on mobile | onnxruntime"
+[5]: https://kserve.github.io/website/docs/admin-guide/overview "Administrator Guide | KServe"
+[6]: https://onnxruntime.ai/docs/get-started/with-mobile.html "Mobile | onnxruntime"
+[7]: https://docs.ray.io/en/latest/serve/llm/architecture/overview.html "Architecture overview — Ray 2.58.0"

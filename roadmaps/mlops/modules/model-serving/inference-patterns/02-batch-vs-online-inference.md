@@ -12,434 +12,1604 @@ aliases:
 
 ## Table of Contents
 
-1. [Start With The Inference Deadline](#start-with-the-inference-deadline)
-2. [How Batch Inference Produces Scheduled Results](#how-batch-inference-produces-scheduled-results)
-3. [How Online Inference Responds To A Live Request](#how-online-inference-responds-to-a-live-request)
-4. [Know The Difference Between Freshness And Latency](#know-the-difference-between-freshness-and-latency)
-5. [How Throughput, Cost, And Failure Affect Architecture](#how-throughput-cost-and-failure-affect-architecture)
-6. [Hybrid Designs Use Both Paths Deliberately](#hybrid-designs-use-both-paths-deliberately)
-7. [Choose Batch Or Online From The Product Decision](#choose-batch-or-online-from-the-product-decision)
-8. [Build Batch Inference With Production Data Systems](#build-batch-inference-with-production-data-systems)
-9. [Build Online Inference With A Production Serving Layer](#build-online-inference-with-a-production-serving-layer)
-10. [Monitor And Recover Batch And Online Systems](#monitor-and-recover-batch-and-online-systems)
-11. [Change The Serving Pattern Without Changing Product Meaning](#change-the-serving-pattern-without-changing-product-meaning)
-12. [The Main Idea](#the-main-idea)
-13. [References](#references)
+1. [How Do Deadlines Distinguish Batch from Online Inference?](#how-do-deadlines-distinguish-batch-from-online-inference)
+2. [Why Do Batch and Online Systems Pay Different Capacity Costs?](#why-do-batch-and-online-systems-pay-different-capacity-costs)
+3. [How Do Data Engineering, Idempotency, and Lineage Make Batch Inference Reliable?](#how-do-data-engineering-idempotency-and-lineage-make-batch-inference-reliable)
+4. [How Do Request Reliability, Overload, Loading, and Autoscaling Make Online Inference Reliable?](#how-do-request-reliability-overload-loading-and-autoscaling-make-online-inference-reliable)
+5. [How Can Both Paths Preserve the Same Model and Feature Meaning?](#how-can-both-paths-preserve-the-same-model-and-feature-meaning)
+6. [How Do Monitoring, Replay, Redundancy, and Retries Differ between the Paths?](#how-do-monitoring-replay-redundancy-and-retries-differ-between-the-paths)
+7. [How Do Releases, Migrations, and Cascades Combine Batch and Online Inference?](#how-do-releases-migrations-and-cascades-combine-batch-and-online-inference)
+8. [What Decision Framework Chooses the Right Operating Path?](#what-decision-framework-chooses-the-right-operating-path)
+9. [Check Your Answers](#check-your-answers)
 
-## Start With The Inference Deadline
-<!-- section-summary: Batch and online inference are two ways to deliver a prediction, separated by the latest moment at which the prediction still helps a real decision. -->
+A retailer can score tomorrow's catalogue overnight and serve those predictions from a table in milliseconds. A payment authorization cannot wait for a nightly job; it needs a live decision while the customer is still at checkout.
 
-A monthly outreach list can wait for predictions prepared overnight. A payment-risk check must return before the service approves or rejects the transaction. **Batch inference** prepares predictions for a known collection of records and publishes them for later use. **Online inference** calculates a prediction while a live request waits. The **inference deadline** is the latest moment at which that prediction can still influence the decision.
+**Batch inference** processes a known body of work by a completion deadline. **Online inference** serves a waiting request under a much shorter response deadline. That timing difference changes capacity, queues, data contracts, recovery, monitoring, and release behaviour even when both paths use the same model artifact.
 
-Consider two ordinary situations. A risk operations team reviews a list of accounts every morning. A scoring job can process all eligible accounts overnight and publish the list before the reviewers start work. A prediction that arrives in a few seconds offers no extra value; a complete, reviewed result set before the morning cutoff matters far more. That is a batch problem.
+These questions compare the two operating models and show where hybrid designs provide a better answer:
 
-Now consider a card payment authorization. The payment service receives an amount, merchant, device, and account history, then requests a fraud score before approving or declining the transaction. The shopper and merchant are waiting. A score produced ten minutes later has missed the decision. That is an online problem.
+1. **How Do Deadlines Distinguish Batch from Online Inference?**
+2. **Why Do Batch and Online Systems Pay Different Capacity Costs?**
+3. **How Do Data Engineering, Idempotency, and Lineage Make Batch Inference Reliable?**
+4. **How Do Request Reliability, Overload, Loading, and Autoscaling Make Online Inference Reliable?**
+5. **How Can Both Paths Preserve the Same Model and Feature Meaning?**
+6. **How Do Monitoring, Replay, Redundancy, and Retries Differ between the Paths?**
+7. **How Do Releases, Migrations, and Cascades Combine Batch and Online Inference?**
+8. **What Decision Framework Chooses the Right Operating Path?**
 
-These examples describe the delivery shape. The model type can stay unchanged: the same gradient-boosted model could run in either path. Batch and online inference differ through their contracts, capacity plans, failure boundaries, and recovery procedures.
+## How Do Deadlines Distinguish Batch from Online Inference?
+<!-- section-summary: Batch work has a completion deadline across available records, while online work has a waiting decision and a per-request latency deadline. -->
 
-```mermaid
-flowchart TD
-    A["Product Decision<br/>(who acts on the prediction)"] --> B["Inference Deadline<br/>(latest useful answer)"]
-    B --> C{"Caller Can Wait<br/>(response needed now)"}
-    C -->|No| D["Batch Inference<br/>(score a known population)"]
-    C -->|Yes| E["Online Inference<br/>(score a live request)"]
-    D --> F["Published Result Set<br/>(consumed after completion)"]
-    E --> G["Immediate Response<br/>(consumed inside the request)"]
+The clearest distinction is whether a waiting decision needs one response now or a set of predictions needs completion by a later deadline.
 
-    class A,B input
-    class C gate
-    class D,E,F,G process
+The easiest way to understand batch and online inference is to stop thinking of them as two different kinds of machine learning. The model may be identical:
+
+$$
+y=f(x)
+$$
+
+What changes is **when the system is required to produce $$y$$**. That gives us the core distinction:
+
+> **Batch inference computes predictions because a schedule or dataset says work is ready. Online inference computes predictions because a live decision is waiting for the answer.**
+
+From that difference follow almost all of their architectural and operational differences. Suppose a product needs a prediction. There are three important times:
+
+$$
+t_{input}=\text{when the required input becomes available}
+$$
+
+$$
+t_{prediction}=\text{when the prediction becomes available}
+$$
+
+$$
+t_{decision}=\text{when the product must make its decision}
+$$
+
+For the prediction to be useful:
+
+$$
+t_{prediction} \le t_{decision}
+$$
+
+Define the available inference window:
+
+$$
+D=t_{decision}-t_{input}
+$$
+
+This $$D$$ is the fundamental serving constraint. If:
+
+$$
+D=50\text{ ms}
+$$
+
+you almost certainly need online inference. If:
+
+$$
+D=8\text{ hours}
+$$
+
+batch inference may be perfectly adequate. For example, consider a payment fraud decision:
+
+```text
+transaction happens
+       ↓
+features become known
+       ↓
+model scores transaction
+       ↓
+approve / decline payment
 ```
 
-The deadline creates an operating promise. A batch team promises that a complete generation of scores will be ready by a business cutoff. An online team promises that each accepted request will receive a valid response inside a latency target. Those promises deserve separate designs even if both paths load the same registered model version.
+The payment cannot reasonably wait until tonight. Now consider a sales team that needs a list of likely-to-churn customers each morning:
+
+```text
+midnight data snapshot
+       ↓
+score customers overnight
+       ↓
+write prediction table
+       ↓
+sales team uses it at 9 AM
+```
+
+Here, computing each prediction synchronously at 9 AM would usually add complexity without improving the product. So before asking:
+
+"Batch or online?"
+
+ask:
+
+**How long can the decision wait after the necessary information becomes available?**
+
+Batch inference begins because some **collection of inputs is ready to process**. Suppose the warehouse contains:
+
+```text
+customer_id | purchases | sessions | tenure | ...
+--------------------------------------------------
+1           | ...
+2           | ...
+3           | ...
+...
+20,000,000
+```
+
+The system effectively computes:
+
+$$
+Y=f(X)
+$$
+
+where
+
+$$
+X=\{x_1,x_2,\ldots,x_N\}
+$$
+
+and produces:
+
+$$
+Y=\{f(x_1),f(x_2),\ldots,f(x_N)\}
+$$
+
+The architecture might look like:
+
+```text
+Warehouse / Object Store
+          │
+          ▼
+     batch scheduler
+          │
+          ▼
+   feature computation
+          │
+          ▼
+     model inference
+          │
+          ▼
+   prediction dataset
+          │
+          ▼
+ warehouse / database
+```
+
+The prediction becomes a **data product**.
+
+For example:
+
+```text
+customer_id | churn_probability | model_version | scored_at
+----------------------------------------------------------------
+1001        | 0.82              | churn_v17     | 02:14
+1002        | 0.13              | churn_v17     | 02:14
+...
+```
+
+Applications later read those results. The important consequence is that users aren't normally blocked while each row is computed. That changes what the system should optimize. Instead of primarily optimizing:
+
+$$
+\text{latency per prediction}
+$$
+
+you often optimize:
+
+$$
+\text{predictions per unit time}
+$$
+
+and:
+
+$$
+\text{cost per prediction}
+$$
+
+Online inference reverses the relationship. The prediction is not produced because a dataset happened to be ready. It is produced because **something is waiting**.
+
+```text
+user / service
+      │
+      │ request
+      ▼
+ feature lookup
+      │
+      ▼
+ model service
+      │
+      ▼
+ prediction
+      │
+      ▼
+ decision
+```
+
+For example:
+
+```text
+GET /search?q=running+shoes
+```
+
+The application might retrieve candidate products and ask a ranking model:
+
+$$
+score_i=f(user,query,item_i,current\ context)
+$$
+
+The user is waiting for the page. Consequently:
+
+$$
+L_{request}
+=
+L_{network}
++
+L_{features}
++
+L_{queue}
++
+L_{inference}
++
+L_{postprocess}
+$$
+
+must satisfy something like:
+
+$$
+P99(L_{request}) < D
+$$
+
+The P99 is important. Suppose latency is:
+
+```text
+50% of requests:   30 ms
+90%:               45 ms
+99%:              400 ms
+99.9%:              4 s
+```
+
+An average of 35 ms might look excellent while the actual user experience is terrible during tail events. Online inference therefore creates pressure around:
+
+```text
+tail latency
+capacity
+concurrency
+timeouts
+autoscaling
+overload
+dependency failures
+```
+
+Batch inference experiences many of the same underlying failures, but the operational priority is different because nobody is usually blocking on an individual prediction. This distinction is subtle but important. Suppose nightly inference processes 100 million customers. Maybe no individual prediction needs to finish within 50 ms. But the **whole job must finish before 06:00**. So batch systems have deadlines too. If the job starts at midnight:
+
+$$
+T_{available}=6\text{ hours}
+$$
+
+and you have:
+
+$$
+N=100\,000\,000
+$$
+
+predictions to compute, then your required average throughput is at least:
+
+$$
+Q=\frac{N}{T_{available}}
+$$
+
+which gives approximately:
+
+$$
+Q \approx 4,630 \text{ predictions/sec}
+$$
+
+before accounting for retries, data loading, skew, failures and output writes. So batch doesn't mean:
+
+"Performance doesn't matter."
+
+It means performance is generally measured at the **job level** rather than the individual-request level. Online asks:
+
+$$
+\text{Did this request finish quickly enough?}
+$$
+
+Batch asks:
+
+$$
+\text{Did the entire required dataset finish before its publication deadline?}
+$$
+
+This is one of the most important distinctions in serving systems.
+
+### Latency
+
+Latency measures:
+
+$$
+\text{request received}
+\rightarrow
+\text{prediction returned}
+$$
+
+Suppose:
+
+$$
+L=40\text{ ms}
+$$
+
+That sounds very real-time. But perhaps the model uses features computed yesterday. Your prediction may be fast but stale.
+
+### Freshness
+
+Freshness asks:
+
+How recent is the information used to produce this prediction
+
+Define prediction age:
+
+$$
+A=t_{now}-t_{data}
+$$
+
+If your product tolerates:
+
+$$
+A<24\text{ hours}
+$$
+
+nightly batch may work perfectly. If it requires:
+
+$$
+A<5\text{ seconds}
+$$
+
+the serving architecture must somehow incorporate very recent information. Therefore these are separate dimensions:
+
+|                           | Low request latency |    High request latency |
+| ------------------------- | ------------------: | ----------------------: |
+| **Fresh data**            |    Online inference | Async/stream processing |
+| **Older data acceptable** |  Precomputed lookup |       Traditional batch |
+
+A prediction can therefore be:
+
+**fast but stale** or:
+
+**slow but fresh** or:
+
+**fast and fresh** or:
+
+**slow and stale**. Only the product can tell you which combination is acceptable. Suppose recommendations are computed every hour.
+
+```text
+hourly batch job
+      ↓
+model inference
+      ↓
+top recommendations/user
+      ↓
+key-value store
+```
+
+When the user opens the app:
+
+```text
+user_id
+   ↓
+database lookup
+   ↓
+recommendations
+```
+
+Request latency might be only:
+
+$$
+5\text{ ms}
+$$
+
+even though inference itself happened 37 minutes earlier. So "online product experience" does **not** imply "online inference." This architecture has transformed:
+
+$$
+\text{expensive model execution}
+$$
+
+into:
+
+$$
+\text{cheap data lookup}
+$$
+
+at request time. The trade-off is freshness.
+
+## Why Do Batch and Online Systems Pay Different Capacity Costs?
+<!-- section-summary: Batch improves utilization and tolerates queues; online pays for ready capacity, while microbatching trades a short wait for efficiency. -->
+
+Those deadlines create different economics: batch fills capacity with available work, while online reserves readiness for uncertain arrivals.
+
+Accelerators are most efficient when kept busy. Suppose a GPU is capable of processing a large batch efficiently. Batch inference can often do:
+
+```text
+large dataset
+     ↓
+partition
+     ↓
+large inference batches
+     ↓
+high GPU utilization
+```
+
+There is little reason to keep spare capacity waiting for unpredictable users. The system can usually optimize heavily for:
+
+$$
+\text{throughput}
+$$
+
+and:
+
+$$
+\text{utilization}
+$$
+
+This tends to reduce:
+
+$$
+\text{cost per prediction}
+$$
+
+Batch systems can also tolerate queueing:
+
+```text
+10 million items waiting
+        ↓
+workers process continuously
+```
+
+If the deadline is hours away, waiting 30 seconds for an available worker may be irrelevant. This ability to buffer work is economically powerful. Online traffic is not usually smooth. Imagine requests per second:
+
+```text
+1000 |                 █
+ 800 |                 █
+ 600 |        █        █
+ 400 |        █   █    █
+ 200 | █  █   █   █    █
+   0 +----------------------
+```
+
+A user arriving during the spike cannot be told:
+
+"We'll process your ranking request when GPU utilization is convenient."
+
+So online systems maintain enough capacity to absorb traffic. If:
+
+$$
+Q_{avg}=1,000\text{ req/s}
+$$
+
+but:
+
+$$
+Q_{peak}=4,000\text{ req/s}
+$$
+
+you may need infrastructure capable of operating near the peak. That capacity may spend much of its time idle. Hence online inference often trades:
+
+$$
+\text{lower utilization}
+$$
+
+for:
+
+$$
+\text{low waiting time}
+$$
+
+In simplified form:
+
+$$
+\boxed{
+\text{Online serving pays for readiness}
+}
+$$
+
+while:
+
+$$
+\boxed{
+\text{Batch serving pays mainly for work actually performed}
+}
+$$
+
+The exact economics depend on the compute platform, but the principle is general. Suppose several online requests arrive close together:
+
+```text
+r1 ─────┐
+r2 ───┐ │
+r3 ─┐ │ │
+    ▼ ▼ ▼
+     GPU
+```
+
+Running each separately may waste GPU capacity. So an inference server can briefly wait:
+
+```text
+r1 ─────────┐
+r2 ──────┐  │
+r3 ───┐  │  │
+r4 ─┐ │  │  │
+    ▼ ▼  ▼  ▼
+      batch
+        ↓
+       GPU
+```
+
+This introduces a queue delay:
+
+$$
+L_{queue}
+$$
+
+but may substantially reduce compute time per request. So the online serving system solves:
+
+$$
+\min(\text{latency})
+$$
+
+subject to maintaining reasonable:
+
+$$
+\text{throughput and utilization}
+$$
+
+Batch serving tends to solve almost the inverse:
+
+$$
+\max(\text{throughput/utilization})
+$$
+
+subject to:
+
+$$
+T_{job}<D_{batch}
+$$
+
+This is why batching techniques appear even inside "online" systems. The boundary isn't about whether the GPU sees a batch. It's about **what caused the work and who is waiting for it**.
 
 ![One approved model version follows a fixed snapshot, partitioned scoring, validation, and publication for batch while a live request follows current features, ready capacity, and a latency deadline for online inference](/content-assets/articles/article-mlops-model-serving-batch-vs-online-inference/batch-online-two-promises.png)
 
 *Batch protects a complete publication before a business cutoff. Online protects a caller that is waiting for a valid response inside the request deadline.*
 
-## How Batch Inference Produces Scheduled Results
-<!-- section-summary: A reliable batch run fixes its input snapshot, model identity, partitions, and publication boundary so retries produce one complete generation of predictions. -->
+## How Do Data Engineering, Idempotency, and Lineage Make Batch Inference Reliable?
+<!-- section-summary: Reliable batch serving depends on reproducible input snapshots, idempotent partitions, durable outputs, and lineage for every produced prediction. -->
 
-Batch inference works on a population the system can identify before scoring starts. That population might be every active subscriber, every product in a catalogue, or every image uploaded during the previous hour. The output usually lands in a warehouse table, lakehouse table, object store, search index, or cache. A later process reads it to rank work, prepare recommendations, or trigger a review.
+High utilization does not make a batch pipeline trustworthy; identified inputs, repeatable partitions, and lineage still protect its results.
 
-You can picture a batch run as a small publishing process. It selects an edition of the input data, applies one model version, checks the finished pages, and releases the edition as a whole. Publishing matters because downstream consumers should avoid seeing a half-finished mixture of old and new scores.
-
-### Use A Schedule To Define The Data Interval
-
-A scheduler starts the work, though the wall clock alone leaves the data ambiguous. A run at 02:00 might process events from the previous business day. If the run starts late after an outage, it still needs that same interval. Mature orchestration systems make this distinction explicit: the schedule says *which run is due*, and the data interval says *which records belong to it*.
-
-Airflow expresses this through logical dates and data intervals. Dagster commonly represents the same boundary as an asset partition. Managed ML pipelines expose scheduled parameters or pipeline-run inputs. In each case, the scoring task receives an interval or partition key. Reading that value avoids a fresh guess from the system clock.
-
-For example, an hourly abuse-review job can receive `interval_start=14:00` and `interval_end=15:00`. A delayed run still scores events from that hour. The team can replay the exact interval later, compare counts, and prove which output belongs to it.
-
-### Use A Snapshot To Fix The Population
-
-An input snapshot records the exact rows and feature values supplied to the model. A practical snapshot can be a Delta table version, an Iceberg snapshot ID, a warehouse table created for the run, or a set of immutable object paths. The run manifest then records the snapshot identifier alongside the model version and feature-contract version.
-
-Without a fixed snapshot, a retry can produce different results even though the code and model stayed unchanged. New rows may arrive, corrected values may replace old values, or a join may gain additional matches. The retry then answers a subtly different question. Reproducible batch inference fixes the eligible population first and scores that population second.
-
-### Use Partitions To Divide Work And Failures
-
-Large populations are split into partitions or shards. Spark may divide a Delta table across executors. A managed batch service may distribute files from object storage across instances. A warehouse can execute a set-based prediction query over date or region partitions. Partitioning improves parallelism and gives recovery a practical unit.
-
-Suppose a daily catalogue job scores forty million products across twenty regions. If one region fails after a malformed feature value, the run can keep successful region outputs in a private staging area, repair the failed partition, and score that partition again. Validation runs across the complete staged generation before publication. Consumers continue reading the last successful generation during the repair.
-
-```mermaid
-flowchart TD
-    A["Scheduled Run<br/>(interval and cutoff)"] --> B["Input Snapshot<br/>(fixed eligible population)"]
-    B --> C["Partition Plan<br/>(bounded units of work)"]
-    C --> D["Parallel Scoring<br/>(one model version)"]
-    D --> E{"Generation Checks<br/>(coverage and quality)"}
-    E -->|Pass| F["Atomic Publication<br/>(complete result set)"]
-    E -->|Fail| G["Repair And Replay<br/>(same partition identity)"]
-    G --> D
-    F --> H["Run Manifest<br/>(data model and code identity)"]
-
-    class A,B input
-    class C,D,F,H process
-    class E gate
-    class G failure
-```
-
-### Make Repeated Batch Runs Safe
-
-**Idempotency** means repeating the same operation produces the same final state. For a batch job, the stable identity often combines the scoring interval, entity key, model version, and policy version. A retry updates or replaces that same logical output. Appending a second copy would violate the contract.
-
-A Delta Lake writer can replace one run-scoped partition atomically after scoring and validation:
+A toy batch system looks like:
 
 ```python
-run_filter = f"score_date = DATE '{score_date}' AND model_version = '{model_version}'"
+df = load_data()
+predictions = model.predict(df)
+save(predictions)
+```
 
+A production system has to answer more questions. What exact data snapshot did we score? Which model version produced the prediction? What happens if worker 47 fails? Can we rerun only the failed partition? Can the job be restarted without duplicating outputs? Can we reproduce yesterday's predictions? What happens if the feature table arrives late? What happens if today's dataset has twice as many rows? These questions lead naturally to a production architecture:
+
+```text
+source datasets
+      ↓
+data validation
+      ↓
+snapshot / partition selection
+      ↓
+feature transformation
+      ↓
+distributed inference
+      ↓
+prediction validation
+      ↓
+atomic publication
+      ↓
+consuming systems
+```
+
+The critical word is **publication**. Consumers should usually not see:
+
+```text
+30% today's scores
+70% yesterday's scores
+```
+
+just because a job is halfway finished. A safer design often writes results somewhere temporary:
+
+```text
+predictions_2026_08_30_staging
+```
+
+validates them, and only then makes that version visible.
+
+Conceptually:
+
+```text
+compute
+   ↓
+validate
+   ↓
+commit
+```
+
+This resembles transactional thinking applied to model outputs. Suppose partition 73 crashes halfway through. The orchestrator retries it. If processing the same input twice creates duplicate outputs, retries become dangerous. So ideally:
+
+$$
+f(x,\text{run version})
+$$
+
+can be executed repeatedly without corrupting the final dataset. For example, writing:
+
+```text
+model_version = fraud_v8
+score_date = 2026-08-30
+customer_id = 123
+```
+
+under a deterministic output key makes replacement easier than blindly appending another row on every retry. This is **idempotent processing**. In production:
+
+**Retries should be boring.**
+
+If every retry requires a human to determine whether output was partially written, the serving pipeline is fragile. A prediction isn't just:
+
+$$
+0.83
+$$
+
+Operationally it is closer to:
+
+$$
 (
-    scored_rows.write.format("delta")
-    .mode("overwrite")
-    .option("replaceWhere", run_filter)
-    .saveAsTable("ml_serving.account_risk_scores")
+0.83,
+model=v17,
+features=v12,
+data\_snapshot=2026\text{-}08\text{-}29,
+code=abc123,
+run=84291
 )
+$$
+
+Why? Imagine somebody asks:
+
+"Why did customer 9382 receive this score last Tuesday?"
+
+Without lineage, you may not know. This becomes particularly important after retraining. Suppose:
+
+```text
+Monday      model v7
+Tuesday     model v7
+Wednesday   model v8
 ```
 
-The snippet teaches one specific boundary: a replay replaces the partition owned by that run. Production code also checks the expected row count, unique entity keys, null scores, and score range before the write. A consumer-facing view or manifest should advance only after every required partition passes.
+If performance changes Wednesday morning, model version becomes an obvious variable to investigate. Good batch operation therefore treats predictions as **versioned, reproducible data artifacts**.
 
-Late data needs an explicit policy. A completeness-first workflow holds publication until a lateness cutoff. A time-critical workflow may publish partial coverage, provided the missing population is visible to every consumer. A safer fallback for many decision systems is to keep the previous complete generation active.
+## How Do Request Reliability, Overload, Loading, and Autoscaling Make Online Inference Reliable?
+<!-- section-summary: Reliable online serving depends on bounded queues, overload behaviour, timeouts, loaded models, redundancy, and autoscaling signals tied to the bottleneck. -->
 
-Silent mixing is the dangerous option. The run record states how many entities were expected and received. It also identifies missing partitions and records the decision taken at the cutoff.
+Online work has a different failure surface because requests, queues, model loading, and overload sit on a live critical path.
 
-## How Online Inference Responds To A Live Request
-<!-- section-summary: Online inference turns model execution into one stage of a live service request, so every dependency spends part of a shared latency and reliability budget. -->
+A toy online service is:
 
-Online inference accepts requests whose arrival times and volumes are unknown in advance. A caller sends a feature payload or entity reference, the serving path calculates a score, and the response immediately affects a workflow. Recommendation ranking, transaction risk, search relevance, and interactive assistants commonly use this shape.
-
-The model server is only one part of the path. A production request may pass through authentication, schema validation, feature retrieval, a queue, model execution, calibration, policy rules, and response serialization. Each stage spends part of the same deadline.
-
-For a transaction risk request with a 150-millisecond service budget, the team might reserve 20 milliseconds for network and gateway work, 35 for online feature retrieval, 60 for model execution, 15 for policy evaluation, and 20 for safety margin. Those numbers are capacity assumptions that load tests must verify. If feature retrieval regularly consumes 80 milliseconds, optimizing model inference from 40 to 30 milliseconds will leave the main problem intact.
-
-```mermaid
-flowchart TD
-    A["Live Request<br/>(caller is waiting)"] --> B["Gateway And Validation<br/>(identity schema and limits)"]
-    B --> C["Feature Retrieval<br/>(request-time context)"]
-    C --> D["Admission And Queue<br/>(bounded concurrency)"]
-    D --> E["Model Execution<br/>(loaded artifact)"]
-    E --> F["Policy And Response<br/>(actionable output)"]
-    F --> G["Decision Log<br/>(request model and outcome keys)"]
-
-    class A input
-    class B,C,D,E,F,G process
+```python
+@app.post("/predict")
+def predict(x):
+    return model(x)
 ```
 
-### Keep Warm Capacity For The Request Deadline
+A production online system looks more like:
 
-Online services need ready capacity before traffic arrives. Autoscaling reacts to observed demand, so it always has some delay. A new replica first starts its container and loads the model. An accelerator-backed replica may also allocate GPU memory or compile kernels. Only a healthy replica can receive traffic. Existing replicas absorb demand during that startup interval, which can make queues grow.
-
-For a steady customer-facing API, a minimum replica count and spare headroom usually protect tail latency. Scale-to-zero can suit development endpoints or asynchronous traffic with generous deadlines. It introduces cold-start delay, and some platforms may reject or time out requests while capacity is being created. The product deadline determines whether that trade is acceptable.
-
-Autoscaling signals should represent the actual bottleneck. CPU can work for a CPU model. An accelerator-backed service may scale from GPU utilization or in-flight requests. Queue depth and concurrency per replica can expose pressure that device utilization misses. Memory places a separate hard limit: a ten-gigabyte model leaves little room on a sixteen-gigabyte GPU even if compute utilization looks low.
-
-### Define Timeouts, Retries, And Fallbacks
-
-A timeout limits how much of the caller's deadline one dependency may consume. The serving client should pass a deadline or use a shorter local timeout, leaving enough time for a fallback. Retries need a remaining-time check and a bounded count. An automatic retry that starts after the product deadline only adds load to an already stressed service.
-
-Pure model scoring can often be repeated safely, though the surrounding business action may have side effects. A payment authorization needs an idempotency key at the decision boundary. Notifications and account changes need the same protection. The prediction service should preserve a request ID so logs, traces, and decision records can be joined. Raw payloads remain outside general operational telemetry.
-
-A fallback is a reviewed alternative result. It might return a cached score younger than a defined staleness limit, route the request to a smaller model, apply a conservative rule, or ask for human review. The response should identify fallback use so product analytics and incident responders can measure its impact.
-
-## Know The Difference Between Freshness And Latency
-<!-- section-summary: Data freshness, prediction freshness, and response latency answer separate questions and need separate limits. -->
-
-Teams often describe a serving requirement as “real time” even though several different clocks are involved. Separating those clocks prevents a fast API from hiding stale evidence.
-
-**Data freshness** measures the age of the facts supplied to the model. An endpoint can respond in 30 milliseconds while reading an account balance copied six hours ago. The service latency is excellent; the decision evidence is stale.
-
-**Prediction freshness** measures the age of a previously calculated score. A batch recommendation generated overnight may remain perfectly useful for a homepage visit in the morning. The same score may be unsuitable after a customer changes an order, address, or preference.
-
-**Response latency** measures the time between a live request and its response. This matters directly to online inference. Batch jobs instead track completion time and publication lag against a business cutoff.
-
-Consider an inventory replenishment decision. A store planner may need a new score every morning, using stock counts finalized after the previous day closes. A 20-minute scoring run is healthy if results arrive before planning starts. An online stockout warning inside a shopping session has a different contract: it may require current stock and a response before the page finishes loading. Calling both systems “low latency” loses the information that actually guides the architecture.
-
-```mermaid
-flowchart TD
-    A["Source Event<br/>(fact occurs)"] --> B["Feature Available<br/>(data freshness delay)"]
-    B --> C["Prediction Produced<br/>(prediction freshness starts)"]
-    C --> D["Live Request<br/>(caller asks for an answer)"]
-    D --> E["Response Returned<br/>(response latency ends)"]
-    E --> F["Business Action<br/>(deadline is satisfied or missed)"]
-
-    class A,D input
-    class B,C,E,F process
+```text
+                ┌──────── feature service
+                │
+Client → gateway → inference service → model runtime
+                │
+                └──────── cache / metadata
+                         ↓
+                      response
 ```
 
-A useful service contract names all relevant limits: source data age, score age, request latency, and the consequence of crossing each limit. The resulting controls are concrete. A stale feature can route to review, an old cached score can be rejected, a slow endpoint can use a fallback, and a late batch generation can keep the previous approved output active.
+And around it exist:
+
+```text
+load balancing
+autoscaling
+timeouts
+rate limiting
+health checks
+model loading
+observability
+rollouts
+fallback behavior
+```
+
+The essential difference is that every dependency contributes to the user's latency and reliability. If:
+
+$$
+A_1,A_2,\ldots,A_n
+$$
+
+represent dependency availabilities and every dependency is mandatory, overall availability can roughly behave like:
+
+$$
+A_{system}\approx\prod_i A_i
+$$
+
+For example, if five required components are each available 99.9% of the time:
+
+$$
+0.999^5 \approx 99.5\%
+$$
+
+So adding synchronous dependencies isn't free. This encourages architectures where the request path is kept as short and predictable as possible. Suppose the system can safely process:
+
+$$
+Q_{capacity}=10,000\text{ req/s}
+$$
+
+and suddenly receives:
+
+$$
+Q_{incoming}=40,000\text{ req/s}
+$$
+
+If every request is accepted indefinitely:
+
+```text
+requests
+████████████████████████
+          ↓
+        queue
+████████████████████████████████
+          ↓
+        model
+```
+
+queueing delay rises. Then requests time out. But workers continue computing responses nobody needs. The queue grows further. Eventually the service collapses. This is a classic overload feedback loop. A better system might deliberately shed load:
+
+```text
+incoming traffic
+       ↓
+capacity check
+   ↙        ↘
+accept      reject/fallback
+  ↓
+model
+```
+
+The key principle is:
+
+**A service that rejects 5% of excess traffic quickly can be healthier than one that attempts 100% and times out on 70%.**
+
+So online inference operation includes mechanisms such as concurrency limits, bounded queues, deadlines, rate limiting and fallback responses. Suppose a recommendation model hasn't responded after 300 ms. Should the application wait? Maybe not. Perhaps it can return popular products instead.
+
+```text
+recommendation request
+        ↓
+online model
+   ↙          ↘
+success      timeout
+  ↓             ↓
+personalized   popular items
+```
+
+That gives the model a **prediction budget**:
+
+$$
+D_{model}<D_{page}
+$$
+
+For example:
+
+$$
+D_{page}=500\text{ ms}
+$$
+
+but:
+
+$$
+D_{model}=150\text{ ms}
+$$
+
+because the application needs time to recover if inference fails. This is better than giving the model the entire user-facing deadline. Models can be large. Suppose a model requires 40 GB of GPU memory. A new inference worker starts:
+
+```text
+container starts
+      ↓
+download weights
+      ↓
+load into RAM
+      ↓
+copy to GPU
+      ↓
+initialize runtime
+      ↓
+warm kernels/cache
+      ↓
+ready
+```
+
+This might take substantial time. Therefore:
+
+$$
+T_{pod-start}
+\neq
+T_{service-ready}
+$$
+
+A container being alive doesn't mean it is capable of serving inference. Online systems must distinguish:
+
+```text
+process exists
+```
+
+from:
+
+```text
+model is ready for production traffic
+```
+
+That matters particularly during autoscaling and deployments. Traditional web services are often scaled using CPU utilization. Inference workloads can behave differently. Useful signals might include:
+
+$$
+Q=\text{requests/sec}
+$$
+
+$$
+C=\text{active requests}
+$$
+
+$$
+B=\text{queue backlog}
+$$
+
+$$
+L=\text{tail latency}
+$$
+
+$$
+U_{GPU}=\text{accelerator utilization}
+$$
+
+Suppose GPU utilization is 40%. That doesn't necessarily mean there is spare capacity. Perhaps memory is full. Or latency has already reached the SLO because requests are large. LLMs complicate things further because different requests may consume radically different compute:
+
+```text
+request A → 20 output tokens
+request B → 5,000 output tokens
+```
+
+So:
+
+$$
+1\text{ request}
+\neq
+1\text{ unit of work}
+$$
+
+Operational capacity planning has to account for work size, not merely request count.
+
+## How Can Both Paths Preserve the Same Model and Feature Meaning?
+<!-- section-summary: Batch and online may share an immutable model, but feature definitions, event time, preprocessing, and policy must preserve the same product meaning. -->
+
+Teams often operate both paths, which makes shared model and feature semantics more important than sharing identical infrastructure.
+
+Imagine you trained:
+
+```text
+fraud_model_v12
+```
+
+There is no fundamental reason you need separate mathematical models for batch and online serving. You might deploy:
+
+```text
+                         fraud_model_v12
+                         /             \
+                        /               \
+                       ▼                 ▼
+             nightly backfill      online API
+```
+
+The model is identical. The execution environments differ. This can be extremely useful. For example, after releasing a new model you can batch-score historical data:
+
+$$
+f_{new}(X_{historical})
+$$
+
+while simultaneously serving new requests online. The distinction is therefore architectural, not necessarily statistical. This is where many hybrid systems fail. Suppose training defines:
+
+$$
+x=\text{purchases during previous 30 days}
+$$
+
+The batch pipeline computes it using SQL:
+
+```text
+warehouse → aggregation → 30_day_purchases
+```
+
+The online service computes it from a real-time store:
+
+```text
+event stream → feature state → 30_day_purchases
+```
+
+If these implementations differ, the model may see:
+
+```text
+training:
+30_day_purchases = 11
+
+online:
+30_day_purchases = 8
+```
+
+for logically equivalent situations. This is often called **training-serving skew** or **feature skew**. The larger principle is:
+
+> **The semantic meaning of an input feature must not depend on whether it was produced through the batch path or online path.**
+
+The technology may differ. The meaning must not. Many production ML systems should not choose "batch versus online." They should ask:
+
+**Which pieces belong in each?**
+
+Consider recommendation ranking. A complete online computation might require comparing one user against 100 million products. Doing that interactively is impractical.
+
+Instead:
+
+```text
+                 BATCH PATH
+
+all users × catalog
+       ↓
+candidate generation
+       ↓
+500 candidates/user
+       ↓
+candidate store
+```
+
+Then when the user arrives:
+
+```text
+                 ONLINE PATH
+
+user request
+     ↓
+read 500 candidates
+     ↓
+current context
+     ↓
+online ranking model
+     ↓
+top 20
+```
+
+Batch solves the expensive broad search. Online solves the freshness-sensitive final decision. This is a powerful general pattern:
+
+$$
+\boxed{
+\text{batch for expensive broad computation}
++
+\text{online for small fresh computation}
+}
+$$
+
+Imagine fraud detection needs both historical and immediate information. Historical features:
+
+```text
+account age
+average purchase amount
+90-day chargeback rate
+merchant history
+```
+
+can be batch-computed. Recent features:
+
+```text
+transactions in last 5 minutes
+current location
+current device
+current transaction amount
+```
+
+need fresh updates. So prediction becomes:
+
+$$
+y=f(x_{historical},x_{recent},x_{request})
+$$
+
+Architecturally:
+
+```text
+batch pipeline
+      ↓
+historical features ──────┐
+                          │
+stream processor          │
+      ↓                   │
+recent features ──────────┼──→ online model → decision
+                          │
+current request ──────────┘
+```
+
+Again, "batch versus online" is the wrong framing. The correct question is:
+
+**Which information needs which freshness guarantee?**
 
 ![A 30-millisecond online response still uses a six-hour-old account balance, while a 20-minute batch can meet daily planning freshness with prior-day finalized stock counts](/content-assets/articles/article-mlops-model-serving-batch-vs-online-inference/batch-online-freshness-latency.png)
 
 *Data freshness, prediction freshness, and response latency are separate clocks. Each needs a limit tied to the product decision.*
 
-## How Throughput, Cost, And Failure Affect Architecture
-<!-- section-summary: Batch and online systems spend capacity differently and expose different failure scopes, even at the same daily prediction volume. -->
+## How Do Monitoring, Replay, Redundancy, and Retries Differ between the Paths?
+<!-- section-summary: Batch recovery replays identified work, while online recovery uses redundancy and degradation; their retry and monitoring signals therefore differ. -->
 
-Two serving systems can produce the same number of daily predictions and require very different infrastructure. Batch traffic is concentrated into a known work window. Online traffic follows user behavior, promotions, time zones, and sudden spikes.
+The same difference continues into monitoring and recovery: replay suits durable work, whereas online paths need redundancy and controlled degradation.
 
-### Optimize Batch For Total Completion Work
+Batch systems fail in ways that can look deceptively quiet. If an API is down, users complain immediately. If a nightly prediction job silently writes half the expected rows, nobody may notice until morning. So batch monitoring needs to verify the **data product**, not merely that a process exited with code 0. Useful concepts include:
 
-Batch throughput is usually measured as records per second, partitions per hour, or time to complete the full generation. The system can group rows into large vectorized batches, keep accelerators busy, and release compute after the run. Data scans, shuffle, model loading, and output writes can dominate cost as much as the prediction calculation.
+| Signal                  | Example                                    |
+| ----------------------- | ------------------------------------------ |
+| Job completion          | Did today's run finish                    |
+| Completion deadline     | Did it finish before 06:00                |
+| Input volume            | Expected 20M rows, received 11M            |
+| Output volume           | Did every expected entity receive a score |
+| Failure rate            | How many partitions/items failed          |
+| Data freshness          | Which source snapshot was used            |
+| Prediction distribution | Did average score suddenly change         |
+| Model/version lineage   | Which artifact produced the data          |
 
-The input layout matters. SageMaker Batch Transform, for example, distributes object-store input across instances. One huge unsplittable file can leave most instances idle, while a useful file or record split exposes parallel work. Spark and warehouse systems have a similar principle: partition sizes need enough work for parallelism without creating a storm of tiny tasks and files.
+A successful scheduler status does not prove inference was correct. Online systems need a different set of operational signals. The core service-level measurements are often:
 
-A batch failure usually affects a bounded interval or partition. The team can quarantine malformed rows, replay failed partitions, and delay publication while consumers keep the last complete generation. This isolation is one of batch inference's strongest operational advantages.
+$$
+\text{request rate}
+$$
 
-### Optimize Online Inference For Waiting Time Under Concurrency
+$$
+\text{error rate}
+$$
 
-Online throughput is measured through requests per second and concurrent in-flight work, alongside percentile latency. Average latency can look healthy while a small group of requests waits far too long, so teams examine p50, p95, and p99. Queue depth and saturation explain whether latency is rising because demand exceeds ready capacity.
+$$
+P50,\ P95,\ P99\ latency
+$$
 
-Online systems pay for availability. Replicas often stay warm between requests, and peak capacity may sit unused during quieter periods. GPU servers can improve utilization by combining compatible requests into a small dynamic batch. NVIDIA Triton exposes this directly:
+$$
+\text{saturation}
+$$
 
-```protobuf
-max_batch_size: 32
+But inference adds model-specific dimensions such as batch size, tokens/sec for generative models, accelerator utilization, model-loading failures, feature-fetch latency and fallback rate. The request should ideally be traceable:
 
-dynamic_batching {
-  max_queue_delay_microseconds: 200
+```text
+request
+  │
+  ├─ 7 ms   gateway
+  ├─ 13 ms  feature lookup
+  ├─ 4 ms   queue
+  ├─ 31 ms  inference
+  └─ 3 ms   postprocessing
+
+total = 58 ms
+```
+
+Otherwise "the ML endpoint is slow" doesn't tell you what to fix. Suppose today's batch job fails. You generally want:
+
+```text
+input snapshot
+      ↓
+rerun
+      ↓
+same logical output
+```
+
+This is much easier when data is immutable or versioned. If the source dataset changes underneath the rerun, reproducibility becomes difficult. So robust batch systems like deterministic inputs:
+
+$$
+X_{2026-08-30}
+$$
+
+plus an explicit model:
+
+$$
+M_{v17}
+$$
+
+plus explicit feature logic:
+
+$$
+F_{v23}
+$$
+
+Then:
+
+$$
+Y=M_{v17}(F_{v23}(X_{2026-08-30}))
+$$
+
+can be reproduced. Backfills become the same operation over historical partitions:
+
+```text
+2026-08-27 → score
+2026-08-28 → score
+2026-08-29 → score
+2026-08-30 → score
+```
+
+This is one reason batch pipelines fit naturally into data-platform abstractions. If an online service fails at 14:03, rerunning requests tomorrow doesn't help. The decision deadline has already passed. So recovery is fundamentally different. Online systems rely more on:
+
+```text
+multiple replicas
+health checks
+automatic routing
+fast replacement
+timeouts
+retries when safe
+fallbacks
+cached predictions
+previous-model versions
+load shedding
+```
+
+The principle is:
+
+$$
+\text{recover before the decision deadline}
+$$
+
+or:
+
+$$
+\text{degrade gracefully}
+$$
+
+For example:
+
+```text
+primary ML model unavailable
+          ↓
+cached model score
+          ↓
+if missing:
+rules-based fallback
+```
+
+The fallback may be less accurate. But:
+
+$$
+\text{slightly worse prediction}
+$$
+
+can be much better than:
+
+$$
+\text{no product response}
+$$
+
+Retries sound harmless:
+
+```text
+request failed
+     ↓
+retry
+```
+
+But suppose the service is overloaded. The original request times out because the service is too busy. If every caller immediately retries:
+
+$$
+10,000\text{ failed requests}
+\rightarrow
+10,000\text{ new requests}
+$$
+
+The retry makes overload worse. This can create a **retry storm**. So online retries usually need limited attempts, deadlines, exponential backoff and jitter. Even more importantly:
+
+Don't retry work after its result is no longer useful.
+
+If the user-facing deadline has passed, completing the prediction often just consumes capacity.
+
+## How Do Releases, Migrations, and Cascades Combine Batch and Online Inference?
+<!-- section-summary: Releases affect long jobs and request traffic differently, and migrations, precomputation, hybrid fraud paths, and cascades combine both modes deliberately. -->
+
+Changing patterns or models therefore affects two operating systems and often produces intentional hybrids and cascades.
+
+For batch:
+
+```text
+model v1
+   ↓
+next scheduled job uses model v2
+```
+
+Deployment can often be tied to a new output partition. You might preserve:
+
+```text
+scores_v1
+scores_v2
+```
+
+and compare them before publication. Online serving is trickier because traffic is live. A common conceptual rollout is:
+
+```text
+             traffic
+                │
+          ┌─────┴─────┐
+          ▼           ▼
+       model v1    model v2
+         95%          5%
+```
+
+Observe metrics. Then perhaps:
+
+```text
+50% / 50%
+```
+
+and eventually:
+
+```text
+0% / 100%
+```
+
+This reduces blast radius. The essential requirement is that **deployment and model selection are reversible**. If model v2 behaves badly, routing should be able to return quickly to v1. This is a deeper architectural concern. Imagine the product defines:
+
+"Customer risk score represents the probability of churn within 30 days, using information available at scoring time."
+
+Initially, you compute it nightly. Later the product needs fresher predictions, so you move to online inference. The infrastructure can change:
+
+```text
+warehouse
+   ↓
+batch model
+```
+
+to:
+
+```text
+feature service
+   ↓
+online model
+```
+
+without changing what the score *means*. Ideally:
+
+$$
+P(\text{churn in 30 days}\mid x)
+$$
+
+still has the same semantic definition. This separation is valuable:
+
+```text
+product semantics
+       │
+       ▼
+feature/model contract
+       │
+       ▼
+serving implementation
+```
+
+The bottom layer should be replaceable without silently changing the top. One way to preserve meaning is to think of the model as exposing a logical contract:
+
+```text
+Prediction:
+    entity
+    event_time
+    features_as_of
+    model_version
+    prediction
+```
+
+For example:
+
+```text
+customer = 19281
+prediction_time = 10:00
+features_as_of = 09:59:55
+model_version = churn_v17
+churn_probability = 0.81
+```
+
+Whether that record was produced by Spark at midnight or by an online inference server at 10:00 isn't its semantic meaning. This makes migrations easier. Suppose you begin with nightly recommendations.
+
+```text
+00:00 → compute recommendations
+all day → serve stored recommendations
+```
+
+Users eventually expect purchases to affect recommendations immediately. You don't necessarily replace the entire system. A safer progression is:
+
+```text
+Stage 1
+
+nightly candidates
+      ↓
+serve directly
+```
+
+then:
+
+```text
+Stage 2
+
+nightly candidates
+      ↓
+online reranker using current context
+```
+
+then perhaps:
+
+```text
+Stage 3
+
+stream-updated candidates
+      ↓
+online reranker
+```
+
+You move only the freshness-sensitive work onto the expensive online path. This is usually better than making everything synchronous. Suppose an application performs an online model call whenever someone views a customer profile. After measuring production traffic, you discover:
+
+```text
+5 million profile views/day
+100,000 unique customers/day
+```
+
+Most scores are being recomputed repeatedly. If scores can be one hour old, then:
+
+```text
+hourly score generation
+      ↓
+prediction store
+      ↓
+lookup
+```
+
+could replace:
+
+```text
+5 million model executions
+```
+
+with perhaps:
+
+```text
+2.4 million or fewer periodic executions
+```
+
+depending on how broadly you score. So moving from online to batch isn't a regression. It may be an architecture becoming better aligned with its actual requirements. Suppose an expensive model takes:
+
+$$
+T_{model}=800\text{ ms}
+$$
+
+but the product deadline is:
+
+$$
+D=100\text{ ms}
+$$
+
+Then pure synchronous inference is physically incompatible with the requirement:
+
+$$
+800 > 100
+$$
+
+You have four basic options:
+
+```text
+make model faster
+precompute part/all of the result
+use a cheaper model online
+relax the product deadline
+```
+
+This is an important first-principles point:
+
+Architecture cannot defeat arithmetic.
+
+If the computation cannot fit inside the deadline, another part of the system must change. Suppose a cheap model handles most requests.
+
+$$
+f_{small}(x)
+$$
+
+Only uncertain examples go to an expensive model:
+
+$$
+f_{large}(x)
+$$
+
+Conceptually:
+
+```text
+request
+   ↓
+small fast model
+   ↓
+confidence
+ ↙         ↘
+high       low
+ ↓          ↓
+answer     large model
+             ↓
+           answer
+```
+
+If only 5% need the expensive model, average cost may fall dramatically. Similar reasoning can apply between batch and online. Batch computation can remove easy or reusable work so the online service performs only the irreducibly live portion.
+
+## What Decision Framework Chooses the Right Operating Path?
+<!-- section-summary: The final choice compares value deadlines, data arrival, freshness, workload size, compute cost, recovery, and the consumer's interaction pattern. -->
+
+The decision framework returns to the product deadline and selects the simplest path that meets freshness, cost, and reliability needs.
+
+This is perhaps the cleanest mathematical summary.
+
+### Batch inference
+
+Given:
+
+$$
+N=\text{number of predictions}
+$$
+
+and:
+
+$$
+D_b=\text{job deadline}
+$$
+
+choose resources to minimize:
+
+$$
+\text{total cost}
+$$
+
+subject to:
+
+$$
+T_{completion}\le D_b
+$$
+
+and correctness requirements. You can tolerate substantial queueing and maximize utilization.
+
+### Online inference
+
+Given a stream of requests $$r_i$$, each with deadline $$D_i$$, choose resources to minimize cost while ensuring something like:
+
+$$
+P99(L_i)\le D_i
+$$
+
+and maintaining availability. This generally requires spare capacity. So:
+
+$$
+\boxed{\text{Batch optimizes a workload}}
+$$
+
+whereas:
+
+$$
+\boxed{\text{Online optimizes a waiting experience}}
+$$
+
+That difference explains most of the architecture. When deciding how to operate a prediction, reason in this order:
+
+1. **What product decision uses the prediction?**
+2. **What information must be known before the prediction can be computed?**
+3. **How fresh must that information be?**
+4. **When does the product need the answer?**
+5. **Can the answer be computed before the request exists?**
+6. **Will many requests reuse the same prediction?**
+7. **Can expensive work be moved off the live path?**
+8. **What happens when inference is late or unavailable?**
+9. **How will the system replay, retry, roll back and observe predictions?**
+10. **Does the simplest architecture satisfying those constraints use batch, online, or both?**
+
+That last point matters. The objective isn't:
+
+"Use the most sophisticated serving architecture."
+
+It is:
+
+**Use the cheapest and simplest architecture that preserves the product's required prediction semantics and deadline.**
+
+Batch and online inference are easiest to remember as two timelines.
+
+### Batch
+
+```text
+data exists
+    ↓
+prediction computed
+    ↓
+prediction stored
+    ↓
+eventually somebody needs it
+```
+
+The system tries to ensure:
+
+$$
+\boxed{\text{prediction exists before it will be needed}}
+$$
+
+### Online
+
+```text
+decision needs answer
+       ↓
+request arrives
+       ↓
+prediction computed now
+       ↓
+decision continues
+```
+
+The system tries to ensure:
+
+$$
+\boxed{\text{prediction finishes before the waiting decision expires}}
+$$
+
+And hybrid systems exploit both:
+
+```text
+slow / broad / reusable work
+            ↓
+           BATCH
+            ↓
+      precomputed state
+            +
+fresh / narrow / contextual work
+            ↓
+          ONLINE
+            ↓
+         decision
+```
+
+The deepest principle is:
+
+$$
+\boxed{
+\text{Do as much computation as possible before the request,
+but keep online whatever cannot be correct until the request exists.}
 }
-```
+$$
 
-This configuration allows a stateless model to gather requests briefly before execution. The 200-microsecond queue delay spends part of the latency budget in exchange for higher accelerator utilization. Teams tune the batch size and queue delay with representative load tests; a value copied from another model has little meaning because tensor shapes, compute time, and traffic patterns differ.
-
-An online failure affects live callers immediately. Bounded queues and admission control stop excess work near the entrance. Per-dependency timeouts, circuit breakers, and fallbacks contain failures deeper in the path. Bulkheads can reserve capacity for important request classes, protecting customer traffic from a large background caller.
-
-```mermaid
-flowchart TD
-    A["Prediction Volume<br/>(same daily total)"] --> B["Batch Capacity<br/>(concentrated work window)"]
-    A --> C["Online Capacity<br/>(unpredictable live arrivals)"]
-    B --> D["Primary Goal<br/>(finish generation by cutoff)"]
-    B --> E["Failure Unit<br/>(interval or partition)"]
-    C --> F["Primary Goal<br/>(protect tail latency)"]
-    C --> G["Failure Unit<br/>(live request and dependency)"]
-
-    class A input
-    class B,C,D,E,F,G process
-```
-
-## Hybrid Designs Use Both Paths Deliberately
-<!-- section-summary: A hybrid design prepares expensive, stable work in batch and reserves online computation for live context that can change the decision. -->
-
-Many production products need a hybrid design. The design separates parts that can be prepared in advance from parts that depend on live context.
-
-A recommendation system can calculate item embeddings and a few hundred candidates for each user overnight. During a page request, the online service retrieves that candidate set, adds current context such as device, inventory, and the last interaction, then re-ranks twenty items. Batch absorbs the large search across the catalogue. Online work stays small enough for the page deadline.
-
-A lending review system can score the full portfolio weekly for analyst planning and still expose an online path for a new application. Both paths can load the same approved model artifact, though they may use separate feature retrieval and output contracts. Their run records should preserve model, feature, and policy versions so the team can compare results.
-
-A cache can also bridge the paths. A live endpoint may use the latest batch score if it is younger than six hours, then calculate a new score for changed entities or high-value decisions. The staleness limit and fallback action belong in product policy, because a cached prediction carries an age as well as a number.
-
-```mermaid
-flowchart TD
-    A["Batch Preparation<br/>(embeddings candidates or baseline scores)"] --> B["Versioned Store<br/>(published reusable results)"]
-    C["Live Context<br/>(request and recent signals)"] --> D["Online Decision<br/>(small deadline-bound calculation)"]
-    B --> D
-    D --> E["Product Action<br/>(rank route review or respond)"]
-    E --> F["Outcome Evidence<br/>(joins back to both paths)"]
-
-    class A,C input
-    class B,D,E,F process
-```
-
-Hybrid systems need a shared definition of the prediction. Feature names and preprocessing must line up first. Output meaning, class order, calibration, and policy thresholds complete that contract. Shared model identity and shared runtime are separate choices. Batch can use Spark and online serving can use a managed endpoint while both refer to the same immutable registered model version.
-
-## Choose Batch Or Online From The Product Decision
-<!-- section-summary: The serving boundary follows the actor, action, deadline, acceptable staleness, fallback, and size of the population being scored. -->
-
-A design review should start with the decision and leave platform selection for later. Write down the actor who uses the prediction and the action it changes. Then state the latest time at which the result can still affect that action. “Fast” is too vague; “the ranked work queue must be published before the review shift opens” or “the authorization service has 120 milliseconds for the risk dependency” gives the team a testable promise.
-
-Next, define the eligible population. A known population available as a table or object set points toward batch. Individual events arriving through a live request point toward online. Large known populations can still require rapid completion, and small populations can still require an endpoint. Arrival shape and deadline usually carry greater weight than row count alone.
-
-Then describe acceptable staleness. A product may tolerate a daily base score and require live updates only after a meaningful event. That requirement often reveals a hybrid boundary. It also prevents an endpoint from being built merely to serve a score that changes once per day.
-
-Finally, decide what happens if fresh scoring is unavailable. A planner may continue with the last complete batch generation and see its age. A checkout flow may use a conservative rule or cached score. A high-risk medical or financial decision may pause for human review. The fallback shows the real cost of failure and influences how much availability engineering the serving path deserves.
-
-A complete decision statement could read like this: “At the start of each support shift, supervisors receive one priority score for every open case, calculated from data finalized by the cutoff. The list may use the previous successful generation for up to two hours, and the interface must display its generation time.” That sentence supplies the orchestration and publication requirements. It also defines monitoring and fallback behavior before tools enter the discussion.
-
-```mermaid
-flowchart TD
-    A["Product Action<br/>(decision the score changes)"] --> B["Latest Useful Time<br/>(business deadline)"]
-    B --> C["Eligible Population<br/>(known set or live arrival)"]
-    C --> D["Freshness Limit<br/>(oldest acceptable evidence)"]
-    D --> E["Failure Policy<br/>(last result fallback or review)"]
-    E --> F["Serving Boundary<br/>(batch online or hybrid)"]
-
-    class A input
-    class B,C,D,E,F process
-```
-
-## Build Batch Inference With Production Data Systems
-<!-- section-summary: Production batch inference usually runs close to governed data, uses an orchestrator for intervals and retries, and publishes a versioned output through a warehouse, lakehouse, or managed batch service. -->
-
-Industrial batch systems usually follow one of three shapes. The best default keeps prediction work close to the governed data and chooses the least complex runtime that meets scale and model requirements.
-
-### Warehouse and lakehouse scoring
-
-SQL or warehouse-native model functions suit tabular models whose inputs already live in a warehouse. The query engine handles parallel reads and writes, permissions, and scheduled transformations. dbt can own upstream transformations and tests, while the orchestrator runs the scoring operation after required assets are ready.
-
-Spark or Databricks suits large lakehouse tables, distributed feature preparation, and models packaged through MLflow. A stable Databricks approach loads a Unity Catalog model version with `mlflow.pyfunc` and applies it through Spark or pandas UDFs, then writes a Delta result table. Databricks AI Functions can simplify some workloads, though teams should verify preview status and regional support before choosing it as a production baseline.
-
-The data layer should retain a run manifest with the input snapshot, output generation, model URI, code revision, feature-contract version, row counts, and validation result. Delta Lake or Iceberg supplies table snapshots and atomic commits; the manifest explains which snapshots belong to the business decision.
-
-### Managed batch prediction services
-
-Managed services remove part of the infrastructure work. SageMaker AI Batch Transform reads input from Amazon S3, distributes work across instances, and writes an output object for each input object. Gemini Enterprise Agent Platform (formerly Vertex AI) batch inference reads from Cloud Storage or BigQuery and writes to a configured destination in the same region as the model. Azure Machine Learning batch endpoints expose a durable endpoint and deployment for long-running scoring jobs. Databricks supports lakehouse jobs and Model Serving-backed AI Functions for batch inference.
-
-Provider behavior influences capacity planning. Agent Platform batch inference uses `starting_replica_count` to fix the worker count at job startup. Batch jobs ignore `max_replica_count`, so the worker count stays fixed throughout the run. A team therefore sizes the starting replica count from measured partition throughput and the publication cutoff.
-
-These services still require data and publication design. The team defines input eligibility and pins an immutable model identity. It chooses partition sizes and duplicate-handling rules. Output validation then protects the consumer-visible cutoff. The platform starts workers and runs the model inside those boundaries.
-
-### Use A Workflow Tool To Coordinate Batch Scoring
-
-Airflow is common in established data platforms. Its timetable and data-interval model fits scheduled scoring, while task retries and backfills provide recovery controls. Dagster fits asset-oriented systems: partitioned assets express the relationship between prepared features and prediction outputs. SageMaker Pipelines, Agent Platform Pipelines, Azure Machine Learning pipelines, and Databricks Jobs provide managed alternatives close to their respective runtimes.
-
-The orchestrator coordinates the work, and business state stays visible outside opaque task code. The interval and model version identify the run. The input snapshot and publication status explain its data state. A task can succeed technically after scoring only half the eligible population. Orchestration status alone provides too little evidence for a valid result set.
-
-```mermaid
-flowchart TD
-    A["Governed Data<br/>(warehouse lakehouse or objects)"] --> B["Orchestrator<br/>(interval dependencies and retries)"]
-    B --> C{"Scoring Runtime<br/>(chosen for data and model scale)"}
-    C --> D["Warehouse Or Spark<br/>(compute close to data)"]
-    C --> E["Managed Batch Service<br/>(provider-operated workers)"]
-    D --> F["Staged Generation<br/>(partitioned predictions)"]
-    E --> F
-    F --> G["Validated Publication<br/>(complete consumer-visible output)"]
-
-    class A input
-    class B,D,E,F,G process
-    class C gate
-```
-
-## Build Online Inference With A Production Serving Layer
-<!-- section-summary: Production online inference combines a stable request contract, ready capacity, bounded dependencies, model execution, traffic control, and observable fallback behavior. -->
-
-The online serving stack should match the team's operational needs. A small CPU model inside an existing product service can run behind an ordinary HTTP or gRPC API. A dedicated model service often starts with a managed endpoint. The provider supplies deployment primitives and health checks, then adds traffic routing and autoscaling. Current choices include SageMaker AI real-time endpoints and Agent Platform online endpoints. Azure managed online endpoints and Databricks Model Serving offer the same broad operating shape in their ecosystems.
-
-Managed endpoints still need application-level design. The endpoint contract must validate inputs and version output semantics. The caller needs a timeout and fallback. Feature retrieval needs its own latency and freshness targets. Release records need model and container identity. Provider autoscaling settings require load tests against realistic traffic and model startup time.
-
-KServe suits organisations that already operate Kubernetes as an internal platform and need a common inference control layer across model frameworks. Its `InferenceService` resource manages serving runtimes, revisions, traffic, and scaling capabilities. Deployment mode matters: Knative serverless and standard Kubernetes installations have different scaling behavior and operational dependencies. This choice is sensible for a team prepared to own the cluster platform. Other teams can avoid that responsibility through a managed endpoint.
-
-NVIDIA Triton is a model server for high-throughput CPU and GPU inference. It supports several model frameworks, concurrent execution, and dynamic batching. Triton owns efficient model execution. A gateway or product API usually owns authentication, request policy, rate limits, and business-specific fallbacks around it.
-
-```mermaid
-flowchart TD
-    A["Product API<br/>(authentication and decision contract)"] --> B["Traffic Control<br/>(limits routing and deadlines)"]
-    B --> C{"Serving Platform<br/>(operations ownership choice)"}
-    C --> D["Managed Endpoint<br/>(provider control plane)"]
-    C --> E["KServe<br/>(Kubernetes control layer)"]
-    C --> F["Ordinary Service<br/>(application-owned runtime)"]
-    D --> G["Model Server<br/>(framework runtime or Triton)"]
-    E --> G
-    F --> G
-    G --> H["Observable Response<br/>(model version fallback and trace keys)"]
-
-    class A input
-    class B,D,E,F,G,H process
-    class C gate
-```
-
-## Monitor And Recover Batch And Online Systems
-<!-- section-summary: Batch monitoring proves that a complete generation was published by its cutoff, while online monitoring proves that live requests receive valid responses inside their deadline. -->
-
-Batch monitoring follows the lifecycle of a result set. The team records whether the expected input snapshot arrived, how many entities were eligible, how many received a score, which partitions failed, and how long the generation took. Distribution checks can detect a broken feature or model output, while consumer checks confirm that the published generation was actually read.
-
-Imagine an overnight account-review job that reports success after scoring nine of ten partitions. A green scheduler status would be misleading. The serving SLO should require complete coverage or an explicitly approved partial-publication policy. A reconciliation check compares expected and scored entity keys before the output pointer advances.
-
-Recovery keeps the previous complete generation active, repairs the input or runtime, replays failed partitions with the same run identity, repeats reconciliation, and publishes the repaired generation atomically. The incident record should retain both the failed attempt and successful replay.
-
-Online monitoring follows the request path. Request rate and error rate show traffic pressure and failures. Percentile latency, queue time, and in-flight requests reveal waiting. Replica saturation and model-load time explain capacity. Feature-fetch latency identifies upstream delay, while fallback rate shows how often the primary path lost control.
-
-Prediction distributions and eventual outcomes describe model quality. They complement service telemetry and answer a different question: whether healthy-looking responses still support accurate decisions.
-
-For example, a new model release may return valid HTTP responses while p99 latency rises from 90 to 400 milliseconds. The service is technically reachable, though it has violated the product deadline. Release automation can stop traffic expansion, route requests back to the previous model, and retain traces from the slow route for investigation.
-
-Online recovery first protects callers: stop the rollout, route to a healthy version or reviewed fallback, restore capacity or dependencies, and verify latency plus error signals under real traffic. Root-cause work follows after the service promise is stable.
-
-```mermaid
-flowchart TD
-    A["Serving Alert<br/>(promise is at risk)"] --> B{"Failure Scope<br/>(generation or live request)"}
-    B -->|Batch| C["Hold Publication<br/>(keep last complete generation)"]
-    C --> D["Replay And Reconcile<br/>(repair failed partitions)"]
-    B -->|Online| E["Protect Callers<br/>(rollback route or fallback)"]
-    E --> F["Restore Capacity<br/>(recover dependencies and replicas)"]
-    D --> G["Verify Business Evidence<br/>(coverage freshness and consumers)"]
-    F --> G
-
-    class A failure
-    class B gate
-    class C,D,E,F,G process
-```
-
-## Change The Serving Pattern Without Changing Product Meaning
-<!-- section-summary: A migration should preserve prediction meaning and evidence while the team validates new timing, feature, capacity, and recovery behavior. -->
-
-Moving from batch to online serving makes sense after the product decision gains a tighter deadline or genuinely needs request-time context. The change adds an always-available service, online feature retrieval, capacity planning, timeouts, and live incident response. It should earn that complexity through product value.
-
-The first migration step freezes the existing prediction contract: feature definitions, preprocessing, model artifact, output meaning, policy thresholds, and fallback. The team then builds the online path in shadow mode, separated from live decisions. Each live request can receive the production batch score and a shadow online score. Comparison records measure coverage, numerical parity, feature freshness, and latency.
-
-Differences need classification. A small floating-point difference may be harmless. A large difference can reveal preprocessing drift, missing online features, different categorical mappings, or a newer source value. The release owner defines acceptable tolerances before traffic moves.
-
-After parity and load tests pass, a small request segment can use the online decision. Traffic grows in stages with service, model, and business guardrails. Rollback returns the segment to the batch score or previous endpoint under the same response contract.
-
-The reverse migration can also be valuable. If a live score changes only after a daily data refresh and no user is blocked by immediate computation, publishing scores in batch can remove warm endpoint cost and simplify recovery. The product deadline remains the deciding fact.
-
-```mermaid
-flowchart TD
-    A["Frozen Contract<br/>(features model output and policy)"] --> B["Shadow Path<br/>(new route records comparisons)"]
-    B --> C{"Parity And Load Gates<br/>(quality timing and capacity)"}
-    C -->|Fail| D["Repair The Difference<br/>(data code or infrastructure)"]
-    D --> B
-    C -->|Pass| E["Small Live Segment<br/>(bounded decision exposure)"]
-    E --> F["Staged Expansion<br/>(service model and business guardrails)"]
-    F --> G["Rollback Route<br/>(stable prior decision path)"]
-
-    class A input
-    class B,E,F,G process
-    class C gate
-    class D failure
-```
-
-## The Main Idea
-<!-- section-summary: Batch prepares a trusted generation before a cutoff; online protects a live request deadline; hybrid systems assign each part of the decision to the fitting path. -->
-
-Batch inference and online inference deliver the same kind of model output under different operating promises. Batch fixes a population and data snapshot, scores partitions, validates the complete generation, and publishes it before a business cutoff. Online inference validates an arriving request, retrieves current evidence, uses ready capacity, and returns a result inside a latency deadline.
-
-A strong design starts with the product action, actor, deadline, acceptable staleness, and fallback. That description leads naturally to a warehouse or lakehouse job, a managed batch service, an ordinary API, a managed endpoint, KServe, Triton, or a deliberate hybrid. Tool choice comes after the decision contract.
+That one rule explains why recommendation systems precompute candidates but rerank online, why fraud systems batch historical features but evaluate transactions live, why online systems need spare capacity and fallbacks, and why batch systems emphasize lineage, replay and completion deadlines. **Batch and online are therefore not competing technologies. They are two places on the timeline where you are allowed to spend computation.**
 
 ![Hybrid recommendation path precomputes candidates in batch, publishes the current approved generation to a versioned store, and re-ranks it with current context inside the page deadline](/content-assets/articles/article-mlops-model-serving-batch-vs-online-inference/batch-online-hybrid-summary.png)
 
 *A hybrid design gives stable catalogue work to batch and deadline-bound context to online inference while preserving shared model, feature, score, and fallback meaning.*
 
-## References
+## Check Your Answers
 
-- [Amazon SageMaker AI: Use Batch Transform](https://docs.aws.amazon.com/sagemaker/latest/dg/batch-transform.html)
-- [Amazon SageMaker AI: Inference options](https://docs.aws.amazon.com/sagemaker/latest/dg/deploy-model-options.html)
-- [Gemini Enterprise Agent Platform: Get batch inferences](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/get-batch-predictions)
-- [Gemini Enterprise Agent Platform: Get online inferences](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/get-online-predictions)
-- [Azure Machine Learning: Batch endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-batch)
-- [Azure Machine Learning: Online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online)
-- [Databricks: Batch inference](https://docs.databricks.com/aws/en/machine-learning/model-inference)
-- [Databricks: Model Serving](https://docs.databricks.com/aws/en/machine-learning/model-serving)
-- [Apache Airflow: Timetables](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timetable.html)
-- [Dagster: Partitions and backfills](https://docs.dagster.io/guides/build/partitions-and-backfills/partitioning-assets)
-- [KServe: Predictive inference framework overview](https://kserve.github.io/website/docs/model-serving/predictive-inference/frameworks/overview)
-- [NVIDIA Triton Inference Server: Dynamic batcher](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[How Do Deadlines Distinguish Batch from Online Inference?]{kind="recap"}
+Batch work has a completion deadline across available records, while online work has a waiting decision and a per-request latency deadline.
+:::
+
+:::expand[Why Do Batch and Online Systems Pay Different Capacity Costs?]{kind="recap"}
+Batch improves utilization and tolerates queues; online pays for ready capacity, while microbatching trades a short wait for efficiency.
+:::
+
+:::expand[How Do Data Engineering, Idempotency, and Lineage Make Batch Inference Reliable?]{kind="recap"}
+Reliable batch serving depends on reproducible input snapshots, idempotent partitions, durable outputs, and lineage for every produced prediction.
+:::
+
+:::expand[How Do Request Reliability, Overload, Loading, and Autoscaling Make Online Inference Reliable?]{kind="recap"}
+Reliable online serving depends on bounded queues, overload behaviour, timeouts, loaded models, redundancy, and autoscaling signals tied to the bottleneck.
+:::
+
+:::expand[How Can Both Paths Preserve the Same Model and Feature Meaning?]{kind="recap"}
+Batch and online may share an immutable model, but feature definitions, event time, preprocessing, and policy must preserve the same product meaning.
+:::
+
+:::expand[How Do Monitoring, Replay, Redundancy, and Retries Differ between the Paths?]{kind="recap"}
+Batch recovery replays identified work, while online recovery uses redundancy and degradation; their retry and monitoring signals therefore differ.
+:::
+
+:::expand[How Do Releases, Migrations, and Cascades Combine Batch and Online Inference?]{kind="recap"}
+Releases affect long jobs and request traffic differently, and migrations, precomputation, hybrid fraud paths, and cascades combine both modes deliberately.
+:::
+
+:::expand[What Decision Framework Chooses the Right Operating Path?]{kind="recap"}
+The final choice compares value deadlines, data arrival, freshness, workload size, compute cost, recovery, and the consumer's interaction pattern.
+:::

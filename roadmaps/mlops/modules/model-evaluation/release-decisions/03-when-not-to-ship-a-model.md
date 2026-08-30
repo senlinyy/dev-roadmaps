@@ -9,351 +9,596 @@ id: "article-mlops-model-evaluation-when-not-to-ship-a-model"
 
 ## Table of Contents
 
-1. [Why Some Models Must Stay Out Of Production](#why-some-models-must-stay-out-of-production)
-2. [Choose Reject, Defer, Shadow, or Restricted Release Deliberately](#choose-reject-defer-shadow-or-restricted-release-deliberately)
-3. [Block a Release With an Unclear or Expanding Use](#block-a-release-with-an-unclear-or-expanding-use)
-4. [Block a Release Built on Invalid Evidence](#block-a-release-built-on-invalid-evidence)
-5. [Block Unacceptable Behaviour and Unresolved Harm](#block-unacceptable-behaviour-and-unresolved-harm)
-6. [Block a Release That Operators Cannot Control](#block-a-release-that-operators-cannot-control)
-7. [Block a Release Without Accountable Authority](#block-a-release-without-accountable-authority)
-8. [Record The Required Repair And Preserve The Failed Decision](#record-the-required-repair-and-preserve-the-failed-decision)
-9. [Run The Full Review Again After Repair](#run-the-full-review-again-after-repair)
-10. [The Main Idea](#the-main-idea)
-11. [References](#references)
+1. [Why Is Shipping a Model an Asymmetric Decision under Uncertainty?](#why-is-shipping-a-model-an-asymmetric-decision-under-uncertainty)
+2. [When Do Unclear Use, Invalid Evidence, or Unacceptable Behaviour Block Release?](#when-do-unclear-use-invalid-evidence-or-unacceptable-behaviour-block-release)
+3. [When Do Residual Harm or Missing Operational Control Make Deployment Unsafe?](#when-do-residual-harm-or-missing-operational-control-make-deployment-unsafe)
+4. [Why Do Accountable Authority and Unresolved Uncertainty Matter?](#why-do-accountable-authority-and-unresolved-uncertainty-matter)
+5. [How Should a Blocked Release Record Repairs and Reconsider the Full Claim?](#how-should-a-blocked-release-record-repairs-and-reconsider-the-full-claim)
+6. [When Is a Restricted Release a Real Boundary rather than a Rename?](#when-is-a-restricted-release-a-real-boundary-rather-than-a-rename)
+7. [How Do Safety Cases and Evidence Proportionality Support the Decision?](#how-do-safety-cases-and-evidence-proportionality-support-the-decision)
+8. [What Is the Final Standard for Deciding Not to Ship?](#what-is-the-final-standard-for-deciding-not-to-ship)
+9. [Check Your Answers](#check-your-answers)
 
-## Why Some Models Must Stay Out Of Production
-<!-- section-summary: A no-ship decision denies production influence if the proposed use exceeds the release's evidence, behaviour, controls, or accountable approval. -->
+A model can lead its benchmark and still lack permission to affect real users. Its intended use may have expanded beyond the evaluation data, a critical subgroup may remain unsafe, or operators may have no reliable way to detect and reverse bad behaviour.
 
-Imagine a model that prioritizes patient messages for nurse review. The candidate improves the overall ranking score. The same evaluation shows that it misses too many urgent messages in one language, and the rollback drill cannot prove which version handles new requests after recovery.
+Choosing **not to ship** is an evidence-based release outcome, not a failure to reward technical progress. The decision concerns one model inside one system, for one population and consequence set, with the monitoring, authority, and recovery controls that actually exist. Missing or invalid evidence can be as important as a failed metric.
 
-The team has useful evidence and a serious boundary. It keeps the candidate out of queue-ordering traffic. Offline work may continue, and an isolated shadow can collect current runtime evidence without changing the order seen by nurses. The release record names the segment failure, broken recovery proof, responsible owners, and tests required from a new candidate.
+Use these questions to identify blocking conditions, record the required repair, and judge whether a narrower release is truly enforceable:
 
-That is a complete no-ship outcome. The team makes a precise decision, preserves safe learning, and keeps production authority with the current system.
+1. **Why Is Shipping a Model an Asymmetric Decision under Uncertainty?**
+2. **When Do Unclear Use, Invalid Evidence, or Unacceptable Behaviour Block Release?**
+3. **When Do Residual Harm or Missing Operational Control Make Deployment Unsafe?**
+4. **Why Do Accountable Authority and Unresolved Uncertainty Matter?**
+5. **How Should a Blocked Release Record Repairs and Reconsider the Full Claim?**
+6. **When Is a Restricted Release a Real Boundary rather than a Rename?**
+7. **How Do Safety Cases and Evidence Proportionality Support the Decision?**
+8. **What Is the Final Standard for Deciding Not to Ship?**
 
-A strong offline score cannot justify a release whose intended use is unclear, whose critical failures remain untested, or whose operators cannot contain a bad outcome. **A model should stay out of the requested production scope if its intended use, evidence, behaviour, operating controls, or accountable approval cannot support that scope.** These are independent conditions:
+## Why Is Shipping a Model an Asymmetric Decision under Uncertainty?
+<!-- section-summary: Deployment creates real effects under uncertainty, and the downside of an unjustified release may be much larger than the cost of waiting for evidence. -->
 
-1. **Defined use:** the decision, population, automation level, and release scope are stable.
-2. **Valid evidence:** the data, labels, comparison, and release identity represent that use.
-3. **Acceptable behaviour:** quality, uncertainty, segments, robustness, and workload stay inside reviewed limits.
-4. **Operational control:** operators can identify, observe, contain, fall back, and recover the exact release.
-5. **Accountable authority:** the owners of the remaining product, domain, data, security, privacy, and operational risk accept the proposed scope.
+Model evaluation exists to support a deployment decision, and the consequences of an unjustified release make that decision asymmetric.
 
-Each condition protects a different failure boundary. Better latency cannot repair evaluation leakage. A higher average score cannot cancel a severe regression for an important group. Review approval cannot create a rollback path that the platform has never tested.
+The purpose of model evaluation is not to prove that a model is “good.” It is to decide whether there is enough justified confidence to expose a particular model, in a particular system, to a particular set of users and consequences. That distinction matters because a model can have excellent benchmark scores and still be unfit for production. Shipping is not a reward for technical progress. It is an authorization to create real-world effects. The central question is:
 
-```mermaid
-flowchart TD
-    U["Defined use and requested scope"] --> E{"Evidence valid<br/>for that use?"}
-    E -- "No" --> B1["Block and rebuild evidence"]
-    E -- "Yes" --> Q{"Behaviour and uncertainty<br/>inside limits?"}
-    Q -- "No" --> B2["Reject or narrow the proposal"]
-    Q -- "Yes" --> O{"Operating controls<br/>proven?"}
-    O -- "No" --> B3["Defer and repair controls"]
-    O -- "Yes" --> A{"Required owners<br/>approve residual risk?"}
-    A -- "No" --> B4["Hold production authority"]
-    A -- "Yes" --> R["Authorize the supported scope"]
+**Given what this system can do, where it will operate, what can go wrong, and how well we can detect and control failure, is deployment justified by the evidence we actually have?**
 
-    class E,Q,O,A question
-    class B1,B2,B3,B4 block
-    class R release
-```
+Sometimes the correct answer is no. Before deployment, most model failures are observations. After deployment, model failures can become consequences. A hallucination during evaluation may be one bad row in a dataset. The same hallucination in production might become a wrong medical instruction, a fraudulent transaction, corrupted business data, reputational damage, or thousands of users receiving systematically bad advice. This creates an important asymmetry:
 
-The flow preserves the reason for the block. Invalid evidence returns to the evaluation protocol. Unacceptable behaviour returns to data, modelling, product policy, or scope. Missing controls return to platform work. Missing authority returns to the owner of that risk.
+$$
+\text{Cost of discovering a failure before release}
+\ll
+\text{Cost of discovering the same failure after release}
+$$
 
-## Choose Reject, Defer, Shadow, or Restricted Release Deliberately
-<!-- section-summary: Different evidence failures lead to different release outcomes, and each outcome grants a distinct level of authority. -->
+Not every system has this asymmetry to the same degree. A model generating game dialogue and a model authorizing financial transfers obviously have different consequences. So the first principle is not:
 
-“Do not ship” can describe several decisions. Keeping them separate helps the team choose the right repair and prevents a limited approval from quietly widening.
+“Does the model usually work?”
 
-**Reject** closes the current candidate for the requested use. The model may depend on a prohibited feature, repeatedly fail a safety-critical segment, or offer too little value to justify its cost. Further work creates a new candidate and a new decision.
+It is:
 
-**Defer** pauses the decision because material evidence is missing or still changing. Labels may need another maturity window. A privacy review may be incomplete. A load-test environment may have failed before producing a trustworthy result. The team preserves the proposal and returns after the unknown is resolved.
+**“What happens when it does not?”**
 
-**Shadow-only authority** allows the candidate to receive isolated copies of real inputs while the production result remains authoritative. This can answer questions about current schemas, feature coverage, runtime, and prediction divergence. It gives the candidate no permission to change the user or workflow outcome.
+The more severe, irreversible, difficult-to-detect, or widespread the answer is, the stronger the evidence required before shipping. A release decision can be represented very roughly as:
 
-**Restricted release** authorizes an enforceable subset. Evidence may support one language, region, product route, or low-risk decision while another remains blocked. The router, policy, monitoring, and fallback must preserve that boundary.
+$$
+\text{Ship if expected benefit exceeds expected harm}
+$$
 
-```mermaid
-stateDiagram-v2
-    [*] --> Proposed
-    Proposed --> Rejected: known unacceptable candidate
-    Proposed --> Deferred: material evidence is unknown
-    Proposed --> ShadowOnly: offline evidence supports runtime learning
-    Proposed --> Restricted: evidence supports enforceable subset
-    Proposed --> BroadRelease: full scope supported
-    Deferred --> Proposed: evidence completed
-    ShadowOnly --> Proposed: runtime evidence collected
-    Restricted --> Proposed: expansion requested
-    Rejected --> [*]
-    BroadRelease --> [*]
-```
+But this simple formulation hides the hardest part. For each failure mode $$i$$:
 
-These outcomes grant different levels of authority. Shadow traffic can be the correct destination for a promising candidate with incomplete runtime evidence. Rejection can be the correct destination for a well-measured candidate whose harm exceeds the limit. Restricted release works only if the boundary is real.
+$$
+E[H]
+=
+\sum_i
+P(F_i)
+\times
+S(F_i)
+\times
+X(F_i)
+$$
 
-Consider a multilingual support classifier with strong English evidence and sparse evidence for two other languages. An English-only shadow may be reasonable if language routing is reliable and copied predictions create no side effects. An English-only automated release needs stronger product and operating evidence because its predictions now change a queue. A broad release remains unsupported.
+where:
 
-The decision should always state the requested authority and the granted authority. This prevents “approved for shadow” from being read later as “approved.”
+* $$P(F_i)$$ is the probability of failure,
+* $$S(F_i)$$ is the severity if it occurs,
+* $$X(F_i)$$ is the scale of exposure.
+
+For model systems, we should add two more factors:
+
+$$
+R_i
+=
+P(F_i)
+\times
+S_i
+\times
+X_i
+\times
+D_i
+\times
+C_i
+$$
+
+where $$D_i$$ represents how difficult the failure is to detect and $$C_i$$ represents how difficult it is to contain or reverse. Consider two models with the same 1% error rate. Model A occasionally generates an unattractive marketing slogan. Model B incorrectly approves a dangerous action 1% of the time. “99% accuracy” tells us almost nothing about whether either should ship. The production decision depends on the structure of the errors, not merely their average frequency. A model should stay out of production when the organization cannot establish a defensible chain from intended use to evidence to acceptable residual risk. Think of deployment as requiring several propositions to be true simultaneously:
+
+$$
+\text{Deployable}
+=
+U \land E \land B \land K \land A
+$$
+
+where:
+
+* $$U$$: the intended use is sufficiently defined,
+* $$E$$: the evaluation evidence is valid,
+* $$B$$: observed behaviour is acceptable,
+* $$K$$: failures can be controlled,
+* $$A$$: accountable authority exists.
+
+This is an **AND**, not an average. Strong performance cannot compensate for missing authority. Excellent monitoring cannot make invalid evaluation evidence valid. A narrow safe use cannot prove a much broader deployment is safe. If one indispensable condition is missing, the rational response may be not to ship. This is one of the most important ideas in model evaluation: **some failures are compensatory, but some are gating failures.** “Ship” and “do not ship” are usually too crude. There are at least four meaningful outcomes.
+
+| Decision               | Meaning                                                                              | Appropriate when                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| **Reject**             | This model/system should not proceed in its present form                             | Evidence shows unacceptable or fundamental failure                      |
+| **Defer**              | Do not release yet                                                                   | Critical uncertainty or remediable evidence gaps remain                 |
+| **Shadow**             | Run the system without allowing its outputs to affect users or decisions             | You need realistic operational evidence without production consequences |
+| **Restricted release** | Deploy only within explicitly bounded users, tasks, permissions, scale, or oversight | Safety is justified inside a narrow envelope but not outside it         |
+
+These choices express different epistemic states. **Reject** means, “We know enough to conclude no.” **Defer** means, “We do not know enough to conclude yes.” That distinction is important. Absence of evidence of danger is not evidence of safety. **Shadow deployment** addresses another problem: laboratory evaluations often fail to reproduce real traffic. The model receives real inputs, but its outputs are prevented from controlling the real system. This lets evaluators observe distribution shift, latency, tool behaviour, failure patterns, and operator interactions with lower consequence. **Restricted release** recognizes that safety claims are conditional.
+
+For example:
+
+$$
+\text{Safe for summarizing internal documents}
+\not\Rightarrow
+\text{Safe for autonomous external communication}
+$$
+
+A model does not have a single universal safety status. It has evidence supporting particular behaviours under particular conditions.
+
+## When Do Unclear Use, Invalid Evidence, or Unacceptable Behaviour Block Release?
+<!-- section-summary: A release should stop when intended use is unclear or expanding, evaluation evidence is invalid, or important behaviour remains unacceptable despite a good average. -->
+
+The first blocking conditions concern the claim itself: what use is proposed, whether the evidence is valid, and whether important behaviour is acceptable.
+
+You cannot meaningfully evaluate an undefined system. Suppose an evaluation demonstrates that a model performs well when:
+
+* answering questions about internal documentation,
+* for trained employees,
+* without external tools,
+* with human review.
+
+Then someone proposes releasing the same model as an autonomous agent that can email customers and modify records. The original evaluation is no longer sufficient. Why? Because risk depends on the interaction between:
+
+$$
+\text{Model}
+\times
+\text{Task}
+\times
+\text{Users}
+\times
+\text{Tools}
+\times
+\text{Environment}
+$$
+
+Changing one of these can change the system's failure modes. This leads to the principle of **evaluation scope matching**:
+
+$$
+\text{Deployment scope} \subseteq \text{Evaluated scope}
+$$
+
+If production use is broader than the conditions tested, the evidence does not cover the release. This is especially important because scope expansion often happens gradually. A system begins as “draft suggestions.”
+
+Then:
+
+“Mostly automatic drafts.”
+
+Then:
+
+“Automatic unless flagged.”
+
+Then:
+
+“Fully automatic for low-risk cases.” The model may never have changed, but the actual system has. Therefore an unclear or expanding use is itself a reason to defer release until the boundary is explicit. A release can fail even when the reported evaluation numbers look excellent. The reason is simple:
+
+$$
+\text{Bad measurement}
+\Rightarrow
+\text{Bad belief}
+\Rightarrow
+\text{Bad decision}
+$$
+
+Evaluation evidence is invalid if the measurement no longer supports the claim being made. Imagine a model scores 97% on an evaluation. That number is almost meaningless until we know what was measured:
+
+- Were test cases representative of actual users?
+- Were difficult cases deliberately included?
+- Was the benchmark contaminated by training data?
+- Were evaluators blind to which model generated which response?
+- Were failures averaged away by easy examples?
+- Was the scoring rubric reliable?
+- Were tool calls, long conversations, adversarial inputs, and production context included?
+
+A particularly dangerous failure occurs when evaluation measures a convenient proxy rather than the real objective. For instance:
+
+$$
+\text{Answer similarity}
+\neq
+\text{Factual correctness}
+$$
+
+and:
+
+$$
+\text{User preference}
+\neq
+\text{Safety}
+$$
+
+and:
+
+$$
+\text{Benchmark performance}
+\neq
+\text{Production reliability}
+$$
+
+The stricter principle is therefore:
+
+**Never authorize a deployment claim stronger than the evidence that supports it.**
+
+If your test establishes “the model performed reliably on 2,000 English customer-support conversations,” you cannot silently transform that into “the model is reliable.” The qualifiers are part of the conclusion. Aggregate scores are particularly dangerous when failures are unevenly distributed. Suppose a system succeeds 99.9% of the time. That sounds excellent. But imagine the remaining 0.1% always involves a catastrophic failure. At one million interactions:
+
+$$
+1{,}000{,}000 \times 0.001 = 1{,}000
+$$
+
+You now have roughly 1,000 catastrophic events. Scale transforms rare errors into recurring incidents. The correct question is therefore not simply:
+
+“What is the average failure rate?”
+
+You need to understand the **failure distribution**. Some behaviours should function as hard gates. For example, depending on the system, repeated evidence of unauthorized actions, disclosure of protected information, dangerous instructions, discriminatory decisions, irreversible tool misuse, fabricated evidence, or systematic deception might independently justify blocking release. The relevant principle is:
+
+$$
+\text{Acceptability}
+\neq
+\text{average performance}
+$$
+
+Instead:
+
+$$
+\text{Acceptability}
+=
+f(\text{frequency}, \text{severity}, \text{detectability}, \text{recoverability}, \text{scale})
+$$
+
+Some errors can be tolerated. Some require mitigation. Some invalidate the release. Good evaluation makes those categories explicit before seeing the final results whenever possible. Otherwise organizations become tempted to redefine “acceptable” after discovering what their preferred model happens to do.
 
 ![Decision tree separates rejection, deferral, shadow-only authority, restricted release, and broad-release review according to the evidence available for one exact production use](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/no-ship-outcome-tree.png)
 
 *A no-ship outcome is precise: each branch states what work may continue and which production authority remains closed.*
 
-## Block a Release With an Unclear or Expanding Use
-<!-- section-summary: Evaluation can authorize only the decision, population, automation level, data use, and environment that reviewers actually assessed. -->
+## When Do Residual Harm or Missing Operational Control Make Deployment Unsafe?
+<!-- section-summary: Mitigations do not erase residual harm, and a system without monitoring, fallback, rollback, or operator control cannot contain predictable failures. -->
 
-**Intended use** describes what the model's output will influence. It includes the population, product action, level of automation, human oversight, environment, and data permitted for that purpose.
+Even measured mitigations can leave unacceptable harm, especially when operators cannot detect, contain, or reverse failure.
 
-A message-priority score used to order a human review queue has one intended use. Using the same score to close low-priority messages creates another. The second use gives the model more authority, changes the harm of a mistake, and may need different metrics, appeal paths, and domain review.
+Finding a failure and adding a mitigation does not automatically make a system safe. Suppose a dangerous failure occurs 10% of the time. A safety layer catches 90% of those failures. The dangerous output rate becomes roughly:
 
-Scope can expand gradually:
+$$
+10\% \times (1-90\%) = 1\%
+$$
 
-- a pilot moves into a country with another language and policy;
-- a recommendation score starts controlling eligibility;
-- a reviewer loses time to inspect every output and begins accepting it automatically;
-- a batch report turns into an API called during live decisions;
-- a feature approved for fraud prevention appears in a marketing model.
+The mitigation sounds excellent—“90% effective”—but the residual risk may still be unacceptable. The production question is:
 
-Each change alters the question that the evidence must answer. A previous report can remain informative, although it cannot authorize an untested action.
+**What risk remains after every realistic mitigation is applied?**
 
-### Ask what will happen to one real case
+Not:
 
-A practical scope review follows one case through the proposed system:
+“Did we add safeguards?”
 
-1. Which person, account, item, or event enters the model?
-2. Which data is read at prediction time?
-3. Which score or output is produced?
-4. Which policy turns that output into an action?
-5. Who can inspect, override, or appeal the action?
-6. Which route receives the release, and which route remains on the current system?
+This distinction prevents safety work from becoming procedural theatre. Mitigations matter only insofar as they change real-world outcomes. Even a reasonably well-performing model can be unsuitable for production if the surrounding system cannot contain it. Every production system eventually encounters something the evaluation did not anticipate. So production safety cannot rely on prediction alone. It also requires control. A healthy production architecture should make it possible to limit things such as scale, permissions, actions, data access, tool access, user populations, and rollout speed, while also making abnormal behaviour observable and stoppable. The underlying engineering principle is:
 
-This walkthrough exposes ambiguity quickly. “Decision support” sounds limited until the team learns that staff are expected to accept the top-ranked action without review. “Internal analytics” sounds low risk until the report starts controlling customer eligibility.
+$$
+\text{Unknown failures are inevitable}
+$$
 
-A narrower proposal can return to review if the platform can enforce it. For example, evidence may support English-language cases under human review. The release policy must identify that language reliably, route other cases to a safe path, monitor both populations, and prevent the approved route from gaining automatic authority. If any of those controls are missing, the narrow proposal still exceeds its evidence.
+Therefore:
 
-## Block a Release Built on Invalid Evidence
-<!-- section-summary: Leakage, immature labels, stale samples, missing coverage, unfair baselines, and ambiguous release identity invalidate the comparison before metric quality matters. -->
+$$
+\text{Safe operation requires bounded consequences}
+$$
 
-Evidence is valid if it measures the production decision being proposed. A polished report can still describe the wrong system.
+This is the same principle used throughout other safety-critical engineering fields. You do not build an aircraft on the assumption that components never fail. You design the system so failures are detectable, isolated, redundant, recoverable, or fail-safe. Model systems need analogous properties. A system that cannot be stopped, rolled back, rate-limited, isolated, audited, or prevented from taking high-impact actions places too much trust in perfect model behaviour. And perfect model behaviour is not a credible assumption. A common mistake is treating the model as if it were the deployed product. Usually it is only one component. A real system may look like:
 
-**Data leakage** occurs if training or evaluation uses information unavailable at prediction time, or if information crosses between training and test groups. A support-priority model might use the final resolution category, which staff add hours after the first prediction. The model can score extremely well offline because the feature reveals part of the answer. Production cannot reproduce that result.
+$$
+\text{User}
+\rightarrow
+\text{Prompting}
+\rightarrow
+\text{Model}
+\rightarrow
+\text{Tools}
+\rightarrow
+\text{Policy}
+\rightarrow
+\text{UI}
+\rightarrow
+\text{Human}
+\rightarrow
+\text{External world}
+$$
 
-Immature labels create a quieter error. Suppose the target is “missed payment within thirty days.” Cases evaluated after one week include many apparent negatives that still have time to become positive. A candidate can look unusually accurate even though the label window has not closed.
+Failures can arise anywhere. A highly capable model paired with excessive permissions may be unsafe. A weaker model with constrained tools and mandatory verification might be acceptable. This gives us an important conclusion:
 
-Coverage can also distort the comparison. If the candidate drops invalid or difficult requests before scoring, it receives credit only for cases it completed. The report should preserve the denominator from eligible traffic through attempted predictions, successful outputs, fallbacks, errors, and mature-label joins.
+> **Release readiness is a property of the deployed system, not of the model checkpoint alone.**
 
-### Pin The Exact Model, Code, Features, And Policy Under Review
+Therefore statements such as “Model X passed safety evaluation” should always provoke the question:
 
-The decision should pin the model artifact, serving image, feature definitions, schema, preprocessing, threshold, and policy. A movable name such as `latest` or `candidate` can point elsewhere after review. If the deployed combination differs from the evaluated combination, the evidence describes another release.
+Passed for what system configuration
 
-Modern MLflow Registry guidance uses model versions, tags, and aliases because fixed model stages are deprecated. A tag can record a no-ship finding, and an alias can help people locate a candidate. The decision and deployment should still pin the exact version or digest.
+## Why Do Accountable Authority and Unresolved Uncertainty Matter?
+<!-- section-summary: Consequential deployment requires accountable authority, while uncertainty about a critical claim can itself be a blocking evaluation result. -->
 
-### Repair The Evidence Before Repeating The Comparison
+Those risks need an accountable decision owner, and missing evidence for a critical claim cannot be converted into confidence by optimism.
 
-Extra plots and threshold tuning cannot rescue leaked features or incorrect labels. The team repairs the failing boundary:
+Another failure has nothing to do with model accuracy. Suppose the evidence is ambiguous. Engineering believes the model is acceptable. Safety disagrees. Product wants to launch. Legal raises unresolved concerns. Who has authority to decide If nobody can answer that clearly, the release process itself is unsafe. A production decision needs both:
 
-- remove the unavailable feature and rebuild historical examples at their true prediction times;
-- wait for label maturity or redefine the target explicitly;
-- reconstruct both production and candidate paths under the same policy;
-- restore failed and fallback cases to the denominator;
-- pin the complete release identity and rerun the evaluation.
+$$
+\text{Decision rights}
++
+\text{Decision accountability}
+$$
 
-Verification uses a fresh report from the corrected protocol. It should include the earlier failure as a test: the prohibited feature is absent, labels meet the maturity rule, coverage reconciles to eligible traffic, and the report points to the proposed release.
+Someone or some formally defined body must have the authority to approve, restrict, defer, and stop the deployment. Otherwise organizations fall into a dangerous coordination failure:
 
-## Block Unacceptable Behaviour and Unresolved Harm
-<!-- section-summary: A candidate remains outside production influence if practical gains, uncertainty, segments, robustness, calibration, or workflow effects cross reviewed limits. -->
+Everyone participates in the decision, but nobody owns it. This creates asymmetric incentives. Teams benefit from shipping, while responsibility for future failures becomes diffuse. Model evaluation should therefore culminate not merely in a report but in a decision owned by identifiable authority. That authority should know:
 
-Valid evidence can deliver an unacceptable answer. Imagine a fraud candidate that catches more fraud overall and wrongly blocks many more legitimate payments from one region. The evaluation is fair, and the result still crosses a product harm limit. A release decision must judge the consequence as well as the validity of the measurement.
+* what evidence supports the release,
+* what uncertainties remain,
+* what risks have been accepted,
+* what limits apply,
+* and what conditions would trigger rollback.
 
-The operating point matters because thresholds and policies turn scores into actions. A fraud model can raise recall by sending many more legitimate purchases to review. A triage model can find more urgent cases and overwhelm staff with false alarms. A ranking model can raise average relevance while removing all useful results for a small query class.
+Without that, “approval” is merely organizational ambiguity disguised as governance. People sometimes assume an evaluation only fails when it discovers something bad. That is incorrect. An evaluation can also fail because it cannot establish what is true. Suppose a safety-critical behaviour occurs only rarely, and your evaluation has too few samples to estimate its rate. The result is not:
 
-The team should block or narrow a release if:
+“We did not observe the failure, therefore it is safe.”
 
-- the improvement fails to reach the practical margin;
-- the uncertainty interval still contains a harmful regression;
-- a critical segment or operating condition crosses its limit;
-- robustness tests expose unsafe missing-data, schema, stress, or adversarial behaviour;
-- calibration fails where a probability controls resources or risk;
-- human workload exceeds available capacity;
-- error review reveals a repeated high-consequence failure hidden by the average.
+The result is:
 
-### Separate known harm from missing knowledge
+“Our evidence is insufficient to estimate this risk.”
 
-Known harm and uncertainty need different responses. If urgent-message recall is credibly below its required floor, the candidate has failed that condition. If the segment contains twelve mature labels, the result may be too uncertain to support broad authority.
+That may justify defer rather than reject. This reflects a deeper epistemic rule:
 
-The second case still blocks the broad release. Its repair is evidence collection. Treating the small sample as a pass would grant authority without proof. The team might run isolated shadow traffic, improve label coverage, extend the observation window, or keep the segment on the current path.
+$$
+\text{Unknown} \neq \text{Safe}
+$$
 
-Consider an automated review queue that can process 2,000 alerts each day. A new threshold raises recall and produces 7,000 alerts. The metric gain is real, while the delivered system leaves thousands of cases unread. The proposed operating point fails the workflow constraint.
+In high-consequence systems, uncertainty itself has a cost. The greater the possible severity, the less uncertainty you should tolerate before release.
 
-The team may raise the threshold and accept lower recall, or it may fund more review capacity. A safe routing rule could reserve human attention for the highest-risk cases. Rejection is appropriate if none of those changes produce a useful system. Every option needs a new comparison at the policy that production will actually use.
+## How Should a Blocked Release Record Repairs and Reconsider the Full Claim?
+<!-- section-summary: A blocked decision records the evidence, reason, owner, and required repair; retesting must reconsider the complete deployment claim and preserve the history. -->
 
-### Inspect the consequence, then choose the repair
+A blocked release should create a specific repair plan and preserve the failed reasoning, then reopen the entire claim rather than only one checkbox.
 
-A segment regression may come from weak data coverage, label error, the model, the threshold, or a product route. The owner should inspect representative errors and upstream evidence before choosing a remedy.
+A failed release review should not end with a vague instruction to “improve the model.” A blocking finding should establish a clear relationship:
 
-Adding more training data is appropriate if the missing pattern is real and labels can be improved. A routed model may help if populations have distinct mechanisms and enough evidence. A conservative fallback may protect a rare high-consequence case. A narrower release may work if traffic boundaries are reliable. The next test should show that the chosen change repaired the observed harm without breaking workload, latency, or another segment.
+$$
+\text{Observed failure}
+\rightarrow
+\text{Required change}
+\rightarrow
+\text{Evidence needed for reconsideration}
+$$
 
-## Block a Release That Operators Cannot Control
-<!-- section-summary: Production authority requires observable release identity, enforceable containment, a safe fallback, and a recovery path proven against the data plane. -->
+For example:
 
-Offline evidence describes recorded predictions. Production adds live dependencies and a running process that may keep the model in memory. A team can issue a successful rollback command and still leave the candidate serving requests. Operations must control and verify what happens in the data path.
+“Model sometimes makes unsupported claims.” is weak. A stronger finding would establish the affected use case, observed failure rate, severity, blocking threshold, mitigation requirement, and test needed to demonstrate remediation. That turns rejection into an engineering input rather than an argument. This matters because vague failures are easy to reinterpret later. Specific failures are testable. When a model fails evaluation, preserve the evidence. Do not overwrite the failed result with the successful rerun. A mature evaluation history might conceptually look like:
 
-A release should remain blocked until operators can answer:
+$$
+V_1:
+\text{Rejected}
+\rightarrow
+V_2:
+\text{Mitigated}
+\rightarrow
+V_3:
+\text{Approved with restrictions}
+$$
 
-- Which model, image, feature, and policy version produced this decision?
-- Which traffic and population received the candidate?
-- Which service and model-quality signals show harm?
-- Which control limits exposure or selects the fallback?
-- Which retained release can take traffic back?
-- Which evidence proves recovery in the running system?
+This history matters for several reasons. First, it shows what kinds of failures the system has exhibited before. Second, it helps future investigators distinguish newly introduced failures from recurring ones. Third, it prevents institutional memory from becoming:
 
-Suppose a rollback drill changes a registry alias from the candidate to the production version. New prediction events still report the candidate because each worker loaded it during startup. The control-plane command succeeded, while the data plane continued serving the blocked version. The team needs a recovery action that restarts or reroutes the actual workers and verification based on new events.
+“This model passed evaluation.”
 
-### Choose Containment That Matches The Failure
+when the more accurate statement is:
 
-Full rollback is one option. A feature incident may call for disabling the feature and using a reviewed default. A failure limited to one route may send that route to the retained release. A high-risk action may return to human review. A broken batch output may remain unpublished while the prior complete dataset stays available.
+“This system originally failed for reasons A and B, changes C and D were made, and the revised configuration passed under conditions E and F.”
 
-The response needs an owner, trigger, action, and proof. “Roll back if needed” leaves every important detail unresolved.
+That distinction becomes extremely valuable during incidents. Suppose an evaluation finds a prompt-injection vulnerability. The team modifies system prompts and tool permissions. The prompt-injection test now passes. Can the system ship? Not automatically. Why? Because changes have side effects. A mitigation that reduces one failure may produce another:
 
-Service monitoring shows whether requests arrive, finish on time, fail, or approach a resource limit. Dependency signals reveal whether the problem sits outside the model process. ML monitoring adds feature health and the rates of predictions and product decisions. Mature labels and segment outcomes later show whether prediction quality changed. Workload signals reveal pressure transferred to people.
+$$
+\text{Fix}(F_1)
+\rightarrow
+\Delta(F_2,F_3,\ldots)
+$$
 
-Prometheus with Grafana can provide service metrics and alerts. OpenTelemetry can connect a request across dependencies, and cloud-native monitoring can cover managed endpoints. The release policy still defines which signal requires a stop and which action follows.
+For example, stronger refusal behaviour might reduce dangerous outputs but increase refusal of legitimate requests. Restricting tools may improve security while reducing task completion reliability. Changing a model checkpoint can affect almost every evaluated behaviour. Therefore remediation should generally trigger both:
 
-Managed endpoints can reduce the amount of custom control code. SageMaker AI deployment guardrails can use canary traffic shifting and CloudWatch alarms to return traffic to the previous fleet. Azure Machine Learning supports blue-green deployments behind one endpoint with explicit traffic allocation. Kubernetes platforms can use Argo Rollouts analysis to pause or abort a canary. The team must test the chosen path with the exact release and dependencies.
+$$
+\text{Targeted regression test}
++
+\text{broader evaluation regression}
+$$
+
+The scale of rerun should depend on how consequential and wide-reaching the change was. A tiny UI correction does not necessarily require rebuilding the entire evaluation campaign. A model update, system-prompt rewrite, tool-policy change, or major safety filter often does. There is an even deeper reason to rerun review after repair. The goal is not merely to ask:
+
+“Did we fix the original bug?”
+
+It is to ask again:
+
+**“Given the system that now exists, do we have enough evidence to authorize the deployment that is now proposed?”**
+
+Those are different questions. Suppose a dangerous autonomous action was fixed by adding human confirmation. The resulting system may now be safe. But it is also a different system. Its latency, user experience, operator workload, error propagation, and responsibility structure have changed. So the safety case itself needs updating.
 
 ![Control-plane alias change is insufficient rollback evidence until workers are rerouted or restarted and a traceable new request reports the retained model version](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/no-ship-data-plane-recovery.png)
 
 *Recovery is proved in the data path: new traffic must identify the retained release that actually handled it.*
 
-## Block a Release Without Accountable Authority
-<!-- section-summary: Named owners accept residual risk within their decision rights, and a missing required approval keeps the requested production authority closed. -->
+## When Is a Restricted Release a Real Boundary rather than a Rename?
+<!-- section-summary: A restricted release is legitimate only when technical and operational controls actually enforce the smaller population, use, capability, and exposure. -->
 
-Every evaluated model retains **residual risk**, the risk left after planned controls. Someone with real authority must decide whether that remainder is acceptable for the proposed use.
+Teams sometimes respond with a smaller release, but that scope is meaningful only when the system can enforce it.
 
-Responsibility usually spans several owners. ML engineering owns the evaluation method. Data owners confirm the feature and label evidence. Product and domain owners judge workflow and user consequences. Platform and operations own capacity, monitoring, containment, and recovery. Security, privacy, legal, and responsible-AI reviewers judge the controls in their areas.
+Restricted deployment is extremely useful, but only when the restrictions are real. Imagine reviewers approve:
 
-Decision rights follow responsibility. Five approvals cannot repair a missing decision from the owner of a safety-critical workflow. A schedule owner cannot accept privacy risk on behalf of the privacy owner. Each reviewer should state the finding, affected scope, and evidence required for reconsideration.
+“Internal use only, trained operators, 100 requests per day, no autonomous external actions.”
 
-NIST's AI Risk Management Framework connects these responsibilities through Govern, Map, Measure, and Manage. Governance defines roles and authority. Mapping clarifies the use and possible harm. Measurement produces the evidence. Management selects, monitors, and revises the response. A no-ship decision is one legitimate risk response.
+Six months later:
 
-Disagreement should produce a precise record. One reviewer may support an English-language shadow while another blocks any storage of raw shadow inputs. The resulting proposal can use approved summaries, strict retention, and no user-facing action if those controls answer both concerns. If they do not, the shadow remains blocked.
+* contractors are added,
+* volume reaches 50,000 requests,
+* tool access is expanded,
+* human review becomes optional.
 
-## Record The Required Repair And Preserve The Failed Decision
-<!-- section-summary: A useful no-ship record binds exact findings and denied authority to owners, allowed work, corrective action, and evidence required for re-entry. -->
+Nobody technically “released a new model.” But the original safety case no longer describes reality. This is why restrictions should be considered part of the system specification. You can represent the approved operating envelope as:
 
-A no-ship decision should stay attached to the exact release it evaluated. Editing the old record into a pass would erase why that artifact lacked authority. Retraining, changing a threshold, repairing telemetry, or altering the scope creates a new proposal with new evidence.
+$$
+\Omega =
+(U,T,P,S,O)
+$$
 
-The record should explain:
+where the dimensions might represent users, tasks, permissions, scale, and oversight. Evaluation justifies operation inside $$\Omega$$. Moving materially outside it requires reconsideration. This is essentially a **safety envelope**.
 
-- which release and requested scope were reviewed;
-- which conditions failed or remained unknown;
-- which authorities are denied;
-- which safe activities may continue;
-- who owns each repair;
-- what evidence is required for another review.
+## How Do Safety Cases and Evidence Proportionality Support the Decision?
+<!-- section-summary: A safety case assembles claims, evidence, assumptions, controls, and residual risk, with the required strength proportional to harm and reversibility. -->
 
-The following YAML represents a candidate that failed one segment floor and a rollback drill. Offline work and isolated shadow remain allowed. The release controller should visibly deny canary and production requests for this model digest.
+The safety-case model organizes the full argument and asks how much evidence the severity and reversibility of the proposed use require.
 
-```yaml
-decision_id: priority-router-18-no-ship
-state: blocked
-subject:
-  model_version: "18"
-  model_sha256: "c31a..."
-requested_authority: broad_production
-allowed_authority:
-  - offline_evaluation
-  - isolated_shadow
-denied_authority:
-  - canary
-  - production
-findings:
-  - id: urgent_language_recall
-    state: failed
-    owner: model-and-label-team
-    required_evidence: rerun_segment_protocol
-  - id: rollback_serving_identity
-    state: failed
-    owner: platform-operations
-    required_evidence: passed_data_plane_drill
-```
+The strongest way to think about release evaluation is not:
 
-This record does two useful things. It keeps unsafe authority closed, and it preserves a safe route for collecting evidence. The deployment system checks the requested action against `allowed_authority` and the pinned digest. A request using another digest also needs its own decision.
+Model received 87/100, passing threshold 80.
 
-### Define A Complete Repair For Every Finding
+Instead, treat release as an argument. A simplified safety case looks like:
 
-“Improve recall” is too vague. The owner should inspect the failed cases and label process, decide whether the problem belongs to data, modelling, threshold, or routing, and record the chosen change. A revised candidate reruns overall, segment, robustness, workload, and operating tests so a local repair does not create another regression.
+$$
+\text{Claim}
+\leftarrow
+\text{Evidence}
+\leftarrow
+\text{Tests}
+$$
 
-“Fix rollback” is equally incomplete. Platform operations should identify the data-plane control, retain a known release, automate the action, send identifiable traffic, activate recovery, and prove from new events that the retained identity is serving. The fallback should remain available during the next canary.
+with assumptions connecting each layer.
 
-The same pattern applies to evidence repairs. A broken outcome join needs a concrete key or time-window correction, a backfill under governed access, reconciliation against expected label volume, and a report showing join coverage by segment. The next evaluation should fail closed if coverage drops again.
+For example:
 
-### Keep release pressure from changing the rule
+**Claim:** The assistant is acceptably safe for internal document summarization. **Evidence:** It rarely introduces material factual errors, sensitive-data handling is controlled, users can detect uncertainty, and harmful output rates remain below predefined limits. **Tests:** Representative summarization evaluations, adversarial tests, privacy tests, production-like shadow traffic, operator studies, and system-level security tests. **Assumptions:** No external tool execution, trained internal users, documents below certain sensitivity levels, human review before consequential use. A deployment should be blocked if the argument breaks anywhere. Maybe the claim is too broad. Maybe the evidence does not support it. Maybe the tests were invalid. Maybe an assumption will not hold in production. This perspective is far more robust than treating evaluation as a collection of leaderboard scores. There is no universal threshold.
 
-Weeks of sunk effort provide no evidence about a failed condition. A deadline changes the schedule and leaves the risk unchanged. One attractive metric answers only the question that metric measured.
+Evidence requirements should scale with possible consequences. We can express the principle loosely as:
 
-A small canary reduces exposure and still needs identity, monitoring, and recovery. Human review protects users only if reviewers have enough time and information to act. They also need authority plus a working escalation path.
+$$
+\text{Required confidence}
+\uparrow
+\quad \text{as} \quad
+\text{Potential harm}
+\uparrow
+$$
 
-External adoption is also weak local evidence. A technique used by another organization may be practical. The local decision still depends on local data, workflows, users, policies, and controls.
+A system suggesting emoji might tolerate significant uncertainty. A system operating critical infrastructure should not. Similarly:
 
-The block should remain material and testable. Vague discomfort can create endless review. A strong finding identifies the possible harm, evidence, denied scope, owner, and next test.
+$$
+\text{Required control}
+\uparrow
+\quad \text{as autonomy}
+\uparrow
+$$
 
-## Run The Full Review Again After Repair
-<!-- section-summary: Re-entry uses a new release identity and fresh evidence, repeats every gate, and proves the original failure plus adjacent risks are controlled. -->
+and:
 
-Repairing the named blocker earns another review. Approval still depends on the complete evidence because the candidate may have changed other metrics, segments, dependencies, or costs.
+$$
+\text{Required monitoring}
+\uparrow
+\quad \text{as exposure}
+\uparrow
+$$
 
-The re-entry packet should contain:
+and:
 
-1. a new immutable release identity;
-2. the original findings and their owners;
-3. evidence that directly repeats the failed tests;
-4. the complete comparison and operating packet;
-5. the new requested authority and scope.
+$$
+\text{Required evidence}
+\uparrow
+\quad \text{as reversibility}
+\downarrow
+$$
 
-Suppose additional multilingual data repairs the urgent-message segment. The model now meets its recall floor. That change may also increase false urgent alerts and nurse workload. The review repeats the operating-point and capacity checks. One repaired score cannot close the surrounding release decision.
+These relationships give you a much better evaluation philosophy than fixed benchmark thresholds.
 
-If the rollback path was repaired, operators repeat the drill against the new release. They verify the candidate identity before the action, activate recovery, and verify the retained production identity afterwards. A screenshot of the control-plane command provides weak proof; new request or batch events show what the system actually served.
+## What Is the Final Standard for Deciding Not to Ship?
+<!-- section-summary: Do not ship when the available evidence and controls cannot justify the specific system, scope, users, and consequences being proposed. -->
 
-```mermaid
-flowchart TD
-    B["Blocked release<br/>exact findings preserved"] --> W["Owned repair work"]
-    W --> N["New release identity"]
-    N --> T["Repeat failed tests<br/>and full protocol"]
-    T --> D{"Evidence supports<br/>requested scope?"}
-    D -- "No" --> B2["Reject, defer,<br/>or narrow again"]
-    D -- "Yes" --> A["New scoped approval"]
-    A --> V["Verify running identity,<br/>traffic, and outcomes"]
+The final rule returns to justified confidence in one concrete deployment, not to whether the model project deserves a launch.
 
-    class B,B2 blocked
-    class W,D work
-    class N,T,V evidence
-    class A approved
-```
+The deepest principle behind “when not to ship” is that deployment is an **authorization of risk under uncertainty**. A model should not enter production merely because it is impressive, better than the previous model, profitable, statistically strong, or because no one has yet demonstrated catastrophic failure. It should ship only when there is a coherent chain of justification:
 
-Provider tools can reflect the outcome without owning the whole decision. An MLflow model-version tag can record `release_decision=blocked`, while the full report stays in governed evidence storage. SageMaker AI can set a model package to `Rejected`. CI/CD or a policy service then denies canary and production for the exact subject. Registry status improves discovery; the decision record preserves scope, findings, owners, and re-entry conditions.
+$$
+\boxed{
+\text{Defined Use}
+\rightarrow
+\text{Valid Evidence}
+\rightarrow
+\text{Acceptable Behaviour}
+\rightarrow
+\text{Bounded Residual Risk}
+\rightarrow
+\text{Operational Control}
+\rightarrow
+\text{Accountable Approval}
+}
+$$
 
-After approval, production monitoring keeps the original failure visible. The repaired language segment gets its own label-volume, join-coverage, quality, and workload view. Teams add the rollback drill to the repeatable release suite. A later regression can revoke authority and restore the retained release.
+If that chain breaks, the correct response is not necessarily “cancel the model.” It may be:
 
-## The Main Idea
-<!-- section-summary: A no-ship decision protects users by denying unsupported authority and helps the team progress through precise findings, owners, safe work, and repeatable re-entry tests. -->
+$$
+\boxed{
+\text{Reject}
+\quad
+\text{Defer}
+\quad
+\text{Shadow}
+\quad
+\text{or}
+\quad
+\text{Restrict}
+}
+$$
 
-A candidate stays out of production if the proposed use is unclear, the evidence cannot represent that use, important behaviour is unacceptable, operators cannot control the release, or required owners cannot accept the residual risk.
+The important part is that the decision follows the evidence rather than the desire to release. A mature evaluation organization therefore treats **“do not ship” as a successful evaluation outcome** when the evidence warrants it. The evaluator's job is not to get models across a finish line. It is to make sure production exposure occurs only when the claim being made about the system is actually justified. And perhaps the most useful rule to remember is:
 
-The outcome should be precise. Rejection closes the current candidate. Deferral waits for material evidence. Shadow-only authority permits isolated runtime learning. Restricted release grants an enforceable subset. None of these outcomes quietly grants broader production influence.
-
-A strong block pins the release identity, states the denied authority, preserves the evidence, assigns production-depth repair work, and names the tests required for reconsideration. A new candidate then returns through the complete review and proves both the original fix and the surrounding system.
+$$
+\boxed{
+\text{When the consequences outrun the evidence or the controls, do not ship.}
+}
+$$
 
 ![Six-step no-ship recovery path preserves the blocked record, states allowed and denied authority, assigns repair, creates a new candidate, repeats the full review, and makes a new scoped decision](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/no-ship-reentry-summary.png)
 
 *The old blocked record remains blocked. A repaired release returns with a new identity and earns a separate decision from complete evidence.*
 
-## References
+## Check Your Answers
 
-- [MLflow: Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
-- [MLflow: Model signatures](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [Amazon SageMaker AI: Update model approval status](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-approve.html)
-- [Amazon SageMaker AI: Canary traffic shifting](https://docs.aws.amazon.com/sagemaker/latest/dg/deployment-guardrails-blue-green-canary.html)
-- [Azure Machine Learning: Progressive rollout of MLflow models to online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-deploy-mlflow-models-online-progressive?view=azureml-api-2)
-- [Argo Rollouts: Analysis and progressive delivery](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)
-- [Prometheus: Alerting practices](https://prometheus.io/docs/practices/alerting/)
-- [Google SRE Workbook: Canarying releases](https://sre.google/workbook/canarying-releases/)
-- [NIST AI Risk Management Framework Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Why Is Shipping a Model an Asymmetric Decision under Uncertainty?]{kind="recap"}
+Deployment creates real effects under uncertainty, and the downside of an unjustified release may be much larger than the cost of waiting for evidence.
+:::
+
+:::expand[When Do Unclear Use, Invalid Evidence, or Unacceptable Behaviour Block Release?]{kind="recap"}
+A release should stop when intended use is unclear or expanding, evaluation evidence is invalid, or important behaviour remains unacceptable despite a good average.
+:::
+
+:::expand[When Do Residual Harm or Missing Operational Control Make Deployment Unsafe?]{kind="recap"}
+Mitigations do not erase residual harm, and a system without monitoring, fallback, rollback, or operator control cannot contain predictable failures.
+:::
+
+:::expand[Why Do Accountable Authority and Unresolved Uncertainty Matter?]{kind="recap"}
+Consequential deployment requires accountable authority, while uncertainty about a critical claim can itself be a blocking evaluation result.
+:::
+
+:::expand[How Should a Blocked Release Record Repairs and Reconsider the Full Claim?]{kind="recap"}
+A blocked decision records the evidence, reason, owner, and required repair; retesting must reconsider the complete deployment claim and preserve the history.
+:::
+
+:::expand[When Is a Restricted Release a Real Boundary rather than a Rename?]{kind="recap"}
+A restricted release is legitimate only when technical and operational controls actually enforce the smaller population, use, capability, and exposure.
+:::
+
+:::expand[How Do Safety Cases and Evidence Proportionality Support the Decision?]{kind="recap"}
+A safety case assembles claims, evidence, assumptions, controls, and residual risk, with the required strength proportional to harm and reversibility.
+:::
+
+:::expand[What Is the Final Standard for Deciding Not to Ship?]{kind="recap"}
+Do not ship when the available evidence and controls cannot justify the specific system, scope, users, and consequences being proposed.
+:::

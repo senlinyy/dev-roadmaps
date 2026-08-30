@@ -11,721 +11,2213 @@ aliases:
 
 ## Table of Contents
 
-1. [Ranking Evaluation Measures An Ordered Experience](#ranking-evaluation-measures-an-ordered-experience)
-2. [Understand The Ranking Pipeline Before Choosing A Metric](#understand-the-ranking-pipeline-before-choosing-a-metric)
-3. [Decide What Counts As A Relevant Result](#decide-what-counts-as-a-relevant-result)
-4. [Build A Time-Valid Evaluation Set](#build-a-time-valid-evaluation-set)
-5. [Precision At K And Recall At K Measure Different Misses](#precision-at-k-and-recall-at-k-measure-different-misses)
-6. [Use MRR For First-Success Tasks And MAP For Several Relevant Results](#use-mrr-for-first-success-tasks-and-map-for-several-relevant-results)
-7. [Use NDCG For Graded Relevance And Position](#use-ndcg-for-graded-relevance-and-position)
-8. [Calculate Metrics Per Request Before Averaging Them](#calculate-metrics-per-request-before-averaging-them)
-9. [Check Latency, Diversity, Coverage, And Eligibility Alongside Relevance](#check-latency-diversity-coverage-and-eligibility-alongside-relevance)
-10. [Offline Evaluation Cannot Recreate A New Ranking Policy](#offline-evaluation-cannot-recreate-a-new-ranking-policy)
-11. [How Current Tools Run And Record Ranking Evaluation](#how-current-tools-run-and-record-ranking-evaluation)
-12. [Use Ranking Results To Approve, Limit, Or Reject A Release](#use-ranking-results-to-approve-limit-or-reject-a-release)
-13. [The Main Idea](#the-main-idea)
-14. [References](#references)
+1. [What User Experience and Relevance Definition Does a Ranking Create?](#what-user-experience-and-relevance-definition-does-a-ranking-create)
+2. [How Do Precision at K and Recall at K Measure the Top Results?](#how-do-precision-at-k-and-recall-at-k-measure-the-top-results)
+3. [How Do MRR, MAP, DCG, and NDCG Reward Rank Position?](#how-do-mrr-map-dcg-and-ndcg-reward-rank-position)
+4. [How Do Click Bias, Time, Candidate Recall, and RAG Change Retrieval Evaluation?](#how-do-click-bias-time-candidate-recall-and-rag-change-retrieval-evaluation)
+5. [How Do Diversity, Coverage, Eligibility, Latency, and Segments Affect Ranking Quality?](#how-do-diversity-coverage-eligibility-latency-and-segments-affect-ranking-quality)
+6. [How Do Paired Comparisons and Online Outcomes Extend Offline Ranking Tests?](#how-do-paired-comparisons-and-online-outcomes-extend-offline-ranking-tests)
+7. [What Should a Reproducible Ranking Report and Release Specification Contain?](#what-should-a-reproducible-ranking-report-and-release-specification-contain)
+8. [How Does Expected Utility Tie the Ranking Metrics Together?](#how-does-expected-utility-tie-the-ranking-metrics-together)
+9. [Check Your Answers](#check-your-answers)
 
-## Ranking Evaluation Measures An Ordered Experience
-<!-- section-summary: Ranking evaluation asks whether useful items appear early enough in an ordered list for a person or downstream system to use them. -->
+A search system returns ten technically relevant results, but the first useful result appears in position nine. Another system finds fewer relevant documents overall yet places the answer first. Whether it is better depends on the user's task, the number of visible slots, and what relevance means for that request.
 
-A search result can contain the correct document and still fail the user if that document appears on page five. **Ranking evaluation measures the quality of an ordered list.**
-Search engines rank documents.
-Recommendation systems rank products, videos, or articles.
-Retrieval systems rank passages before another model reads them.
-Matching systems rank jobs, drivers, or service providers.
+Ranking and retrieval evaluation measures an ordered set rather than one independent prediction. It must account for relevance, position, candidate coverage, diversity, eligibility, latency, request frequency, and the behaviour data used as labels. Different metrics expose different parts of that experience.
 
-The order matters because attention is limited.
-A relevant document at position 2 is easy to find.
-The same document at position 200 may never be seen.
-A row-level classifier can call both documents “relevant” and report two correct labels.
-That result says nothing about the order presented to the user.
+These questions follow the ranking pipeline from relevance judgements to a reproducible offline and online release decision:
 
-Consider five results with binary relevance labels:
+1. **What User Experience and Relevance Definition Does a Ranking Create?**
+2. **How Do Precision at K and Recall at K Measure the Top Results?**
+3. **How Do MRR, MAP, DCG, and NDCG Reward Rank Position?**
+4. **How Do Click Bias, Time, Candidate Recall, and RAG Change Retrieval Evaluation?**
+5. **How Do Diversity, Coverage, Eligibility, Latency, and Segments Affect Ranking Quality?**
+6. **How Do Paired Comparisons and Online Outcomes Extend Offline Ranking Tests?**
+7. **What Should a Reproducible Ranking Report and Release Specification Contain?**
+8. **How Does Expected Utility Tie the Ranking Metrics Together?**
 
-```text
-Position:      1   2   3   4   5
-Result:        A   B   C   D   E
-Relevant:      no  yes no  yes no
-```
+## What User Experience and Relevance Definition Does a Ranking Create?
+<!-- section-summary: Ranking evaluation starts from the request, candidate set, ordered experience, and relevance labels that define what a useful result means. -->
 
-A classifier sees five separate rows and may count two positives and three negatives.
-Ranking evaluation keeps the rows together as one request.
-It asks whether B and D appeared inside the visible area, how early they appeared, and how many other relevant results were left out.
+Ranking determines which items receive scarce user attention, so evaluation begins with the experience and relevance judgement it is intended to create.
 
-This gives ranking evaluation a natural framework:
+Ranking and retrieval systems do something different from ordinary classifiers or regressors. A classifier asks:
 
-1. **System boundary:** identify the retrieval, scoring, and re-ranking stages under review.
-2. **Evaluation unit:** preserve each query or request as one ordered group.
-3. **Relevance evidence:** define what makes an item useful for that request.
-4. **Metric:** choose a measure that matches the user's task and the visible cutoff.
-5. **Aggregation:** decide how requests and users contribute to the overall result.
-6. **Guardrails:** protect coverage, segments, diversity, latency, and other product needs.
-7. **Release evidence:** connect offline results to shadow checks, online experiments, and rollback.
+$$
+\text{“What class is this item?”}
+$$
 
-```mermaid
-flowchart TD
-    A["User or downstream system<br/>needs useful results"] --> B["Define the ranked surface<br/>and cutoff k"]
-    B --> C["Build request groups<br/>with valid relevance evidence"]
-    C --> D["Measure each ordered list"]
-    D --> E["Aggregate across requests<br/>and important segments"]
-    E --> F["Check coverage, diversity,<br/>latency, and safety guardrails"]
-    F --> G["Choose the next evidence stage<br/>or release scope"]
+A regressor asks:
 
-    class A need
-    class B,C,D work
-    class E,F review
-    class G decision
-```
+$$
+\text{“What number should I predict?”}
+$$
 
-The framework starts with the experience being ranked.
-A search box and a three-card recommendation row have different cutoffs, labels, and failure costs.
-A retriever that supplies twenty passages to a language model creates another evaluation boundary.
-All three can use the same metric names while answering different product questions.
+A ranking or retrieval system asks:
 
-## Understand The Ranking Pipeline Before Choosing A Metric
-<!-- section-summary: Candidate retrieval determines which items are available, scoring orders them, and re-ranking applies final product constraints. -->
+$$
+\boxed{\text{“Which items should I show, and in what order?”}}
+$$
 
-Most production ranking systems reduce a very large collection in stages. You can think of the pipeline as a funnel.
+Examples include:
 
-A **query** or **request group** represents one information need and its context.
-A unique request ID keeps two requests with the same text from being merged accidentally.
+* search engines,
+* recommendation systems,
+* product search,
+* document retrieval,
+* candidate retrieval for RAG,
+* job recommendations,
+* feed ranking,
+* ad ranking,
+* question-answer retrieval.
 
-For search, the context may include query text, locale, active filters, and request time. For recommendation, it may include a user or session, the surface being filled, and the current interaction context.
+The core difficulty is that users usually see only the **top few results**. So evaluation cannot treat every item equally. A relevant result at rank 1 is usually more useful than the same result at rank 500. That gives the first principle:
 
-The **candidate set** contains the items available to the ranking stage.
-Candidate retrieval might combine keyword search, approximate nearest-neighbour vector search, collaborative filtering, popularity lists, or business rules.
-It narrows millions of possible items to hundreds or thousands.
+$$
+\boxed{
+\text{Ranking quality depends on relevance, order, and the number of results a user can actually inspect.}
+}
+$$
 
-A **score** is the number used to order candidates.
-Higher scores usually mean the ranker expects greater relevance or utility.
-A score is often meaningful only inside the same request because score distributions can vary across queries.
+Suppose a user searches:
 
-A **relevance judgment** says how useful one candidate is for one request.
-It may be binary, such as relevant or irrelevant, or graded, such as 0 for irrelevant through 3 for highly relevant.
+noise-cancelling headphones
 
-A **position** is the item's place in the ordered list.
-Position 1 is the first result.
-The **cutoff `k`** marks the part of the list included in a metric, such as the first 5 cards or first 20 retrieved passages.
+A retrieval system has one million products. It might assign every candidate a score:
 
-```mermaid
-flowchart TD
-    A["Request group<br/>query, context, time"] --> B["Candidate retrieval<br/>millions to hundreds"]
-    B --> C["Candidate set<br/>the ranker's available choices"]
-    C --> D["Scoring<br/>assign one score per candidate"]
-    D --> E["Re-ranking and policy<br/>filters, diversity, freshness"]
-    E --> F["Top k results<br/>the visible or consumed list"]
+$$
+s(q,d)
+$$
 
-    B -. "Retrieval evaluation" .-> G["Did relevant items enter<br/>the candidate set?"]
-    D -. "Ranking evaluation" .-> H["Were available relevant items<br/>ordered near the top?"]
-    E -. "End-to-end evaluation" .-> I["Did the final list satisfy<br/>quality and product constraints?"]
+where:
 
-    class A request
-    class B,D,E stage
-    class C,F output
-    class G,H,I question
-```
+* $$q$$ = query,
+* $$d$$ = candidate document or item,
+* $$s$$ = relevance score.
 
-This separation prevents the wrong component from receiving the blame.
-Suppose ten documents are known to answer a query.
-Candidate retrieval supplies only four of them to the ranker.
-Even a perfect ranker can place at most those four in the final list.
-Retrieval recall sets the ceiling.
+Then it sorts candidates:
 
-Now suppose retrieval supplies all ten, while the ranker places them below irrelevant documents.
-The candidate generator did its job.
-The scoring or re-ranking stage needs investigation.
+$$
+d_{(1)},d_{(2)},d_{(3)},\ldots
+$$
 
-Teams usually run two complementary comparisons:
+such that:
 
-- A **controlled ranker comparison** gives production and candidate rankers the same candidate set. This isolates ordering quality.
-- An **end-to-end comparison** lets each complete pipeline generate and rank its own candidates. This measures the release users would actually receive.
+$$
+s(q,d_{(1)})
+\ge
+s(q,d_{(2)})
+\ge
+s(q,d_{(3)})
+\ge\cdots
+$$
 
-Both results belong in a release report. The first helps locate a change. The second supports the production decision.
+The user may see only:
+
+$$
+d_{(1)},\ldots,d_{(10)}
+$$
+
+So the system's real output is not merely a set of relevant items. It is an **ordered list**:
+
+$$
+\boxed{
+[d_1,d_2,\ldots,d_K]
+}
+$$
+
+Evaluation therefore needs to answer questions such as:
+
+* Did relevant items appear
+* Did we retrieve all important relevant items
+* How early did useful items appear
+* Were highly relevant items placed above weakly relevant items
+* Did the system return enough variety
+* Did it obey eligibility and safety rules
+* Did it respond fast enough
+
+One metric rarely answers all of these. Many production ranking systems contain several stages. A simplified pipeline is:
+
+$$
+\text{Request}
+\rightarrow
+\text{Candidate generation}
+\rightarrow
+\text{Filtering}
+\rightarrow
+\text{Scoring}
+\rightarrow
+\text{Ranking}
+\rightarrow
+\text{Top-}K
+$$
+
+For example, a search system might have:
+
+### Stage 1: Retrieval
+
+Find perhaps:
+
+$$
+1{,}000
+$$
+
+plausible documents from millions.
+
+### Stage 2: Filtering
+
+Remove documents that are:
+
+* unavailable,
+* forbidden,
+* geographically ineligible,
+* already consumed,
+* out of stock.
+
+### Stage 3: Reranking
+
+A stronger model assigns scores and sorts the remaining candidates.
+
+### Stage 4: Presentation
+
+Show the top:
+
+$$
+10
+$$
+
+or:
+
+$$
+20
+$$
+
+results. These stages fail differently. If the correct item is never retrieved in Stage 1, no reranker can rescue it. If candidate retrieval is excellent but ranking is poor, relevant items may exist in the candidate set but appear too far down. So evaluation should distinguish:
+
+$$
+\boxed{\text{retrieval failure}}
+$$
+
+from:
+
+$$
+\boxed{\text{ranking failure}}
+$$
+
+Every ranking metric assumes some notion of:
+
+$$
+\text{relevance}
+$$
+
+But relevance is not given by mathematics. It comes from the task. Suppose the query is:
+
+python list sorting
+
+Would these documents count as relevant?
+
+* Python's official `sorted()` documentation
+* a Stack Overflow answer about sorting lists
+* an article about sorting algorithms generally
+* a Java sorting tutorial
+* an article about Python snakes
+
+You need rules. For binary relevance, you might define:
+
+$$
+rel(q,d)\in\{0,1\}
+$$
+
+where:
+
+$$
+1=\text{relevant}
+$$
+
+$$
+0=\text{not relevant}
+$$
+
+But many systems need **graded relevance**.
+
+For example:
+
+$$
+rel(q,d)\in\{0,1,2,3\}
+$$
+
+where:
+
+$$
+0=\text{irrelevant}
+$$
+
+$$
+1=\text{somewhat relevant}
+$$
+
+$$
+2=\text{relevant}
+$$
+
+$$
+3=\text{highly relevant}
+$$
+
+This distinction becomes crucial for metrics such as NDCG. Before evaluating ranking quality, you therefore need a defensible answer to:
+
+$$
+\boxed{\text{What counts as a good result?}}
+$$
+
+Suppose two evaluators judge the same search result. Evaluator A says:
+
+$$
+rel=3
+$$
+
+Evaluator B says:
+
+$$
+rel=1
+$$
+
+The metric cannot resolve that disagreement. It simply operates on the labels it receives. So ranking evaluation quality depends partly on:
+
+* annotation instructions,
+* annotator expertise,
+* label consistency,
+* whether context is visible,
+* whether relevance is subjective,
+* whether judgments become outdated.
+
+This creates an important principle:
+
+$$
+\boxed{
+\text{A ranking metric can be precise even when the relevance labels are poor.}
+}
+$$
+
+A score such as:
+
+$$
+NDCG=0.8734
+$$
+
+may look mathematically rigorous while being built on unreliable judgments. For ranking systems, the basic unit is usually not an individual document. It is a **request**. Examples:
+
+* search query,
+* user session,
+* recommendation request,
+* question being answered,
+* feed refresh.
+
+Suppose query $$q_i$$ produces ranked list:
+
+$$
+L_i=[d_{i1},d_{i2},\ldots]
+$$
+
+We usually compute a ranking metric separately for each request:
+
+$$
+M_i=M(q_i,L_i)
+$$
+
+and then aggregate:
+
+$$
+M_{\text{overall}}
+=
+\frac{1}{N}
+\sum_{i=1}^{N}M_i
+$$
+
+This matters because one query with 500 retrieved documents should not automatically dominate another query with 10. The natural statistical unit is often:
+
+$$
+\boxed{\text{one request}}
+$$
+
+not:
+
+$$
+\boxed{\text{one result}}
+$$
+
+## How Do Precision at K and Recall at K Measure the Top Results?
+<!-- section-summary: Precision at K measures useful use of limited top slots, while Recall at K measures how much available relevant material the list recovered. -->
+
+Once relevance and the request unit are defined, the first question is whether the limited top-K slots contain enough useful material.
+
+Suppose the top five results are:
+
+| Rank | Relevant |
+| ---: | --------- |
+|    1 | Yes       |
+|    2 | No        |
+|    3 | Yes       |
+|    4 | Yes       |
+|    5 | No        |
+
+There are:
+
+$$
+3
+$$
+
+relevant results among the top:
+
+$$
+5
+$$
+
+So:
+
+$$
+Precision@5
+=
+\frac{3}{5}
+=
+0.6
+$$
+
+or:
+
+$$
+60\%
+$$
+
+In general:
+
+$$
+Precision@K
+=
+\frac{
+\text{relevant items in top }K
+}{
+K
+}
+$$
+
+It answers:
+
+Of the items we showed near the top, how many were useful
+
+This is especially meaningful when users inspect only a fixed number of results. Suppose a recommendation panel has room for:
+
+$$
+4
+$$
+
+items. If only:
+
+$$
+2
+$$
+
+are relevant, then:
+
+$$
+Precision@4
+=
+\frac{2}{4}
+=
+50\%
+$$
+
+Half of your scarce screen space was effectively wasted. That makes Precision@K useful for:
+
+* search result pages,
+* recommendation carousels,
+* analyst review queues,
+* retrieval systems with fixed context budgets.
+
+It is fundamentally a **top-of-list quality** metric. Suppose there are:
+
+$$
+10
+$$
+
+relevant documents in the entire corpus. Your top five contain:
+
+$$
+3
+$$
+
+of them.
+
+Then:
+
+$$
+Recall@5
+=
+\frac{3}{10}
+=
+30\%
+$$
+
+In general:
+
+$$
+Recall@K
+=
+\frac{
+\text{relevant items in top }K
+}{
+\text{all relevant items}
+}
+$$
+
+It asks:
+
+Of everything useful that existed, how much did we manage to retrieve near the top
+
+This is different from Precision@K. Precision cares about:
+
+$$
+\text{purity of shown results}
+$$
+
+Recall cares about:
+
+$$
+\text{coverage of all relevant results}
+$$
+
+Imagine two systems. There are:
+
+$$
+20
+$$
+
+relevant items. At $$K=10$$:
+
+### System A
+
+Returns:
+
+$$
+8
+$$
+
+relevant items.
+
+Then:
+
+$$
+Precision@10=80\%
+$$
+
+$$
+Recall@10=40\%
+$$
+
+### System B
+
+Returns:
+
+$$
+6
+$$
+
+relevant items.
+
+Then:
+
+$$
+Precision@10=60\%
+$$
+
+$$
+Recall@10=30\%
+$$
+
+System A is better on both. But sometimes tradeoffs appear. Suppose you expand $$K$$. At:
+
+$$
+K=100
+$$
+
+you may retrieve nearly every relevant item:
+
+$$
+Recall@100\approx100\%
+$$
+
+while precision becomes very low. So $$K$$ is part of the metric definition. You should not say:
+
+"Recall is 80%."
+
+You should say something like:
+
+$$
+\boxed{Recall@20=80\%}
+$$
+
+because operational depth matters. Why evaluate:
+
+$$
+Precision@10
+$$
+
+rather than:
+
+$$
+Precision@100
+$$
+
+Ideally because users or downstream systems actually consume around 10 results.
+
+For example:
+
+* search page displays 10 results,
+* recommendation tray shows 6 products,
+* analyst team reviews 50 alerts,
+* RAG model receives 8 retrieved passages.
+
+Then:
+
+$$
+K
+$$
+
+has an operational meaning. Choosing $$K$$ arbitrarily can make evaluation misleading. A ranking metric should resemble the experience or resource constraint:
+
+$$
+\boxed{
+K\approx\text{number of positions that actually matter}
+}
+$$
 
 ![Ranking evaluation separates candidate retrieval, controlled ordering, and the final visible list](/content-assets/articles/article-mlops-model-evaluation-ranking-retrieval-evaluation/retrieval-ranking-boundaries.png)
 
 *Retrieval determines which relevant items are available, ranking orders those candidates, and the final-list check adds eligibility, diversity, and latency.*
 
-## Decide What Counts As A Relevant Result
-<!-- section-summary: Relevance labels approximate user usefulness, and every label source brings coverage limits, bias, or delay. -->
+## How Do MRR, MAP, DCG, and NDCG Reward Rank Position?
+<!-- section-summary: MRR emphasizes the first success, MAP rewards multiple early successes, and DCG/NDCG combine graded relevance with position discounting. -->
 
-A ranking metric needs a reference answer that says which items were useful for each request.
-That reference is the **relevance evidence**, and its quality limits every result calculated from it.
-Relevance itself is rarely observed directly.
+Top-K counts ignore order within the list, which creates the need for metrics that discount later positions and reward early success.
 
-For a knowledge search, relevance might mean that a document answers the question.
-For a product search, semantic fit, price, availability, delivery, and user preference may all matter.
-For recommendations, a click may indicate curiosity, while a completed view or purchase may provide stronger evidence of satisfaction.
-
-The evaluation policy should state the label meaning before candidates are compared. A graded search policy might use:
-
-- `3`: directly satisfies the request.
-- `2`: useful and substantially relevant.
-- `1`: related but incomplete.
-- `0`: irrelevant or conflicting.
-
-That scale needs examples and judge guidance.
-One team may treat availability as part of relevance.
-Another may evaluate semantic relevance first and protect availability through a separate guardrail.
-Either design can work if the definition matches the product decision and remains stable across candidates.
-
-### Use Human Judgments To Evaluate Items The Old System Never Exposed
-
-Human assessors can judge a query-item pair without relying on a production click.
-This makes judged sets valuable for new items, tail queries, and candidate changes that retrieve previously unseen results.
-
-Judgments still require quality control.
-Assessors need the request context and a clear scale.
-They also need a way to mark ambiguous cases.
-
-The pipeline should measure agreement and adjudicate important disagreements.
-It should preserve the judgment-policy version as well.
-A stale judgment can also become invalid after a document, price, inventory state, or policy changes.
-
-### Correct For Exposure Bias In Clicks And Other Implicit Feedback
-
-Clicks, watch time, saves, add-to-cart events, purchases, reformulations, and successful task completion provide large amounts of behavioural evidence.
-They describe what users did, which is valuable.
-They also describe what users had an opportunity to do.
-
-An item placed first receives more attention than the same item placed tenth.
-This is **position bias**.
-The production policy also decides which items receive any exposure.
-This is **selection or exposure bias**.
-Presentation, price, brand familiarity, image quality, and page speed can influence a click independently of relevance.
-
-For example, an unclicked result at position 40 may be irrelevant, or the user may never have seen it. Turning every unclicked result into a negative label teaches the candidate to copy the exposure pattern of the old ranker.
-
-Controlled exploration can estimate observation propensities for some systems. Inverse-propensity weighting then gives more weight to interactions that were unlikely to be observed. This approach needs logged propensities, adequate overlap between policies, variance controls, and careful review of its assumptions. It is a specialised correction with narrow assumptions and cannot repair every problem in click data.
-
-### Wait For Delayed Outcomes To Mature
-
-A click arrives quickly. A purchase, repayment, completed course, retained subscriber, or resolved support case may arrive much later. Evaluation should wait until the defined outcome window closes.
-
-Suppose a recommendation is labelled successful if a user completes a course within 30 days. Requests from the last week have had less opportunity to become positive. Treating them as failures creates a false recent decline. The dataset should record event time, label maturity time, and join coverage so reviewers can distinguish a model result from an incomplete outcome feed.
-
-```mermaid
-flowchart TD
-    A["Relevance policy<br/>What counts as useful?"] --> B["Human judgments"]
-    A --> C["Implicit interactions"]
-    A --> D["Delayed outcomes"]
-    B --> E["Check instructions,<br/>agreement, and freshness"]
-    C --> F["Check exposure, position,<br/>presentation, and propensity"]
-    D --> G["Check maturity window,<br/>join coverage, and censoring"]
-    E --> H["Versioned relevance evidence"]
-    F --> H
-    G --> H
-
-    class A policy
-    class B,C,D source
-    class E,F,G check
-    class H evidence
-```
-
-Strong evaluation sets often combine sources. Human judgments provide controlled relevance coverage. Mature outcomes connect ranking to product value. Carefully collected interaction data supplies scale and current behaviour. The report keeps the sources separate so disagreement remains visible.
-
-## Build A Time-Valid Evaluation Set
-<!-- section-summary: A valid dataset reconstructs each request, eligible candidate universe, features, labels, and policies using information available at the relevant time. -->
-
-An evaluation row usually contains a request ID, item ID, candidate score, relevance grade, event time, and segment fields. The rows must remain grouped by request. Repeated query text alone is too weak because two users can issue the same query under different locales, filters, permissions, or catalog states.
-
-Time validity means that every part of the evaluation represents a possible production decision at that time. A document published next week cannot appear in today's candidate set. A feature calculated from tomorrow's purchase cannot help rank yesterday's request. A current access policy cannot silently replace the policy that controlled the historical request.
-
-A useful dataset manifest records:
-
-- request sampling window and inclusion rules.
-- unique request-group key.
-- corpus, index, catalog, and eligibility snapshot.
-- feature and preprocessing versions.
-- relevance-policy and judgment-set versions.
-- outcome maturity window and join coverage.
-- candidate-generation and ranker identities.
-- cutoff values and metric conventions.
-- exclusions, deduplication, and missing-label policy.
-
-Candidate-set validity deserves a separate check. For a controlled ranker comparison, both rankers should score the same eligible candidates. For an end-to-end comparison, each pipeline produces its own candidates, and the report measures retrieval coverage before ranking quality.
-
-Judgment coverage also limits interpretation. Search evaluation commonly uses a judged pool collected from several systems. A new candidate may return unjudged items. Counting every unjudged item as irrelevant can punish genuine discoveries, while ignoring all of them can inflate precision. The report should publish the chosen policy and an **unjudged rate** at each cutoff. High unjudged coverage triggers more judgments before a release claim.
-
-The following validation path catches common dataset failures before metrics run:
-
-```mermaid
-flowchart TD
-    A["Sample request groups"] --> B{"Unique request key<br/>and complete context?"}
-    B -->|"No"| X["Repair grouping"]
-    B -->|"Yes"| C{"Catalog, permissions,<br/>and features valid at event time?"}
-    C -->|"No"| Y["Rebuild historical snapshot"]
-    C -->|"Yes"| D{"Labels mature and<br/>joined at expected coverage?"}
-    D -->|"No"| Z["Wait or repair outcome join"]
-    D -->|"Yes"| E{"Candidate and judgment<br/>coverage adequate?"}
-    E -->|"No"| W["Expand retrieval or judgments"]
-    E -->|"Yes"| F["Calculate per-request metrics"]
-
-    class A input
-    class B,C,D,E gate
-    class X,Y,Z,W repair
-    class F ready
-```
-
-Metric changes from an invalid dataset describe the data pipeline. They provide no reliable conclusion about the candidate, so evidence-integrity checks belong ahead of the leaderboard.
-
-## Precision At K And Recall At K Measure Different Misses
-<!-- section-summary: Precision@k measures how much of the top list is relevant, while recall@k measures how much known relevant material the list recovered. -->
-
-Two simple metrics answer complementary questions about the visible list. **Precision at `k`** measures how much of that space contains relevant items. **Recall at `k`** measures how much known relevant material reached that space.
-
-Precision at `k` asks: “Of the first `k` results, how many are relevant?”
-
-Suppose the first five results are:
-
-```text
-Ranked list:       [A, B, D, C, E]
-Relevant items:   {B, D, F, G}
-Top five matches:     B  D
-```
-
-Two of the five visible results are relevant, so precision@5 is `2 / 5 = 0.40`. Precision protects scarce display positions. A three-card carousel filled with irrelevant items has poor precision even if useful items exist deeper in the catalog.
-
-**Recall at `k`** asks: “Of all known relevant items, how many appeared in the first `k` results?”
-
-The same request has four known relevant items: B, D, F, and G. The top five recover B and D, so recall@5 is `2 / 4 = 0.50`. Recall is especially important for candidate retrieval. A later ranker cannot recover F or G if they never enter its candidate set.
-
-The formulas follow the examples:
+Suppose there is exactly one relevant result. System A puts it at:
 
 $$
-\text{Precision@k}(q)=\frac{\text{relevant items in the first }k}{k}
+\text{rank }1
+$$
+
+System B puts it at:
+
+$$
+\text{rank }10
+$$
+
+Both have:
+
+$$
+Recall@10=1
+$$
+
+Both technically retrieved the answer. But the experiences are not equivalent. If the user wants the **first correct result as soon as possible**, we need a metric that rewards earlier success. That leads to reciprocal rank. If the first relevant result appears at position:
+
+$$
+r
+$$
+
+then reciprocal rank is:
+
+$$
+RR=\frac{1}{r}
+$$
+
+Examples:
+
+If first relevant result is rank 1:
+
+$$
+RR=1
+$$
+
+Rank 2:
+
+$$
+RR=\frac12=0.5
+$$
+
+Rank 5:
+
+$$
+RR=\frac15=0.2
+$$
+
+Rank 20:
+
+$$
+RR=\frac1{20}=0.05
+$$
+
+So the penalty grows quickly when the first useful result appears later. Across $$N$$ queries:
+
+$$
+MRR
+=
+\frac1N
+\sum_{i=1}^N
+\frac{1}{r_i}
+$$
+
+where $$r_i$$ is the rank of the first relevant result. Suppose three queries have first relevant results at:
+
+$$
+1,\quad2,\quad5
+$$
+
+Then:
+
+$$
+MRR
+=
+\frac{1+\frac12+\frac15}{3}
 $$
 
 $$
-\text{Recall@k}(q)=\frac{\text{relevant items in the first }k}{\text{all known relevant items for }q}
+=
+\frac{1.7}{3}
+\approx0.567
 $$
 
-The cutoff should match a real boundary. Search may report precision@10 for the first page and recall@100 for candidate retrieval. A recommendation row may use precision@5. A RAG retriever might use recall@20 because twenty passages enter the next stage.
-
-Precision and recall treat the top `k` as a set. Moving the only relevant result from position 1 to position 5 leaves both values unchanged. MRR, MAP, and NDCG add sensitivity to order.
-
-Edge cases need an explicit contract:
-
-- A request with no known relevant item has undefined recall under the formula above. Report these requests as a separate population. Assigning them zero or one silently changes the metric's meaning.
-- A system that returns fewer than `k` items needs a denominator policy. Dividing by `k` treats empty slots as misses; dividing by returned count measures the purity of available results.
-- Duplicate item IDs should be rejected or deduplicated before scoring. Repeating one relevant item must not create extra credit.
-- Incomplete judgments require an unjudged-item policy and coverage report.
-
-A focused implementation can keep these decisions visible:
-
-```python
-def precision_recall_at_k(ranked_ids, relevant_ids, k):
-    top_k = ranked_ids[:k]
-    unique_hits = len(set(top_k) & relevant_ids)
-
-    precision = unique_hits / k
-    recall = unique_hits / len(relevant_ids) if relevant_ids else None
-    return {"precision": precision, "recall": recall}
-
-result = precision_recall_at_k(
-    ranked_ids=["A", "B", "D", "C", "E"],
-    relevant_ids={"B", "D", "F", "G"},
-    k=5,
-)
-# {"precision": 0.4, "recall": 0.5}
-```
-
-The short function illustrates the metric. Production code should also validate uniqueness, returned-list length, and the no-known-relevant policy.
-
-## Use MRR For First-Success Tasks And MAP For Several Relevant Results
-<!-- section-summary: MRR rewards the first relevant result, while MAP rewards finding multiple relevant results early across the list. -->
-
-Some tasks end as soon as the user finds one good answer. Others require several useful results. MRR and MAP represent those two shapes.
-
-### Use MRR To Reward An Early First Success
-
-For one request, **reciprocal rank** is `1 / r`, where `r` is the position of the first relevant item.
-
-```text
-Ranked list:      [A, C, B, D]
-Relevance:         0  0  1  1
-First relevant:    position 3
-Reciprocal rank:   1 / 3 = 0.333
-```
-
-**Mean reciprocal rank (MRR)** averages reciprocal rank over requests. A request with no relevant result inside the evaluated cutoff usually contributes zero.
+MRR is useful when:
 
 $$
-\text{MRR}=\frac{1}{|Q|}\sum_{q \in Q}\frac{1}{\text{rank of first relevant result for }q}
+\boxed{\text{the first correct result is what mainly matters}}
 $$
 
-MRR fits a navigational query, known-answer retrieval, or support lookup where one early success satisfies the need. It ignores every relevant item after the first. Two systems receive the same reciprocal rank if both place their first answer at position 2. Additional useful results receive no MRR credit.
+Examples include:
 
-### Use MAP To Reward Several Useful Results Through The List
+* navigational search,
+* FAQ retrieval,
+* certain question-answer systems,
+* finding a known item.
 
-**Average precision (AP)** looks at every position containing a relevant item. At each such position, it calculates precision up to that point and then averages those precision values.
+Suppose:
 
-```text
-Ranked list:       [B, A, D, C, F]
-Relevant items:   {B, D, F}
+### System A
 
-Rank 1: B is relevant -> precision@1 = 1/1
-Rank 3: D is relevant -> precision@3 = 2/3
-Rank 5: F is relevant -> precision@5 = 3/5
-
-AP = (1 + 2/3 + 3/5) / 3 = 0.756
-```
-
-**Mean average precision (MAP)** averages AP across requests.
+Ranks:
 
 $$
-\text{AP}(q)=\frac{1}{R_q}\sum_i \text{Precision@i}(q)\cdot \text{rel}_i
+[R,N,N,N,N]
 $$
 
-$$
-\text{MAP}=\frac{1}{|Q|}\sum_{q \in Q}\text{AP}(q)
-$$
+### System B
 
-Here, \(R_q\) is the number of known relevant items and \(\text{rel}_i\) is 1 for a relevant result at position \(i\). Truncated AP variants differ in their denominator and treatment of relevant items beyond `k`. The evaluation configuration should name the exact AP@k convention.
-
-MAP fits tasks with multiple binary-relevant results, such as legal-document search or retrieving several useful knowledge passages. It assumes binary relevance. NDCG is usually a better fit once “excellent,” “useful,” and “partly useful” need different credit.
-
-## Use NDCG For Graded Relevance And Position
-<!-- section-summary: NDCG gives more credit to highly relevant items near the top and normalizes against the best possible order for the same request. -->
-
-**Normalized discounted cumulative gain (NDCG)** measures an ordered list whose relevance labels have meaningful grades. It rewards putting the strongest results near the top and gives progressively less credit to useful items placed lower down.
-
-NDCG combines two ideas:
-
-1. relevance can have several grades;
-2. a high grade contributes more near the top of the list.
-
-Suppose four results have relevance grades:
-
-```text
-Current order:   [A, B, C, D]
-Grades:           3  0  2  1
-
-Ideal order:     [A, C, D, B]
-Grades:           3  2  1  0
-```
-
-The current list starts well with grade 3, wastes the second position on grade 0, and places useful items below it. **Discounted cumulative gain (DCG)** adds the gain from each item and discounts lower positions. **Ideal DCG (IDCG)** calculates the same quantity for the best possible order. NDCG divides the current DCG by IDCG.
+Ranks:
 
 $$
-\text{DCG@k}=\sum_{i=1}^{k}\frac{G(\text{relevance}_i)}{\log_2(i+1)}
+[R,R,R,R,R]
+$$
+
+where $$R$$ means relevant. Both have first relevant result at rank 1. Therefore:
+
+$$
+RR_A=RR_B=1
+$$
+
+MRR cannot distinguish them. That is not a flaw if the task truly ends after the first useful result. But if users benefit from several relevant results, MRR throws away important information. This illustrates a general rule:
+
+$$
+\boxed{
+\text{A metric is useful when what it ignores is genuinely unimportant.}
+}
+$$
+
+Suppose there are several relevant results. Average Precision evaluates precision at the positions where relevant documents appear. One common form is:
+
+$$
+AP
+=
+\frac{1}{R}
+\sum_{k=1}^{N}
+Precision@k\cdot rel(k)
+$$
+
+where:
+
+* $$R$$ = number of relevant documents,
+* $$rel(k)=1$$ if result at rank $$k$$ is relevant, otherwise 0.
+
+Let's see why this makes sense. Suppose the ranking is:
+
+| Rank | Relevant |
+| ---: | --------- |
+|    1 | Yes       |
+|    2 | No        |
+|    3 | Yes       |
+|    4 | Yes       |
+
+There are three relevant items. Precision when we hit each relevant result is:
+
+At rank 1:
+
+$$
+P@1=1
+$$
+
+At rank 3:
+
+$$
+P@3=\frac23
+$$
+
+At rank 4:
+
+$$
+P@4=\frac34
+$$
+
+Therefore:
+
+$$
+AP
+=
+\frac{
+1+\frac23+\frac34
+}{3}
 $$
 
 $$
-\text{NDCG@k}=\frac{\text{DCG@k}}{\text{IDCG@k}}
+\approx0.806
 $$
 
-The gain function \(G\) is part of the metric definition. A linear gain uses the relevance grade directly. Another common convention uses \(2^{\text{relevance}}-1\) to give high grades more separation. Scikit-learn's `ndcg_score` uses the supplied relevance values as gains and a logarithmic discount. The library also averages tied predicted scores by default.
+Relevant documents appearing early improve AP more. Mean Average Precision is:
 
-NDCG normally falls between 0 and 1 for non-negative relevance grades. A score near 1 means the ranking is close to the best order available for that request. It does not say that the labels are complete, that the user was satisfied, or that the candidate set contained every useful item.
+$$
+MAP
+=
+\frac1N
+\sum_{i=1}^{N}AP_i
+$$
 
-The metric protocol should therefore record:
+MAP is useful when:
 
-- relevance grades and gain function.
-- logarithm base and cutoff `k`.
-- tie handling.
-- treatment of requests with zero ideal gain.
-- treatment of unjudged results.
-- library and version used for computation.
+* multiple relevant documents may exist,
+* finding more of them matters,
+* earlier relevant documents are better.
 
-The core scikit-learn call is small. The important work happened earlier in grouping and label design:
+It has historically been common in information retrieval evaluation.
 
-```python
-import numpy as np
-from sklearn.metrics import ndcg_score
+Conceptually:
 
-relevance = np.array([[3, 0, 2, 1]])
-candidate_scores = np.array([[0.95, 0.80, 0.70, 0.60]])
+$$
+\boxed{
+MRR \rightarrow \text{first useful result}
+}
+$$
 
-ndcg_at_4 = ndcg_score(
-    y_true=relevance,
-    y_score=candidate_scores,
-    k=4,
-    ignore_ties=False,
-)
-```
+while:
 
-Each row passed to `ndcg_score` represents one request group. A production evaluation usually calculates or preserves per-request results so poor queries and segments remain inspectable.
+$$
+\boxed{
+MAP \rightarrow \text{quality of retrieving several relevant results}
+}
+$$
 
-The metric choice now follows the user task:
+Imagine search results for:
 
-| Task shape | Strong starting metric | Main question |
-|---|---|---|
-| One early answer satisfies the request | MRR@k | How early is the first relevant result? |
-| Several binary-relevant items matter | MAP or AP@k | Are relevant items repeatedly placed early? |
-| Relevance has meaningful grades | NDCG@k | Are the best items concentrated near the top? |
-| Retrieval supplies another stage | Recall@k | Did the candidate set contain the needed items? |
+best beginner Python tutorial
 
-The table summarizes the theory. Product guardrails and online outcomes still complete the decision.
+Suppose three documents are:
 
-## Calculate Metrics Per Request Before Averaging Them
-<!-- section-summary: Ranking metrics are calculated within requests and then aggregated with an explicit policy for queries, users, traffic, and uncertainty. -->
+### A
 
-Ranking metrics start inside a request group. Averaging item rows first destroys the ordering and gives requests with many candidates more influence.
+Excellent, comprehensive beginner tutorial.
 
-The simplest summary is a **macro average**: calculate one metric for each request and give every request equal weight. This answers, “How well does the system perform for a typical sampled request?”
+### B
 
-A traffic-weighted average answers a different question: “What metric would we observe across the current request mix?” Frequent queries or heavy users receive more influence. That may represent present business volume, while also hiding weak tail queries.
+Related Python article but somewhat advanced.
 
-A user-weighted report gives each user equal influence before averaging across users. This can prevent a small number of highly active users from dominating the result. Session-level aggregation may fit products where several requests form one task.
+### C
 
-For example, suppose one head query appears 10,000 times with NDCG 0.95, while 1,000 distinct tail queries each have NDCG 0.30. A traffic-weighted result looks excellent. A unique-query macro result exposes the poor tail experience. Neither view is automatically correct; they answer different questions.
+Mentions Python but barely answers the query. Calling all three simply:
 
-A mature report often includes:
+$$
+rel=1
+$$
 
-- macro average across request groups.
-- traffic-weighted average.
-- user- or session-weighted result if repeated activity matters.
-- distribution percentiles and count of zero-score requests.
-- segments for query type, locale, device, and frequency.
-- candidate minus production difference for the same request.
-- confidence interval at the dependency-carrying unit.
+loses important information. Instead assign graded relevance:
 
-Candidate and production results should be paired by request. Each pair faced the same information need, labels, and eligible context. Resampling those paired differences preserves the shared-request dependence. If many requests come from the same user or session, a user- or session-level block may provide the more honest resampling unit.
+$$
+A=3
+$$
 
-```mermaid
-flowchart TD
-    A["Request-item rows"] --> B["Group by unique request"]
-    B --> C["Sort candidates inside each request"]
-    C --> D["Calculate one metric result per request"]
-    D --> E["Pair candidate and production<br/>for the same request"]
-    E --> F["Aggregate with declared weights"]
-    F --> G["Report overall, distribution,<br/>segments, counts, and uncertainty"]
+$$
+B=2
+$$
 
-    class A rows
-    class B,C,D calculate
-    class E,F compare
-    class G report
-```
+$$
+C=1
+$$
 
-Counts belong beside every average. A locale with ten judged requests provides weaker evidence than one with ten thousand. Missing labels, excluded requests, and zero-candidate groups should remain visible throughout aggregation.
+$$
+\text{irrelevant}=0
+$$
 
-## Check Latency, Diversity, Coverage, And Eligibility Alongside Relevance
-<!-- section-summary: Ranking quality needs segment, coverage, diversity, latency, safety, and business guardrails because one relevance average cannot represent the whole system. -->
+Now evaluation can reward not merely finding relevant items, but placing **more useful results above less useful results**. That motivates DCG and NDCG. Discounted Cumulative Gain assigns value to relevant results while discounting lower positions. A common formulation is:
 
-A candidate can improve NDCG and still damage the product. It may slow every request, repeatedly show the same popular items, exclude new content, violate eligibility rules, or fail badly for one language.
+$$
+DCG@K
+=
+\sum_{i=1}^{K}
+\frac{2^{rel_i}-1}
+{\log_2(i+1)}
+$$
 
-Segment reports ask who receives the improvement. Search teams often examine navigational, broad, exact-title, head, tail, zero-result, locale, and device groups. Recommendation teams may examine new users, returning users, new items, content categories, subscription tiers, and surface types. Product risk and system architecture determine which segments deserve gates.
+Two ideas are built into this formula. First:
 
-Coverage measures whether the system has enough material to rank:
+$$
+2^{rel_i}-1
+$$
 
-- **retrieval recall** checks how many known relevant items enter the candidate set.
-- **zero-candidate rate** counts requests where retrieval returns nothing.
-- **eligible-catalog coverage** measures how much valid inventory can be surfaced.
-- **judgment coverage** reports how much of the evaluated top `k` has labels.
-- **feature coverage** catches candidates missing values needed by the ranker.
+makes higher relevance grades substantially more valuable. Second:
 
-Diversity checks whether the list offers meaningfully different choices. One recommendation row may achieve high relevance by showing near-duplicates from the same category. Category coverage, intra-list similarity, provider concentration, and duplicate rate describe different diversity concerns. The final re-ranking stage often applies diversity, freshness, eligibility, or fairness constraints, so evaluation should measure the final output after those rules.
+$$
+\frac{1}{\log_2(i+1)}
+$$
 
-Operational guardrails protect delivery. Stage-level measurements separate candidate-generation latency from scoring latency. End-to-end p95 or p99 latency represents the delay users experience.
+discounts results at lower ranks. So:
 
-Timeouts and errors reveal failed requests. Index freshness catches delayed content. Cost per request shows whether the new pipeline can operate at the planned traffic level. A larger retrieval depth may raise recall and exceed the latency budget, so the release decision needs both effects.
+$$
+\boxed{\text{high relevance + high position = high gain}}
+$$
 
-Concrete product constraints also belong in the report. Examples include unavailable items in commerce, unsafe content in recommendations, permission leaks in enterprise search, stale passages in a knowledge retriever, or overexposure of one provider in a marketplace.
+Consider the same highly relevant document. At rank 1:
 
-```mermaid
-mindmap
-  root((Ranking release))
-    Relevance
-      NDCG or MAP
-      Precision and recall
-    Coverage
-      Candidate recall
-      Zero results
-      Judged coverage
-    Experience
-      Diversity
-      Freshness
-      Duplicate rate
-    Segments
-      Query type
-      Locale
-      Head and tail
-    Operations
-      Latency
-      Errors
-      Cost
-    Policy
-      Eligibility
-      Safety
-      Fairness
-```
+$$
+\log_2(2)=1
+$$
 
-This guardrail set keeps the primary metric focused. NDCG can represent ordered relevance while separate measures preserve the other responsibilities of the product.
+so there is no discount. At rank 3:
 
-## Offline Evaluation Cannot Recreate A New Ranking Policy
-<!-- section-summary: Historical logs describe outcomes under the old ranking policy, so shadow traffic and controlled experiments provide evidence that offline replay cannot supply. -->
+$$
+\log_2(4)=2
+$$
 
-Offline evaluation is a screening tool. It offers fast, reproducible comparison across a fixed request set. It cannot fully answer how users will react to a ranking they have never seen.
+so its contribution is halved. At rank 7:
 
-Historical interaction data was produced by the logging policy, usually the current production ranker. That policy controlled exposure and position. A candidate that promotes different items changes which items are seen, clicked, purchased, or labelled in the future. This is the **counterfactual problem**. The team wants to know what would have happened under another ranking, while the log contains outcomes from the old ranking.
+$$
+\log_2(8)=3
+$$
 
-Judged sets reduce reliance on old clicks, but they still simplify the real experience. Assessors may view one result at a time, while users compare items, scan snippets, reformulate queries, and react to latency. Recommendation changes can alter discovery and future preferences. A RAG retriever can improve document recall while the downstream generator uses the new context poorly.
+so it receives only one-third of its undiscounted value. The exact logarithmic formula is a modeling choice. The deeper principle is:
 
-Shadow traffic is the next operational check. The candidate processes copied requests without controlling the visible result. It can reveal latency, errors, candidate counts, score distributions, feature gaps, index mismatches, and large rank changes. Since users still see production results, shadow traffic supplies no direct evidence of user benefit.
+$$
+\boxed{\text{users generally care less about results appearing farther down the ranking}}
+$$
 
-A controlled online experiment assigns eligible users or requests to production and candidate policies. It measures outcomes such as successful sessions, task completion, reformulation, abandonment, conversion, retained use, complaints, or downstream answer quality. Stable assignment, sample-size planning, mature outcome windows, and predeclared guardrails protect the interpretation.
+A position discount mathematically represents that diminishing attention. Raw DCG depends on the number and grades of relevant results. So it is hard to compare directly across queries. Suppose one query has ten highly relevant results while another has only one. Their maximum possible DCGs are different. NDCG solves this by dividing actual DCG by the ideal DCG:
+
+$$
+NDCG@K
+=
+\frac{DCG@K}{IDCG@K}
+$$
+
+where $$IDCG$$ is the DCG from the perfect ranking. Thus:
+
+$$
+0\le NDCG\le1
+$$
+
+in standard settings. If:
+
+$$
+NDCG@10=1
+$$
+
+the top 10 are ideally ordered according to the relevance labels. If:
+
+$$
+NDCG@10=0.8
+$$
+
+the ranking captures about 80% of the attainable discounted gain under that relevance scheme. Consider two rankings:
+
+### Ranking A
+
+$$
+[3,3,0,0]
+$$
+
+### Ranking B
+
+$$
+[1,1,1,1]
+$$
+
+A binary metric might call every positive grade simply "relevant." Then B could appear to have more relevant results. But if grade 3 means exceptionally useful and grade 1 means weakly useful, Ranking A may create the better user experience. NDCG can represent that distinction. It is often valuable when:
+
+* relevance has degrees,
+* top positions matter strongly,
+* several results matter.
+
+## How Do Click Bias, Time, Candidate Recall, and RAG Change Retrieval Evaluation?
+<!-- section-summary: Observed clicks reflect the old ranking policy, time changes validity, candidate generation caps reranking, and RAG may require several complementary pieces of evidence. -->
+
+Those formulas assume trustworthy labels, yet real retrieval data inherits position bias, historical policy, time, and candidate-generation limits.
+
+Notice what happened with NDCG. We assumed:
+
+1. high-grade relevance is more valuable,
+2. lower-ranked results matter less,
+3. a logarithmic discount approximates how attention decays.
+
+These are assumptions about user behavior. Likewise:
+
+* Precision@K assumes all positions up to $$K$$ matter similarly,
+* MRR assumes mostly the first successful result matters,
+* MAP assumes several binary relevant items matter,
+* NDCG assumes graded relevance and position discounting.
+
+So ranking metrics are not neutral mathematical facts. They are simplified models of:
+
+$$
+\boxed{\text{how users derive utility from a ranked list}}
+$$
+
+You might think:
+
+Why not just use clicks as relevance labels
+
+Because users click partly based on position. A result at rank 1 gets more attention than the identical result at rank 8. So:
+
+$$
+P(\text{click})
+$$
+
+depends on at least:
+
+$$
+P(\text{relevance})
+$$
+
+and:
+
+$$
+P(\text{examination due to position})
+$$
+
+A simplified model is:
+
+$$
+P(\text{click at rank }k)
+\approx
+P(\text{examined at }k)
+\times
+P(\text{attractive/relevant})
+$$
+
+This creates **position bias**. A result may receive few clicks not because it is poor, but because users rarely saw it. Therefore logged behavior is not automatically unbiased ground truth. Suppose yesterday's system ranked Document A at position 1 and Document B at position 100. You observe many clicks on A and almost none on B. Now you want to evaluate a new model that would rank B first. Historical logs cannot directly tell you what would have happened if B had actually been shown first. Why? Because the old ranking policy determined what users saw. Formally, observed behavior comes from:
+
+$$
+P(\text{outcome}\mid\text{old policy})
+$$
+
+but you want:
+
+$$
+P(\text{outcome}\mid\text{new policy})
+$$
+
+Those are not necessarily the same. This is one reason offline ranking evaluation is inherently limited. Suppose you build a search evaluation set today using current products and queries. If you accidentally allow future information into training, evaluation becomes optimistic.
+
+For example:
+
+* future clicks leak into features,
+* future popularity enters candidate scores,
+* future document versions become visible,
+* availability information is taken from after the request date.
+
+A time-valid evaluation should reconstruct what was knowable at the moment of the request.
+
+Conceptually:
+
+$$
+\boxed{
+\text{features available at time }t
+\rightarrow
+\text{ranking at time }t
+}
+$$
+
+not:
+
+$$
+\boxed{
+\text{future knowledge}
+\rightarrow
+\text{ranking in the past}
+}
+$$
+
+This is especially important for feeds, recommendations, marketplaces, and news search. Suppose the ideal relevant item is not retrieved by the candidate generator. Then the reranker has no chance to place it first. If candidate generation recalls only:
+
+$$
+70\%
+$$
+
+of relevant items, final recall can never exceed that ceiling. This suggests evaluating retrieval stages separately. For candidate generation, you might emphasize:
+
+$$
+Recall@100
+$$
+
+or:
+
+$$
+Recall@1000
+$$
+
+The goal may be:
+
+Retrieve nearly every plausible relevant item, even if the candidate set contains some noise.
+
+Then the reranker focuses on:
+
+$$
+NDCG@10
+$$
+
+or:
+
+$$
+Precision@10
+$$
+
+The stages have different objectives. Consider a two-stage system.
+
+### Retriever
+
+Returns:
+
+$$
+1000
+$$
+
+documents. Its main goal may be high recall:
+
+$$
+Recall@1000\approx99\%
+$$
+
+Some irrelevant documents are acceptable.
+
+### Reranker
+
+Sorts those 1,000 and displays 10. Its goal may be:
+
+$$
+NDCG@10
+$$
+
+or:
+
+$$
+Precision@10
+$$
+
+Now precision matters much more. This architecture reflects a common pattern:
+
+$$
+\boxed{
+\text{early stage: don't miss good candidates}
+}
+$$
+
+$$
+\boxed{
+\text{late stage: put the best candidates first}
+}
+$$
+
+Using one metric for the entire pipeline can obscure which stage needs improvement. Consider retrieval-augmented generation. A question arrives:
+
+$$
+q
+$$
+
+The retriever returns:
+
+$$
+K
+$$
+
+passages. The language model then answers using those passages. The retrieval system's real objective is not merely:
+
+Retrieve semantically similar text.
+
+It is closer to:
+
+Put enough correct evidence into the context window for the downstream model to produce a correct answer.
+
+This can create several useful metrics.
+
+For example:
+
+$$
+Recall@K
+$$
+
+asks whether required evidence appeared. But document-level recall may still be insufficient. You might also evaluate:
+
+* answer-support coverage,
+* whether all necessary pieces of evidence were retrieved,
+* redundant versus complementary passages,
+* context-token efficiency.
+
+A retriever can look good according to standard relevance metrics while still supplying poor evidence to the generator. Suppose answering a question requires both:
+
+$$
+d_A
+$$
+
+and:
+
+$$
+d_B
+$$
+
+The retriever returns only $$d_A$$. A simple metric might award partial credit because one relevant document was found. But downstream answer generation may completely fail because both documents are required. So some retrieval tasks need metrics that operate on the **set of retrieved evidence** rather than independently on each item. The system-level requirement may be:
+
+$$
+\boxed{
+\text{all necessary evidence appears within top }K
+}
+$$
+
+This illustrates why relevance definitions must be derived from downstream needs.
+
+## How Do Diversity, Coverage, Eligibility, Latency, and Segments Affect Ranking Quality?
+<!-- section-summary: Useful rankings also balance diversity, catalogue coverage, eligibility, latency, request frequency, segments, and distributional behaviour. -->
+
+Relevance alone is also incomplete when the product needs diverse, eligible, fast results across many request types.
+
+Suppose a user asks:
+
+laptops for programming
+
+The system returns ten nearly identical configurations of the same laptop. All ten may be individually relevant. So:
+
+$$
+Precision@10=100\%
+$$
+
+Yet the result set may be poor because it lacks useful variety. The user may prefer choices spanning:
+
+* budget,
+* operating system,
+* portability,
+* performance.
+
+Thus relevance alone may not capture list quality. You may need diversity metrics or explicit category coverage constraints. This leads to:
+
+$$
+\boxed{
+\text{individual relevance}
+\neq
+\text{quality of the result set}
+}
+$$
+
+Imagine a recommendation system always recommends the same 100 popular products. Its recommendations may have high click-through rate. But thousands of useful products never appear. You may measure catalogue coverage:
+
+$$
+\text{Coverage}
+=
+\frac{
+\text{items ever recommended}
+}{
+\text{eligible items}
+}
+$$
+
+Or user/request coverage:
+
+$$
+\frac{
+\text{requests receiving valid recommendations}
+}{
+\text{all requests}
+}
+$$
+
+Coverage is not necessarily something to maximize without limit. But it can reveal pathological concentration. Suppose the top five highest-scoring results are all nearly duplicates. Replacing one with a somewhat less individually relevant but substantially different result may improve the overall experience. So you may face:
+
+$$
+\text{relevance}
+\leftrightarrow
+\text{diversity}
+$$
+
+This is not necessarily a model defect. It is a multi-objective product decision. A practical setup might be:
+
+$$
+\boxed{\text{maximize NDCG@10}}
+$$
+
+subject to:
+
+$$
+\boxed{\text{minimum diversity requirement}}
+$$
+
+rather than combining everything into an opaque single score. Suppose a hotel recommendation system returns the perfect hotel—but it is sold out. Or a product search system ranks an unavailable product first. Or a job system recommends a role the user is legally ineligible to apply for. The ranking may be semantically excellent but operationally invalid. So production evaluation should check constraints such as:
+
+$$
+\text{eligible(result)}
+$$
+
+A simple guardrail might be:
+
+$$
+\text{Ineligible@10}=0
+$$
+
+or:
+
+$$
+\text{eligibility violation rate}<0.01\%
+$$
+
+Hard constraints may matter more than another percentage point of NDCG. Suppose Model B improves:
+
+$$
+NDCG@10
+$$
+
+from:
+
+$$
+0.76
+$$
+
+to:
+
+$$
+0.78
+$$
+
+but increases p99 latency from:
+
+$$
+120\text{ ms}
+$$
+
+to:
+
+$$
+2.5\text{ s}
+$$
+
+That may be unacceptable. Ranking systems often operate under strict response-time requirements. So a production release might optimize:
+
+$$
+NDCG@10
+$$
+
+subject to:
+
+$$
+p95\text{ latency}<200\text{ ms}
+$$
+
+and:
+
+$$
+p99\text{ latency}<500\text{ ms}
+$$
+
+Model evaluation should include enough system-level constraints to reflect actual deployability. Suppose Query A has:
+
+$$
+100
+$$
+
+candidates. Query B has:
+
+$$
+10
+$$
+
+candidates. If you simply pool every ranked result together, Query A could dominate the metric because it contributes more rows. Instead, ranking metrics are commonly calculated per request:
+
+$$
+M_A,\quad M_B,\quad\ldots
+$$
+
+and then averaged:
+
+$$
+\bar M
+=
+\frac{1}{N}
+\sum_iM_i
+$$
+
+This gives each request equal influence. But even this contains a policy decision. Should every query really count equally? Perhaps some queries are:
+
+* more frequent,
+* higher value,
+* safety-critical,
+* more important to users.
+
+Then a weighted average may be appropriate:
+
+$$
+M
+=
+\frac{
+\sum_iw_iM_i
+}{
+\sum_iw_i
+}
+$$
+
+Again, the weighting should reflect something real. Suppose:
+
+### Head queries
+
+Very common. Metric:
+
+$$
+NDCG=0.90
+$$
+
+### Tail queries
+
+Rare individually but collectively substantial. Metric:
+
+$$
+NDCG=0.45
+$$
+
+If your evaluation set samples query strings uniformly, tail queries may dominate. If it samples actual traffic, common queries may dominate. Neither is automatically wrong. They answer different questions:
+
+$$
+\text{unweighted by query}
+\rightarrow
+\text{performance for the typical distinct query}
+$$
+
+$$
+\text{traffic weighted}
+\rightarrow
+\text{performance for the typical request}
+$$
+
+You need to know which population the metric represents. An aggregate:
+
+$$
+NDCG@10=0.82
+$$
+
+can conceal serious differences. Suppose:
+
+| Query type              | NDCG@10 |
+| ----------------------- | ------: |
+| Navigational            |    0.95 |
+| Popular products        |    0.90 |
+| Long-tail informational |    0.68 |
+| Newly added content     |    0.42 |
+
+The aggregate score hides weak areas. Useful segments might include:
+
+* head versus tail queries,
+* short versus long queries,
+* geography,
+* language,
+* new versus returning users,
+* cold-start items,
+* catalogue category,
+* query intent,
+* mobile versus desktop.
+
+Evaluation should identify **where ranking quality breaks down**. Suppose:
+
+$$
+Mean\ NDCG@10=0.80
+$$
+
+Two systems can share this average but behave very differently.
+
+### Model A
+
+Most queries score near:
+
+$$
+0.80
+$$
+
+### Model B
+
+Half score:
+
+$$
+1.00
+$$
+
+and half score:
+
+$$
+0.60
+$$
+
+Same mean. Different user experience. You may therefore examine:
+
+* median metric,
+* p10 or worst-decile performance,
+* fraction of zero-result or zero-relevance queries,
+* fraction of queries that regress versus baseline.
+
+For example:
+
+$$
+P(NDCG@10=0)
+$$
+
+can be operationally very revealing.
 
 ![Ranking evidence progresses from offline evaluation through shadow traffic and a controlled experiment to release review](/content-assets/articles/article-mlops-model-evaluation-ranking-retrieval-evaluation/progressive-ranking-evidence.png)
 
 *Each stage answers a different question: offline evidence screens quality, shadow traffic verifies operation, and a controlled experiment measures outcomes under the new policy.*
 
-Offline and online metrics should tell a coherent story without being identical. NDCG@10 can justify testing a candidate. The experiment may use successful-search rate or task completion as its primary outcome. A disagreement triggers investigation into label meaning, exposure bias, presentation, latency, novelty, or experiment implementation.
+## How Do Paired Comparisons and Online Outcomes Extend Offline Ranking Tests?
+<!-- section-summary: Paired offline comparisons isolate list changes, while online experiments test causal product outcomes and guard against misleading engagement targets. -->
 
-Counterfactual estimators such as inverse-propensity scoring can help in systems with logged action probabilities and adequate policy overlap. Large weights can create unstable estimates, and missing support cannot be repaired statistically. High-impact releases still need controlled production evidence.
+Offline evidence can compare the same requests precisely, while live randomized evidence is needed for causal product effects.
 
-## How Current Tools Run And Record Ranking Evaluation
-<!-- section-summary: Production evaluation combines metric libraries, versioned datasets, experiment artifacts, and search-platform relevance tools without giving any vendor ownership of the framework. -->
+Suppose:
 
-Current tools can preserve request groups, version the relevance labels, calculate per-request metrics, publish segment results and examples, and compare a candidate against production. The evaluation design stays the same even though each platform records the work differently.
+$$
+NDCG_A=0.812
+$$
 
-Python libraries provide focused metric implementations. Scikit-learn includes `ndcg_score` and explicit tie behaviour. Teams often implement precision@k, recall@k, MRR, and MAP in a small tested evaluation library because edge-case policies vary. Tests should cover duplicates, ties, short lists, missing judgments, no-known-relevant requests, and multiple request groups.
+and:
 
-MLflow Tracking can store the evaluation identity and artifacts. The primary metrics are small scalar values. Query-level results, segment reports, worst regressions, and configuration belong in tables or files. Dataset metadata can identify the source and digest without copying sensitive raw data into the tracking server.
+$$
+NDCG_B=0.818
+$$
 
-```python
-import mlflow
+The difference is:
 
-with mlflow.start_run(run_name="ranking-candidate-review"):
-    mlflow.log_params({
-        "candidate_model": candidate_version,
-        "production_model": production_version,
-        "candidate_index": index_version,
-        "judgment_policy": judgment_policy_version,
-        "cutoff_k": 10,
-    })
-    mlflow.log_metrics({
-        "macro_ndcg_at_10": summary["macro_ndcg_at_10"],
-        "recall_at_100": summary["recall_at_100"],
-        "unjudged_at_10": summary["unjudged_at_10"],
-    })
-    mlflow.log_table(segment_report, "evaluation/segments.json")
-    mlflow.log_table(worst_regressions, "evaluation/worst_queries.json")
-```
+$$
++0.006
+$$
 
-The run should also identify the evaluation dataset, feature or query configuration, code revision, and metric-policy version. Access controls still apply because query text, user context, and judgments may contain sensitive data.
+But what happened query by query For request $$i$$:
 
-Search platforms can run part of the evaluation close to the retrieval engine. Elasticsearch's ranking evaluation API accepts representative search requests and per-query document ratings. It returns metrics such as precision, recall, MRR, and normalized DCG with per-query details. OpenSearch Search Relevance Workbench organizes query sets, search configurations, judgment lists, and evaluation experiments, with aggregate and individual-query views.
+$$
+\Delta_i
+=
+NDCG_i(B)-NDCG_i(A)
+$$
 
-These platform tools are especially practical for comparing lexical, vector, hybrid, filter, and query-rewrite configurations against judged queries. A broader MLOps job still owns time-valid dataset construction and model or index lineage. It also owns product segments, operational guardrails, confidence intervals, online experiment links, and release authority.
+You might discover:
 
-Amazon Personalize provides another managed example: its offline recommender reports include coverage, MRR, NDCG, and precision at defined cutoffs. Its documentation also separates offline metrics from online interaction outcomes. Managed metrics can accelerate evaluation, while the team remains responsible for label meaning, data comparability, and release thresholds.
+* B improves 60% of queries slightly,
+* B badly hurts 5% of important queries,
+* the entire average gain comes from one segment,
+* B helps tail queries but hurts head queries.
 
-In practice, the stack may look like:
+So model comparison should often analyze:
 
-- object storage, a lakehouse, or warehouse for request, judgment, and outcome data.
-- Spark, SQL, Polars, or pandas for time-valid joins and query grouping.
-- a tested Python metric layer or search-platform evaluation API.
-- MLflow or managed experiment tracking for identity, metrics, tables, and artifacts.
-- orchestration through Airflow, Dagster, or a managed ML pipeline.
-- a controlled experimentation platform for online outcomes.
-- dashboards and alerting for release and production guardrails.
+$$
+\{\Delta_1,\Delta_2,\ldots,\Delta_N\}
+$$
 
-The components can change. The evidence contract should survive those changes.
+not merely:
 
-## Use Ranking Results To Approve, Limit, Or Reject A Release
-<!-- section-summary: Release gates translate ranking evidence into enforceable thresholds, an approved scope, stop conditions, and component-specific recovery actions. -->
+$$
+\bar M_B-\bar M_A
+$$
 
-Ranking results should tell reviewers whether to approve, limit, or reject a release. “NDCG improved” is too weak because it omits uncertainty, retrieval coverage, affected segments, runtime behaviour, and the scope users will receive.
+Suppose:
 
-Start with a declared release question. For example: does the candidate improve NDCG@10 for eligible search traffic? Does it also preserve exact-match success, tail-query quality, retrieval recall, result diversity, permission correctness, and p95 latency?
+$$
+MRR_A=0.621
+$$
 
-The gate then binds that question to measurable limits:
+and:
 
-```yaml
-ranking_release_gate:
-  identity:
-    model_version: "ranker-v42"
-    index_version: "hybrid-index-v18"
-    relevance_policy: "judgments-v6"
+$$
+MRR_B=0.625
+$$
 
-  primary:
-    metric: "macro_ndcg_at_10"
-    candidate_minus_production_lower_ci_min: 0.004
+That does not automatically prove B is genuinely better. Evaluation queries are a finite sample. If you drew another set, results might differ.
 
-  retrieval:
-    recall_at_100_min: 0.96
-    zero_candidate_rate_max: 0.002
-    unjudged_at_10_max: 0.08
+Conceptually:
 
-  guardrails:
-    exact_match_mrr_at_10_regression_max: 0.002
-    tail_query_ndcg_at_10_regression_max: 0.005
-    duplicate_at_10_max: 0.01
-    permission_violation_count: 0
-    p95_latency_ms_max: 150
+$$
+\text{observed metric}
+=
+\text{expected performance}
++
+\text{sampling variation}
+$$
 
-  rollout:
-    initial_traffic_percent: 5
-    rollback_model: "ranker-v41"
-    rollback_index: "hybrid-index-v17"
-```
+Useful techniques include:
 
-The numbers illustrate the schema. Production limits come from the product objective, baseline variation, harm analysis, service objective, and the amount of risk the first rollout can safely contain.
+* bootstrap confidence intervals over requests,
+* paired tests,
+* randomization tests,
+* confidence intervals on model differences.
 
-The release packet should contain:
+Because models rank the **same requests**, paired analysis is usually preferable to treating the scores as unrelated samples. Suppose a search corpus contains one million documents. Human evaluators cannot judge all of them for every query. Instead, evaluation may have relevance labels for only a subset. Now imagine a new model discovers a genuinely excellent document that the old system never surfaced. If that document lacks a relevance judgment, your offline metric may accidentally treat it as irrelevant or ignore it. This is known broadly as a problem of **incomplete judgments**. It matters especially when comparing a substantially new retrieval system with systems that generated the original evaluation pool. Offline benchmarks can systematically undervalue genuinely novel retrieval behavior.
 
-- exact model, index, query, feature, and re-ranking identities.
-- dataset and judgment manifests.
-- overall paired effects with uncertainty.
-- per-request artifact and worst regressions.
-- segment, coverage, diversity, policy, and latency results.
-- shadow evidence and online experiment plan or result.
-- approved traffic, population, duration, and stop conditions.
-- rollback pair and owner.
+Suppose Model B reranks roughly the same candidate set as Model A. Historical relevance labels may compare them reasonably well. Now suppose Model C uses an entirely new retrieval strategy and surfaces documents nobody has previously seen or labeled. Offline evaluation becomes much less trustworthy. This creates a useful rule:
 
-The rollback pair matters because model and index changes can depend on each other. Restoring the old ranker while keeping an incompatible candidate index may preserve the incident.
+$$
+\boxed{
+\text{The farther a new policy moves from the data-generating policy, the less complete offline evaluation may become.}
+}
+$$
 
-Investigation starts from the failed boundary:
+This is one reason online experimentation remains important. Offline ranking metrics measure things like:
 
-```mermaid
-flowchart TD
-    A["A ranking gate fails"] --> B{"Which evidence failed?"}
-    B -->|"Candidate recall or zero results"| C["Inspect index publication, filters,<br/>eligibility, locale, and retrieval depth"]
-    B -->|"NDCG, MRR, or MAP"| D["Inspect query examples, features,<br/>ties, scoring, and re-ranking"]
-    B -->|"Segment or diversity"| E["Inspect training coverage, popularity,<br/>constraints, and candidate sources"]
-    B -->|"Latency or errors"| F["Inspect retrieval fan-out, model runtime,<br/>timeouts, capacity, and fallbacks"]
-    B -->|"Online outcome only"| G["Inspect labels, exposure, presentation,<br/>assignment, maturity, and feedback"]
-    C --> H["Repair the responsible component<br/>and rerun its evidence"]
-    D --> H
-    E --> H
-    F --> H
-    G --> H
+$$
+NDCG
+$$
 
-    class A incident
-    class B decision
-    class C,D,E,F,G inspect
-    class H repair
-```
+$$
+MRR
+$$
 
-This runbook separates candidate retrieval, ranking, final policy, runtime, and online interpretation. Each path produces a different repair. Expanding traffic repeats the decision with the larger capacity and exposure, using current evidence from the approved scope.
+$$
+Recall@K
+$$
 
-## The Main Idea
-<!-- section-summary: Reliable ranking evaluation connects ordered relevance to valid evidence, system boundaries, product guardrails, and controlled release decisions. -->
+Online evaluation may measure:
 
-Ranking evaluation starts from one simple observation: users and downstream systems consume an ordered list. The evaluation unit is therefore the complete request group, with positions and a product-relevant cutoff.
+* click-through rate,
+* conversion,
+* dwell time,
+* reformulation rate,
+* session success,
+* abandonment,
+* revenue,
+* retention.
 
-The team first separates candidate retrieval from final ranking. It defines relevance, examines the bias and delay in each label source, and reconstructs a time-valid candidate and judgment set. Precision@k and recall@k measure visible purity and recovered material. MRR focuses on the first success, MAP rewards multiple binary-relevant results placed early, and NDCG supports graded relevance with position discounting.
+These metrics are closer to user outcomes. But online metrics also have complications:
 
-Per-request aggregation keeps weighting and uncertainty honest. Segment, coverage, diversity, policy, latency, and cost guardrails protect responsibilities outside the primary relevance metric. Offline results screen the candidate, shadow traffic validates operation, and controlled experiments measure behaviour under the new policy.
+* position bias,
+* novelty effects,
+* delayed outcomes,
+* feedback loops,
+* confounding,
+* strategic user behavior.
 
-The final release gate grants only the scope supported by that evidence. It identifies the exact ranker and index, names stop conditions, and retains a tested rollback pair. That chain turns ranking metrics into a production decision people can understand, inspect, and reverse.
+Therefore a strong ranking evaluation stack often combines:
+
+$$
+\boxed{\text{offline relevance evaluation}}
+$$
+
+with:
+
+$$
+\boxed{\text{online outcome measurement}}
+$$
+
+Suppose your team repeatedly observes:
+
+$$
+\Delta NDCG@10>0
+$$
+
+but online user satisfaction does not improve. That is evidence that NDCG@10 may be a poor proxy for the actual product goal. A good offline metric should ideally have empirical predictive validity:
+
+$$
+\Delta M_{\text{offline}}
+$$
+
+should tend to align with:
+
+$$
+\Delta U_{\text{online}}
+$$
+
+where $$U$$ is user or business utility. If there is no relationship, optimizing the offline metric may become metric gaming rather than product improvement. Ranking systems often use engagement metrics, but engagement is not automatically equivalent to utility. For example, a search system could increase:
+
+$$
+\text{time spent}
+$$
+
+because users struggle to find what they want. In this case:
+
+$$
+\text{time spent}\uparrow
+$$
+
+could indicate:
+
+$$
+\text{quality}\downarrow
+$$
+
+Similarly, more clicks can mean:
+
+* greater interest,
+* or greater difficulty finding the right result.
+
+Metrics must be interpreted causally and contextually. The first-principles question remains:
+
+$$
+\boxed{\text{What user outcome are we actually trying to create?}}
+$$
+
+## What Should a Reproducible Ranking Report and Release Specification Contain?
+<!-- section-summary: A reproducible report fixes requests, labels, K values, segment definitions, metrics, examples, uncertainty, guardrails, and release thresholds. -->
+
+The worked example and report format preserve these choices so candidate comparisons use identical requests and definitions.
+
+A useful mental map is:
+
+| Task shape                                 | Useful metric                    |
+| ------------------------------------------ | -------------------------------- |
+| Need a clean top $$K$$                     | Precision@K                      |
+| Need to recover most relevant items        | Recall@K                         |
+| Need first correct result quickly          | MRR                              |
+| Need several binary-relevant results early | MAP                              |
+| Relevance has multiple grades              | NDCG                             |
+| Need candidate-generation coverage         | Recall at large K                |
+| Need constrained review queue              | Precision@K / Recall@K           |
+| Need set variety                           | Diversity / coverage metrics     |
+| Need operational reliability               | Latency / eligibility guardrails |
+
+The metric should be selected from the **shape of the user task**, not from convention. Suppose a query has four relevant documents:
+
+$$
+A,\ C,\ D,\ F
+$$
+
+The system returns:
+
+| Rank | Document | Relevant |
+| ---: | -------- | --------- |
+|    1 | A        | Yes       |
+|    2 | B        | No        |
+|    3 | C        | Yes       |
+|    4 | E        | No        |
+|    5 | D        | Yes       |
+
+### Precision@5
+
+There are three relevant results in five:
+
+$$
+P@5=\frac35=0.6
+$$
+
+### Recall@5
+
+Three of four total relevant documents were retrieved:
+
+$$
+R@5=\frac34=0.75
+$$
+
+### Reciprocal Rank
+
+The first relevant result is rank 1:
+
+$$
+RR=1
+$$
+
+### Average Precision
+
+Precision at relevant ranks:
+
+At 1:
+
+$$
+1
+$$
+
+At 3:
+
+$$
+\frac23
+$$
+
+At 5:
+
+$$
+\frac35
+$$
+
+There are four relevant documents in total, including one not retrieved. Therefore:
+
+$$
+AP
+=
+\frac{
+1+\frac23+\frac35
+}{4}
+$$
+
+$$
+\approx0.567
+$$
+
+Notice how each metric tells a different story. MRR says:
+
+Excellent—the first result is relevant.
+
+Recall says:
+
+We recovered most, but not all, relevant documents.
+
+Precision says:
+
+40% of the top five slots were wasted.
+
+AP combines multiple aspects of early retrieval. None is contradictory. Suppose Model A has:
+
+$$
+NDCG@10=0.86
+$$
+
+and Model B:
+
+$$
+NDCG@10=0.88
+$$
+
+It is tempting to declare B the winner. But perhaps B also has:
+
+$$
+p99\ latency=1.8s
+$$
+
+instead of:
+
+$$
+300ms
+$$
+
+Perhaps:
+
+$$
+Recall@100
+$$
+
+fell sharply. Perhaps category diversity collapsed. Perhaps certain regions became much worse. Perhaps new items are rarely surfaced. A useful release decision therefore needs:
+
+$$
+\boxed{\text{primary ranking metric}}
+$$
+
+plus:
+
+$$
+\boxed{\text{guardrails}}
+$$
+
+Suppose the main product experience is search. You might specify:
+
+$$
+\text{maximize }NDCG@10
+$$
+
+subject to:
+
+$$
+Recall@100\ge98\%
+$$
+
+$$
+p95\ latency<250ms
+$$
+
+$$
+\text{eligibility violations}=0
+$$
+
+$$
+NDCG_{\text{worst major segment}}>0.70
+$$
+
+$$
+\text{coverage does not fall by more than 2\%}
+$$
+
+This is often clearer than inventing a composite metric such as:
+
+$$
+0.5NDCG+0.2Recall+0.1Diversity+0.2Latency
+$$
+
+unless those weights correspond to real utility. A strong evaluation pipeline records enough information that another person can reproduce the result. At minimum, record:
+
+* evaluation dataset version,
+* relevance-label version,
+* query sampling method,
+* candidate corpus snapshot,
+* model version,
+* feature version,
+* filtering rules,
+* $$K$$ values,
+* metric definitions,
+* aggregation method,
+* random seed where applicable,
+* segment definitions,
+* confidence intervals,
+* baseline model.
+
+Why? Because:
+
+$$
+NDCG@10=0.834
+$$
+
+means little if nobody knows:
+
+* which queries,
+* which corpus,
+* which relevance labels,
+* which filtering rules,
+* which version of the model.
+
+Evaluation is a measurement process, so provenance matters. Suppose Model A is evaluated on one sample of queries and Model B on another. A difference may simply reflect query difficulty. A stronger design evaluates both models on the same requests:
+
+$$
+q_1,q_2,\ldots,q_N
+$$
+
+Then compare:
+
+$$
+M_A(q_i)
+$$
+
+with:
+
+$$
+M_B(q_i)
+$$
+
+for every $$i$$. This produces paired comparisons and substantially reduces unnecessary variance. It also lets you answer:
+
+Which exact queries improved, and which regressed
+
+That diagnostic information is often more valuable than the overall score. Metrics compress information. That compression is useful, but dangerous. Two rankings can receive similar metric values while failing in qualitatively different ways. So evaluation should include direct inspection of examples such as:
+
+* largest improvements,
+* largest regressions,
+* zero-relevance results,
+* high-frequency queries,
+* important tail queries,
+* surprising high-confidence rankings.
+
+Metrics tell you:
+
+$$
+\text{whether something changed}
+$$
+
+Examples often tell you:
+
+$$
+\text{why}
+$$
+
+A mature ranking evaluation process uses both. A useful report might contain:
+
+| Evaluation dimension          | Example metric                     |
+| ----------------------------- | ---------------------------------- |
+| Candidate coverage            | Recall@1000                        |
+| Top-result relevance          | Precision@10                       |
+| Overall ordered relevance     | NDCG@10                            |
+| First-result success          | MRR                                |
+| Multi-result binary relevance | MAP                                |
+| Tail-query quality            | NDCG@10 by query frequency segment |
+| Catalogue coverage            | Coverage                           |
+| Result variety                | Diversity                          |
+| Constraint compliance         | Eligibility violation rate         |
+| Speed                         | p50 / p95 / p99 latency            |
+| Reliability                   | Confidence intervals               |
+| Comparison                    | Per-query delta vs baseline        |
+
+Not every system requires every row. The goal is to measure the dimensions that determine real usefulness. Suppose we are evaluating a search reranker. A disciplined specification might say:
+
+**Primary metric:** NDCG@10
+**Evaluation unit:** search query
+**Relevance scale:** 0–3 human judgments
+**Evaluation set:** fixed time-valid sample of production queries
+**Candidate set:** frozen retriever output
+**Baseline:** current production reranker
+**Candidate guardrail:** Recall@100 unchanged within 0.5 percentage points
+**Latency guardrail:** p95 below 200 ms
+**Eligibility:** zero critical violations
+**Segments:** head queries, tail queries, language, category
+**Uncertainty:** paired bootstrap 95% confidence interval
+**Release rule:** statistically credible NDCG gain with no guardrail regression
+
+This makes model comparison much less arbitrary.
+
+## How Does Expected Utility Tie the Ranking Metrics Together?
+<!-- section-summary: Expected utility expresses ranking as limited attention allocated across positions, users, benefits, costs, and system constraints. -->
+
+The final utility view explains why no one ranking score can represent every benefit, cost, and constraint.
+
+Suppose a ranked list is:
+
+$$
+L=[d_1,d_2,\ldots,d_K]
+$$
+
+A user receives some utility:
+
+$$
+U(L,q)
+$$
+
+The ideal system would choose:
+
+$$
+L^*
+=
+\arg\max_L
+E[U(L,q)]
+$$
+
+But real user utility is difficult to observe directly. So ranking metrics act as proxies. Precision@K approximates:
+
+$$
+\text{usefulness of limited top slots}
+$$
+
+MRR approximates:
+
+$$
+\text{utility of finding the first useful result quickly}
+$$
+
+NDCG approximates:
+
+$$
+\text{utility from graded relevance discounted by position}
+$$
+
+Recall@K approximates:
+
+$$
+\text{value of recovering available useful information}
+$$
+
+Therefore ranking metrics are best understood as simplified models of user utility. In ordinary supervised prediction, you often observe:
+
+$$
+(x_i,y_i)
+$$
+
+and compare:
+
+$$
+\hat y_i
+$$
+
+with:
+
+$$
+y_i
+$$
+
+Ranking is more complicated because:
+
+1. outputs are lists,
+2. order matters,
+3. users inspect only part of the list,
+4. relevance may be graded,
+5. several items may be useful,
+6. the available item set changes,
+7. user interaction depends on the ranking itself,
+8. historical observations are biased by previous ranking policies.
+
+So there is usually no single natural notion of "correct ranking." Instead, evaluation asks:
+
+$$
+\boxed{\text{How much useful information did we put where users were likely to benefit from it?}}
+$$
+
+When designing ranking evaluation, work through this chain:
+
+$$
+\boxed{
+\text{User task}
+\rightarrow
+\text{What counts as relevant}
+\rightarrow
+\text{How many results matter}
+\rightarrow
+\text{How position affects utility}
+\rightarrow
+\text{Metric}
+}
+$$
+
+Then check the pipeline:
+
+$$
+\boxed{
+\text{candidate recall}
+\rightarrow
+\text{reranking quality}
+\rightarrow
+\text{final list}
+}
+$$
+
+Then add production constraints:
+
+$$
+\boxed{
+\text{latency}
++
+\text{eligibility}
++
+\text{diversity}
++
+\text{coverage}
+}
+$$
+
+Then add statistical robustness:
+
+$$
+\boxed{
+\text{segments}
++
+\text{uncertainty}
++
+\text{paired baseline comparison}
+}
+$$
+
+Finally verify:
+
+$$
+\boxed{
+\text{offline improvement}
+\rightarrow
+\text{better online outcomes}
+}
+$$
+
+Ranking evaluation is fundamentally about **ordered utility**. A ranking system does not merely ask:
+
+$$
+\text{“Did we retrieve something relevant?”}
+$$
+
+It asks:
+
+$$
+\boxed{
+\text{“Did we put the right things high enough in the list for the user to benefit?”}
+}
+$$
+
+Different metrics encode different versions of that question. Precision@K asks:
+
+$$
+\boxed{\text{How many of the top }K\text{ slots are useful?}}
+$$
+
+Recall@K asks:
+
+$$
+\boxed{\text{How much of the useful material did we recover?}}
+$$
+
+MRR asks:
+
+$$
+\boxed{\text{How quickly does the first useful result appear?}}
+$$
+
+MAP asks:
+
+$$
+\boxed{\text{Do multiple relevant results appear early?}}
+$$
+
+NDCG asks:
+
+$$
+\boxed{\text{Are highly relevant items placed near the top?}}
+$$
+
+And production guardrails ask:
+
+$$
+\boxed{\text{Can the system do this quickly, safely, broadly, and reliably?}}
+$$
+
+The central rule is therefore:
+
+$$
+\boxed{
+\text{Choose a ranking metric by modeling how users obtain value from positions in the ranked list.}
+}
+$$
+
+Not:
+
+$$
+\boxed{
+\text{Choose whichever ranking metric is most common.}
+}
+$$
+
+Once the user task, relevance definition, candidate pipeline, attention depth, and production constraints are clear, metric selection becomes much more principled.
 
 ![Ranking release evidence joins the experience definition, valid labels, per-request metrics, product guardrails, and a reversible scope](/content-assets/articles/article-mlops-model-evaluation-ranking-retrieval-evaluation/ranking-release-evidence.png)
 
 *A ranking score supports a release only when it travels with the exact request set, relevance policy, guardrails, uncertainty, and compatible rollback pair.*
 
-## References
+## Check Your Answers
 
-- [scikit-learn: Normalized discounted cumulative gain](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.ndcg_score.html)
-- [Google for Developers: Recommendation systems overview](https://developers.google.com/machine-learning/recommendation/overview/types)
-- [Google for Developers: Scoring in recommendation systems](https://developers.google.com/machine-learning/recommendation/dnn/scoring)
-- [Google for Developers: Re-ranking recommendations](https://developers.google.com/machine-learning/recommendation/dnn/re-ranking)
-- [Google Research: Position Bias Estimation for Unbiased Learning to Rank in Personal Search](https://research.google/pubs/position-bias-estimation-for-unbiased-learning-to-rank-in-personal-search/)
-- [Elasticsearch: Ranking evaluation API](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/search-rank-eval)
-- [OpenSearch: Search Relevance Workbench](https://docs.opensearch.org/latest/search-plugins/search-relevance/using-search-relevance-workbench/)
-- [OpenSearch: Exploring search evaluation results](https://docs.opensearch.org/latest/search-plugins/search-relevance/explore-experiment-results/)
-- [MLflow: Experiment tracking](https://mlflow.org/docs/latest/tracking/)
-- [MLflow: Dataset tracking](https://mlflow.org/docs/latest/dataset/)
-- [Amazon Personalize: Evaluating a recommender](https://docs.aws.amazon.com/personalize/latest/dg/evaluating-recommenders.html)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What User Experience and Relevance Definition Does a Ranking Create?]{kind="recap"}
+Ranking evaluation starts from the request, candidate set, ordered experience, and relevance labels that define what a useful result means.
+:::
+
+:::expand[How Do Precision at K and Recall at K Measure the Top Results?]{kind="recap"}
+Precision at K measures useful use of limited top slots, while Recall at K measures how much available relevant material the list recovered.
+:::
+
+:::expand[How Do MRR, MAP, DCG, and NDCG Reward Rank Position?]{kind="recap"}
+MRR emphasizes the first success, MAP rewards multiple early successes, and DCG/NDCG combine graded relevance with position discounting.
+:::
+
+:::expand[How Do Click Bias, Time, Candidate Recall, and RAG Change Retrieval Evaluation?]{kind="recap"}
+Observed clicks reflect the old ranking policy, time changes validity, candidate generation caps reranking, and RAG may require several complementary pieces of evidence.
+:::
+
+:::expand[How Do Diversity, Coverage, Eligibility, Latency, and Segments Affect Ranking Quality?]{kind="recap"}
+Useful rankings also balance diversity, catalogue coverage, eligibility, latency, request frequency, segments, and distributional behaviour.
+:::
+
+:::expand[How Do Paired Comparisons and Online Outcomes Extend Offline Ranking Tests?]{kind="recap"}
+Paired offline comparisons isolate list changes, while online experiments test causal product outcomes and guard against misleading engagement targets.
+:::
+
+:::expand[What Should a Reproducible Ranking Report and Release Specification Contain?]{kind="recap"}
+A reproducible report fixes requests, labels, K values, segment definitions, metrics, examples, uncertainty, guardrails, and release thresholds.
+:::
+
+:::expand[How Does Expected Utility Tie the Ranking Metrics Together?]{kind="recap"}
+Expected utility expresses ranking as limited attention allocated across positions, users, benefits, costs, and system constraints.
+:::

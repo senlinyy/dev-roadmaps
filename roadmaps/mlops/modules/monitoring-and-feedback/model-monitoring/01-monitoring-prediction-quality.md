@@ -1,7 +1,7 @@
 ---
 title: "Monitoring Prediction Quality"
-description: "Explain how production predictions are connected to delayed outcomes, meaningful metrics, segments, and product action."
-overview: "Prediction-quality monitoring measures the deployed decision system by connecting prediction identity, policy, outcome maturity, comparable cohorts, uncertainty, and owned responses."
+description: "Production quality starts with a stable prediction event joined to a matured real-world outcome and enough versioned context to reproduce what happened."
+overview: "Production quality starts with a stable prediction event joined to a matured real-world outcome and enough versioned context to reproduce what happened. The complete loop starts from the decision that must be protected, records predictions, waits for valid outcomes, measures comparable cohorts, investigates causes, and feeds verified evidence into action."
 tags: ["MLOps", "monitoring", "quality"]
 order: 1
 id: "article-mlops-monitoring-and-feedback-monitoring-prediction-quality"
@@ -12,348 +12,2342 @@ aliases:
 
 ## Table of Contents
 
-1. [What Prediction Quality Means After Deployment](#what-prediction-quality-means-after-deployment)
-2. [Record Every Important Prediction](#record-every-important-prediction)
-3. [Wait For Real Outcomes Before Calculating Final Quality](#wait-for-real-outcomes-before-calculating-final-quality)
-4. [Compare Predictions From The Same Time, Release, And Population](#compare-predictions-from-the-same-time-release-and-population)
-5. [Choose a Metric That Matches the Real Mistake](#choose-a-metric-that-matches-the-real-mistake)
-6. [A Global Average Can Hide a Local Failure](#a-global-average-can-hide-a-local-failure)
-7. [How Teams Build the Monitoring Loop](#how-teams-build-the-monitoring-loop)
-8. [Respond To Quality Alerts Without Causing More Harm](#respond-to-quality-alerts-without-causing-more-harm)
-9. [How The Complete Quality-Monitoring Loop Works](#how-the-complete-quality-monitoring-loop-works)
-10. [References](#references)
+1. [What Evidence Connects a Production Prediction to Its Outcome?](#what-evidence-connects-a-production-prediction-to-its-outcome)
+2. [How Do Delayed, Imperfect, and Selective Labels Affect Quality Measurement?](#how-do-delayed-imperfect-and-selective-labels-affect-quality-measurement)
+3. [Which Quality Metrics Match Classification, Regression, Probability, and Ranking Tasks?](#which-quality-metrics-match-classification-regression-probability-and-ranking-tasks)
+4. [How Do Segments, Sample Size, Missing Labels, Drift, Baselines, and Shadow Results Change Interpretation?](#how-do-segments-sample-size-missing-labels-drift-baselines-and-shadow-results-change-interpretation)
+5. [When Should a Quality Signal Create an Alert and Investigation?](#when-should-a-quality-signal-create-an-alert-and-investigation)
+6. [What Should an End-to-End Quality Dashboard Show?](#what-should-an-end-to-end-quality-dashboard-show)
+7. [How Does Quality Monitoring Diagnose Models, Data, Policies, Labels, and Business Outcomes?](#how-does-quality-monitoring-diagnose-models-data-policies-labels-and-business-outcomes)
+8. [How Do You Build the Complete Monitoring Loop Backwards from a Decision?](#how-do-you-build-the-complete-monitoring-loop-backwards-from-a-decision)
+9. [Check Your Answers](#check-your-answers)
 
-## What Prediction Quality Means After Deployment
-<!-- section-summary: Prediction-quality monitoring checks whether live model outputs still agree with real outcomes and still support the product decision they were built for. -->
+A fraud dashboard says precision fell from 90% to 70%. Before anyone rolls back the model, the team needs to know which predictions were measured, whether their labels have matured, how many cases formed each rate, which release handled them, and whether the product changed what outcomes became observable.
 
-**Prediction-quality monitoring** is the ongoing practice of checking whether a deployed model's predictions remain accurate and reliable enough for the decisions they support. During development, you can evaluate a model on a test dataset whose answers are already known. Production is different. New cases arrive every day. Correct answers often arrive later. The people or systems using the prediction may also change how they act on it.
+**Prediction quality monitoring** measures how production predictions compare with later evidence about the real world. It is harder than checking service uptime because outcomes can be delayed, incomplete, noisy, or changed by the decisions the model helped make.
 
-Imagine a model that estimates the sale price of a home. It returns a price for every request, the API stays fast, and every response has the expected JSON shape. Six months later, the estimates are regularly £80,000 above the final sale price in city-centre neighbourhoods. From a software-health point of view, the service is working. From the buyer's point of view, the model has stopped being reliable.
+The questions below move from one prediction-outcome pair to a production feedback loop that can support a defensible response:
 
-This quiet gap between a successful response and a useful prediction is why prediction-quality monitoring exists. The direct evidence comes from comparing a prediction with the outcome it tried to predict. For the home-price model, that means joining each estimate to the later sale and measuring the size and pattern of the errors.
+1. **What Evidence Connects a Production Prediction to Its Outcome?**
+2. **How Do Delayed, Imperfect, and Selective Labels Affect Quality Measurement?**
+3. **Which Quality Metrics Match Classification, Regression, Probability, and Ranking Tasks?**
+4. **How Do Segments, Sample Size, Missing Labels, Drift, Baselines, and Shadow Results Change Interpretation?**
+5. **When Should a Quality Signal Create an Alert and Investigation?**
+6. **What Should an End-to-End Quality Dashboard Show?**
+7. **How Does Quality Monitoring Diagnose Models, Data, Policies, Labels, and Business Outcomes?**
+8. **How Do You Build the Complete Monitoring Loop Backwards from a Decision?**
 
-**Drift** provides a different kind of evidence. Data drift reports that live inputs have moved away from a reference distribution. Concept drift describes a change in the relationship between inputs and outcomes. Both can warn that quality is at risk, especially during the weeks before enough outcomes mature. Neither one proves that the model has become inaccurate. A change in property size may leave price errors unchanged. Buyer preferences can also change prediction quality even though the input distribution still looks familiar.
+## What Evidence Connects a Production Prediction to Its Outcome?
+<!-- section-summary: Production quality starts with a stable prediction event joined to a matured real-world outcome and enough versioned context to reproduce what happened. -->
 
-Quality can also fall because a feature pipeline serves stale values. A new threshold may change the product action, or the outcome data may stop joining correctly. A useful monitor separates these causes. Retraining is one possible response among several; a broken label join, stale feature, or policy change needs a different repair.
+Production quality starts with a stable prediction event joined to a matured real-world outcome and enough versioned context to reproduce what happened.
 
-The job therefore follows a loop from one prediction to its later outcome, comparable measurement, and a controlled response. What did the model predict? What did the product do with that prediction? What actually happened? Are we comparing the same kind of cases? Is the difference large enough to matter? What should the team change? The rest of the article builds that loop one part at a time.
+A model can be perfectly healthy as a service and still be making increasingly bad predictions.
 
-## Record Every Important Prediction
-<!-- section-summary: A prediction record preserves enough information to explain which model produced an output and how the product used it. -->
+For example:
 
-A production prediction needs a durable **prediction record**. You can think of this record as a receipt. It preserves the information required to reconstruct the decision after the real outcome arrives and gives every later investigation a stable place to start.
-
-Assume the serving path already emits a privacy-controlled prediction record through a reconciled asynchronous capture path. Prediction-quality monitoring begins after that evidence is trustworthy. Its concern is narrower: does the receipt contain the fields needed to attach a later outcome and compare like with like?
-
-For that job, `prediction_id` and decision time identify the case and place it in the correct production window. Model and preprocessing versions explain which implementation produced the output. The output, policy version, and product action separate model behaviour from the rule that used it. Approved segment keys let the report find important differences inside the population. The join key for the later outcome must keep the same meaning for the full outcome window. A segment such as region belongs here only when the team has a legitimate reason and enough examples to measure it safely.
-
-The distinction between prediction and action matters. Suppose a fraud model returns a risk score of `0.72`. One policy approves scores below `0.80`, while a later policy sends scores above `0.65` to manual review. The model output stayed the same and the action changed. A quality report that records only the score can wrongly blame the model for a policy change; `policy_version` and `action` preserve the separation.
-
-A compact monitoring row makes that separation concrete:
-
-```json
-{
-  "prediction_id": "pred_01K0Q7H7T8Z6M3X2",
-  "prediction_time": "<RFC 3339 timestamp>",
-  "model_version": "price-v18",
-  "preprocessing_version": "property-features-v12",
-  "policy_version": "listing-v4",
-  "prediction": {"sale_price_gbp": 485000},
-  "action": "show_estimate",
-  "segment": {"region_group": "city-centre"},
-  "outcome_join_key": "sale_8F31"
-}
+```text
+Availability       = 99.99%
+p99 latency        = 120 ms
+error rate         = 0.02%
+GPU utilization    = normal
 ```
 
-Store this row in a governed decision table. Metric labels are too small for request-level evidence. Broad application logs rarely provide the retention, schema, and access rules required for a months-later outcome join. The later sale outcome joins through the controlled key, while the prediction, policy, and action remain separate fields. A privacy review decides whether the segment and join key may be retained and who can query them.
+Operationally, the service looks excellent. But suppose a fraud model's precision falls from:
 
-Before computing quality, the monitoring job checks the selected prediction IDs for uniqueness and required versions. It verifies the outcome key and reconciles receipt coverage with the complete service-level prediction count. If the capture feed is incomplete, the job publishes a data-quality incident and withholds the quality claim. This protects later calculations from producing precise metrics over an untrustworthy population.
+```text
+92% → 61%
+```
 
-The receipt forms the stable left side of the outcome join. The remaining work decides whether the right side is mature and which predictions belong in the same cohort. It then asks whether the evidence is strong enough to change production.
+The system is reliably and quickly delivering worse decisions. That is why **prediction quality monitoring** exists. Its purpose is to answer:
 
-## Wait For Real Outcomes Before Calculating Final Quality
-<!-- section-summary: Outcomes turn predictions into measurable evidence, and maturity rules prevent incomplete recent cases from distorting the result. -->
+**Are the predictions being made in production still useful and correct for the real-world problem we care about?**
 
-An **outcome**, often called a ground-truth label, is the real event used to judge a prediction. A home-price prediction can be compared with the final sale price. A delivery estimate can be compared with the actual arrival time. A fraud prediction may have to wait for a confirmed chargeback.
+During model development, evaluating prediction quality seems straightforward. You have:
 
-Some outcomes arrive in minutes, while others take weeks or months. The monitor therefore needs an **outcome maturity rule**. This rule states how long a case must remain open before its outcome is reliable enough for a final quality measure.
+```text
+features
+   +
+known labels
+   ↓
+model
+   ↓
+predictions
+   ↓
+compare predictions with labels
+```
 
-### Exclude Recent Cases Until Outcomes Are Complete
+For example:
 
-Consider a model that predicts whether a customer will cancel a subscription within 90 days. After two weeks, most customers have neither cancelled nor completed the full 90-day period. Counting every active customer as a successful negative prediction would make the model appear unusually accurate. The honest status for those cases is **pending**. Early evidence such as a cancellation request can appear on a separate panel, while the final metric waits for the full maturity window.
+```text
+Prediction     Actual
+fraud          fraud
+legitimate     legitimate
+fraud          legitimate
+fraud          fraud
+```
 
-The same principle applies when labels arrive late or receive corrections. A disputed payment may first appear legitimate and later turn into a confirmed chargeback. The monitoring data should retain the original outcome, the correction, and the time each state became known. That history lets the team recompute the same prediction group without pretending that the final answer was available earlier.
+Then you calculate metrics such as:
 
-Production teams usually make these rules explicit in a **label contract**. The contract identifies the source event and the key that connects it to a prediction. It separates an early useful signal from the rule for a final mature label, then states how corrections and arrival delays are handled. A named owner resolves changes to those rules. For a delivery estimate, `delivered_at` may be final within hours. For a credit decision, a delinquency label may need 90 days plus a short ingestion allowance. Giving both labels the same daily freshness target would create a false expectation for one and a dangerously slow response for the other.
+```text
+accuracy
+precision
+recall
+F1
+log loss
+RMSE
+```
 
-### Record When Outcomes Happened And When They Arrived
+But production is different. At prediction time, you usually know:
 
-The outcome pipeline keeps event time and observation time separate. Event time says when the outcome happened; observation time says when the monitoring system learned about it. This distinction matters during backfills. A chargeback created on Monday and imported on Thursday still belongs to Monday's business event. Thursday's observation time explains its absence from earlier monitoring runs. Versioned outcome rows or a warehouse snapshot preserve this history. The cohort job selects the newest outcome state known as of its run time.
+$$
+\hat{y}
+$$
 
-In a warehouse-first implementation, product events or change-data capture land in BigQuery with both timestamps. A dbt incremental model turns those events into versioned label states, and Airflow passes an explicit `as_of_time` into the cohort build. Suppose Thursday's load contains a correction for Monday. The workflow rebuilds the affected Monday cohort as a new metric revision, while the earlier published run remains available for audit. The revision history reveals whether reality changed or the monitoring system received better evidence.
+the prediction. You often **do not yet know**:
 
-### Some Product Decisions Prevent Outcomes From Being Observed
+$$
+y
+$$
 
-There is a harder problem when the product action changes whether an outcome can ever be observed. If a payment is blocked, nobody gets to see whether approving it would have caused a chargeback. If only high-risk cases receive human review, the reviewed labels describe a model-selected group rather than all traffic. This missing view of the alternative action is called **censoring**.
+the true outcome.
 
-Teams handle censoring carefully because measurement never justifies exposing users to unacceptable risk. A low-risk recommendation system may use a small random holdout to learn what happens without the normal ranking rule. A payment team may send a bounded sample to trained reviewers and combine that evidence with later disputes. The product and risk owners define the eligible cases, sampling rate, safety budget, and stop condition before the measurement starts.
+For example:
 
-The decision service records which cases entered the sample and the probability of selection. Once outcomes mature, the measurement owner checks whether the observed sample matches the intended design and whether important segments received enough coverage. If the review queue, loss estimate, or customer impact crosses its approved limit, the sampling policy rolls back immediately. Some outcomes will remain unknowable, and the published metric should say which population it genuinely represents.
+```text
+Today:
+model predicts transaction is fraudulent
 
-For example, a payment team may review a random sample of low-risk approvals because blocking a payment hides the outcome that approval would have produced. The sampling service records eligibility, selection probability, reviewer result, and final dispute status. The monitor reports both the raw result and the weighted estimate for the eligible population, with the sampling assumptions visible. If reviewers fall behind, the sample shrinks before the queue changes which cases receive labels. This keeps the measurement process from creating an operational problem of its own.
+30 days later:
+chargeback information reveals
+whether it really was fraud
+```
+
+This creates the central difficulty of prediction-quality monitoring:
+
+**The prediction happens now, but the evidence needed to judge it may arrive later.**
+
+Prediction quality is not:
+
+```text
+"Is the model server functioning?"
+```
+
+It is not:
+
+```text
+"Does the input distribution look familiar?"
+```
+
+And it is not simply:
+
+```text
+"Is the model producing predictions?"
+```
+
+Prediction quality asks whether model outputs agree with the outcomes or objectives that matter.
+
+Conceptually:
+
+$$
+Quality = f(\text{Predictions},\text{Ground Truth})
+$$
+
+For classification:
+
+```text
+prediction
+     +
+actual class
+     ↓
+correct / incorrect
+```
+
+For regression:
+
+```text
+predicted value
+      +
+actual value
+      ↓
+prediction error
+```
+
+For ranking:
+
+```text
+recommended ranking
+       +
+user behaviour
+       ↓
+ranking usefulness
+```
+
+So the first-principles idea is:
+
+**You cannot directly measure final predictive quality unless you have some trustworthy signal about what actually happened.**
+
+Suppose a fraud model emits:
+
+```text
+prediction_id = P1007
+score         = 0.91
+decision      = FRAUD
+timestamp     = Monday
+model_version = v18
+```
+
+At that moment, you have only the prediction. Later you learn:
+
+```text
+prediction_id = P1007
+actual_outcome = LEGITIMATE
+```
+
+Now the two records can be joined:
+
+```text
+Prediction P1007
+       │
+       ├── predicted = FRAUD
+       │
+       └── actual    = LEGITIMATE
+                ↓
+          false positive
+```
+
+That joined record is the fundamental raw material of quality monitoring. Across many such records:
+
+```text
+prediction + outcome
+prediction + outcome
+prediction + outcome
+prediction + outcome
+        ↓
+aggregate
+        ↓
+quality metric
+```
+
+So a production quality-monitoring system fundamentally needs to preserve a link between:
+
+$$
+\hat{y}_i
+$$
+
+and eventually:
+
+$$
+y_i
+$$
+
+for the same event $$i$$. Suppose an outcome arrives four weeks after inference. If the original prediction was never recorded, you may know:
+
+```text
+actual outcome = fraud
+```
+
+but not:
+
+```text
+what did the model predict
+which model version made it
+what score did it produce
+what threshold was active
+```
+
+So production quality monitoring usually depends on prediction records.
+
+Conceptually:
+
+```text
+Production inference
+       │
+       ├────► prediction returned
+       │
+       └────► prediction record
+                    │
+                    │
+            later outcome arrives
+                    │
+                    ▼
+               join records
+                    │
+                    ▼
+             calculate quality
+```
+
+This is why prediction logging and prediction-quality monitoring are closely connected. Suppose outcomes arrive from another system.
+
+For example:
+
+```text
+Prediction system
+→ predicts loan default
+
+Months later
+
+Repayment system
+→ observes whether default occurred
+```
+
+The two systems need some way to identify the same case. A stable key might be:
+
+```text
+prediction_id = pred_82fa
+```
+
+Then:
+
+```text
+prediction record:
+prediction_id = pred_82fa
+probability   = 0.72
+
+outcome record:
+prediction_id = pred_82fa
+defaulted     = true
+```
+
+The join becomes reliable. Without this stable identity, teams often resort to approximate joins using:
+
+```text
+customer ID
+timestamp
+transaction amount
+```
+
+which can create mismatches. So:
+
+**The quality loop begins at prediction time, even though quality cannot yet be calculated.**
+
+You have to preserve enough information now to evaluate later. For quality monitoring, you usually need enough information to evaluate the prediction later. That might include:
+
+```text
+prediction_id
+timestamp
+model_version
+prediction
+score/probability
+decision threshold
+population/segment
+experiment or release
+```
+
+You may also need selected safe contextual information. But this does **not** imply storing every raw feature, personal identifier, document, or secret in general telemetry. The principle remains:
+
+Keep enough evidence to evaluate model behaviour, while minimizing unnecessary sensitive data.
+
+Sometimes prediction records are stored in a specialized, governed dataset rather than ordinary operational logs.
+
+## How Do Delayed, Imperfect, and Selective Labels Affect Quality Measurement?
+<!-- section-summary: Ground truth may arrive late, remain missing, contain errors, or depend on the model's action, so cohorts and release identity must define which cases are comparable. -->
+
+Ground truth may arrive late, remain missing, contain errors, or depend on the model's action, so cohorts and release identity must define which cases are comparable.
+
+The model prediction is usually easy to obtain. The difficult part is determining:
+
+“What was actually correct?”
+
+That is ground truth. For some systems, ground truth is immediate. Example:
+
+```text
+OCR predicts:
+character = "A"
+
+human verifies immediately:
+actual = "A"
+```
+
+For others, it arrives later.
+
+### Fraud
+
+```text
+prediction today
+↓
+chargeback / investigation weeks later
+```
+
+### Loan default
+
+```text
+prediction today
+↓
+repayment behaviour months later
+```
+
+### Churn
+
+```text
+prediction today
+↓
+did customer leave within next 90 days
+```
+
+### Recommendation
+
+```text
+recommend item
+↓
+did user click / purchase / engage
+```
+
+### Medical prediction
+
+```text
+risk estimate
+↓
+later clinical outcome
+```
+
+So prediction quality monitoring is often really a problem of **delayed feedback**. A deeper problem appears.
+
+What if your "ground truth" is itself noisy?
+
+Suppose fraud is defined by:
+
+```text
+chargeback received
+```
+
+But not every fraudulent transaction results in a chargeback. And some chargebacks are unrelated to fraud. So:
+
+```text
+observed label ≠ perfect truth
+```
+
+Similarly:
+
+```text
+click
+```
+
+is not exactly the same thing as:
+
+```text
+recommendation was useful
+```
+
+And:
+
+```text
+customer remained subscribed
+```
+
+may not mean:
+
+```text
+model prediction was correct
+```
+
+Therefore:
+
+**Prediction quality is only as meaningful as the outcome signal used to define correctness.**
+
+You should always ask:
+
+```text
+What real-world event does this label represent
+
+How delayed is it
+
+How noisy is it
+
+Can it be missing
+
+Can the model itself influence whether we observe it
+```
+
+That last question is especially important. Suppose a fraud model predicts:
+
+```text
+FRAUD
+```
+
+and blocks the transaction. Now you never observe whether the transaction would have resulted in actual fraud because it never happened. This creates a feedback problem:
+
+```text
+prediction
+   ↓
+action
+   ↓
+changes reality
+   ↓
+changes what outcome becomes observable
+```
+
+Another example:
+
+A churn model identifies high-risk customers. The company gives them discounts. Many stay. Later you see:
+
+```text
+predicted churn = high
+actual churn    = no
+```
+
+Was the model wrong?
+
+Perhaps not. The intervention may have prevented the predicted event. This means production quality monitoring can involve **selection bias and intervention effects**, not just ordinary metric calculation. The deeper principle is:
+
+In deployed systems, predictions often affect the process that generates their future labels.
+
+That must be considered when interpreting quality. Suppose you're evaluating whether customers default within 90 days. A prediction made yesterday cannot yet be labeled:
+
+```text
+did not default
+```
+
+It has only been observed for one day. Calling it negative would be wrong. Instead, define a maturity window.
+
+For example:
+
+```text
+Prediction date      Jan 1
+Outcome window       90 days
+Fully evaluable      after Apr 1
+```
+
+Only predictions old enough to have a fair observation window should enter final quality calculations. Otherwise your monitoring dataset becomes biased toward:
+
+```text
+events that happen quickly
+```
+
+while missing events that need more time. This principle is called various things depending on the domain, but conceptually:
+
+**Do not evaluate a prediction before its outcome has had enough time to become observable.**
+
+This causes an important monitoring subtlety. Suppose labels take 30 days to arrive. On August 30, your latest reliable quality metric might describe predictions made around July 31. So:
+
+```text
+quality dashboard today
+≠
+quality of predictions being made today
+```
+
+Instead:
+
+```text
+quality dashboard today
+=
+latest cohort with mature ground truth
+```
+
+That lag must be visible. A dashboard should distinguish:
+
+```text
+prediction time
+```
+
+from:
+
+```text
+label arrival time
+```
+
+Otherwise teams may mistakenly think they are seeing real-time model quality. Suppose today's labels arrive for predictions made over many different days. If you group them by **label arrival date**, you can create misleading trends. The more useful question is often:
+
+How good were predictions made during a particular prediction period
+
+For example:
+
+```text
+Prediction cohort       Precision
+Aug 1–7                 91%
+Aug 8–14                89%
+Aug 15–21               78%
+```
+
+This groups quality by when the model made the prediction. That matters because:
+
+```text
+model version
+data distribution
+feature pipeline
+threshold
+traffic composition
+```
+
+are properties of the prediction time. Suppose model quality appears to fall:
+
+```text
+last month     accuracy = 94%
+this month     accuracy = 86%
+```
+
+Before concluding:
+
+“The model deteriorated.”
+
+ask whether the evaluated populations are comparable. Maybe last month contained:
+
+```text
+80% easy cases
+20% difficult cases
+```
+
+while this month contained:
+
+```text
+30% easy cases
+70% difficult cases
+```
+
+The model may not have changed at all. The population did. Therefore quality should often be segmented by meaningful dimensions:
+
+```text
+model version
+region
+traffic source
+customer segment
+request type
+product category
+risk band
+device type
+```
+
+The principle is:
+
+**Quality comparisons are meaningful only when the underlying populations are sufficiently comparable or the population change is explicitly accounted for.**
+
+Suppose overall precision is:
+
+```text
+89%
+```
+
+That seems acceptable. But traffic is split:
+
+```text
+v17 → 95% of requests
+v18 → 5% of requests
+```
+
+and their precision is:
+
+```text
+v17 = 92%
+v18 = 34%
+```
+
+The aggregate hides a broken new release. So prediction records should carry:
+
+```text
+model_version
+```
+
+and often:
+
+```text
+feature_version
+policy_version
+experiment_id
+deployment_id
+```
+
+Then quality can be evaluated by release:
+
+```text
+precision{model=v17}
+precision{model=v18}
+```
+
+This is especially important during:
+
+```text
+canary releases
+A/B testing
+champion-challenger evaluation
+model migrations
+```
 
 ![Prediction and outcome timeline separating decision time, event time, observation time, outcome maturity, censoring, and missing evidence](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/outcome-maturity-evidence.png)
 
 *Decision time, event time, and observation time describe different moments. Only a mature outcome enters the final quality result; pending, censored, and missing states remain visible.*
 
-## Compare Predictions From The Same Time, Release, And Population
-<!-- section-summary: A cohort groups predictions by time, version, policy, and maturity so the resulting quality comparison has a stable meaning. -->
+## Which Quality Metrics Match Classification, Regression, Probability, and Ranking Tasks?
+<!-- section-summary: Confusion-matrix measures, cost, regression errors, calibration, ranking outcomes, and multidimensional guardrails answer different production-quality questions. -->
 
-A **cohort** is the exact group of predictions included in one result. In ordinary language, it means “the cases we are grading together.” Production traffic, model versions, policies, and label availability all change over time. The cohort definition fixes those moving boundaries for one measurement.
+Confusion-matrix measures, cost, regression errors, calibration, ranking outcomes, and multidimensional guardrails answer different production-quality questions.
 
-### Use Prediction Time To Select The Model Version
+Suppose 99.5% of transactions are legitimate. A useless model predicts:
 
-Suppose a home-price model version changes on 1 June. A sale completed on 15 June may belong to a prediction made in March by the previous version. Grouping results by sale date would mix the two versions. The cohort should begin with prediction time, then attach outcomes when they mature.
-
-A useful cohort definition starts with the prediction window and the outcome maturity period. It then identifies the model, policy, and segment being measured. These boundaries tell the reader exactly which production decisions the result describes.
-
-Coverage is reported beside the metric. The report separates predictions with a mature outcome from cases that remain pending. It also shows censored cases and records whose outcome failed to join. Those counts protect the metric from a common failure: a broken outcome feed can remove difficult cases and make quality appear to improve.
-
-### Define Exactly Which Predictions Belong In Each Comparison
-
-The following warehouse query shows the central idea. The SQL dialect may change, while the time and version boundaries remain the important part:
-
-```sql
-SELECT
-  model_version,
-  policy_version,
-  region,
-  COUNT(*) AS mature_predictions,
-  AVG(ABS(predicted_price - sale_price)) AS mean_absolute_error
-FROM monitoring.property_price_outcomes
-WHERE prediction_time >= :cohort_start
-  AND prediction_time < :cohort_end
-  AND prediction_time < :as_of_time - INTERVAL '60 days'
-  AND outcome_status = 'mature'
-GROUP BY model_version, policy_version, region;
+```text
+LEGITIMATE
 ```
 
-This query grades only predictions old enough to have a mature sale outcome. It keeps model and policy versions visible and calculates the error by region. A production job also reconciles the rows around this query: eligible predictions, matched outcomes, duplicates, orphan outcomes, and pending cases. The final error value is trustworthy only when those surrounding counts make sense.
+for everything. Its accuracy is:
 
-The cohort table is normally an incremental, reproducible data product. A one-off query behind a dashboard cannot provide the same revision history. For source data already in a warehouse, dbt can build and test the cohort in SQL. Spark fits lakehouse-scale histories and large backfills. The transformation writes a candidate partition for a specific `cohort_start`, `cohort_end`, and `as_of_time`. Data tests then check key uniqueness, accepted maturity states, outcome relationships, and coverage limits before that partition is published.
+$$
+99.5\%
+$$
 
-Late outcomes make idempotency important. A rerun after a backfill should update each affected prediction once. It should also preserve the earlier run for audit and produce a visible metric revision. A practical table keeps `cohort_definition_version`, `metric_definition_version`, `computed_at`, and the source snapshot identifiers beside the result. Investigators can then answer whether a chart moved because production changed or because a corrected label arrived.
+That looks excellent. But it catches zero fraud. So "quality" does not have one universal metric. You must ask:
 
-### Track Missing Labels And Cohort Coverage
+**What kind of mistake matters in this problem?**
 
-Suppose an orchestrated job expects 600,000 eligible predictions. It finds 599,700 unique receipts and 520,000 mature outcomes. Another 77,000 cases remain pending, 1,900 are censored, and 800 have failed joins. Those numbers tell a coherent story. If the next run still has 520,000 mature outcomes but only 260,000 matches, metric publication should stop. The orchestrator opens a data incident. Publishing the resulting MAE would give a precise number built from a damaged population.
+For binary classification:
 
-Every eligible prediction should end in one named evidence state. That accounting rule prevents missing rows from disappearing between capture and metric calculation.
+```text
+                     Actual
+                 Positive   Negative
 
-```mermaid
-flowchart TD
-  A["Eligible Predictions<br/>(all decisions in the cohort)"] --> B["Captured Receipts<br/>(identity and versions are present)"]
-  A --> C["Missing Receipts<br/>(open a capture incident)"]
-  B --> D{"Outcome State<br/>(classify every receipt)"}
-  D -->|Mature| E["Joined Outcomes<br/>(enter the metric denominator)"]
-  D -->|Pending| F["Pending Outcomes<br/>(wait for the maturity window)"]
-  D -->|Censored| G["Censored Cases<br/>(report as a separate population)"]
-  D -->|Join Failure| H["Failed Joins<br/>(stop metric publication)"]
+Predicted
+Positive            TP         FP
+Negative            FN         TN
 ```
 
-In the numeric example, the 300 missing receipts indicate a capture problem and the 800 failed joins indicate an outcome-linking problem. Pending and censored cases have known meanings, so they stay visible outside the final denominator. An unexpected change in any state triggers an evidence investigation before the team interprets MAE, recall, or another model metric.
+These four counts represent four types of outcome.
+
+### True positive
+
+```text
+predicted fraud
+actual fraud
+```
+
+### False positive
+
+```text
+predicted fraud
+actual legitimate
+```
+
+### False negative
+
+```text
+predicted legitimate
+actual fraud
+```
+
+### True negative
+
+```text
+predicted legitimate
+actual legitimate
+```
+
+Quality metrics are different summaries of these counts.
+
+$$
+Accuracy =
+\frac{TP+TN}
+{TP+TN+FP+FN}
+$$
+
+Accuracy works reasonably when:
+
+```text
+classes are balanced
+```
+
+and:
+
+```text
+different mistakes have similar costs
+```
+
+But many ML systems violate both assumptions.
+
+$$
+Precision =
+\frac{TP}{TP+FP}
+$$
+
+For fraud:
+
+Of all transactions we blocked as fraud, how many really were fraudulent
+
+Suppose:
+
+```text
+100 transactions blocked
+80 fraud
+20 legitimate
+```
+
+Then:
+
+$$
+Precision = 80\%
+$$
+
+Precision matters when false positives are costly. Examples:
+
+```text
+blocking legitimate customers
+flagging legitimate emails as spam
+sending unnecessary manual reviews
+```
+
+$$
+Recall =
+\frac{TP}{TP+FN}
+$$
+
+For fraud:
+
+Of all fraudulent transactions, how many did we actually detect
+
+Suppose:
+
+```text
+100 fraud cases existed
+70 detected
+30 missed
+```
+
+Then:
+
+$$
+Recall = 70\%
+$$
+
+Recall matters when false negatives are costly. Examples:
+
+```text
+missed fraud
+missed disease
+missed safety incident
+```
+
+Suppose a fraud model outputs probabilities. You block when:
+
+$$
+p(\text{fraud}) \geq \theta
+$$
+
+If you lower $$\theta$$:
+
+```text
+more transactions blocked
+↓
+catch more fraud
+↓
+recall rises
+```
+
+but:
+
+```text
+more legitimate transactions blocked
+↓
+precision may fall
+```
+
+If you raise the threshold:
+
+```text
+fewer transactions blocked
+↓
+fewer false positives
+↓
+precision may rise
+```
+
+but:
+
+```text
+more fraud missed
+↓
+recall falls
+```
+
+So production quality often depends not just on the model but also on the **decision threshold**. That threshold should therefore often be monitored and versioned too.
+
+$$
+F1 =
+2\frac{Precision \times Recall}
+{Precision + Recall}
+$$
+
+F1 can be useful when both precision and recall matter. But it assumes a particular balance between them. It does not know that:
+
+```text
+missing one fraud case costs £5,000
+```
+
+while:
+
+```text
+reviewing one legitimate transaction costs £2
+```
+
+A business-aware metric may be more appropriate. Suppose:
+
+```text
+false positive cost = £5
+false negative cost = £500
+```
+
+Then define:
+
+$$
+Cost
+=
+5 \times FP
++
+500 \times FN
+$$
+
+Now quality monitoring directly reflects operational impact. Two models can have identical accuracy but very different business cost. This leads to a powerful principle:
+
+> **The best quality metric is the one that reflects the real consequence of being wrong.**
+
+Suppose the model predicts delivery time. For prediction $$i$$:
+
+$$
+e_i = y_i - \hat{y}_i
+$$
+
+You might monitor:
+
+### Mean Absolute Error
+
+$$
+MAE
+=
+\frac{1}{n}
+\sum_{i=1}^{n}
+|y_i-\hat{y}_i|
+$$
+
+This answers roughly:
+
+How far away are predictions on average
+
+### Root Mean Squared Error
+
+$$
+RMSE
+=
+\sqrt{
+\frac{1}{n}
+\sum_{i=1}^{n}
+(y_i-\hat{y}_i)^2
+}
+$$
+
+Because errors are squared, large mistakes receive more weight. Again:
+
+Choose based on which error behaviour matters.
+
+Suppose a model outputs:
+
+```text
+fraud probability = 0.8
+```
+
+What should that mean?
+
+Among many cases assigned roughly 0.8 probability, approximately 80% should eventually be fraud if the model is well calibrated.
+
+For example:
+
+```text
+Predicted probability bucket     Actual positive rate
+
+0.1                              0.11
+0.3                              0.28
+0.5                              0.49
+0.7                              0.71
+0.9                              0.88
+```
+
+That is reasonably calibrated. But suppose:
+
+```text
+predicted 0.9
+actual positive rate 0.55
+```
+
+The model is badly overconfident. A thresholded classification metric might still look acceptable while probability quality has degraded. So monitoring may need to distinguish:
+
+```text
+decision quality
+```
+
+from:
+
+```text
+probability quality
+```
+
+For recommendation systems, there may not be a single "correct class." Instead you might care about:
+
+```text
+click-through rate
+conversion rate
+NDCG
+precision@k
+recall@k
+revenue
+watch time
+long-term retention
+```
+
+But be careful. A metric like:
+
+```text
+click-through rate
+```
+
+is influenced not only by the prediction model but also by:
+
+```text
+UI design
+position bias
+promotions
+seasonality
+user intent
+```
+
+So measured outcome quality is often a property of the complete product system. A single number may not be enough. For a fraud system, you might simultaneously monitor:
+
+```text
+precision
+recall
+false-positive rate
+false-negative rate
+estimated financial loss
+manual-review volume
+calibration
+```
+
+Why?
+
+Because one metric can improve while another deteriorates.
+
+For example:
+
+```text
+recall:      72% → 94%
+precision:   88% → 41%
+```
+
+The model catches much more fraud but now blocks huge numbers of legitimate transactions. Whether that is better depends on the real objective.
+
+## How Do Segments, Sample Size, Missing Labels, Drift, Baselines, and Shadow Results Change Interpretation?
+<!-- section-summary: Averages need segment denominators and uncertainty, while drift and prediction distributions are proxies; baseline and shadow comparisons add evidence without replacing outcomes. -->
+
+Averages need segment denominators and uncertainty, while drift and prediction distributions are proxies; baseline and shadow comparisons add evidence without replacing outcomes.
+
+Suppose:
+
+```text
+overall accuracy = 94%
+```
+
+But by region:
+
+```text
+UK       96%
+France   95%
+Germany  94%
+Brazil   68%
+```
+
+The global average hides a severe problem for one population. Similarly:
+
+```text
+overall MAE = £18
+```
+
+might hide:
+
+```text
+small transactions     £4
+large transactions     £230
+```
+
+So quality monitoring should include important slices. But avoid slicing into thousands of tiny groups where noise dominates. A useful segment should usually be:
+
+```text
+meaningful
+large enough to measure
+operationally actionable
+```
+
+Suppose model A has:
+
+```text
+9 correct out of 10
+accuracy = 90%
+```
+
+and model B has:
+
+```text
+8,900 correct out of 10,000
+accuracy = 89%
+```
+
+A simplistic comparison might conclude:
+
+Model A is better.
+
+But ten examples provide very weak evidence. Production dashboards should therefore show not just:
+
+```text
+quality metric
+```
+
+but also:
+
+```text
+sample size
+```
+
+and, where useful:
+
+```text
+confidence intervals
+```
+
+A quality metric without the amount of evidence behind it can be misleading. Suppose you receive ground truth for only 40% of predictions. If that 40% is random, quality estimates might still be useful. But often labels are not missing randomly.
+
+For example:
+
+```text
+high-risk transactions
+→ more likely to receive human review
+→ more likely to get reliable labels
+```
+
+Then your labeled sample overrepresents difficult cases. Or:
+
+```text
+only customers who complain
+→ get manually verified
+```
+
+Now quality monitoring is biased toward complaints. Therefore monitor label coverage:
+
+$$
+LabelCoverage =
+\frac{\text{Predictions with usable outcomes}}
+{\text{Eligible predictions}}
+$$
+
+For example:
+
+```text
+label coverage = 87%
+```
+
+A sudden drop in label coverage may make quality numbers less trustworthy even if the metric itself looks stable. Suppose normal feedback delay is:
+
+```text
+7 days
+```
+
+but your label pipeline breaks and delay becomes:
+
+```text
+25 days
+```
+
+Quality dashboards become increasingly stale. So monitor:
+
+```text
+label arrival rate
+label coverage
+median label delay
+p95 label delay
+age of latest mature cohort
+```
+
+This is crucial because:
+
+A quality monitor depends on the feedback pipeline being healthy.
+
+If the feedback pipeline breaks, the absence of bad quality numbers does not imply good quality. This is an important limitation. If labels arrive after 90 days, you cannot directly calculate today's 90-day quality today. But you still need earlier warning signals. So teams often monitor proxies such as:
+
+```text
+input drift
+feature missingness
+prediction distribution
+confidence distribution
+class distribution
+calibration proxies
+fallback rate
+model disagreement
+```
+
+Suppose the usual positive prediction rate is:
+
+```text
+18%
+```
+
+and suddenly becomes:
+
+```text
+61%
+```
+
+That does **not prove** quality is bad. But it signals:
+
+Something changed and should be investigated.
+
+This distinction is fundamental:
+
+```text
+drift / prediction monitoring
+→ indirect early warning
+
+ground-truth quality monitoring
+→ direct evidence of predictive performance
+```
+
+Do not confuse the two. Suppose customer ages shift slightly:
+
+```text
+training mean age      = 38
+production mean age    = 41
+```
+
+That is distribution change. But the model may still perform perfectly. Conversely, quality might collapse even with little detectable input drift. For example, the relationship between an input and outcome changes:
+
+```text
+same input distribution
+different real-world meaning
+```
+
+This is often related to concept drift. So:
+
+$$
+Drift \neq QualityLoss
+$$
+
+Drift is evidence that something changed. Quality measures whether predictions remain useful. Suppose a classifier normally predicts:
+
+```text
+positive = 20%
+```
+
+Today:
+
+```text
+positive = 12%
+```
+
+That could mean:
+
+```text
+the model broke
+```
+
+or:
+
+```text
+the world genuinely changed
+```
+
+Without ground truth, you cannot know which purely from output frequency. Prediction distribution monitoring is useful because it gives quick feedback. But it is a **proxy signal**. Suppose model `v22` is deployed to 10% of traffic while `v21` remains on 90%. Once enough labels arrive:
+
+```text
+                     Precision     Recall
+
+v21                     88%          73%
+v22                     90%          76%
+```
+
+This comparison is much more useful if the versions received comparable traffic. A controlled rollout can make monitoring stronger because it provides a contemporaneous baseline. Instead of comparing:
+
+```text
+v22 today
+vs
+v21 six months ago
+```
+
+you can compare:
+
+```text
+v22 today
+vs
+v21 today
+```
+
+which reduces confounding from time, seasonality, and population changes. Sometimes a candidate model runs without controlling the actual decision.
+
+For example:
+
+```text
+production request
+      │
+      ├── v21 → actual decision
+      │
+      └── v22 → shadow prediction only
+```
+
+Later, when ground truth arrives, both can be evaluated on the same cases. This gives:
+
+```text
+same inputs
+same time
+same population
+different model
+```
+
+which makes comparison cleaner. But shadow performance may still differ from live performance if the model would alter downstream behaviour once actually deployed.
+
+## When Should a Quality Signal Create an Alert and Investigation?
+<!-- section-summary: Quality alerts use slower and noisier evidence than service alerts, so they need persistence, effect size, uncertainty, actionability, and a check that the monitor itself is healthy. -->
+
+Quality alerts use slower and noisier evidence than service alerts, so they need persistence, effect size, uncertainty, actionability, and a check that the monitor itself is healthy.
+
+A service alert like:
+
+```text
+error rate > 10%
+```
+
+may demand immediate action. A prediction-quality alert is often statistically noisier and delayed. Suppose precision falls:
+
+```text
+88% → 84%
+```
+
+for one hour.
+
+Should you rollback immediately?
+
+Maybe not. The sample might contain:
+
+```text
+23 labeled examples
+```
+
+The difference could simply be noise. Quality alerts should often account for:
+
+```text
+minimum sample size
+duration
+confidence
+baseline
+segment
+business impact
+label completeness
+```
+
+For example:
+
+```text
+Alert if:
+precision < 80%
+AND labeled sample >= 5,000
+AND degradation persists for 3 mature cohorts
+```
+
+The exact rule depends on the problem. All measured metrics fluctuate. Suppose true precision is around 90%. Different samples might produce:
+
+```text
+89.4%
+90.7%
+88.9%
+91.1%
+89.8%
+```
+
+This does not necessarily represent meaningful model changes. If alerts react to ordinary variation, teams get:
+
+```text
+false alarms
+alert fatigue
+unnecessary rollbacks
+constant threshold changes
+```
+
+So prediction-quality monitoring should distinguish:
+
+```text
+normal statistical variation
+```
+
+from:
+
+```text
+credible degradation
+```
+
+This may involve:
+
+```text
+larger evaluation windows
+confidence intervals
+control charts
+statistical tests
+minimum effect sizes
+```
+
+The exact technique matters less than the principle:
+
+Do not treat every observed difference as a real model change.
+
+Suppose recall drops from:
+
+```text
+85% → 70%
+```
+
+Immediately retraining the model may sound reasonable. But what if the real problem is:
+
+```text
+label pipeline bug
+```
+
+or:
+
+```text
+feature pipeline changed
+```
+
+or:
+
+```text
+threshold accidentally modified
+```
+
+or:
+
+```text
+population mix changed
+```
+
+Blind retraining can make things worse. A safer workflow is often:
+
+```text
+quality alert
+     │
+     ▼
+validate measurement
+     │
+     ▼
+identify affected cohorts
+     │
+     ▼
+check recent releases
+     │
+     ▼
+inspect inputs/features
+     │
+     ▼
+identify cause
+     │
+     ▼
+choose intervention
+```
+
+Possible interventions include:
+
+```text
+rollback model
+rollback feature pipeline
+restore threshold
+fix labels
+route to fallback
+retrain
+collect more data
+do nothing if change is expected
+```
+
+Suppose accuracy suddenly becomes:
+
+```text
+97% → 48%
+```
+
+Possible explanations include:
+
+```text
+model degraded
+```
+
+but also:
+
+```text
+label definitions changed
+prediction/outcome join broke
+duplicate records appeared
+time zones misaligned
+label pipeline delayed
+model version incorrectly tagged
+metric calculation changed
+```
+
+So monitoring systems need monitoring. Before declaring the model bad, ask:
+
+```text
+Are prediction counts normal
+
+Are label counts normal
+
+Is join coverage normal
+
+Did schema versions change
+
+Did metric code change
+
+Is the cohort complete
+```
+
+This prevents a telemetry failure from being mistaken for model failure.
 
 ![Cohort evidence accounting that reconciles 600,000 eligible predictions into captured, missing, mature, pending, censored, and failed-join states](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/cohort-evidence-accounting.png)
 
 *The cohort accounts for every eligible prediction. Missing receipts open a capture incident, and failed joins stop metric publication instead of disappearing from the denominator.*
 
-## Choose a Metric That Matches the Real Mistake
-<!-- section-summary: Quality metrics should reflect the type of prediction, the cost of each error, and the capacity of the process that acts on the result. -->
+## What Should an End-to-End Quality Dashboard Show?
+<!-- section-summary: The fraud example and dashboard combine metric values with label freshness, denominators, segments, windows, baselines, release identity, and the data needed for investigation. -->
 
-A **quality metric** turns many prediction errors into a number that can be tracked. The team can compare time windows, model versions, and segments using the same definition. The size and reliability of the change then guide the response.
+The fraud example and dashboard combine metric values with label freshness, denominators, segments, windows, baselines, release identity, and the data needed for investigation.
 
-The choice carries real product meaning because different metrics reward different behaviour. A measure that treats every error equally may suit one decision and hide the expensive mistakes in another. The team therefore starts with the prediction task and the harm created by each kind of error.
+Suppose a fraud system records every important production prediction:
 
-### Regression Metrics Measure the Size of a Miss
-
-For a home-price model, **mean absolute error**, or MAE, answers a direct question. On average, how many pounds separate the estimate from the sale price? **Root mean squared error**, or RMSE, gives extra weight to large misses. A stable MAE can hide a growing number of extreme errors, so teams often inspect error percentiles and regional error alongside the average.
-
-The unit keeps the result understandable. An MAE of `£24,000` has direct product meaning. An RMSE of `£51,000` beside that result says a smaller number of very large misses are pulling the squared-error measure upward. The investigation should inspect those cases before anyone changes the model solely to improve the average.
-
-### Classification Metrics Describe Different Error Types
-
-Classification models need a different view. For a fraud model, **precision** asks how many flagged payments were actually fraudulent. **Recall** asks how much fraud the model found. Raising the review threshold may improve precision because analysts see fewer weak cases, while recall falls because more fraud passes through. Neither number can choose the threshold alone.
-
-The product process supplies the missing context. If investigators can review 1,200 cases each day, a threshold that produces 1,700 cases creates a growing queue even when recall improves. The team may choose an intermediate threshold, add review capacity, or apply the more sensitive threshold only to high-loss segments. Queue size and wait time belong beside the model metric because the decision depends on both.
-
-### Ranking and Forecasting Need Their Own View
-
-A recommendation or search model usually ranks items instead of making one yes-or-no decision. **Precision at k** asks how many of the first `k` results were relevant. **Recall at k** asks how much of the available relevant material appeared in those positions. The value of `k` should match the product surface. A three-card home screen and a fifty-result search page do not expose the same decision space.
-
-A forecasting model needs error by horizon. A demand forecast can look healthy one day ahead and fail badly four weeks ahead. Teams report MAE or a scale-aware forecasting metric for each useful horizon and inspect seasonal periods separately. Combining all horizons into one number can hide the exact period used for purchasing or staffing.
-
-### Calibration Checks Whether a Score Behaves Like a Probability
-
-Probability scores also need **calibration**. A calibrated risk score of `0.8` means that roughly eight out of ten comparable cases with that score eventually produce the event. A model can rank cases in the right order while its probabilities grow too high or too low. That failure matters when the score drives prices, credit limits, staffing, or another decision that treats the number as a probability.
-
-### Version Metric Definitions And Release Rules
-
-Metric definitions need versions just like model code. Libraries can use different averaging rules, class handling, and thresholds. Teams keep a small fixture containing known predictions and outcomes. The monitoring job must reproduce the expected denominator and result before a metric change reaches production.
-
-Metrics also need a decision rule. Teams often combine an absolute guardrail with a relative comparison and a minimum sample size. For example, mature recall below `0.82` can block a release. A drop of more than five percentage points against the approved route can also block it after at least 5,000 positives have matured. The absolute rule protects the minimum acceptable service. The relative rule catches a candidate that is materially worse even though both routes remain above that minimum.
-
-Uncertainty belongs in the decision as well. A bootstrap interval can show how much MAE might vary across resampled cases, while a binomial interval can describe uncertainty around a classification rate. The exact method depends on the metric and sampling design. In simple terms, a monitoring number is an estimate from a finite group of cases. The alert should reveal whether the apparent movement is larger than normal variation.
-
-Threshold changes receive their own evaluation. A fraud classifier can keep the same ranking quality while a new review threshold sends twice as many cases to investigators. Teams replay candidate thresholds on mature recent cohorts. They estimate precision, recall, expected loss, and queue volume, then canary the chosen policy separately from a model release. This prevents a policy incident from being recorded as a model-quality failure.
-
-One practical metric job reads a tested cohort table into a pinned Python environment and uses scikit-learn for the statistical calculation. The warehouse has already decided which rows belong in the cohort; the Python task receives mature labels and the decision generated at prediction time.
-
-```python
-from sklearn.metrics import precision_score, recall_score
-
-y_true = cohort["mature_fraud_label"]
-y_decision = cohort["sent_to_review"]
-
-metrics = {
-    "precision": precision_score(y_true, y_decision, zero_division=0),
-    "recall": recall_score(y_true, y_decision, zero_division=0),
-    "sample_count": len(cohort),
-    "positive_count": int(y_true.sum()),
-}
+```text
+prediction_id
+timestamp
+model_version
+fraud_score
+decision
+region
 ```
 
-The job writes these values with the scikit-learn version, metric-definition version, cohort ID, model version, policy version, and uncertainty interval. The same container also runs a small fixture whose expected denominator and result live in source control. A library upgrade or averaging-rule change therefore fails before it silently rewrites the production history.
+A prediction occurs:
 
-## A Global Average Can Hide a Local Failure
-<!-- section-summary: Segment results and uncertainty reveal where a model is failing and whether the available evidence is strong enough to act on. -->
-
-A **segment** is a meaningful slice of production traffic, such as region, device type, new customers, model route, or fallback path. Segment monitoring answers a simple question: is the overall result hiding a serious problem for one group?
-
-Imagine that property-price error stays close to £25,000 across the whole country. In one newly added region, the error has risen to £110,000 because local leasehold rules were never represented in training. The national average can remain calm because that region handles only a small share of requests. Regional monitoring reveals the problem while it is still concentrated.
-
-Teams choose important segments from product risks, release routes, previous incidents, and regulated analysis. Searching every possible column creates thousands of noisy comparisons and may expose sensitive data without a clear purpose. A smaller reviewed set gives responders signals they understand and can act on.
-
-Every result should show its sample count and uncertainty. Perfect recall based on two positive cases provides weak evidence. A five-point recall drop across thousands of mature cases carries much more weight. Confidence intervals, sustained-window rules, and minimum sample sizes help the alert distinguish a real movement from ordinary variation.
-
-Segment rules are reviewed like other production configuration. Each segment has a reason, an owner, a minimum volume, and an intended action. A region may exist because data sources differ by country. A `new_customer` slice may exist because the model has less behavioural history for those users. A `fallback_path` slice exists because a degraded data route can change the input meaning. This small catalog helps responders understand why a result is present instead of facing hundreds of automatically generated cuts.
-
-The monitor usually computes the overall result first, then the governed segments, and finally release-specific comparisons. A comparison between the champion and canary routes is especially useful because both routes saw traffic during the same period. The report keeps the model version, preprocessing version, and policy version visible, so a route difference has an identifiable owner.
-
-A segment query can stay small because the cohort table already contains trusted labels and version identity. This PostgreSQL-compatible example produces the confusion-matrix counts for each governed slice:
-
-```sql
-SELECT
-  model_version,
-  policy_version,
-  region_group,
-  COUNT(*) AS sample_count,
-  COUNT(*) FILTER (
-    WHERE predicted_fraud = true AND mature_fraud_label = true
-  ) AS true_positives,
-  COUNT(*) FILTER (
-    WHERE predicted_fraud = true AND mature_fraud_label = false
-  ) AS false_positives,
-  COUNT(*) FILTER (
-    WHERE predicted_fraud = false AND mature_fraud_label = true
-  ) AS false_negatives
-FROM monitoring.mature_fraud_cohort
-WHERE cohort_id = :cohort_id
-GROUP BY model_version, policy_version, region_group;
+```text
+prediction_id = P718
+model_version = v12
+score         = 0.87
+decision      = BLOCK
 ```
 
-The metric task derives precision and recall from these confusion-matrix counts. The query also demonstrates the operational boundary: one governed cohort, grouped by the route and segment fields captured at decision time. Minimum-volume and uncertainty rules run before any group can open an alert.
+Three weeks later:
 
-The alert policy also accounts for the number of comparisons or requires sustained evidence, so one random fluctuation among many slices does not page the team. Low-volume but high-harm segments can use longer windows, pooled evidence, or manual review. Those populations remain visible even though the evidence needs more time to mature.
+```text
+prediction_id = P718
+confirmed_fraud = false
+```
 
-## How Teams Build the Monitoring Loop
-<!-- section-summary: A practical monitoring stack captures prediction records, joins mature outcomes, computes versioned metrics, publishes results, and checks that the evidence pipeline itself is healthy. -->
+The join produces:
 
-A dashboard cannot measure prediction quality until several systems have connected the original decision with its later outcome. The production loop has five jobs: capture each decision, obtain the outcome, build a trustworthy cohort, calculate a task-specific metric, and send accepted results into an owned alert. Teams often use several tools because these jobs operate on different data shapes and time scales.
+```text
+predicted fraud
+actual legitimate
+↓
+false positive
+```
 
-### Define The Prediction And Outcome Records First
+Do this across 100,000 matured predictions. Suppose:
 
-The application owns prediction identity. The product or source system owns the real outcome. The data platform owns the reproducible join between them. The statistical job owns the metric calculation. The monitoring system owns publication, freshness, and alert delivery. Assigning these responsibilities prevents a dashboard from quietly becoming the only place that knows how quality was calculated.
+```text
+TP = 8,000
+FP = 2,000
+FN = 1,000
+TN = 89,000
+```
 
-For example, an endpoint may emit a fraud score in milliseconds, while a confirmed chargeback arrives weeks later through a payment processor. Kafka or a managed event service can carry the prediction receipt. The payment event can land through change-data capture. Both records eventually reach object storage, a warehouse, or a lakehouse. The quality workflow reads those durable records.
+Then:
 
-### Build the Labeled Cohort in the Data Platform
+$$
+Precision
+=
+\frac{8000}{8000+2000}
+=
+80\%
+$$
 
-dbt is a practical default for warehouse-resident data because its incremental models can encode the join, maturity window, and cohort version in SQL. Its tests can reject duplicate prediction IDs, invalid outcome states, and missing relationships. Spark serves the same role for lakehouse-scale histories or large backfills. Great Expectations can add richer cross-table and distribution checks where the SQL test layer no longer expresses the rule cleanly.
+and:
 
-Airflow, Dagster, or a managed pipeline runs the steps in order. A typical run verifies input partitions and builds a candidate cohort. It then executes data tests, calculates metrics, writes a versioned result, and publishes a small set of alertable time series. A failed validation blocks publication. The dashboard keeps the last accepted value and displays its age. A separate freshness alert tells the team that new evidence is unavailable.
+$$
+Recall
+=
+\frac{8000}{8000+1000}
+\approx 88.9\%
+$$
 
-This design also supports repairs. If Monday's outcomes arrive with a broken join key, the data owner fixes the adapter and rebuilds Monday's cohort under the same cohort definition. The result receives a new computation revision. The incident record can attribute the metric movement to evidence repair because the earlier result and model identity remain available.
+Now compare with the previous model:
 
-### Calculate Quality After Data Checks Pass
+```text
+              Precision     Recall
 
-scikit-learn works well for familiar regression and classification metrics inside a pinned Python environment. Evidently can produce classification or regression reports and compare a current labeled cohort with an approved reference cohort. Its classification preset expects prediction and target columns, which means the team must complete the outcome join and data validation first. Evidently then helps with calculation, visualization, and pass/fail tests. The application's label contract remains the source for chargeback maturity, receipt coverage, and join rules.
+v11              91%          87%
+v12              80%          89%
+```
 
-MLflow 3 fits a different boundary. After the cohort and metric pass validation, MLflow can link a metric to a specific Logged Model and dataset reference. That link answers which trained artifact produced the measured production result and which evaluated population supported it. The long-lived cohort still belongs in governed data storage, and the alert policy still belongs in the monitoring system. MLflow provides model-level evidence for later comparison and release review.
+v12 catches slightly more fraud but blocks many more legitimate transactions. Whether it is better depends on costs. Suppose:
 
-### Send Fast And Delayed Signals To The Right Systems
+```text
+false negative cost = £500
+false positive cost = £20
+```
 
-Outcome-based quality often moves slowly because labels need time to mature. Prometheus or the cloud monitoring service should still track fast evidence-health signals. Prediction volume and capture coverage compare serving traffic with durable receipts. Outcome-job freshness and join coverage describe the label path. Fallback rate and publication age expose degraded serving or a stalled report. These metrics can page an owner within minutes without placing request identifiers or raw predictions in the time-series system.
+Then compute expected business cost for each release. The best operational decision may differ from the model with the best F1 score. Suppose overall v12 precision is:
 
-The warehouse or lakehouse retains the detailed cohort rows and longer history used during investigation. A responder can move from a compact alert to the governed cohort ID, then inspect the affected versions, segments, and cases under the normal access policy. This split protects both operational speed and evidence depth.
+```text
+80%
+```
 
-### Know What Managed Monitoring Does And Does Not Cover
+By region:
 
-Cloud platforms can supply capture, scheduled jobs, dashboards, and alert integrations for models that use their supported serving paths. Their usefulness depends on the signal and product lifecycle.
+```text
+UK         91%
+France     89%
+Germany    88%
+Brazil     42%
+```
 
-Azure Machine Learning's established tabular signals cover data drift, prediction drift, and data quality. Feature-attribution drift and the classification and regression model-performance signals are Public Preview. A hard release gate should use those Preview signals only after the team has explicitly accepted their lifecycle risk. Threshold events can flow through Azure Event Grid, while the application's label contract continues to define outcome maturity and cohort membership.
+Now the picture changes. The problem is not necessarily:
 
-Google's Model Monitoring v2 supports scheduled or on-demand monitoring for registered tabular model versions and includes distribution and attribution monitoring. V2 remains Preview. The older v1 path is generally available for supported platform endpoints. A production design should check the documented support for its model type and serving path. Region, required signal, and service version also need confirmation before the release gate relies on the service.
+```text
+v12 is globally broken
+```
 
-Databricks AI Gateway-enabled inference tables capture requests and responses from supported Model Serving endpoints into Unity Catalog Delta tables. The Delta rows can join to labels and enter a Lakeflow Jobs workflow. SQL or Spark can then build the cohort. Legacy inference tables are retired, so new work should use the AI Gateway path. Inference tables for route-optimized endpoints remain Public Preview. Delivery also has documented size, latency, sampling, and error-path limits. Serving counts still need reconciliation with captured rows.
+It may be:
 
-SageMaker Model Monitor remains available to existing customers, while access is closed to new customers and no new features are planned. Existing installations can continue under AWS's stated maintenance policy. New AWS implementations need an alternative quality path built from governed prediction capture, processing or established data-platform jobs, and CloudWatch for operational signals.
+```text
+v12 behaves poorly for Brazil
+```
 
-Managed services remove useful plumbing. The business meaning stays with the application and data owners. The platform cannot decide that a delinquency label needs a 90-day window. It also cannot determine whether a reviewed sample represents all traffic or explain a policy threshold change. Those rules must remain visible in versioned contracts and cohort code.
+That suggests very different responses:
 
-### Check That The Monitoring Pipeline Is Healthy
+```text
+route Brazil back to v11
+investigate Brazil-specific features
+inspect population shift
+collect additional labels
+```
 
-The quality job records its last successful run, input window, code version, row counts, rejected records, metric revision, and publication time. Serving counts are reconciled with captured prediction IDs. Outcome counts are reconciled with joined labels. The dashboard shows the age of the last accepted result. If the job stops, the stale timestamp and pipeline alert expose the failure even though the previous quality value still looks healthy.
+Segmentation turns aggregate quality into actionable evidence. Suppose dashboard precision drops:
 
-## Respond To Quality Alerts Without Causing More Harm
-<!-- section-summary: A quality alert first verifies the evidence, then locates the failing boundary, limits harm, repairs the cause, and proves recovery. -->
+```text
+90% → 70%
+```
 
-The quality alert should say which cohort moved, how much it moved, how many cases support the result, and whether label coverage stayed healthy. It also includes the model, policy, segment, recent releases, owner, and investigation link. This context lets the responder understand what the number claims before changing production.
+But:
 
-The first investigation checks the measuring system: did the job run, did the schema change, did the expected outcomes arrive, and did the join coverage fall? The second pass checks model routes, feature health, policy changes, action rates, and affected segments. This order saves the team from rolling back a model because a label column was renamed.
+```text
+previous window:
+10,000 positive predictions
 
-Suppose recall falls from `0.88` to `0.63`, while outcome join coverage falls from `97%` to `46%` at the same time. The monitoring owner freezes promotion and automatic retraining because their evidence is incomplete. The data owner updates the source adapter or dbt model, reprocesses the affected outcome partitions into a candidate table, and checks eligible predictions, duplicates, orphan outcomes, and maturity states.
+current window:
+20 positive predictions
+```
 
-The corrected job recomputes the original cohorts beside the published results. When coverage returns to its expected range and sampled prediction IDs lead to the intended outcomes, the team promotes the corrected table and records the metric revision. A controlled outcome then travels through ingestion, cohort building, dashboard publication, and alert delivery. Release automation resumes only after that complete path works.
+Those numbers should not be interpreted equally. Every rate has a denominator. For precision:
 
-With dbt and Airflow, the failed relationship or coverage test stops the downstream publication task. dbt can store the failing records in its audit schema, which gives the data owner the exact prediction IDs that missed an outcome instead of only a failed task name. Airflow reruns the repaired partition and starts the publish task only after the same tests pass. Prometheus continues showing the last accepted metric together with a stale timestamp, and Alertmanager routes the pipeline-freshness alert until the controlled outcome proves that publication and notification work again.
+$$
+TP+FP
+$$
 
-If the evidence path is healthy and the decline belongs to one new model route, the response changes. The release owner can shift that route to the approved model, pause the affected automated action, or send a risky score range to review. Early signals such as action rate, queue size, and fallback use confirm that the containment is active. Mature outcomes later confirm whether prediction quality recovered. The incident stays open until the evidence that justified the action has caught up.
+For recall:
 
-Consider a second case in which join coverage stays at 98%, feature checks pass, and recall falls only for model version 18 on mobile traffic. The release owner routes that segment back to version 17 through the endpoint traffic configuration or feature-flag service. The model owner compares false negatives from the affected cohort with the candidate's training coverage and discovers that a mobile acquisition channel introduced a type of case missing from the candidate dataset.
+$$
+TP+FN
+$$
 
-The repair follows the normal release path. The data team builds a point-in-time-correct training snapshot containing the new channel, the training platform produces a candidate, and the registry links the model to its data and code versions. Offline evaluation checks global and mobile results. Shadow traffic verifies execution and feature parity, followed by a small canary with explicit recall, latency, action-rate, and queue limits. Any breach returns the segment to version 17. Promotion continues only after the immediate signals and the first mature outcome window support the same conclusion.
+For accuracy:
 
-## How The Complete Quality-Monitoring Loop Works
-<!-- section-summary: Prediction-quality monitoring connects live predictions to trustworthy outcomes and turns that evidence into a controlled production response. -->
+$$
+N
+$$
 
-Prediction quality answers a direct question: do the model's live predictions still agree with reality well enough for the decision they support? Answering it requires more than a metric chart. The team needs a receipt for each prediction, an honest rule for when outcomes are ready, a fair group of cases to compare, a metric tied to real harm, and enough segment and sample context to judge the result.
+Quality dashboards should make this evidence volume visible. Otherwise percentages can look much more certain than they are. Suppose fraud prevalence changes from:
 
-That evidence also has to lead somewhere. A broken label join calls for data repair. A policy change calls for policy analysis. Stale features call for feature-path recovery. A model-specific decline can justify containment, evaluation, and a controlled release. A strong prediction-quality monitor identifies the responsible part of the system and supplies the evidence required to prove recovery.
+```text
+1%
+```
+
+to:
+
+```text
+0.1%
+```
+
+Even if the model's underlying discrimination remains similar, precision can change substantially.
+
+Why?
+
+Because there are now many more legitimate cases relative to fraud. So quality metrics are influenced by population prevalence. This is another reason to monitor:
+
+```text
+base rate
+class balance
+population composition
+```
+
+alongside the final metric. Suppose you calculate quality over:
+
+```text
+last 5 minutes
+```
+
+You get fast detection, but perhaps very few labeled examples. Suppose you calculate over:
+
+```text
+last 30 days
+```
+
+You get stability, but sudden degradation may be hidden. This is the classic trade-off:
+
+```text
+short window
+→ fast
+→ noisy
+
+long window
+→ stable
+→ slow
+```
+
+Many systems use multiple windows.
+
+For example:
+
+```text
+7-day precision
+30-day precision
+90-day precision
+```
+
+or recent mature cohorts versus a longer baseline. A useful dashboard might say:
+
+```text
+Model                  fraud-v22
+Metric                 precision
+Latest mature cohort   Aug 1–7
+Metric value           88.4%
+Previous cohort        90.2%
+Sample size            84,231
+Label coverage         94%
+Median label delay     18 days
+```
+
+This is far more informative than:
+
+```text
+Precision = 88.4%
+```
+
+because you know:
+
+```text
+which model
+which period
+how much evidence
+how complete the labels are
+how stale the result is
+```
+
+For a binary classifier:
+
+```text
+┌────────────── PREDICTION QUALITY ──────────────┐
+
+Model version                v22
+Latest mature prediction     Aug 7
+
+Quality
+  Precision                  88.4%
+  Recall                     84.1%
+  FPR                         1.7%
+  Calibration error           ...
+
+Evidence
+  Predictions evaluated      84,231
+  Label coverage             94.2%
+  Median label delay         18 days
+
+Comparison
+  v21 precision              90.1%
+  v22 precision              88.4%
+
+Segments
+  UK                         91.3%
+  France                     89.4%
+  Brazil                     66.2%   ← investigate
+
+└───────────────────────────────────────────────┘
+```
+
+And separately, fast proxy signals:
+
+```text
+Today's prediction rate
+Today's score distribution
+Feature missingness
+Input drift
+```
+
+The dashboard should clearly distinguish:
+
+```text
+confirmed quality
+```
+
+from:
+
+```text
+early-warning proxies
+```
+
+## How Does Quality Monitoring Diagnose Models, Data, Policies, Labels, and Business Outcomes?
+<!-- section-summary: A quality change can come from the model, data pipeline, population, concept, decision policy, labels, measurement, or product, and business quality remains a separate outcome. -->
+
+A quality change can come from the model, data pipeline, population, concept, decision policy, labels, measurement, or product, and business quality remains a separate outcome.
+
+Now the broader principle appears. At deployment time:
+
+```text
+model
+  ↓
+predictions
+```
+
+But the real environment eventually generates:
+
+```text
+outcomes
+```
+
+Those outcomes are fed back into engineering. So:
+
+```text
+Train
+  ↓
+Deploy
+  ↓
+Predict
+  ↓
+Observe outcome
+  ↓
+Evaluate prediction
+  ↓
+Detect degradation
+  ↓
+Investigate
+  ↓
+Change model/data/system
+  ↓
+Deploy again
+```
+
+This is a closed feedback loop. Without the outcome connection:
+
+```text
+Train → Deploy → Predict →
+```
+
+you do not know whether the model remains useful. Suppose model precision falls. The cause may not be the model itself. Possible causes include:
+
+```text
+feature values changed
+feature was missing
+schema changed
+wrong units
+new population arrived
+threshold changed
+label pipeline changed
+model genuinely became stale
+```
+
+So investigation usually moves across several layers:
+
+```text
+Prediction quality degraded
+          │
+          ├── model release
+          ├── feature pipeline
+          ├── input population
+          ├── label pipeline
+          ├── threshold/policy
+          └── real-world relationship changed
+```
+
+This is why ML monitoring should not treat the model artifact as an isolated object. A useful causal taxonomy is:
+
+### Model regression
+
+```text
+bad new model deployed
+```
+
+### Data pipeline regression
+
+```text
+feature incorrectly computed
+```
+
+### Data drift
+
+```text
+population changed
+```
+
+### Concept drift
+
+```text
+relationship between inputs and outcomes changed
+```
+
+### Decision-policy change
+
+```text
+threshold changed
+```
+
+### Label problem
+
+```text
+ground-truth pipeline changed
+```
+
+### Measurement problem
+
+```text
+prediction/outcome join is wrong
+```
+
+The same visible symptom:
+
+```text
+precision ↓
+```
+
+can result from any of them. Prediction-quality monitoring tells you **what deteriorated**. Investigation determines **why**. Imagine a spam classifier. During training:
+
+```text
+certain phrases strongly indicate spam
+```
+
+Six months later, attackers adapt. The model binary has not changed. The feature pipeline has not changed. The serving system is healthy. But:
+
+$$
+P(Y|X)
+$$
+
+has changed. The same input patterns now mean something different. Quality falls. This illustrates why production evaluation is necessary even for models whose code never changes.
+
+Model quality is a relationship between a model and its environment.
+
+When the environment changes, the quality of that relationship can change. Suppose a recommendation model remains identical. But the product redesigns the homepage. Now:
+
+```text
+recommendations appear lower on screen
+```
+
+Click-through rate falls.
+
+Did recommendation quality deteriorate?
+
+Not necessarily. The metric changed because the surrounding system changed. This reinforces the need to interpret outcome-based metrics in context. Production quality is often influenced by:
+
+```text
+model
++
+product
++
+population
++
+policy
++
+measurement
+```
+
+Suppose a ranking model improves NDCG by 5%. But:
+
+```text
+revenue unchanged
+user retention unchanged
+support complaints increase
+```
+
+Was the deployment successful?
+
+Technically:
+
+```text
+offline predictive quality improved
+```
+
+But product quality may not have. This suggests a hierarchy:
+
+```text
+Model metric
+      ↓
+Decision metric
+      ↓
+User outcome
+      ↓
+Business outcome
+```
+
+Good monitoring usually tracks multiple levels rather than assuming one ML metric fully represents success. Before deployment:
+
+```text
+test accuracy = 94%
+```
+
+After deployment:
+
+```text
+production accuracy = 84%
+```
+
+Why?
+
+Possible reasons:
+
+```text
+training data not representative
+production data changed
+feature pipelines differ
+leakage existed in offline evaluation
+labels differ
+threshold differs
+feedback effects occur
+```
+
+This is the reason production quality monitoring exists at all. Offline evaluation answers:
+
+How did the model perform on this historical dataset
+
+Production monitoring answers:
+
+How is the deployed decision process performing in the environment it actually encounters
+
+These are not guaranteed to match.
+
+## How Do You Build the Complete Monitoring Loop Backwards from a Decision?
+<!-- section-summary: The complete loop starts from the decision that must be protected, records predictions, waits for valid outcomes, measures comparable cohorts, investigates causes, and feeds verified evidence into action. -->
+
+The complete loop starts from the decision that must be protected, records predictions, waits for valid outcomes, measures comparable cohorts, investigates causes, and feeds verified evidence into action.
+
+A useful design method is to start with:
+
+What decision do we need to make if quality changes
+
+Suppose the answer is:
+
+```text
+rollback model if fraud precision becomes unacceptable
+```
+
+Then work backwards. You need:
+
+```text
+acceptable precision threshold
+      ↓
+reliable precision calculation
+      ↓
+confirmed fraud outcomes
+      ↓
+prediction/outcome join
+      ↓
+stored prediction identity
+      ↓
+instrument inference
+```
+
+This is much better than beginning with:
+
+“What ML metrics can our monitoring platform display?”
+
+For any deployed prediction system, ask:
+
+### What is the prediction
+
+```text
+class
+score
+rank
+continuous value
+```
+
+### What real-world outcome determines whether it was useful
+
+```text
+fraud confirmation
+purchase
+default
+delivery time
+human review
+```
+
+### How long until that outcome is trustworthy
+
+```text
+seconds
+days
+months
+```
+
+### How do we connect outcome to prediction
+
+```text
+prediction_id
+transaction_id
+other stable key
+```
+
+### What mistake matters
+
+```text
+false positives
+false negatives
+large regression errors
+poor ranking
+miscalibration
+```
+
+### Which populations must be protected
+
+```text
+region
+customer type
+product
+risk class
+```
+
+### What comparison is meaningful
+
+```text
+previous version
+control group
+historical baseline
+SLO-like quality target
+```
+
+### What action follows degradation
+
+```text
+investigate
+rollback
+fallback
+retrain
+change threshold
+```
+
+Those questions determine the monitoring design. Putting everything together:
+
+```text
+                     PRODUCTION REQUEST
+                            │
+                            ▼
+                         MODEL
+                            │
+                            ▼
+                       PREDICTION
+                         │     │
+                         │     └────► user/system
+                         │
+                         ▼
+                 prediction record
+                         │
+                         │
+                 real world unfolds
+                         │
+                         ▼
+                     OUTCOME
+                         │
+                         ▼
+               join by stable identity
+                         │
+                         ▼
+                eligible/mature cohort
+                         │
+                         ▼
+               calculate quality metric
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+          baseline               segments
+              │                     │
+              └──────────┬──────────┘
+                         ▼
+                  detect degradation
+                         │
+                         ▼
+                 validate measurement
+                         │
+                         ▼
+                    investigate
+                         │
+       ┌─────────────────┼─────────────────┐
+       ▼                 ▼                 ▼
+    model             data             labels
+       │                 │                 │
+       └─────────────────┼─────────────────┘
+                         ▼
+                       action
+                         │
+                         ▼
+              rollback / fix / retrain
+                         │
+                         ▼
+                      deploy
+                         │
+                         └────────► measure again
+```
+
+That is the actual feedback loop. Imagine a credit-risk model. At 10:00:
+
+```text
+prediction_id     = P4021
+model_version     = credit-v14
+prob_default      = 0.18
+decision          = APPROVE
+```
+
+The system stores the prediction record. Six months later:
+
+```text
+prediction_id = P4021
+actual_default = true
+```
+
+That prediction becomes:
+
+```text
+false negative
+```
+
+Thousands of matured records are joined. The dashboard reports:
+
+```text
+v13:
+recall = 81%
+
+v14:
+recall = 68%
+```
+
+But further segmentation reveals:
+
+```text
+existing customers:
+recall = 82%
+
+new customers:
+recall = 43%
+```
+
+Feature monitoring shows:
+
+```text
+new-customer income feature
+missingness = 38%
+```
+
+Tracing and logs reveal a feature-pipeline problem introduced during the v14 rollout. The causal story becomes:
+
+```text
+new feature pipeline
+       ↓
+income often missing
+       ↓
+fallback value used
+       ↓
+default-risk scores too low
+       ↓
+high-risk applicants approved
+       ↓
+false negatives increase
+       ↓
+recall falls
+```
+
+The team fixes the feature pipeline rather than blindly retraining the model. After sufficient new outcomes mature, quality monitoring confirms recovery. That is why monitoring is not just about computing a metric. It is about creating a reliable chain from:
+
+```text
+prediction
+→ outcome
+→ measurement
+→ diagnosis
+→ action
+→ verification
+```
+
+The deepest idea is that **prediction quality cannot be known from the prediction alone**. You need to observe what eventually happened. So:
+
+```text
+Prediction
+     │
+     │ stored with identity/version/time
+     ▼
+Future outcome
+     │
+     ▼
+Join
+     │
+     ▼
+Comparable mature cohort
+     │
+     ▼
+Metric matching real mistake
+     │
+     ▼
+Compare by release and population
+     │
+     ▼
+Detect meaningful degradation
+     │
+     ▼
+Investigate cause
+     │
+     ▼
+Take controlled action
+     │
+     ▼
+Measure again
+```
+
+The central principle is:
+
+> **Monitoring prediction quality means continuously connecting deployed predictions to trustworthy real-world outcomes, measuring the kinds of mistakes that actually matter, and using that evidence to decide whether the model, data, policy, or surrounding system needs to change.**
+
+And the most important practical distinction is:
+
+**Metrics like drift, confidence, or prediction distribution can warn you early, but only outcomes let you directly measure whether the predictions were actually good.**
 
 ![Prediction-quality response summary that verifies evidence before branching to measurement repair or model-decline containment, evaluation, controlled release, and mature confirmation](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/prediction-quality-response-summary.png)
 
 *A quality alert first tests the evidence path. Broken measurement is repaired and revised; a real model decline enters containment, comparison, shadowing, canary release, and mature confirmation.*
 
-## References
+## Check Your Answers
 
-- [Google Rules of ML: monitoring](https://developers.google.com/machine-learning/guides/rules-of-ml#monitoring)
-- [scikit-learn model evaluation](https://scikit-learn.org/stable/modules/model_evaluation.html)
-- [Evidently classification quality](https://docs.evidentlyai.com/metrics/preset_classification)
-- [MLflow 3 model and dataset metric links](https://mlflow.org/docs/latest/ml/tracking/#linking-metrics-to-models-and-datasets)
-- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
-- [Great Expectations Checkpoints and Actions](https://docs.greatexpectations.io/docs/core/trigger_actions_based_on_results/create_a_checkpoint_with_actions/)
-- [Azure Machine Learning model monitoring](https://learn.microsoft.com/en-us/azure/machine-learning/concept-model-monitoring?view=azureml-api-2)
-- [Google Model Monitoring overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-monitoring/overview)
-- [Databricks AI Gateway inference tables](https://docs.databricks.com/aws/en/ai-gateway/inference-tables-serving-endpoints)
-- [Amazon SageMaker Model Monitor availability change](https://docs.aws.amazon.com/sagemaker/latest/dg/model-monitor-custom-monitoring-schedules.html)
-- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Evidence Connects a Production Prediction to Its Outcome?]{kind="recap"}
+Production quality starts with a stable prediction event joined to a matured real-world outcome and enough versioned context to reproduce what happened.
+:::
+
+:::expand[How Do Delayed, Imperfect, and Selective Labels Affect Quality Measurement?]{kind="recap"}
+Ground truth may arrive late, remain missing, contain errors, or depend on the model's action, so cohorts and release identity must define which cases are comparable.
+:::
+
+:::expand[Which Quality Metrics Match Classification, Regression, Probability, and Ranking Tasks?]{kind="recap"}
+Confusion-matrix measures, cost, regression errors, calibration, ranking outcomes, and multidimensional guardrails answer different production-quality questions.
+:::
+
+:::expand[How Do Segments, Sample Size, Missing Labels, Drift, Baselines, and Shadow Results Change Interpretation?]{kind="recap"}
+Averages need segment denominators and uncertainty, while drift and prediction distributions are proxies; baseline and shadow comparisons add evidence without replacing outcomes.
+:::
+
+:::expand[When Should a Quality Signal Create an Alert and Investigation?]{kind="recap"}
+Quality alerts use slower and noisier evidence than service alerts, so they need persistence, effect size, uncertainty, actionability, and a check that the monitor itself is healthy.
+:::
+
+:::expand[What Should an End-to-End Quality Dashboard Show?]{kind="recap"}
+The fraud example and dashboard combine metric values with label freshness, denominators, segments, windows, baselines, release identity, and the data needed for investigation.
+:::
+
+:::expand[How Does Quality Monitoring Diagnose Models, Data, Policies, Labels, and Business Outcomes?]{kind="recap"}
+A quality change can come from the model, data pipeline, population, concept, decision policy, labels, measurement, or product, and business quality remains a separate outcome.
+:::
+
+:::expand[How Do You Build the Complete Monitoring Loop Backwards from a Decision?]{kind="recap"}
+The complete loop starts from the decision that must be protected, records predictions, waits for valid outcomes, measures comparable cohorts, investigates causes, and feeds verified evidence into action.
+:::

@@ -12,425 +12,2468 @@ aliases:
 
 ## Table of Contents
 
-1. [What A/B Testing Can Tell You About Product Impact](#what-ab-testing-can-tell-you-about-product-impact)
-2. [A Rollout and an Experiment Answer Different Questions](#a-rollout-and-an-experiment-answer-different-questions)
-3. [The Terms Used In A Controlled Experiment](#the-terms-used-in-a-controlled-experiment)
-4. [Choose What Gets Randomly Assigned](#choose-what-gets-randomly-assigned)
-5. [Record Assignment, Exposure, And Outcome Separately](#record-assignment-exposure-and-outcome-separately)
-6. [Choose Metrics That Can Decide The Experiment](#choose-metrics-that-can-decide-the-experiment)
-7. [Handle Delayed Outcomes and Decision Policies](#handle-delayed-outcomes-and-decision-policies)
-8. [Plan How Many Units And How Long To Run The Test](#plan-how-many-units-and-how-long-to-run-the-test)
-9. [Analyze The Same Population That Was Randomized](#analyze-the-same-population-that-was-randomized)
-10. [Check Experiment Integrity Before Reading The Result](#check-experiment-integrity-before-reading-the-result)
-11. [Avoid Time Bias And Repeated-Testing Errors](#avoid-time-bias-and-repeated-testing-errors)
-12. [Detect Interference And Feedback Loops](#detect-interference-and-feedback-loops)
-13. [Build Reliable Assignment, Logging, And Outcome Pipelines](#build-reliable-assignment-logging-and-outcome-pipelines)
-14. [Write the Decision Rules Before Launch](#write-the-decision-rules-before-launch)
-15. [Know Where Randomized Testing Is Inappropriate](#know-where-randomized-testing-is-inappropriate)
-16. [The Main Idea](#the-main-idea)
-17. [References](#references)
+1. [How Does Random Assignment Estimate the Causal Effect of an ML Product Change?](#how-does-random-assignment-estimate-the-causal-effect-of-an-ml-product-change)
+2. [How Do Randomization Unit, Eligibility, Assignment, Exposure, and Intention-to-Treat Fit Together?](#how-do-randomization-unit-eligibility-assignment-exposure-and-intention-to-treat-fit-together)
+3. [How Should Primary, Guardrail, Proxy, Delayed, and Windowed Metrics Be Defined?](#how-should-primary-guardrail-proxy-delayed-and-windowed-metrics-be-defined)
+4. [How Do Sample Size, Power, Intervals, Integrity Checks, and the Analysis Unit Support Valid Results?](#how-do-sample-size-power-intervals-integrity-checks-and-the-analysis-unit-support-valid-results)
+5. [How Do Peeking, Multiple Tests, Interference, Feedback, Novelty, and Learning Threaten the Experiment?](#how-do-peeking-multiple-tests-interference-feedback-novelty-and-learning-threaten-the-experiment)
+6. [How Do Durable Assignment, Exposure, Outcome Data, Precommitment, and Staged Release Operate the Test?](#how-do-durable-assignment-exposure-outcome-data-precommitment-and-staged-release-operate-the-test)
+7. [How Do Worked Results, Heterogeneity, Variance Reduction, Constraints, and Inappropriate Cases Shape Decisions?](#how-do-worked-results-heterogeneity-variance-reduction-constraints-and-inappropriate-cases-shape-decisions)
+8. [What Checklist and Mental Model Define a Trustworthy ML A/B Test?](#what-checklist-and-mental-model-define-a-trustworthy-ml-ab-test)
+9. [Check Your Answers](#check-your-answers)
 
-## What A/B Testing Can Tell You About Product Impact
-<!-- section-summary: An ML A/B test estimates whether a model-driven product change caused a meaningful change in user or business outcomes. -->
+A recommendation model increases clicks after a gradual rollout. That does not establish that the model caused the increase; the exposed users, time period, or traffic mix may also have changed. To estimate a causal effect, the product needs comparable alternative realities.
 
-Suppose a team wants to know whether a new ranking model improves successful searches rather than merely changing an offline score. An **A/B test** makes a fair comparison between the current and candidate product experiences. Eligible users, accounts, devices, or other units are randomly placed into groups, and the team compares real outcomes.
+An **A/B test** assigns eligible units randomly to stable treatments and measures outcomes under a predeclared analysis. Assignment, actual exposure, and observed outcome are different events. The design must also control interference, delayed effects, peeking, multiple metrics, data joins, and safety guardrails.
 
-The word **causal** matters here. A causal question asks whether the candidate experience produced the observed change. A dashboard may show that users served by a new ranking model purchased more items. That pattern alone leaves several other explanations open: those users may come from a higher-spending region, the comparison may span different days, or a marketing campaign may have reached one group first. Random assignment gives every eligible unit the same chance of entering either group, so these background differences tend to balance.
+These questions follow the experiment from causal objective and randomization through production operation and the final product decision:
 
-Consider a candidate search-ranking model with a higher offline relevance score. The product decision is still unresolved. Users may find answers faster, scroll through more irrelevant results, abandon the page, or receive slower responses. The experiment turns that uncertainty into a precise question.
+1. **How Does Random Assignment Estimate the Causal Effect of an ML Product Change?**
+2. **How Do Randomization Unit, Eligibility, Assignment, Exposure, and Intention-to-Treat Fit Together?**
+3. **How Should Primary, Guardrail, Proxy, Delayed, and Windowed Metrics Be Defined?**
+4. **How Do Sample Size, Power, Intervals, Integrity Checks, and the Analysis Unit Support Valid Results?**
+5. **How Do Peeking, Multiple Tests, Interference, Feedback, Novelty, and Learning Threaten the Experiment?**
+6. **How Do Durable Assignment, Exposure, Outcome Data, Precommitment, and Staged Release Operate the Test?**
+7. **How Do Worked Results, Heterogeneity, Variance Reduction, Constraints, and Inappropriate Cases Shape Decisions?**
+8. **What Checklist and Mental Model Define a Trustworthy ML A/B Test?**
 
-**Experiment question:** Does the candidate ranker increase successful searches per eligible user while search abandonment, harmful-result reports, and response latency remain inside agreed limits?
+## How Does Random Assignment Estimate the Causal Effect of an ML Product Change?
+<!-- section-summary: An A/B test uses randomized potential alternatives to estimate a causal product effect that cannot be observed for the same unit in both realities. -->
 
-The model is one part of the change. The experiment evaluates the experience created by the model, its features, serving path, thresholds, fallbacks, and surrounding product policy.
+A rollout shows whether a system survives limited exposure, while an experiment estimates what would have happened under an alternative treatment.
 
-```mermaid
-flowchart TD
-    Q["Product question"] --> H["Testable hypothesis"]
-    H --> R["Random assignment"]
-    R --> C["Control experience"]
-    R --> T["Treatment experience"]
-    C --> O["Comparable outcome measurement"]
-    T --> O
-    O --> D["Ship, stop, iterate, or rerun"]
+ML A/B testing answers a question that offline evaluation and ordinary deployment monitoring cannot reliably answer:
+
+**What changed in the real product because users were served Model B instead of Model A?**
+
+That sounds simple, but it is fundamentally a **causal inference** problem. Suppose:
+
+```text
+Model A → 8.2% purchase rate
+Model B → 8.8% purchase rate
 ```
 
-## A Rollout and an Experiment Answer Different Questions
-<!-- section-summary: A rollout limits release risk, while a controlled experiment estimates product impact. -->
+Can we conclude that Model B caused the improvement? Not necessarily. Perhaps B happened to serve:
 
-A **rollout** asks, “Can we deliver this change safely?” A **controlled experiment** asks, “Did this change improve the product?” Both practices may split traffic, yet the reason for the split is different.
+```text
+more returning customers
+more users in high-income regions
+more weekend traffic
+more mobile users
+```
 
-During a canary rollout, a team may send a small percentage of requests to a candidate endpoint and watch errors, latency, saturation, and rollback signals. That protects production from a faulty container, incompatible feature lookup, or expensive inference path. The canary can pass every operational check even if the candidate produces worse decisions.
+The purpose of a controlled experiment is to make those alternative explanations implausible. The central mechanism is **random assignment**. Imagine an ML recommendation system. Current production model:
 
-A baseline-versus-canary dashboard also gives weak causal evidence. Canary traffic may come from one cluster, one region, or one time window. Returning users may cross between versions. A weighted endpoint can route one request to the candidate and the next request from the same person to the baseline. These differences make the groups harder to compare as product populations.
+```text
+Model A
+```
 
-An A/B test adds the missing experimental controls: a declared population, random assignment, stable group membership, exposure records, outcome definitions, and a statistical decision plan. The release system still owns health checks and rollback. The experiment system owns the product comparison.
+Candidate:
 
-Cloud endpoints from SageMaker AI, Gemini Enterprise Agent Platform Endpoints, Azure Machine Learning, and Databricks Model Serving can distribute requests across deployments. Their traffic weights are valuable delivery controls. Stable user cohorts, exposure-to-outcome joins, and statistical analysis still require an experiment layer or equivalent application logic.
+```text
+Model B
+```
+
+Offline evaluation says:
+
+```text
+Precision@10
+
+A = 0.31
+B = 0.35
+```
+
+So B looks better. But the product does not fundamentally care about:
+
+```text
+Precision@10
+```
+
+It may actually care about:
+
+```text
+purchases
+watch time
+successful searches
+retention
+revenue
+customer satisfaction
+```
+
+A model can improve an offline metric while hurting the product.
+
+For example:
+
+```text
+Model B
+   ↓
+more clickable recommendations
+   ↓
+users click more
+   ↓
+recommendations are repetitive
+   ↓
+long-term satisfaction falls
+```
+
+Or:
+
+```text
+Model B
+   ↓
+higher ranking relevance
+   ↓
+more expensive inference
+   ↓
+page becomes slower
+   ↓
+conversion falls
+```
+
+Therefore offline evaluation answers:
+
+How does B perform on a dataset under an evaluation procedure
+
+An A/B test asks:
+
+What happens to the real system when eligible units actually experience B instead of A
+
+Those are different questions. Suppose Alice sees Model B. We observe:
+
+```text
+Alice + Model B → purchase
+```
+
+What we really want to know is:
+
+```text
+Would Alice also have purchased
+if she had received Model A
+```
+
+But we cannot go back in time and run the same Alice through an alternate universe. For each user there are conceptually two possible outcomes:
+
+```text
+Y(A) = outcome if assigned Model A
+Y(B) = outcome if assigned Model B
+```
+
+But we can observe only one:
+
+```text
+Alice receives A → observe Y(A)
+
+or
+
+Alice receives B → observe Y(B)
+```
+
+Never both simultaneously. This is the fundamental problem of causal inference. Instead of comparing the same individual to themselves, we create two statistically comparable groups. Randomly assign many users:
+
+```text
+Eligible users
+      |
+      | random assignment
+      |
+   ┌──┴──┐
+   v     v
+   A     B
+control treatment
+```
+
+Because the assignment is random, sufficiently large groups should be similar, on average, in characteristics unrelated to the experiment.
+
+For example:
+
+```text
+                 A              B
+
+Returning users  42.1%          42.0%
+Mobile users     61.4%          61.6%
+Avg. age         similar        similar
+Region mix       similar        similar
+Traffic time     similar        similar
+```
+
+The important difference is:
+
+```text
+A gets Model A
+B gets Model B
+```
+
+Therefore if outcomes systematically differ:
+
+```text
+E[Y | B] - E[Y | A]
+```
+
+we can attribute that difference to the treatment, subject to the experiment's assumptions. That is the first-principles reason randomization works. Suppose purchase rate is:
+
+```text
+Control A:   8.0%
+Treatment B: 8.6%
+```
+
+The estimated absolute effect is:
+
+```text
+8.6% - 8.0%
+= +0.6 percentage points
+```
+
+The relative effect is:
+
+```text
+(8.6 - 8.0) / 8.0
+= 7.5%
+```
+
+These are different statements.
+
+```text
+absolute lift = +0.6 percentage points
+
+relative lift = +7.5%
+```
+
+It is usually worth reporting both. But statistical uncertainty matters too. The observed difference could partly reflect random variation. That leads to confidence intervals, statistical tests, and statistical power, which we will get to. This distinction is extremely important in release management. A **canary rollout** might ask:
+
+Is Model B safe enough to expose to more traffic
+
+An **A/B experiment** asks:
+
+What causal effect does Model B have relative to Model A
+
+Consider:
+
+```text
+Model A → 95%
+Model B → 5%
+```
+
+This could be a canary. You might monitor:
+
+```text
+error rate
+latency
+crashes
+GPU memory
+safety incidents
+prediction distribution
+```
+
+If everything looks healthy, increase B to 20%. But that does not automatically make it a valid experiment. Perhaps traffic was assigned like this:
+
+```text
+first 5% of traffic each minute → B
+```
+
+or:
+
+```text
+European region → B
+everything else → A
+```
+
+Now differences may reflect the population rather than the model. An experiment requires deliberate assignment that supports causal comparison. A rollout is primarily:
+
+```text
+Candidate
+   ↓
+limited exposure
+   ↓
+safe
+   ↓
+more exposure
+```
+
+An A/B test is primarily:
+
+```text
+Eligible population
+      |
+   randomize
+    /     \
+   A       B
+    \     /
+     outcomes
+        ↓
+causal comparison
+```
+
+You can combine them.
+
+For example:
+
+```text
+Stage 1: 1% canary
+         safety only
+
+Stage 2: 50/50 A/B experiment
+         product impact
+
+Stage 3: 100% rollout
+         if experiment wins
+```
+
+Each stage answers a different question. It helps to establish precise terms. Suppose we're testing recommendation Model B.
+
+### Control
+
+The existing baseline:
+
+```text
+Model A
+```
+
+### Treatment
+
+The change being tested:
+
+```text
+Model B
+```
+
+### Experimental unit
+
+The thing randomly assigned.
+
+For example:
+
+```text
+user
+```
+
+### Assignment
+
+Which group the unit is allocated to:
+
+```text
+User 42 → treatment
+```
+
+### Exposure
+
+Whether the unit actually encountered the treatment.
+
+For example:
+
+```text
+User 42 was assigned B
+but never opened the recommendation page
+```
+
+means:
+
+```text
+assigned = B
+exposed = no
+```
+
+### Outcome
+
+What happened afterward:
+
+```text
+purchase
+click
+watch time
+retention
+revenue
+```
+
+### Primary metric
+
+The main quantity used to judge the experiment.
+
+For example:
+
+```text
+purchase conversion
+```
+
+### Guardrail metric
+
+A measure that must not deteriorate excessively.
+
+For example:
+
+```text
+latency
+complaints
+cancellations
+safety violations
+```
+
+These concepts should be distinct in your data model.
+
+## How Do Randomization Unit, Eligibility, Assignment, Exposure, and Intention-to-Treat Fit Together?
+<!-- section-summary: The assignment unit matches interference, stable randomization follows predeclared eligibility, and intention-to-treat keeps assignment distinct from exposure and outcome. -->
+
+Randomization supports that causal comparison only when the unit, eligibility, assignment, exposure, and analysis preserve the design.
+
+Suppose you randomly assign **requests**:
+
+```text
+Request 1 from Alice → A
+Request 2 from Alice → B
+Request 3 from Alice → A
+```
+
+This might be fine for an independent image-classification API. It can be terrible for a recommendation system. Alice's experience becomes inconsistent:
+
+```text
+homepage → A
+product page → B
+homepage → B
+```
+
+The versions can influence one another through the user's behavior. Instead, assign by user:
+
+```text
+hash(user_id) → group
+
+Alice → B
+Bob   → A
+Carol → B
+```
+
+Now Alice consistently receives B. Possible randomization units include:
+
+```text
+request
+session
+conversation
+user
+device
+account
+household
+organization
+school
+store
+city
+country
+```
+
+Ask:
+
+At what level can one treatment exposure influence later outcomes
+
+For a chatbot:
+
+```text
+conversation
+```
+
+may be better than individual turns. For enterprise SaaS:
+
+```text
+organization
+```
+
+may be better than users because employees interact. For a marketplace:
+
+```text
+geographic market
+```
+
+may sometimes be necessary because buyers and sellers affect each other. A badly chosen unit can invalidate the causal interpretation. A common mechanism is deterministic hashing.
+
+Conceptually:
+
+```text
+bucket = hash(experiment_id, user_id) mod 10000
+```
+
+Then:
+
+```text
+0–4999    → control
+5000–9999 → treatment
+```
+
+Alice always hashes into the same group for that experiment. This gives:
+
+```text
+random-like distribution
++
+stable assignment
+```
+
+Stable assignment is important because you generally do not want:
+
+```text
+Monday: Alice → A
+Tuesday: Alice → B
+Wednesday: Alice → A
+```
+
+unless the experiment was explicitly designed as a crossover study. Suppose your new model affects only search. Your population might be:
+
+```text
+logged-in users
+AND
+country in supported countries
+AND
+search feature enabled
+AND
+not internal employee account
+```
+
+First determine:
+
+```text
+eligible
+```
+
+Then randomize.
+
+Conceptually:
+
+```text
+All traffic
+    ↓
+Eligibility filter
+    ↓
+Eligible units
+    ↓
+Random assignment
+   / \
+  A   B
+```
+
+Otherwise differences in eligibility logic can contaminate the experiment. This distinction is essential for reliable experiments. Suppose:
+
+```text
+User 42
+```
+
+gets assigned to B at 10:00. But she does not open the product until 14:00. Then purchases at 16:00. You have three separate facts:
+
+```text
+10:00 assignment:
+User 42 → B
+
+14:00 exposure:
+User 42 actually received B recommendations
+
+16:00 outcome:
+User 42 purchased
+```
+
+Do not collapse all three into one event. Suppose 10,000 users are assigned:
+
+```text
+5,000 → A
+5,000 → B
+```
+
+But only:
+
+```text
+1,000 A users open the feature
+1,300 B users open the feature
+```
+
+Perhaps B itself influences whether users return to the feature. If you analyze only people who were exposed:
+
+```text
+1,000 A vs 1,300 B
+```
+
+you have selected people based on behavior that may be affected by treatment. That can destroy randomization. This is one reason the main analysis often uses the population that was **assigned**, not merely the population eventually observed using the feature. Suppose assignment is:
+
+```text
+A group → intended to receive A
+B group → intended to receive B
+```
+
+Some members may not actually experience the model. The **intention-to-treat**, or ITT, analysis compares:
+
+```text
+everyone assigned B
+vs
+everyone assigned A
+```
+
+regardless of actual treatment exposure. Why? Because assignment was randomized. Exposure often was not. Therefore ITT preserves the causal guarantee created by randomization. Imagine:
+
+```text
+B makes recommendations much more attractive
+```
+
+Therefore treatment users visit the recommendation screen more frequently. If you compare:
+
+```text
+people who saw A
+vs
+people who saw B
+```
+
+you have selected different populations. The B population contains people whose exposure may itself have been caused by B. That introduces selection bias. The original assignment is cleaner:
+
+```text
+assigned A
+vs
+assigned B
+```
+
+ITT does not mean exposure can be ignored. You should separately measure:
+
+```text
+assignment rate
+actual exposure rate
+treatment delivery failures
+crossovers
+```
+
+Suppose:
+
+```text
+Assigned B: 50,000 users
+Actually served B: 31,000
+```
+
+That may reveal a deployment bug. Or perhaps the feature is naturally encountered by only 62% of users. Either way, exposure helps you understand the mechanism. Just do not casually replace randomized assignment with post-treatment selection.
 
 ![A comparison of a rollout and a controlled experiment showing that weighted delivery traffic answers operational safety questions while random stable assignment and mature outcomes answer causal product questions.](/content-assets/articles/article-mlops-deployment-and-release-management-ab-testing-for-ml-products/rollout-versus-controlled-experiment.png)
 
 *Rollout controls limit operational risk; experiment controls create comparable product populations and measure whether the candidate caused a meaningful outcome.*
 
-## The Terms Used In A Controlled Experiment
-<!-- section-summary: A small set of terms describes who enters the experiment, what changes, what is measured, and how a decision is made. -->
+## How Should Primary, Guardrail, Proxy, Delayed, and Windowed Metrics Be Defined?
+<!-- section-summary: One primary product metric sits beside safety guardrails and mechanism proxies, with exact definitions and observation windows that respect delayed and late-arriving outcomes. -->
 
-Experiment discussions get confusing if “user,” “request,” and “exposure” are used as though they mean the same thing. The following terms describe separate parts of the design.
+A valid design still needs metrics tied to product value and safety and time windows long enough for outcomes to mature.
 
-### Treatment and control
+A weak experiment asks:
 
-The **control** is the current product experience. The **treatment** is the candidate experience under evaluation. For a fraud model, control might use the current model and review threshold; treatment might use a new model with a recalibrated threshold.
+What metrics should we look at afterward
 
-The comparison should capture the full behavior that differs. If treatment changes the model and threshold together, the experiment estimates their combined product effect. It cannot later prove how much came from each component without another experiment or a factorial design.
+A stronger experiment decides beforehand:
 
-### Random assignment and the experimental unit
+What result would make us launch or reject B
 
-**Random assignment** uses chance to place eligible units into control or treatment. The **experimental unit**, also called the randomization unit, is the entity being assigned: a request, user, device, account, store, city, or cluster.
+Suppose B is a ranking model. Possible metrics:
 
-Randomization creates comparable groups in expectation. Stable assignment keeps the selected experience consistent for the chosen unit. These are related requirements. A random result regenerated independently on every request can create a 50/50 traffic split while giving a single user a mixed experience.
-
-### Exposure and outcome
-
-An **assignment** says which group a unit belongs to. An **exposure** says that the unit actually encountered the changed experience. An **outcome** is the later event or measurement used to judge impact.
-
-For a recommendation test, opening the application can create an assignment. Rendering the recommendation rail creates an exposure. A saved item, skip, purchase, or later return visit creates an outcome. Keeping these events distinct reveals whether treatment was delivered and whether the outcome feed arrived.
-
-### Hypothesis, primary metric, and guardrail
-
-A **hypothesis** predicts a direction and a reason: “The candidate ranker will increase successful sessions because it places relevant results earlier.” The **primary metric** is the main numerical outcome used for the decision. A **guardrail metric** protects an area where harm would block launch, such as severe-error rate, cancellation rate, fairness disparity, or p95 latency.
-
-An **analysis population** defines whose outcomes enter the estimate. This choice deserves a written rule before launch because filtering people after observing their behavior can destroy the balance created by randomization.
-
-## Choose What Gets Randomly Assigned
-<!-- section-summary: The randomization unit should match the boundary across which the treatment can remain consistent and outcomes can remain reasonably independent. -->
-
-The best randomization unit follows the product interaction. Choose it by asking two questions: “Which entity needs a consistent experience?” and “Can one assigned entity affect another entity’s outcome?”
-
-### Request, user, and device units
-
-Request-level assignment can fit a stateless infrastructure optimization where each request stands alone. It usually fits poorly for personalization. A person who sees different recommendation policies across consecutive page loads may adapt to both, creating **crossover** between variants.
-
-User-level assignment fits signed-in products where behavior spans sessions and devices. Device-level assignment supports anonymous experiences, although the same person may use several devices and several people may share one device. A stable cookie or platform-generated stable identifier keeps an anonymous device in one group.
-
-### Account, location, and cluster units
-
-Account-level assignment fits team products because people inside one account share settings, workflows, and outcomes. Location-level assignment can fit store operations, logistics, or marketplace supply. Cluster assignment groups connected users, households, classrooms, or geographic areas if their actions influence each other.
-
-Larger units reduce contamination, yet they also reduce the number of independent observations. Ten thousand users inside twenty stores produce twenty randomized store units. The calculation therefore has twenty independent units, even though the experiment observes many more people. The sample-size calculation and statistical method must use the level of randomization.
-
-```mermaid
-flowchart TD
-    A["Does the experience need to stay consistent across sessions?"] -->|"Yes"| B["Use user or account"]
-    A -->|"No"| C["Can each request stand alone?"]
-    C -->|"Yes"| D["Request may fit"]
-    C -->|"No"| E["Use device or user"]
-    B --> F["Can assigned units affect each other?"]
-    E --> F
-    F -->|"Yes"| G["Randomize a location, household, or cluster"]
-    F -->|"No"| H["Keep the smaller stable unit"]
+```text
+click-through rate
+items purchased
+revenue per user
+latency
+return rate
+complaint rate
+session length
 ```
 
-The unit choice should also account for repeated sessions, shared inventory, and social effects. A pricing experiment can change remaining inventory for later shoppers. A feed-ranking experiment can change what creators produce. A fraud model can alter attacker behavior. Each case creates links between units that a simple user-level design may miss.
+If you inspect 50 metrics and choose whichever looks nicest after the experiment, you are giving randomness many opportunities to produce a "win." So metric roles should be defined before launch. You can divide metrics into several categories.
 
-## Record Assignment, Exposure, And Outcome Separately
-<!-- section-summary: Trustworthy experiments preserve stable assignment and record the actual product exposure that connects a model release to later outcomes. -->
+### Primary decision metric
 
-Stable assignment is the foundation. You can think of it as attaching a durable experiment label to the chosen unit. A person assigned to treatment on one visit receives treatment again on later visits. This consistency protects the product experience and keeps behavior connected to one experimental group.
+The main success criterion.
 
-A common implementation hashes an experiment identifier together with a persistent unit identifier, then maps the result into a bucket. The hash converts the two identifiers into a repeatable number. A percentage range maps that number to control or treatment, so the same inputs return the same group.
+For example:
 
-```python
-from hashlib import sha256
-
-def variant(experiment: str, unit_id: str) -> str:
-    digest = sha256(f"{experiment}:{unit_id}".encode()).digest()
-    bucket = int.from_bytes(digest[:8], "big") % 10_000
-    return "treatment" if bucket < 5_000 else "control"
+```text
+purchase conversion
 ```
 
-Production teams commonly obtain this behavior from Statsig, LaunchDarkly, Optimizely, or an internal allocation service. A managed service adds reviewed targeting, persistent assignment, holdouts, audit history, and experiment health checks. An internal allocator carries the same responsibilities and needs careful testing around salts, allocation changes, identifier loss, and concurrent experiments.
+### Guardrails
 
-Assignment alone cannot prove delivery. A user may be assigned to treatment and never open the screen that calls the model. The application should write an exposure at the point where the model-driven result reaches the product experience. That record should include:
+Must remain within acceptable limits:
 
-- experiment and variant identity;
-- randomization-unit identifier or governed join key;
-- exposure time and product surface;
-- model registry name and immutable model version;
-- release, feature, and policy versions;
-- prediction or trace identifier for operational investigation.
-
-Model identity matters because an endpoint name can move between artifacts during a long-running experiment. Policy identity matters because a threshold, eligibility rule, post-ranking filter, or fallback can change the decision users receive even if the model artifact stays fixed.
-
-The join key should support outcome analysis without copying unrestricted personal data into every telemetry system. A governed pseudonymous identifier, documented retention policy, and access-controlled mapping table are common choices.
-
-```mermaid
-flowchart TD
-    E["Eligible unit"] --> A["Stable assignment record"]
-    A --> P["Product requests decision"]
-    P --> X["Exposure record: variant + model + policy"]
-    X --> O["Outcome arrives now or later"]
-    A --> I["Intent-to-treat population"]
-    O --> I
-    X --> V["Delivery and triggered-analysis checks"]
+```text
+p95 latency
+refund rate
+safety violation rate
+customer complaints
 ```
+
+### Secondary metrics
+
+Useful evidence:
+
+```text
+click-through rate
+items per session
+average order value
+```
+
+### Diagnostic metrics
+
+Help explain what happened:
+
+```text
+model score distribution
+number of recommendations rendered
+feature-load success rate
+```
+
+This prevents every metric from being treated as equally decisive. Suppose Model B improves:
+
+```text
+CTR:
+10% → 12%
+```
+
+but reduces:
+
+```text
+purchases:
+3.1% → 2.7%
+```
+
+If the business ultimately cares about purchases, declaring victory based on CTR would be a mistake. CTR is an intermediate outcome:
+
+```text
+recommendation
+      ↓
+click
+      ↓
+evaluation
+      ↓
+purchase
+```
+
+A model can optimize an early stage while harming the final objective. This is particularly common in ML because models are often trained on proxy objectives. Suppose customer retention takes 90 days to observe. Waiting 90 days for every model iteration may be impractical. You might use:
+
+```text
+7-day activity
+```
+
+as an early proxy. But it should be treated as:
+
+Evidence correlated with what we ultimately care about.
+
+not:
+
+The final objective by definition.
+
+Good experimentation often uses:
+
+```text
+fast proxy metric
++
+slower true outcome
+```
+
+and continually validates that the proxy predicts the real objective. Consider:
+
+```text
+conversion rate
+```
+
+What exactly does that mean? Possibilities include:
+
+```text
+purchases / sessions
+
+users purchasing / eligible users
+
+purchases / recommendation impressions
+
+purchases within 24 hours / assigned users
+
+purchases within 7 days / exposed users
+```
+
+These can produce very different answers. An experiment specification should define:
+
+```text
+numerator
+denominator
+population
+time window
+attribution rules
+aggregation unit
+```
+
+For example:
+
+```text
+Primary metric:
+Percentage of randomly assigned users
+who complete at least one purchase
+within 7 days after assignment.
+```
+
+Now the metric is reproducible. Suppose the primary outcome is:
+
+```text
+purchase within 7 days
+```
+
+User A entered the experiment eight days ago. You know their full outcome window. User B entered yesterday. You don't. If you compare them immediately, recent participants have had less opportunity to convert. This is called an **immature outcome** problem. If your outcome is:
+
+```text
+7-day retention
+```
+
+then a user assigned today cannot contribute a finalized retention outcome tomorrow. You generally need:
+
+```text
+assignment date
+        +
+7 days
+        ↓
+outcome mature
+```
+
+So an experiment may stop accepting new participants on Friday but continue waiting for outcomes:
+
+```text
+Enrollment:
+Mon ───────── Fri
+
+Outcome maturation:
+               ───────── Fri+7
+```
+
+This difference between **experiment enrollment** and **analysis readiness** is important. Even if the outcome happened, your data pipeline may not know yet. Example:
+
+```text
+10:00 purchase occurs
+10:15 event sent
+11:00 warehouse ingest
+14:00 attribution pipeline completes
+```
+
+If you read metrics at 10:30:
+
+```text
+purchase appears missing
+```
+
+A reliable experiment system understands data latency. Possible rules include:
+
+```text
+only analyze data at least 24h old
+```
+
+or:
+
+```text
+wait until outcome completeness > 99.9%
+```
+
+Suppose Model B changes user behavior for weeks. A one-hour experiment may detect immediate clicks but miss:
+
+```text
+novelty effects
+user adaptation
+repeat usage
+long-term dissatisfaction
+retention effects
+```
+
+Your experimental duration needs to be long enough to capture the phenomena you care about. Experiment duration is therefore not merely about obtaining enough traffic. It is also about observing the relevant temporal dynamics. Traffic differs with time.
+
+For example:
+
+```text
+Monday ≠ Saturday
+
+morning ≠ evening
+
+holiday ≠ normal day
+```
+
+Randomization protects A and B from many contemporaneous differences because both groups run at the same time. But running an experiment for too short a period can still give you a population unrepresentative of normal product usage. For many products, tests should span full business cycles such as:
+
+```text
+at least one complete week
+```
+
+depending on the metric and traffic pattern.
+
+## How Do Sample Size, Power, Intervals, Integrity Checks, and the Analysis Unit Support Valid Results?
+<!-- section-summary: Minimum detectable effect, power, errors, confidence intervals, analysis unit, sample-ratio checks, delivery checks, balance, and A/A tests establish precision and integrity. -->
+
+Those outcomes have noise, so sample planning, interval estimates, and integrity checks must precede interpretation.
+
+Suppose the true conversion rates are:
+
+```text
+A = 10.0%
+B = 10.1%
+```
+
+That difference is tiny. To distinguish it reliably from random fluctuation, you may need a very large experiment. If instead:
+
+```text
+A = 10%
+B = 20%
+```
+
+the signal is enormous and much less data is needed. Fundamentally:
+
+```text
+required sample size increases
+when the effect you want to detect gets smaller
+```
+
+and:
+
+```text
+required sample size increases
+when outcome variability gets larger
+```
+
+Before launching, ask:
+
+What is the smallest improvement that would actually matter
+
+This is often called the **minimum detectable effect**, or MDE. Suppose increasing conversion from:
+
+```text
+10.00% → 10.01%
+```
+
+has negligible business value. Perhaps you only care about an improvement of:
+
+```text
+at least +0.5 percentage points
+```
+
+Designing the experiment around a meaningful MDE helps prevent absurd sample-size requirements for economically irrelevant differences. Suppose B genuinely improves the product by the MDE. A powerful experiment should have a high probability of detecting that effect. Typical planning parameters include:
+
+```text
+baseline metric
+minimum detectable effect
+significance level α
+desired statistical power
+metric variance
+allocation ratio
+```
+
+Common conventions are:
+
+```text
+α = 0.05
+power = 80% or 90%
+```
+
+but these are conventions, not natural laws. The appropriate values depend on the consequences of wrong decisions. Imagine the truth can be:
+
+```text
+B has no useful improvement
+
+or
+
+B really improves the product
+```
+
+The experiment can conclude:
+
+```text
+launch B
+
+or
+
+do not launch B
+```
+
+This creates two important error types.
+
+### False positive
+
+Conclude B is better when it isn't.
+
+```text
+false win
+```
+
+### False negative
+
+Fail to detect a genuinely useful B.
+
+```text
+missed win
+```
+
+Experiment design chooses how much risk to accept from each. Suppose we test 20 users:
+
+```text
+A: 10 users
+B: 10 users
+```
+
+One purchase changes conversion by:
+
+```text
+10 percentage points
+```
+
+The metric is extremely noisy. Now test:
+
+```text
+1,000,000 users
+```
+
+One additional purchase barely moves the estimate. As sample size grows, random imbalance tends to shrink relative to the population. Roughly:
+
+```text
+uncertainty ∝ 1 / √n
+```
+
+So cutting uncertainty in half generally requires about:
+
+```text
+4× the sample
+```
+
+not 2×. That square-root relationship is an important intuition. Suppose the estimated effect is:
+
+```text
++0.8%
+```
+
+An interval might be:
+
+```text
+95% CI: [+0.2%, +1.4%]
+```
+
+That says the data are reasonably consistent with a meaningful positive effect and less consistent with zero or negative effects, under the model used. Compare that with:
+
+```text
++0.8%
+95% CI: [-2.5%, +4.1%]
+```
+
+Same point estimate. Very different evidence. The second experiment is too uncertain to say much. So focus on:
+
+```text
+estimated effect
++
+uncertainty
+```
+
+rather than only a p-value. Suppose:
+
+```text
++0.01% conversion
+```
+
+with 500 million users becomes statistically significant. That does not automatically mean it matters. Conversely:
+
+```text
++5% revenue
+```
+
+from a small pilot may fail conventional significance thresholds because the sample is too small. The product decision should consider:
+
+```text
+effect size
+uncertainty
+business value
+risk
+cost
+```
+
+Statistical significance is only one piece. This is worth repeating because it is one of the most important principles. If randomization occurred at:
+
+```text
+user level
+```
+
+analysis should usually respect user-level assignment. Do not accidentally analyze:
+
+```text
+requests
+```
+
+as though they were independent observations. One user may generate:
+
+```text
+1 request
+```
+
+while another generates:
+
+```text
+500 requests
+```
+
+Treating requests as independent can make the experiment appear to have much more information than it actually does. Suppose:
+
+```text
+10,000 users
+```
+
+generate:
+
+```text
+2,000,000 requests
+```
+
+You do not necessarily have two million independent experimental units. Treatment was randomized over:
+
+```text
+10,000 users
+```
+
+Requests from the same user are correlated. Ignoring that correlation can make confidence intervals too narrow. Possible approaches include:
+
+```text
+aggregate outcomes per user
+
+or
+
+use statistical methods that account for clustering
+```
+
+The randomization structure and statistical analysis should agree. Suppose you intend:
+
+```text
+50% control
+50% treatment
+```
+
+but observe:
+
+```text
+Control:   512,381 users
+Treatment: 463,099 users
+```
+
+That imbalance is far larger than random chance would normally produce at this scale. Something may be wrong. Possible causes:
+
+```text
+assignment bug
+logging failure
+treatment crashes before logging
+eligibility mismatch
+bot filtering difference
+ID hashing problem
+```
+
+Do not immediately interpret business metrics. First investigate the experiment. If assignment is designed as:
+
+```text
+50/50
+```
+
+then approximately half the eligible units should enter each group. Small differences happen randomly. Large unexplained differences are called **sample ratio mismatch**, or SRM.
+
+Conceptually:
+
+```text
+expected:
+50% / 50%
+
+observed:
+54% / 46%
+```
+
+could indicate that your experiment infrastructure itself is broken. An SRM check should happen before deciding that B won or lost. Suppose assignment looks perfect:
+
+```text
+50,000 A
+50,000 B
+```
+
+but telemetry shows:
+
+```text
+A users receiving A: 99.9%
+
+B users receiving B: 71%
+```
+
+Then your treatment implementation has a major problem. Perhaps:
+
+```text
+B times out and falls back to A
+```
+
+or:
+
+```text
+some server versions don't support B
+```
+
+Assignment and actual delivery need separate instrumentation. Randomization should make groups similar on variables measured before treatment.
+
+For example:
+
+```text
+historical purchase rate
+device type
+region
+account age
+past activity
+```
+
+Large unexplained differences may indicate broken randomization. But an important nuance:
+
+Perfect balance is not required.
+
+Random assignment naturally produces some differences by chance. The purpose is mainly diagnostic, especially for extreme discrepancies. Suppose one group happens to contain slightly more mobile users. That does not automatically invalidate randomization. Randomization guarantees similarity **in expectation**, not exact equality for every variable in every realized experiment. Overreacting to ordinary imbalance can create unnecessary analysis flexibility. Predefined adjustment methods are better than improvising after seeing the results. Before testing A versus B, sometimes run:
+
+```text
+A versus A
+```
+
+Both groups receive the same model. Expected causal effect:
+
+```text
+0
+```
+
+If you consistently detect large differences, something may be wrong with:
+
+```text
+assignment
+logging
+metric computation
+statistics
+```
+
+A/A tests are especially useful when building a new experimentation platform. They are essentially testing the tester.
+
+## How Do Peeking, Multiple Tests, Interference, Feedback, Novelty, and Learning Threaten the Experiment?
+<!-- section-summary: Repeated peeking and many metrics create false wins; interference, feedback loops, cluster or switchback designs, novelty, and learning alter simple independence assumptions. -->
+
+Repeated looks, multiple choices, interference, feedback, novelty, and carryover can invalidate ordinary formulas even when traffic splitting works.
+
+Imagine a two-week experiment. Every hour someone checks:
+
+```text
+Is p < 0.05 yet
+```
+
+At hour 20:
+
+```text
+p = 0.12
+```
+
+Continue. Hour 50:
+
+```text
+p = 0.08
+```
+
+Continue. Hour 70:
+
+```text
+p = 0.048
+```
+
+Stop immediately and declare victory. This procedure is not equivalent to a single test at `α = 0.05`. You repeatedly gave random noise opportunities to cross the threshold. That inflates the false-positive rate. Imagine a perfectly fair coin. If you flip it:
+
+```text
+10 times
+```
+
+you might briefly see:
+
+```text
+8 heads
+2 tails
+```
+
+If you stop precisely when the coin looks unusually favorable, you create a biased stopping rule. The same principle applies to experiments. Random metrics fluctuate. If you continuously inspect them and stop whenever they look good, some tests will "win" through chance alone. This does not mean you must blindly ignore experiments until one predetermined date. You can use methods designed for sequential analysis, such as:
+
+```text
+group-sequential tests
+alpha spending
+sequential probability methods
+always-valid inference
+Bayesian decision procedures
+```
+
+The important principle is:
+
+The statistical analysis must account for the stopping policy.
+
+Do not use a fixed-horizon test while behaving like a sequential experiment. Suppose a treatment produces:
+
+```text
+10× crash rate
+```
+
+You should not say:
+
+We promised not to look until Friday.
+
+Safety guardrails can and should be monitored continuously. You can separate:
+
+```text
+Safety stopping rules
+```
+
+from:
+
+```text
+Product success decision rules
+```
+
+For example:
+
+```text
+Immediate rollback if:
+critical error rate > 2%
+
+Product decision after:
+minimum sample and planned analysis window
+```
+
+That preserves both user safety and statistical discipline. Suppose B has absolutely no effect. You test 100 unrelated metrics. Purely by chance, some will appear unusually positive. If you then report:
+
+```text
+Metric 73 improved significantly!
+```
+
+you may simply be selecting noise. This is one reason to choose the primary metric before launch. When many hypotheses genuinely matter, use appropriate multiple-testing methods or hierarchical decision rules. Suppose you test:
+
+```text
+A = baseline
+B = model 1
+C = model 2
+D = model 3
+E = model 4
+F = model 5
+```
+
+Then pick whichever looks best. More alternatives create more opportunities for random variation to produce an apparent winner. Your statistical plan should account for how many comparisons are being made. Standard A/B reasoning assumes roughly:
+
+Alice's outcome depends on Alice's treatment, not on Bob's treatment.
+
+This is sometimes called a no-interference assumption. But many ML products violate it. Consider a marketplace. Model B is given to some sellers. It changes prices. Those prices affect buyers in both groups. Now:
+
+```text
+Seller treatment
+      ↓
+market conditions
+      ↓
+other users' outcomes
+```
+
+Control and treatment are no longer isolated. Suppose recommendations determine which videos gain attention. Treatment users receive B. B promotes video X more heavily. Video X becomes more popular. Popularity becomes a feature used by both A and B. Now treatment behavior changes the environment seen by control users:
+
+```text
+B users
+   ↓
+change popularity
+   ↓
+shared features
+   ↓
+A users affected
+```
+
+The treatment has leaked into the control condition. ML systems often consume data generated by previous model decisions.
+
+For example:
+
+```text
+model recommends content
+       ↓
+users click
+       ↓
+clicks become training data
+       ↓
+future model learns from clicks
+```
+
+Now experiment effects can persist beyond immediate treatment. A model may alter:
+
+```text
+the population
+the labels
+the training set
+the inventory
+the marketplace
+```
+
+that future models observe. A/B testing in ML therefore sometimes requires thinking beyond simple one-shot causal effects. If users strongly interact within groups, randomize whole groups. Instead of:
+
+```text
+individual users
+```
+
+randomize:
+
+```text
+schools
+companies
+geographic markets
+social communities
+```
+
+For example:
+
+```text
+London → A
+Manchester → B
+```
+
+if users mostly interact within cities. The tradeoff is that you now have fewer independent units. Millions of users inside 20 cities do not give you millions of independent clusters. Statistical power can fall dramatically. Suppose you operate a ride-sharing marketplace. You cannot easily show different dispatch algorithms simultaneously to drivers sharing the same city. Instead you might alternate over time:
+
+```text
+09:00–10:00 → A
+10:00–11:00 → B
+11:00–12:00 → A
+12:00–13:00 → B
+```
+
+This is a **switchback experiment**. The randomization unit becomes something like:
+
+```text
+market × time block
+```
+
+rather than individual users. This can reduce cross-treatment interference, though time effects must be handled carefully. Consider search ranking. Model B surfaces different documents. Therefore users click different documents. Then you collect different relevance labels. Now:
+
+```text
+Treatment B
+    ↓
+changes observations
+    ↓
+changes future training data
+```
+
+This is sometimes called a **performative** or feedback effect. The model is not simply predicting an independent world. It partly changes the world it later learns from. This makes long-term evaluation more complex. Suppose B radically changes the interface or recommendations. Users may initially engage more because:
+
+```text
+it is new
+```
+
+Then after two weeks:
+
+```text
+engagement returns to baseline
+```
+
+An experiment stopped after one day may declare a false long-term win. The reverse can also happen:
+
+```text
+users initially dislike unfamiliar behavior
+but adapt over time
+```
+
+This is another reason experiment duration should reflect product dynamics, not just required sample size. Suppose Model B teaches users a new workflow. Even after switching them back to A, their behavior remains different. Now a crossover design:
+
+```text
+A → B → A
+```
+
+does not necessarily restore the original baseline. The first treatment changed the user. This is called a carryover effect. For products with strong learning or habit formation, parallel persistent assignment is often safer than frequently switching users between treatments.
 
 ![A search-ranking experiment connecting stable user assignment to control or treatment, actual rendered exposure, mature outcomes, governed joins, integrity gates, and decision evidence.](/content-assets/articles/article-mlops-deployment-and-release-management-ab-testing-for-ml-products/assignment-exposure-outcome.png)
 
 *Assignment records preserve the randomized population, exposure records prove delivery, and outcome records become decision evidence only after join and integrity checks pass.*
 
-## Choose Metrics That Can Decide The Experiment
-<!-- section-summary: A primary metric expresses the intended benefit, while guardrails and counter-metrics reveal unacceptable costs. -->
+## How Do Durable Assignment, Exposure, Outcome Data, Precommitment, and Staged Release Operate the Test?
+<!-- section-summary: Assignment is a versioned production service with durable events; precommitted hypotheses, metrics, guardrails, allocation, and staged release keep safety separate from efficacy. -->
 
-A metric is a rule for turning events into a number. “Engagement” is a topic. “Completed searches per eligible user during seven days after assignment” is a metric definition. The second version identifies the unit, event, denominator, and time window.
+The experiment platform therefore needs durable versioned assignment and event records plus a decision committed before results are visible.
 
-### Choose one primary metric
+A real experiment needs reliable infrastructure.
 
-The primary metric should represent the product benefit named in the hypothesis. For a candidate recommendation model, click-through rate may react quickly, yet clicks can reward curiosity or misleading content. Saves per eligible user, completed listening sessions, or retained users may reflect the intended value more closely. The right choice depends on the product decision.
-
-Selecting one primary metric protects the team from searching a large scorecard for any positive result. Secondary metrics can explain how behavior changed. They should carry labels such as diagnostic, supporting, or exploratory so their role stays clear.
-
-### Add guardrails and counter-metrics
-
-Guardrails define unacceptable harm. A conversion model could improve purchases while increasing refunds. A support-routing model could reduce handling time while increasing reopened tickets. A fraud model could reduce losses while blocking too many legitimate customers.
-
-A **counter-metric** captures the plausible downside created by optimizing the primary outcome. If the primary metric rewards clicks, long-term satisfaction and complaint rate can counter short-term click seeking. If the primary metric rewards automated approvals, later default rate and manual-review burden can reveal transferred risk.
-
-Service metrics belong in the same plan. Error rate, timeout rate, p95 or p99 latency, resource saturation, and inference cost protect the delivery path. Prometheus, OpenTelemetry, and cloud monitoring can alert on these signals during the run. Product outcomes usually come from warehouse or lakehouse events and mature on a slower schedule.
-
-### Decide which segments can block launch
-
-Aggregate improvement can hide local harm. Prewritten segment checks might cover new users, device classes, regions, product tiers, or groups relevant to fairness and accessibility. A team should name decision-gating segments in advance. Post-hoc slicing remains valuable for investigation, though repeated searching across dozens of segments raises the chance of a lucky pattern.
-
-## Handle Delayed Outcomes and Decision Policies
-<!-- section-summary: ML outcomes often arrive after the prediction, so experiments need explicit attribution windows, maturity rules, and policy identity. -->
-
-Many ML decisions receive their ground truth later. A recommendation impression can lead to a purchase hours later. A credit decision may mature over months. A predictive-maintenance alert may need the next inspection. An experiment readout is premature until the relevant outcome window has closed for the included cohort.
-
-An **attribution window** defines how long an outcome can be linked to an assignment or exposure. A seven-day purchase metric, for example, counts qualifying purchases from assignment through the next seven days. Every analyzed unit needs the same opportunity to produce that outcome. Units assigned near the end of enrollment must finish their window before the final readout.
-
-Missing outcomes need a semantic rule. No purchase event can correctly mean zero purchases if event collection is healthy. A missing payment feed, incomplete label join, or absent regional export means unknown data. Converting telemetry failure into zero silently biases the result. Data freshness, join coverage, and event-volume checks should distinguish an absent user action from a failed measurement.
-
-The user-facing treatment may also include policy around the model score:
+Conceptually:
 
 ```text
-features -> model score -> threshold -> business rule -> fallback -> action
+Request
+   ↓
+Eligibility
+   ↓
+Experiment assignment
+   ↓
+Treatment configuration
+   ↓
+Model serving
+   ↓
+Exposure logging
+   ↓
+User outcome
+   ↓
+Outcome pipeline
+   ↓
+Experiment analysis
 ```
 
-Suppose treatment uses a new fraud model while a risk-policy service changes the review threshold halfway through the test. The resulting effect mixes two changes, so attribution is difficult. Freeze decision-policy versions during the experiment, include them in exposure logs, or design separate randomized factors under statistical review.
-
-## Plan How Many Units And How Long To Run The Test
-<!-- section-summary: Sample size depends on the smallest valuable effect, normal outcome variation, desired power, error tolerance, and randomization unit. -->
-
-An experiment needs enough independent units to distinguish a meaningful effect from ordinary variation. Three planning terms make this practical.
-
-The **minimum detectable effect (MDE)** is the smallest change the experiment is designed to detect. Teams should tie it to a product decision. A 0.1 percentage-point gain may be valuable at enormous scale and irrelevant for a small workflow with high operating cost.
-
-**Statistical power** is the probability that the planned test detects an effect at least as large as the MDE if that effect exists. **Significance level**, often written as alpha, controls the planned false-positive tolerance. Higher power, smaller MDE, noisier metrics, and stricter error tolerance all require more units.
-
-For a simplified two-arm test of a conversion rate, assume a 10% baseline, a one percentage-point MDE, 5% two-sided alpha, 80% power, and equal groups. A normal approximation gives:
+Every arrow can introduce bias if implemented incorrectly. For each unit, store something like:
 
 ```text
-n per arm ≈ 2 × (1.96 + 0.84)² × 0.10 × 0.90 ÷ 0.01²
-          ≈ 14,100 independent units
+experiment_id
+unit_id
+variant
+assignment_timestamp
+assignment_version
+eligibility context
 ```
 
-This planning illustration provides no universal sample count. Unequal allocation, clustered randomization, repeated observations, rare events, variance reduction, and heavy-tailed revenue can change the requirement substantially. Teams commonly use their experiment platform, a reviewed statistics library, or simulation over historical unit-level data.
+Then later you can reconstruct:
 
-Duration adds product context that sample size alone misses. The run should cover relevant weekly cycles, delayed-outcome maturity, and expected learning or novelty. A high-traffic site may collect the planned sample in one afternoon while still producing a misleading result if weekday and weekend behavior differ.
-
-## Analyze The Same Population That Was Randomized
-<!-- section-summary: Intent-to-treat analysis preserves the balance created by random assignment and measures the effect of offering the treatment. -->
-
-The usual primary analysis follows **intent to treat (ITT)**. Every eligible unit stays in its assigned group, including units that never reached the model-driven surface. ITT estimates the effect of assigning or offering the candidate experience under real product usage.
-
-This can feel counterintuitive. If half the assigned users never open the relevant screen, the measured effect is diluted. That dilution is often the product truth: shipping the feature to the whole eligible population produces impact only through people who encounter it.
-
-Filtering to units that actually received treatment creates a **treatment-on-the-treated (ToT)** or triggered view. This view can estimate the effect among reached units only under stronger assumptions. Exposure itself may depend on treatment. A faster recommendation model could make the page render, while a slower control could cause abandonment before the exposure event. Keeping only observed exposures would then compare different types of users.
-
-A trustworthy triggered analysis uses a qualification rule that can be evaluated for both groups, often through counterfactual trigger logging, and verifies that excluded units behave like an A/A comparison. ITT remains the default decision estimate. ToT serves a clearly stated secondary purpose with statistical review.
-
-The SQL shape below preserves assigned units. It also keeps exposure coverage visible as a diagnostic:
-
-```sql
-SELECT
-  a.variant,
-  COUNT(*) AS assigned_units,
-  COUNT(DISTINCT e.unit_id) AS exposed_units,
-  AVG(COALESCE(o.completed_actions, 0)) AS actions_per_assigned_unit
-FROM experiment_assignments AS a
-LEFT JOIN first_exposures AS e
-  ON a.experiment_id = e.experiment_id
- AND a.unit_id = e.unit_id
-LEFT JOIN mature_outcomes AS o
-  ON a.experiment_id = o.experiment_id
- AND a.unit_id = o.unit_id
-WHERE a.experiment_id = :experiment_id
-GROUP BY a.variant;
+```text
+Why was this user in treatment
+When did they enter
+Which experiment configuration applied
 ```
 
-Here, absent completed-action events count as zero only after the pipeline has verified outcome-feed completeness. Exposure coverage appears beside the ITT metric so delivery failures stay visible.
+Do not rely on reconstructing historical assignment from mutable current configuration. Suppose experiment B changes midway from:
 
-## Check Experiment Integrity Before Reading The Result
-<!-- section-summary: Assignment balance, identifier integrity, exposure delivery, outcome freshness, and join coverage must pass before a metric difference is trusted. -->
-
-The first experiment readout should test the evidence itself. A polished lift chart built from broken assignments or missing events can create a confident wrong decision.
-
-### Sample ratio mismatch
-
-**Sample ratio mismatch (SRM)** means the observed group counts differ more than random variation would reasonably explain from the planned allocation. A 50/50 design that repeatedly records a large imbalance may have an assignment bug, identifier loss, eligibility difference, cache problem, logging filter, or warehouse transformation error.
-
-SRM is an alarm about experiment validity. The team should pause interpretation, trace counts from allocator through exposure stream and analytical table, repair the cause, and restart or invalidate affected data according to the analysis plan.
-
-### Crossover and identifier failures
-
-Crossover occurs if one unit appears in several variants. Common causes include changing from device ID to user ID, inconsistent salts between client and server, lost cookies, and allocation changes without persistent assignment. Experiment diagnostics should report crossover rate and assignment reasons.
-
-### Logging and join failures
-
-Exposure counts should reconcile with product traffic. Outcome events need the same unit identifier or an approved mapping. Freshness checks should compare expected arrival time with the latest partition. Join coverage should be reviewed by variant and major segment, because a region-specific export failure can create a false treatment effect.
-
-dbt data tests fit this layer well. Built-in `unique`, `not_null`, `accepted_values`, and `relationships` assertions cover basic contracts; custom SQL tests can fail on duplicate assignments, crossovers, stale partitions, unexpected allocation ratios, or low exposure-to-outcome coverage.
-
-```yaml
-models:
-  - name: experiment_assignments
-    columns:
-      - name: assignment_key
-        data_tests: [unique, not_null]
-      - name: variant
-        data_tests:
-          - accepted_values:
-              arguments:
-                values: [control, treatment]
+```text
+Model B version 42
 ```
 
-## Avoid Time Bias And Repeated-Testing Errors
-<!-- section-summary: Novelty, learning, peeking, and multiple comparisons can make an early positive result look stronger than the lasting effect. -->
+to:
 
-User behavior can change during a test. A **novelty effect** is an early response to a new experience that fades. A **learning effect** grows as users discover how to use a new workflow. Plotting treatment effect by enrollment cohort and time since first exposure can reveal both patterns. The planned duration should cover the period needed for the product claim.
-
-Repeatedly checking a fixed-horizon test and stopping at the first favorable result raises the false-positive rate. This practice is often called **peeking**. Safety monitoring can continue throughout the run because harm needs rapid action. Success decisions should follow the planned maturity and sample rule, or use a preselected sequential method whose boundaries account for repeated looks.
-
-Multiple metrics create a related problem. Twenty independent tests at a 5% threshold provide many chances for a lucky positive result. A clear primary metric keeps the main decision focused. Experiments with several primary outcomes or variants need a documented multiplicity procedure, such as family-wise error or false-discovery control, selected before analysis.
-
-Concurrent launches can also contaminate interpretation. Experiment layers or mutual-exclusion groups prevent units from entering combinations with known interactions. Teams should record overlapping experiment assignments so unexpected interactions can be investigated.
-
-## Detect Interference And Feedback Loops
-<!-- section-summary: Some ML treatments change the environment shared by control and treatment, weakening the assumption that units act independently. -->
-
-Some products connect participants through shared resources or direct interaction. A change delivered to one participant can therefore alter the experience available to someone in the other group. **Interference** is the name for this cross-group effect.
-
-Standard A/B analysis assumes one unit’s assignment has no effect on another unit’s outcome. Interference weakens that assumption, so the measured difference may combine direct treatment impact with changes to the shared environment.
-
-In a marketplace, a treatment that ranks certain listings higher changes inventory available to control users. In a social product, ranking changes affect which posts receive reactions, which then changes what creators publish. In delivery operations, a route-optimization treatment reallocates drivers shared by both groups. The control environment has now been altered by treatment.
-
-Possible responses include cluster randomization, geographic switchbacks, time-based switchback experiments, marketplace-specific estimators, or a design that measures equilibrium effects. Each method changes the statistical assumptions. A team should involve an experimentation specialist early instead of applying a user-level test to a connected system.
-
-ML feedback loops add another layer. Treatment-generated clicks may enter the next training dataset, causing future models to learn from behavior created by the experiment. Preserve variant and policy identity in training events, define whether experimental data can enter retraining, and keep a stable holdout if the long-term effect matters.
-
-```mermaid
-flowchart TD
-    M["Model variant"] --> D["Decisions shown to users"]
-    D --> B["User or marketplace behavior"]
-    B --> L["Logged labels and features"]
-    L --> N["Next training dataset"]
-    N --> M
-    D --> S["Shared inventory or social graph"]
-    S --> B
+```text
+Model B version 43
 ```
 
-## Build Reliable Assignment, Logging, And Outcome Pipelines
-<!-- section-summary: Industrial experiments connect assignment, immutable release identity, governed event tables, data-quality tests, statistical analysis, and decision records. -->
+Now "B" actually means two things. Your interpretation becomes:
 
-An industrial experiment is a small production system. Its job is to preserve the causal comparison from product configuration through the final decision. Every layer carries a different piece of evidence, and those pieces must join through stable identities.
-
-The control plane defines eligibility, allocation, unit type, metrics, and stop rules. The request path obtains a stable assignment. The product logs actual exposure with immutable release identity. A governed warehouse or lakehouse joins outcomes after their maturity window. A statistics layer estimates effects and uncertainty. A decision record connects the result to the next release action.
-
-```mermaid
-flowchart TD
-    C["Experiment config and assignment service"] --> A["Stable assignment"]
-    R["MLflow or managed model registry"] --> P["Prediction path"]
-    A --> P
-    P --> E["Exposure table: variant + model + policy"]
-    U["Product outcome events"] --> W["Governed warehouse or lakehouse"]
-    E --> W
-    W --> Q["dbt or SQL quality gates"]
-    Q --> S["Experiment statistics layer"]
-    S --> D["Reviewed decision record"]
-    D --> G["Release ramp or rollback"]
+```text
+some users received B42
+some received B43
 ```
 
-A representative stack might use Statsig for assignment and experiment analysis, MLflow Model Registry for immutable model identity, product events in BigQuery, Snowflake, or a Databricks lakehouse, and dbt for analytical models and data tests. LaunchDarkly, Optimizely, or an internal allocator can fill the assignment role. A managed cloud registry can fill the registry role. The architecture matters more than matching one vendor combination.
+If intentional, log it explicitly. Otherwise freeze treatment artifacts while the experiment runs. A good experiment usually wants:
 
-Operational ownership should be explicit:
+```text
+variant B → one clearly defined treatment
+```
 
-- product and data science own the hypothesis, MDE, metrics, and segment interpretation;
-- application engineering owns assignment placement and true exposure logging;
-- ML engineering owns model, feature, policy, and release identity;
-- data engineering owns event contracts, maturity, joins, and quality checks;
-- an experimentation or statistics owner reviews power, estimators, and decision validity;
-- the release owner executes ramp, rollback, or follow-up work.
+A weak design logs:
 
-This separation prevents an experiment dashboard from becoming the only evidence. Raw contracts, transformations, model lineage, analysis version, and decision history remain inspectable.
+```text
+user assigned to B
+```
 
-## Write the Decision Rules Before Launch
-<!-- section-summary: A prewritten analysis plan states what success, harm, inconclusive evidence, and invalid evidence will trigger. -->
+and assumes B was served. But perhaps:
 
-A **pre-registration** or analysis plan records the important choices before results can influence them. It can be a reviewed configuration, experiment brief, or versioned document. The plan should include:
+```text
+routing failed
+B timed out
+fallback returned A
+cache served old result
+feature wasn't rendered
+```
 
-- product hypothesis and eligible population;
-- randomization unit, allocation, and assignment persistence;
-- control and treatment release identities;
-- primary metric, guardrails, counter-metrics, and attribution windows;
-- MDE, power target, estimator, duration, and stopping rule;
-- decision-gating segments and multiplicity method;
-- evidence-quality gates such as SRM, crossover, freshness, and join coverage;
-- immediate harm-stop thresholds and rollback owner;
-- actions for win, loss, inconclusive evidence, and invalid evidence.
+A stronger exposure log records what actually happened:
 
-A win can lead to a gradual release ramp with continued service and product monitoring. A loss can keep control in place and use diagnostic evidence to guide another candidate. An inconclusive result may call for more units, a lower-variance metric, or a redesigned treatment. Invalid evidence calls for instrumentation repair and a fresh run; extending corrupted data rarely restores randomization.
+```text
+experiment = ranking_test_27
+assigned_variant = B
+served_model = ranker_v43
+request_id = ...
+timestamp = ...
+```
 
-Decision thresholds should express practical value as well as statistical uncertainty. A tiny effect can be statistically distinguishable at large scale while remaining too small to justify inference cost or operational complexity. A wide interval can include both valuable benefit and unacceptable harm, which supports an inconclusive decision.
+For user-facing treatments, you may also distinguish:
 
-## Know Where Randomized Testing Is Inappropriate
-<!-- section-summary: Some decisions carry legal, ethical, privacy, or safety consequences that require stronger governance or a different evaluation design. -->
+```text
+model executed
+```
 
-Random assignment is a method; it grants no automatic permission to expose people to avoidable risk. High-impact decisions involving health, employment, credit, housing, education, public benefits, or physical safety need legal, risk, domain, and ethics review. Existing protections, known beneficial treatment, informed-consent duties, and anti-discrimination obligations may rule out a conventional control group.
+from:
 
-The experiment should minimize personal data, limit access, document retention, and evaluate whether the randomization unit or outcomes reveal sensitive attributes. Guardrails need enough authority to stop harm immediately. Some risks are too severe or too delayed for a live test to manage safely.
+```text
+result actually rendered to user
+```
 
-Alternatives include retrospective causal analysis, shadow evaluation, simulation, expert review, phased observational studies, or testing a lower-risk workflow component. The NIST AI Risk Management Framework offers a useful governance structure through its Govern, Map, Measure, and Manage functions. Organizational policy and applicable law determine the final route.
+Suppose a purchase event is duplicated by the pipeline.
 
-## The Main Idea
-<!-- section-summary: A trustworthy ML A/B test connects random assignment to real exposure, mature outcomes, evidence checks, and a prewritten product decision. -->
+Then:
 
-ML A/B testing estimates whether a model-driven product change caused a meaningful outcome. The framework starts with a causal question, chooses a stable randomization unit, records assignment and actual exposure, waits for mature outcomes, checks evidence integrity, and analyzes the population defined in advance.
+```text
+one purchase
+```
 
-Release controls and experiments work together. Canary, blue-green, shadow, and weighted routing protect delivery. Randomized assignment, exposure logs, outcome contracts, and statistical rules establish product impact. The final result should support one clear action: ship carefully, keep control, iterate, or rerun with repaired evidence.
+becomes:
 
-The practical lesson is to treat the experiment record as part of the release evidence. A model registry can identify the candidate artifact, yet the decision also needs its assignment rule, policy version, exposure coverage, outcome window, data-quality results, uncertainty estimate, and approved follow-up action.
+```text
+two purchases
+```
+
+Experiment metrics become wrong. Outcome pipelines therefore need properties such as:
+
+```text
+deduplication
+stable event IDs
+consistent timestamps
+clear attribution rules
+late-event handling
+```
+
+Experimentation is only as trustworthy as the measurement system beneath it. Suppose purchases are logged using:
+
+```text
+account_id
+```
+
+while experiment assignment uses:
+
+```text
+device_id
+```
+
+Some users use multiple devices. Now outcome attribution may fail differently across populations. Or perhaps treatment changes login behavior, which changes whether events can be joined. Measurement can become treatment-dependent. This is particularly dangerous because the experiment can look statistically rigorous while the underlying data linkage is biased. Suppose outcome data is missing for:
+
+```text
+2% of A
+10% of B
+```
+
+If you simply remove missing cases, you may select very different populations. The missingness itself could be caused by treatment. For instance:
+
+```text
+B causes app crashes
+        ↓
+events never upload
+```
+
+Dropping those users would hide one of the treatment's main harms. A good experiment specification might state:
+
+```text
+Population:
+Eligible logged-in users in supported markets.
+
+Unit:
+User ID.
+
+Control:
+Recommendation model A v17.
+
+Treatment:
+Recommendation model B v23.
+
+Allocation:
+50/50 stable user assignment.
+
+Primary metric:
+7-day purchase conversion.
+
+Primary decision threshold:
+Launch if estimated lift is positive
+and confidence criterion is met.
+
+Guardrails:
+p95 latency must increase < 50 ms.
+Refund rate must not increase > 0.2 pp.
+
+Minimum sample:
+400,000 eligible users.
+
+Minimum duration:
+14 days.
+
+Outcome maturation:
+7 additional days.
+
+Stopping:
+Immediate rollback for critical safety regression.
+No ordinary efficacy stopping before planned analysis.
+```
+
+This dramatically reduces the freedom to reinterpret the experiment afterward. Imagine the experiment finishes with:
+
+```text
+purchase rate:         no improvement
+click rate:            +0.4%
+session duration:      -2%
+wishlist additions:    +6%
+revenue:               no improvement
+```
+
+If the team chooses afterward:
+
+Wishlist additions were really our true objective.
+
+the experiment becomes difficult to trust. Pre-specifying the decision rule distinguishes:
+
+```text
+confirmatory evidence
+```
+
+from:
+
+```text
+interesting exploratory observations
+```
+
+Both are useful, but they should not be confused. Suppose Model B produces:
+
+```text
+conversion:
++3%
+
+latency:
++900 ms
+```
+
+If your predeclared guardrail says:
+
+```text
+p95 latency increase <= 200 ms
+```
+
+the experiment may be:
+
+```text
+primary metric: PASS
+guardrail: FAIL
+decision: DO NOT LAUNCH
+```
+
+This is not contradictory. Products optimize multiple objectives under constraints. A release decision is often:
+
+```text
+maximize value
+subject to safety/reliability constraints
+```
+
+You may not require every metric to improve.
+
+For example:
+
+```text
+Primary:
+Revenue should improve.
+
+Guardrail:
+Retention must not decline by more than 0.2 percentage points.
+```
+
+The guardrail asks:
+
+Is B sufficiently close to A on this dimension that the difference is acceptable
+
+This is a non-inferiority style question. That often matches product decision-making better than demanding every metric have `p < 0.05`. Nothing requires only A and B. You might test:
+
+```text
+A = existing model
+B = smaller faster model
+C = larger higher-quality model
+D = hybrid routing strategy
+```
+
+Randomize:
+
+```text
+25% A
+25% B
+25% C
+25% D
+```
+
+But every additional arm spreads traffic thinner and creates more statistical comparisons. So multi-arm tests should exist for a reason, not merely because many variants are available. You don't always need:
+
+```text
+50/50
+```
+
+Suppose B carries some risk. You might use:
+
+```text
+90% A
+10% B
+```
+
+You can still estimate causal effects if assignment is randomized. But statistical efficiency usually decreases because the smaller treatment group provides less information. There is a tradeoff:
+
+```text
+less exposure risk
+vs
+more time/sample needed
+```
+
+A sophisticated launch might be:
+
+```text
+Stage 0
+Offline evaluation
+
+Stage 1
+Shadow:
+A controls decisions
+B evaluated silently
+
+Stage 2
+Canary:
+99% A
+1% B
+Check severe regressions
+
+Stage 3
+Experiment:
+50% A
+50% B
+Stable randomized assignment
+
+Stage 4
+Decision
+
+Stage 5
+If B wins:
+10% → 25% → 50% → 100%
+or directly complete rollout depending on risk
+```
+
+Notice that the 50/50 experiment is not necessarily the final rollout itself. It exists to estimate causal product impact. There are two questions:
+
+```text
+1. Is B dangerous or operationally broken
+
+2. Is B actually better
+```
+
+Safety might be evaluated through:
+
+```text
+canary
+shadow testing
+guardrails
+continuous monitoring
+```
+
+Efficacy might be evaluated through:
+
+```text
+randomized comparison
+primary outcome
+confidence interval
+```
+
+A treatment can be:
+
+```text
+safe but not better
+```
+
+or:
+
+```text
+better on average but operationally unsafe
+```
+
+Both dimensions matter.
+
+## How Do Worked Results, Heterogeneity, Variance Reduction, Constraints, and Inappropriate Cases Shape Decisions?
+<!-- section-summary: Worked outcomes require practical interpretation; no significance is not equality, heterogeneous effects and Simpson's paradox need care, and some harmful or tiny-population changes should not be randomized. -->
+
+Worked cases show how uncertainty, practical size, segments, and constraints lead to launch, continue, stop, or no-experiment decisions.
+
+Suppose you operate an ecommerce recommendation model. Current model:
+
+```text
+A
+```
+
+Candidate:
+
+```text
+B
+```
+
+Your business hypothesis is:
+
+B improves the relevance of recommendations, increasing completed purchases without materially harming latency or returns.
+
+Design:
+
+```text
+Unit:
+user
+
+Population:
+logged-in users eligible for recommendations
+
+Assignment:
+50% A
+50% B
+stable by user ID
+```
+
+Primary outcome:
+
+```text
+purchase within 7 days of assignment
+```
+
+Guardrails:
+
+```text
+p95 recommendation latency
+refund rate
+customer complaint rate
+```
+
+You recruit:
+
+```text
+A: 500,000 users
+B: 500,000 users
+```
+
+After all outcomes mature:
+
+```text
+Purchase conversion:
+
+A = 7.80%
+B = 8.15%
+```
+
+Absolute lift:
+
+```text
+8.15 - 7.80
+= +0.35 percentage points
+```
+
+Relative lift:
+
+```text
+0.35 / 7.80
+≈ +4.5%
+```
+
+Suppose the uncertainty interval is:
+
+```text
++0.21 pp to +0.49 pp
+```
+
+and guardrails show:
+
+```text
+Latency:
++12 ms
+allowed <= +100 ms
+
+Refund rate:
+unchanged
+
+Complaint rate:
+unchanged
+```
+
+This is strong evidence for launching B according to the pre-specified decision rule. Suppose instead:
+
+```text
+Purchase conversion:
+
+A = 7.80%
+B = 7.95%
+```
+
+Estimate:
+
+```text
++0.15 percentage points
+```
+
+but interval:
+
+```text
+-0.10 pp to +0.40 pp
+```
+
+This does **not** mean:
+
+```text
+A and B are identical
+```
+
+It means:
+
+```text
+the experiment did not estimate the effect precisely enough
+to rule out both modest harm and modest benefit
+```
+
+Possible conclusion:
+
+```text
+inconclusive
+```
+
+This is an important third state. Experiments are not always:
+
+```text
+WIN
+or
+LOSE
+```
+
+They can produce:
+
+```text
+insufficient evidence
+```
+
+Suppose your sample is only:
+
+```text
+100 users
+```
+
+and you find no statistical difference. That could simply mean:
+
+```text
+experiment too noisy
+```
+
+To claim two systems are meaningfully similar, you need a design capable of ruling out effects large enough to matter. This is one reason MDE and power planning come before launch. Suppose overall:
+
+```text
+B improves conversion by +1%
+```
+
+But:
+
+```text
+New users:      +4%
+Existing users: -2%
+```
+
+The average hides meaningful variation. Segment analysis can reveal such effects. Useful predefined segments may include:
+
+```text
+country
+platform
+new vs returning
+subscription tier
+traffic source
+```
+
+However, slicing hundreds of segments after the fact recreates the multiple-testing problem. Pre-specify especially important heterogeneity questions. Imagine B appears better in every region individually but worse overall because traffic composition differs. Or vice versa.
+
+For example:
+
+```text
+             A       B
+UK          10%     11%
+US          20%     21%
+```
+
+Yet if B gets far more UK traffic and A more US traffic, aggregate numbers could reverse. Well-functioning randomization reduces such composition differences. When imbalance exists due to design, proper stratification or weighting may be required. Suppose country strongly affects conversion. Instead of randomizing globally:
+
+```text
+all users → randomize
+```
+
+you can randomize separately within important strata:
+
+```text
+UK users:
+50% A / 50% B
+
+US users:
+50% A / 50% B
+
+Germany:
+50% A / 50% B
+```
+
+This helps guarantee similar country composition and can improve statistical precision. The principle is:
+
+Randomize within important pre-treatment groups when those groups strongly influence outcomes.
+
+Suppose historical purchase behavior predicts future purchasing strongly. Instead of comparing only raw outcomes, predefined statistical adjustment can account for historical behavior.
+
+Conceptually:
+
+```text
+Observed treatment difference
+-
+noise predictable from pre-treatment characteristics
+```
+
+Techniques such as:
+
+```text
+covariate adjustment
+regression adjustment
+CUPED-style methods
+```
+
+can reduce variance. That means detecting the same effect with fewer users. Crucially, adjustment variables should generally be measured **before treatment** so treatment cannot have caused them. Suppose:
+
+```text
+B → more clicks → more purchases
+```
+
+If you "control for clicks" when estimating B's total effect on purchases, you may remove one of the pathways through which B works. Clicks are a post-treatment variable:
+
+```text
+Treatment → Clicks → Purchase
+```
+
+Conditioning on them changes the causal question. Pre-treatment covariates and post-treatment variables play very different roles. Suppose B has better:
+
+```text
+NDCG
+precision
+calibration
+```
+
+in live traffic. Those are valuable diagnostics. But if the experiment's purpose is product impact, they usually describe **how** the treatment works rather than the ultimate causal objective. Think:
+
+```text
+Model B
+   ↓
+better ranking metric
+   ↓
+different items shown
+   ↓
+different user behavior
+   ↓
+business outcome
+```
+
+Offline and online model metrics help explain the mechanism. The randomized product outcome tells you whether the mechanism created value.
+
+For example:
+
+```text
+Offline:
+B has +8% ranking quality
+```
+
+But online:
+
+```text
+B recommends more computationally expensive candidates
+       ↓
+latency +400 ms
+       ↓
+users abandon page
+       ↓
+purchases -2%
+```
+
+There is no contradiction. The product contains a larger causal system than the model benchmark. Maybe B produces slightly lower click prediction accuracy but generates more diverse recommendations. Users discover more products. Long-term purchase rate rises. Again:
+
+```text
+model metric
+≠
+product objective
+```
+
+This is precisely why controlled online experiments are so valuable. Randomization is powerful, but it is not universally appropriate. Suppose treatment could plausibly cause:
+
+```text
+serious physical harm
+illegal discrimination
+major financial loss
+irreversible medical decisions
+severe safety violations
+```
+
+You cannot justify knowingly exposing users to unacceptable risks merely because randomization would produce a scientifically clean estimate. Safety and ethical constraints come first.
+
+For example:
+
+```text
+schema compatibility
+data privacy
+security
+model signature
+basic correctness
+policy compliance
+catastrophic safety behavior
+```
+
+should usually be tested before exposing real users. An A/B test is not a substitute for ordinary validation. Do not use production users as a debugging system for preventable failures. Suppose a product has:
+
+```text
+40 eligible customers
+```
+
+and the minimum important effect is small. A conventional randomized test may take an unreasonable amount of time or never achieve useful precision. Alternatives might include:
+
+```text
+careful observational analysis
+paired designs
+switchback designs
+domain-specific evaluations
+qualitative studies
+simulation
+expert review
+```
+
+The appropriate method depends on the causal question. Suppose you're changing:
+
+```text
+auction mechanism
+market-clearing algorithm
+fraud network detector
+shared recommendation inventory
+```
+
+Treatment effects may spill across everyone. Individual randomization may be invalid. You may need:
+
+```text
+cluster experiments
+geographic experiments
+switchbacks
+system-level simulations
+```
+
+or other causal designs. Some users may have:
+
+```text
+contractually fixed behavior
+regulated treatment requirements
+consent restrictions
+data-locality requirements
+```
+
+Those constraints can determine:
+
+```text
+who may enter the experiment
+what may be randomized
+which outcomes may be collected
+```
+
+Experiment eligibility must respect those boundaries. Think about the full release lifecycle:
+
+```text
+Train
+  ↓
+Offline evaluate
+  ↓
+Validate API + safety
+  ↓
+Deploy candidate
+  ↓
+Shadow / canary
+  ↓
+Randomized A/B experiment
+  ↓
+Causal product evidence
+  ↓
+Launch decision
+  ↓
+Progressive rollout
+  ↓
+Long-term monitoring
+```
+
+Different stages answer different questions.
+
+For example:
+
+```text
+Offline evaluation:
+Does the model look promising
+
+Shadow:
+Does it run correctly on real traffic
+
+Canary:
+Is limited real exposure safe
+
+A/B test:
+Does B cause a better product outcome
+
+Full rollout:
+Can B operate successfully at complete scale
+
+Post-launch monitoring:
+Does the benefit persist
+```
+
+A reliable A/B platform needs at least:
+
+```text
+eligibility service
+        ↓
+stable randomization
+        ↓
+treatment configuration
+        ↓
+model routing
+        ↓
+assignment logging
+        ↓
+exposure logging
+        ↓
+outcome collection
+        ↓
+metric computation
+        ↓
+integrity checks
+        ↓
+statistical analysis
+        ↓
+decision
+```
+
+A bug anywhere upstream can invalidate a perfectly sophisticated statistical calculation downstream. This is why experimentation belongs partly to statistics and partly to production engineering.
+
+## What Checklist and Mental Model Define a Trustworthy ML A/B Test?
+<!-- section-summary: A trustworthy experiment estimates a predeclared causal effect under a verified assignment and data system, then makes a product decision with uncertainty and guardrails. -->
+
+The checklist treats the experiment itself as a production causal-measurement system.
+
+Before an ML A/B experiment, you should be able to answer:
+
+1. **What causal question are we trying to answer?**
+
+```text
+Does serving Model B instead of Model A improve 7-day purchase conversion
+```
+
+2. **Who is eligible?**
+3. **What is randomly assigned?**
+
+User, request, account, market, session
+
+4. **Is assignment stable?**
+5. **What exactly are A and B?**
+6. **What event counts as exposure?**
+7. **What is the primary outcome?**
+8. **What are the guardrails?**
+9. **What observation window defines the outcome?**
+10. **How many units are needed?**
+11. **How long must the experiment cover?**
+12. **When are outcomes mature?**
+13. **What integrity checks happen first?**
+14. **What stopping rule is used?**
+15. **What effect is large enough to justify launch?**
+16. **What conditions force rollback regardless of the primary metric?**
+17. **Could users interfere with one another?**
+18. **Could B alter the environment or future training data?**
+19. **What exact analysis will be performed?**
+20. **What decision follows each possible result?**
+
+A/B testing can be understood as building two parallel worlds that differ in one controlled dimension. You cannot create:
+
+```text
+Alice in universe A
+and
+the exact same Alice in universe B
+```
+
+So instead you create:
+
+```text
+many randomly selected Alice-like users → A
+many randomly selected Alice-like users → B
+```
+
+Randomization tries to make all the uncontrolled differences cancel out. What remains is the controlled difference:
+
+```text
+Model A
+vs
+Model B
+```
+
+Then you compare outcomes. That is the core causal logic. ML A/B testing begins with one fundamental limitation:
+
+**For a given user, we can observe what happened under Model A or what happened under Model B, but we cannot observe both alternate realities simultaneously.**
+
+Randomization solves this at the population level:
+
+```text
+Eligible population
+       ↓
+Random assignment
+   ┌───────────┐
+   ↓           ↓
+Model A     Model B
+   ↓           ↓
+Outcomes    Outcomes
+   └─────┬─────┘
+         ↓
+Compare
+```
+
+Because the groups were created randomly, their outcome difference can be interpreted causally much more credibly than a simple before/after or observational comparison. But that causal guarantee survives only if the rest of the experiment is designed correctly:
+
+```text
+choose the right randomization unit
+        ↓
+keep assignment stable
+        ↓
+record assignment separately from exposure
+        ↓
+measure well-defined outcomes
+        ↓
+preserve the randomized population in analysis
+        ↓
+wait for delayed outcomes to mature
+        ↓
+plan sample size and duration
+        ↓
+check experiment integrity
+        ↓
+handle repeated testing correctly
+        ↓
+account for interference and feedback
+        ↓
+apply predeclared decision rules
+```
+
+And the most important deployment distinction is:
+
+```text
+Canary / rollout:
+"Is it safe to expose more production?"
+
+A/B experiment:
+"Did the new model actually cause a better product outcome?"
+```
+
+A model can therefore pass:
+
+```text
+offline evaluation
++
+integration tests
++
+canary deployment
+```
+
+and still lose an A/B experiment. That is not a failure of experimentation. It is exactly what experimentation is designed to discover. The essence of **ML A/B testing in deployment and release management** is therefore:
+
+> **Do not infer product value merely because a model looks better offline or survives production traffic. Randomly create comparable groups, measure what actually changes downstream, and make the release decision from the causal effect on outcomes that matter.**
 
 ![The ML A/B test decision path from a prewritten plan through stable comparison, evidence validation, effect estimation, and distinct win loss inconclusive or invalid actions.](/content-assets/articles/article-mlops-deployment-and-release-management-ab-testing-for-ml-products/ml-ab-test-summary.png)
 
 *A trustworthy decision follows the plan written before results: validate the evidence, estimate practical value and uncertainty, then take the action assigned to that outcome.*
 
-## References
+## Check Your Answers
 
-- [Statsig: Experiments overview](https://docs.statsig.com/experiments/overview)
-- [Statsig: Raw experiment events and unit identifiers](https://docs.statsig.com/metrics/raw-events)
-- [Statsig: Server persistent assignment](https://docs.statsig.com/server/concepts/persistent_assignment)
-- [Statsig: Experiment health checks](https://docs.statsig.com/experiments/monitor)
-- [LaunchDarkly: Continuous experiments](https://launchdarkly.com/docs/fed-docs/guides/cheatsheets/continuous-experiments)
-- [MLflow: Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
-- [dbt: Data tests](https://docs.getdbt.com/docs/build/data-tests)
-- [Microsoft Research: Diagnosing sample ratio mismatch](https://www.microsoft.com/en-us/research/publication/diagnosing-sample-ratio-mismatch-in-online-controlled-experiments-a-taxonomy-and-rules-of-thumb-for-practitioners/)
-- [Microsoft Research: Trustworthy analysis of online A/B tests](https://www.microsoft.com/en-us/research/publication/trustworthy-analysis-of-online-a-b-tests-pitfalls-challenges-and-solutions/)
-- [Microsoft Research: Post-experiment patterns and triggered analysis](https://www.microsoft.com/en-us/research/group/experimentation-platform-exp/articles/patterns-of-trustworthy-experimentation-post-experiment-stage/)
-- [Microsoft Research: External validity and novelty effects](https://www.microsoft.com/en-us/research/articles/external-validity-of-online-experiments-can-we-predict-the-future/)
-- [Microsoft Research: Metric interpretation pitfalls](https://www.microsoft.com/en-us/research/publication/a-dirty-dozen-twelve-common-metric-interpretation-pitfalls-in-online-controlled-experiments/)
-- [NIST: Selecting sample sizes](https://www.itl.nist.gov/div898/handbook/prc/section2/prc222.htm)
-- [NIST: AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
-- [Amazon SageMaker AI: Test models with production variants](https://docs.aws.amazon.com/sagemaker/latest/dg/model-ab-testing.html)
-- [Gemini Enterprise Agent Platform: Deploy a Model and Split Endpoint Traffic](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/deploy-model-api)
-- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
-- [Azure Machine Learning: Managed online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online)
-- [Databricks Model Serving: Serve multiple models from one endpoint](https://docs.databricks.com/aws/en/machine-learning/model-serving/serve-multiple-models-to-serving-endpoint)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[How Does Random Assignment Estimate the Causal Effect of an ML Product Change?]{kind="recap"}
+An A/B test uses randomized potential alternatives to estimate a causal product effect that cannot be observed for the same unit in both realities.
+:::
+
+:::expand[How Do Randomization Unit, Eligibility, Assignment, Exposure, and Intention-to-Treat Fit Together?]{kind="recap"}
+The assignment unit matches interference, stable randomization follows predeclared eligibility, and intention-to-treat keeps assignment distinct from exposure and outcome.
+:::
+
+:::expand[How Should Primary, Guardrail, Proxy, Delayed, and Windowed Metrics Be Defined?]{kind="recap"}
+One primary product metric sits beside safety guardrails and mechanism proxies, with exact definitions and observation windows that respect delayed and late-arriving outcomes.
+:::
+
+:::expand[How Do Sample Size, Power, Intervals, Integrity Checks, and the Analysis Unit Support Valid Results?]{kind="recap"}
+Minimum detectable effect, power, errors, confidence intervals, analysis unit, sample-ratio checks, delivery checks, balance, and A/A tests establish precision and integrity.
+:::
+
+:::expand[How Do Peeking, Multiple Tests, Interference, Feedback, Novelty, and Learning Threaten the Experiment?]{kind="recap"}
+Repeated peeking and many metrics create false wins; interference, feedback loops, cluster or switchback designs, novelty, and learning alter simple independence assumptions.
+:::
+
+:::expand[How Do Durable Assignment, Exposure, Outcome Data, Precommitment, and Staged Release Operate the Test?]{kind="recap"}
+Assignment is a versioned production service with durable events; precommitted hypotheses, metrics, guardrails, allocation, and staged release keep safety separate from efficacy.
+:::
+
+:::expand[How Do Worked Results, Heterogeneity, Variance Reduction, Constraints, and Inappropriate Cases Shape Decisions?]{kind="recap"}
+Worked outcomes require practical interpretation; no significance is not equality, heterogeneous effects and Simpson's paradox need care, and some harmful or tiny-population changes should not be randomized.
+:::
+
+:::expand[What Checklist and Mental Model Define a Trustworthy ML A/B Test?]{kind="recap"}
+A trustworthy experiment estimates a predeclared causal effect under a verified assignment and data system, then makes a product decision with uncertainty and guardrails.
+:::

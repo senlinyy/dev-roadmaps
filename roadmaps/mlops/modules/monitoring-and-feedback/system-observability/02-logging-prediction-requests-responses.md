@@ -1,7 +1,7 @@
 ---
 title: "Prediction Logging"
-description: "Learn how production teams record safe, structured, joinable evidence around model predictions for debugging, monitoring, feedback, and audit."
-overview: "Prediction logging gives a deployed model a trustworthy history of the decisions it produced, including what to record, how records connect across systems, how sensitive data stays protected, where production stacks store the evidence, and how teams test and recover the logging path."
+description: "Prediction logging turns a temporary inference into structured historical evidence that can answer what happened, under which conditions, and why an individual decision occurred."
+overview: "Prediction logging turns a temporary inference into structured historical evidence that can answer what happened, under which conditions, and why an individual decision occurred. The final record model and worked example show how identity, versions, safe context, timings, decisions, outcomes, monitoring, and investigation form one feedback loop."
 tags: ["MLOps", "core", "observability"]
 order: 2
 id: "article-mlops-monitoring-and-feedback-logging-prediction-requests-responses"
@@ -9,628 +9,1590 @@ id: "article-mlops-monitoring-and-feedback-logging-prediction-requests-responses
 
 ## Table of Contents
 
-1. [What Prediction Logging Means](#what-prediction-logging-means)
-2. [Decide What The Team Needs To Explain](#decide-what-the-team-needs-to-explain)
-3. [Give Each Prediction A Stable Identity](#give-each-prediction-a-stable-identity)
-4. [Write A Structured Event That People And Systems Can Read](#write-a-structured-event-that-people-and-systems-can-read)
-5. [Keep Raw Inputs And Secrets Outside General Telemetry](#keep-raw-inputs-and-secrets-outside-general-telemetry)
-6. [How Prediction Records Reach Search And Storage](#how-prediction-records-reach-search-and-storage)
-7. [Control Volume, Retention, And Access](#control-volume-retention-and-access)
-8. [Investigate A Production Problem With Prediction Evidence](#investigate-a-production-problem-with-prediction-evidence)
-9. [Test That Prediction Logging Works End To End](#test-that-prediction-logging-works-end-to-end)
-10. [The Main Idea](#the-main-idea)
-11. [References](#references)
+1. [Why Must a Production System Preserve Evidence about Individual Predictions?](#why-must-a-production-system-preserve-evidence-about-individual-predictions)
+2. [Which Identities, Structured Fields, Model Details, and Outputs Belong in a Prediction Record?](#which-identities-structured-fields-model-details-and-outputs-belong-in-a-prediction-record)
+3. [How Should Feature Evidence, Privacy, Secrets, References, and Time Be Handled?](#how-should-feature-evidence-privacy-secrets-references-and-time-be-handled)
+4. [How Do Prediction Events Reach Storage with Versioning, Bounded Volume, Retention, and Access Control?](#how-do-prediction-events-reach-storage-with-versioning-bounded-volume-retention-and-access-control)
+5. [How Do Prediction Records Join Outcomes and Reconstruct One Decision Path?](#how-do-prediction-records-join-outcomes-and-reconstruct-one-decision-path)
+6. [How Do You Keep Logging Reliable, Non-Disruptive, and Verifiably Complete?](#how-do-you-keep-logging-reliable-non-disruptive-and-verifiably-complete)
+7. [How Do Prediction Logs Support Model and Service Monitoring without Collecting Everything?](#how-do-prediction-logs-support-model-and-service-monitoring-without-collecting-everything)
+8. [What Does a Complete Prediction Record and Feedback Loop Look Like?](#what-does-a-complete-prediction-record-and-feedback-loop-look-like)
+9. [Check Your Answers](#check-your-answers)
 
-## What Prediction Logging Means
-<!-- section-summary: Prediction logging records a safe history of each production decision so teams can explain, monitor, and improve deployed models. -->
+A legitimate transaction was blocked three days ago. The service is healthy today, but memory from that request is gone and the current model may not be the version that handled it. Without a durable event, the team cannot reliably recover the features, threshold, fallback, or output behind the decision.
 
-**Prediction logging is the practice of recording what happened around a model prediction.** It gives the production system a memory.
+A **prediction log** is a structured record of an inference event. It preserves enough safe evidence to investigate one historical prediction and to aggregate behaviour across a population. It is different from a generic message saying that a request completed.
 
-Imagine a loan application receives a `manual_review` decision. Two weeks later, the applicant challenges the result. The support team needs to answer several ordinary questions:
+These questions derive the record from the investigations it must support, then follow it through delivery, storage, access, verification, and the outcome feedback loop:
 
-- Which model produced the score?
-- Which version of that model was running?
-- Which decision policy turned the score into `manual_review`?
-- Did the service use fresh features or a fallback?
-- Can the final repayment outcome be connected to this prediction later?
+1. **Why Must a Production System Preserve Evidence about Individual Predictions?**
+2. **Which Identities, Structured Fields, Model Details, and Outputs Belong in a Prediction Record?**
+3. **How Should Feature Evidence, Privacy, Secrets, References, and Time Be Handled?**
+4. **How Do Prediction Events Reach Storage with Versioning, Bounded Volume, Retention, and Access Control?**
+5. **How Do Prediction Records Join Outcomes and Reconstruct One Decision Path?**
+6. **How Do You Keep Logging Reliable, Non-Disruptive, and Verifiably Complete?**
+7. **How Do Prediction Logs Support Model and Service Monitoring without Collecting Everything?**
+8. **What Does a Complete Prediction Record and Feedback Loop Look Like?**
 
-A normal web-server log rarely answers those questions. It may contain a line like this:
+## Why Must a Production System Preserve Evidence about Individual Predictions?
+<!-- section-summary: Prediction logging turns a temporary inference into structured historical evidence that can answer what happened, under which conditions, and why an individual decision occurred. -->
+
+Prediction logging turns a temporary inference into structured historical evidence that can answer what happened, under which conditions, and why an individual decision occurred.
+
+A production ML system does not only need to answer:
+
+“Is the service running?”
+
+It also needs to answer:
+
+“What prediction did the system make, under what circumstances, and why did that particular prediction happen?”
+
+Service-health metrics can tell you that error rate rose or latency increased. Model-health metrics can tell you that accuracy or data distributions changed. But when somebody asks:
+
+“Why did customer X receive this prediction yesterday?”
+
+aggregated metrics are usually not enough. You need evidence about the **individual prediction event**. That is the purpose of prediction logging. Imagine a fraud model receives:
+
+```text
+transaction amount = £2,400
+country            = GB
+merchant category  = electronics
+account age        = 3 days
+```
+
+and produces:
+
+```text
+fraud probability = 0.94
+decision          = BLOCK
+```
+
+At prediction time, everything appears normal. Three days later, someone asks:
+
+“Why was this legitimate transaction blocked?”
+
+If the system kept nothing about the prediction, you may know the model currently deployed, but you might not know:
+
+```text
+Which model version actually handled it
+Which features were used
+Were any features missing
+What threshold was applied
+Was preprocessing different
+Did a fallback path run
+What output did the model return
+```
+
+The prediction happened in the past. The internal state that produced it may already be gone. That leads to a direct definition:
+
+> **Prediction logging means preserving enough structured evidence about prediction events that their behaviour can be investigated later.**
+
+It turns an ephemeral computation into an observable historical record. An inference request is temporary.
+
+Conceptually:
+
+```text
+input
+  │
+  ▼
+preprocessing
+  │
+  ▼
+model
+  │
+  ▼
+postprocessing
+  │
+  ▼
+prediction
+```
+
+After the request finishes, memory is reused and temporary values disappear. Without deliberate logging:
+
+```text
+prediction happens
+      │
+      ▼
+response returned
+      │
+      ▼
+evidence disappears
+```
+
+With prediction logging:
+
+```text
+prediction happens
+      │
+      ├──────────────► user receives prediction
+      │
+      └──────────────► prediction record stored
+                              │
+                              ▼
+                       later investigation
+```
+
+Logging therefore creates **memory for the production system**. A normal application log might say:
+
+```text
+INFO request completed successfully
+```
+
+That helps with operations, but tells you little about model behaviour. A prediction event might instead contain:
+
+```text
+prediction_id     = pred_8f29...
+timestamp         = 2026-08-30T08:14:21Z
+model_version     = fraud-v42
+feature_version   = features-v18
+prediction        = 0.94
+decision          = BLOCK
+threshold         = 0.80
+latency_ms        = 73
+missing_features  = 0
+region            = eu-west
+```
+
+This answers a different class of questions. Ordinary operational logs often describe:
+
+```text
+process started
+request failed
+database timeout
+container restarted
+```
+
+Prediction logs describe:
+
+```text
+what inference happened
+which model produced it
+what context affected it
+what result was returned
+```
+
+They overlap, but they are not the same thing. A common mistake is:
+
+“Let's log everything.”
+
+That creates expensive, risky and difficult-to-use telemetry. A better starting point is:
+
+“What questions will we need to answer later?”
+
+Suppose your team expects questions such as:
+
+```text
+Why was this prediction made
+Which model version produced it
+Did the model receive valid features
+Did the new release behave differently
+Did prediction confidence suddenly change
+Can this prediction be connected to its eventual outcome
+```
+
+Now you can derive the information that must be preserved. This gives a useful evidence pattern:
+
+$$
+\text{Investigation question}
+\rightarrow
+\text{required evidence}
+\rightarrow
+\text{logged fields}
+$$
+
+For example:
+
+```text
+Question:
+Which model made this prediction
+
+Required evidence:
+model identity
+
+Logged field:
+model_version = "fraud-v42"
+```
+
+Another:
+
+```text
+Question:
+Was a missing feature responsible
+
+Required evidence:
+feature quality information
+
+Logged fields:
+missing_feature_count = 3
+feature_schema_version = "v18"
+```
+
+Logging should follow investigative needs, not curiosity.
+
+## Which Identities, Structured Fields, Model Details, and Outputs Belong in a Prediction Record?
+<!-- section-summary: Stable prediction and correlation identities connect a structured event to the model that ran, the score and decision returned, thresholds, fallbacks, and other behaviour-affecting context. -->
+
+Stable prediction and correlation identities connect a structured event to the model that ran, the score and decision returned, thresholds, fallbacks, and other behaviour-affecting context.
+
+Suppose a user complains about one transaction among 500 million predictions.
+
+How do you find it?
+
+Searching by timestamp alone is fragile. You need a stable identifier:
+
+```text
+prediction_id = pred_01J6...
+```
+
+This ID becomes the anchor connecting different pieces of evidence.
+
+For example:
+
+```text
+                 prediction_id
+                      │
+        ┌─────────────┼─────────────┐
+        ▼             ▼             ▼
+ prediction log    request trace   outcome record
+        │             │             │
+ model v42        feature store    chargeback
+ score .94        call details     = false
+```
+
+Without a shared identifier, those records may exist but be difficult to join. With one:
+
+```text
+prediction_id = P12345
+```
+
+you can ask:
+
+```text
+Find prediction P12345.
+Find its trace.
+Find the model version.
+Find its later outcome.
+```
+
+This makes individual inference events traceable. A request may travel through many services:
+
+```text
+client
+  │
+  ▼
+API gateway
+  │
+  ▼
+feature service
+  │
+  ▼
+prediction service
+  │
+  ▼
+policy service
+```
+
+A **request ID** or **trace ID** often identifies the whole distributed request. A **prediction ID** identifies the particular prediction. Sometimes one request produces one prediction:
+
+```text
+request 123
+    │
+    └── prediction A
+```
+
+But sometimes one request creates several:
+
+```text
+request 123
+    │
+    ├── prediction A
+    ├── prediction B
+    └── prediction C
+```
+
+So keeping them conceptually separate can be useful. A prediction record might contain:
+
+```text
+trace_id      = trace_91...
+request_id    = req_27...
+prediction_id = pred_88...
+```
+
+This lets you move between service-level and model-level evidence. Consider this log:
+
+```text
+User received a high fraud score from model 42 at around 10am.
+```
+
+A human can understand it. A computer cannot reliably aggregate it. Now consider:
 
 ```json
 {
-  "method": "POST",
-  "path": "/predict",
-  "status": 200,
-  "duration_ms": 86
+  "event_type": "prediction",
+  "timestamp": "2026-08-30T09:03:18Z",
+  "prediction_id": "pred_7391",
+  "model_name": "fraud_classifier",
+  "model_version": "42",
+  "score": 0.94,
+  "decision": "block"
 }
 ```
 
-This record proves that the API accepted a request and returned a successful HTTP response in 86 milliseconds. It says nothing about the model decision inside the response.
+Now systems can ask:
 
-A useful prediction record adds the missing decision context:
+```text
+count predictions by model_version
 
-```json
-{
-  "event_name": "prediction_completed",
-  "prediction_id": "pred_01K0Q7H7T8Z6M3X2",
-  "model_version": "application-risk-42",
-  "policy_version": "approval-thresholds-12",
-  "model_route": "primary",
-  "score": 0.73,
-  "decision": "manual_review",
-  "fallback_used": false
-}
+average score by hour
+
+find all BLOCK decisions
+
+compare v41 and v42
+
+retrieve prediction_id = pred_7391
 ```
 
-The second record still avoids the applicant's name, address, income documents, and full feature vector. It preserves the facts needed to understand the decision without copying the original application into a general log system.
+This is the principle of **structured logging**. Instead of encoding meaning inside prose:
 
-This distinction is the foundation of prediction logging. The goal is to preserve useful evidence, rather than to save every byte that passed through the model.
-
-Prediction evidence supports four common jobs:
-
-1. **Operational debugging** — find a failed dependency, timeout, fallback, or bad release.
-2. **Model monitoring** — compare scores, decisions, segments, and routes over time.
-3. **Feedback joins** — connect a prediction to an outcome that arrives days or months later.
-4. **Review and audit** — identify the approved model, feature, prompt, and policy versions behind a decision.
-
-Those jobs need different levels of detail, access, and retention. A short-lived operational log is useful during an incident. A compact decision record may need to remain available until labels mature. A raw document or prompt may require much stronger controls and may have no place in the logging platform at all.
-
-The full design follows the life of the evidence:
-
-```mermaid
-flowchart LR
-    A["Production prediction"] --> B["Choose the questions<br/>the evidence must answer"]
-    B --> C["Create stable<br/>identifiers"]
-    C --> D["Write a safe,<br/>versioned event"]
-    D --> E["Collect and route<br/>the event"]
-    E --> F["Store each evidence<br/>type appropriately"]
-    F --> G["Use it for monitoring,<br/>feedback, and investigation"]
-    G --> H["Test coverage,<br/>privacy, and recovery"]
-
-    class A source
-    class B,C,D design
-    class E,F,G operate
-    class H verify
+```text
+"Model v42 predicted 0.94"
 ```
 
-## Decide What The Team Needs To Explain
-<!-- section-summary: Production questions determine which fields are useful, who owns them, and how long the evidence needs to remain available. -->
+you encode meaning into named fields:
 
-A common logging mistake is to start with fields. A team opens the request object, chooses twenty values that look interesting, and sends them to a logging backend. Months later, the logs are expensive and sensitive, yet they still cannot answer the questions that matter.
-
-A better design starts with future investigations.
-
-Suppose a recommendation service has started using its fallback more often. The team needs to discover whether the increase comes from feature timeouts, empty candidate sets, low model confidence, or a new policy threshold. That investigation needs:
-
-- a stable prediction identifier;
-- the model route and version;
-- the policy version;
-- a bounded fallback reason;
-- the dependency result;
-- enough time information to locate the release window.
-
-It does not need the user's complete profile or the full list of recommendations.
-
-Now consider a different question: did the model remain accurate after deployment? The team needs the prediction, the model version, a safe segment, and a key that can later join to the real outcome. It may need those records for 90 days because the outcome arrives slowly. A seven-day log index cannot support that job.
-
-These examples lead to three evidence surfaces.
-
-### Use Operational Logs For Recent Service Events
-
-Operational logs help responders inspect recent failures and unusual paths. They usually contain status, duration, error class, dependency result, request or trace identity, and a bounded fallback reason.
-
-They are optimized for fast search. Loki, OpenSearch, Elasticsearch, and managed cloud logging services are common destinations. Their retention is often shorter because indexing a large volume of detailed records is expensive.
-
-### Use Decision Records To Preserve Model Decisions
-
-A **decision record** is a durable, structured account of one prediction. It carries the model, feature or prompt, policy, and serving versions needed to reconstruct the decision. It may also contain a score, class, confidence band, safe input summary, and outcome join key.
-
-Decision records are usually stored in analytical systems: a Delta or Iceberg table, a warehouse table, or a managed inference table. These stores handle long retention, reliable joins, schema checks, and aggregate analysis better than a log-search index.
-
-### Keep Restricted Source Data For Approved Deep Investigation
-
-Some investigations genuinely need the original document, image, prompt, or feature values. Those values should remain in a governed source system or a dedicated restricted store. General operational access should not reveal them.
-
-The decision record can carry an approved reference. A reviewer follows that reference through an access-controlled workflow that records who opened the source data and why.
-
-Consider a document-classification endpoint. The operational log records `dependency="ocr"` and `failure_class="timeout"`. The decision table records document type, page-count band, model version, score, decision, and prediction ID. The original document stays in the document system with its existing encryption, access, and deletion policy.
-
-That separation gives each team the evidence it needs without granting every log user access to the original document.
-
-| Evidence surface | Main question | Common destination | Typical access |
-|---|---|---|---|
-| Operational log | What failed or slowed down recently? | Cloud logging, Loki, OpenSearch | Service responders |
-| Decision record | Which model decision occurred, and how does it join to later outcomes? | Warehouse, Delta, Iceberg, managed inference table | Model and data teams |
-| Restricted source | What did the original governed input contain? | Protected source system or restricted object store | Approved reviewers |
-
-The table summarizes the division. The design work still happens in prose and policy: each field needs a question, an owner, a sensitivity class, a destination, and a retention reason.
-
-```mermaid
-flowchart TD
-    A["Question<br/>Why did fallback use rise?"] --> B["Minimum facts<br/>Route, reason, dependency, version"]
-    B --> C{"How sensitive is<br/>each fact?"}
-    C -->|"Safe operational fact"| D["Recent searchable log"]
-    C -->|"Durable decision fact"| E["Analytical decision record"]
-    C -->|"Raw or identifying data"| F["Restricted source system"]
-    D --> G["Reconstruct the event"]
-    E --> G
-    F -.->|"Approved access only"| G
-
-    class A,B question
-    class C choice
-    class D,E,F store
-    class G result
+```text
+model_version = 42
+score         = 0.94
 ```
 
-## Give Each Prediction A Stable Identity
-<!-- section-summary: Stable request, trace, prediction, and outcome keys connect evidence across services and over time. -->
+Machines can index, filter, aggregate and validate those fields. A useful mental model is:
 
-One prediction can leave evidence in several systems. The API writes a service log. A tracing backend records calls across dependencies. A decision table stores the model result. A product database receives the real outcome weeks later.
+A prediction is an event that occurred in the life of the system.
 
-Those records need reliable keys. Timestamps alone are too weak. At a rate of 1,000 predictions per second, many records share the same second. Payload matching is unreliable and can expose sensitive data.
+An event has:
 
-The main identifiers have different jobs:
-
-- A **request ID** helps support and service teams find one API request.
-- A **trace ID** connects timed operations across several services.
-- A **prediction ID** identifies the durable model decision.
-- An **outcome join key** connects that decision to a later real-world result.
-- A **batch run ID** identifies the job that produced a group of offline predictions.
-
-For a simple endpoint, one request may produce one prediction. It can be tempting to use a single value everywhere. The meanings separate as the system grows.
-
-Imagine an API request that ranks twenty products. The request has one request ID and one trace ID. The system may produce twenty scored decisions, each with its own prediction ID. A retry creates a new request path, while an idempotency key prevents the same business decision from being counted twice.
-
-An asynchronous loan outcome adds another time scale. The trace may be kept for seven days, while the repayment label arrives after 90 days. The model-quality join must depend on the durable prediction ID or approved outcome key, not on the tracing backend.
-
-The application creates the prediction ID at the trusted serving boundary. It stores the same value in the decision record and returns or propagates it to the system that will later produce the outcome. If a public client supplies its own correlation value, the edge validates its length and allowed characters or replaces it. Untrusted values should never serve as arbitrary index keys.
-
-Model identity needs the same precision. A label such as `fraud-model` is too broad if several artifacts served traffic. The decision record normally carries:
-
-- a stable model name;
-- an immutable model or artifact version;
-- the deployment or serving route;
-- the feature-set or prompt version;
-- the policy version that turned the model output into an action.
-
-Suppose two identical scores lead to different decisions. The first record shows `policy_version="thresholds-11"` and the second shows `policy_version="thresholds-12"`. The team can explain the change without blaming the model artifact.
-
-```mermaid
-flowchart LR
-    A["API request<br/>request_id"] --> B["Distributed work<br/>trace_id"]
-    B --> C["Model decision<br/>prediction_id"]
-    C --> D["Decision record<br/>model + policy versions"]
-    C --> E["Product workflow<br/>outcome join key"]
-    E --> F["Mature outcome<br/>days or months later"]
-
-    class A,B request
-    class C,D prediction
-    class E,F outcome
+```text
+identity
+time
+context
+cause
+result
+provenance
 ```
 
-The diagram also explains why one identifier should not carry every meaning. The trace describes a short execution path. The prediction ID describes a durable decision. The outcome key describes a later business event.
+For ML inference, this often maps approximately to:
 
-## Write A Structured Event That People And Systems Can Read
-<!-- section-summary: A versioned event contract gives every prediction field a stable name, type, unit, and meaning. -->
+```text
+identity
+→ prediction_id
 
-A human-readable sentence such as “the candidate model returned low confidence and used fallback” is easy to print. It is difficult to analyze across ten million requests. The same fact needs stable fields:
+time
+→ timestamp
 
-This format is called **structured logging**. Each important fact receives a named field with a predictable type and meaning. Search tools can filter those fields, validation code can check them, and analytical jobs can group them across many predictions.
+context
+→ endpoint, region, request type
 
-```json
-{
-  "model_route": "candidate",
-  "confidence_band": "low",
-  "fallback_used": true,
-  "fallback_reason": "confidence_below_policy"
-}
+cause
+→ model version, feature version, configuration
+
+result
+→ score, class, ranking, decision
+
+provenance
+→ deployment, pipeline, experiment, trace ID
 ```
 
-OpenTelemetry defines a stable log data model with fields for the event timestamp, observed timestamp, severity, body, resource, attributes, event name, trace ID, and span ID. A team can use that shared model even if its applications keep their existing logging libraries. For Python, OpenTelemetry traces and metrics are stable while the logs SDK remains under development, so many production teams emit structured JSON through a mature logging library and let an agent or Collector translate it.
+You do not necessarily store all of these for every system. The schema should reflect what you need to explain. This sounds obvious, but it is one of the most valuable fields. Suppose today you have:
 
-### Define A Contract For The Event
-
-The contract describes more than field names. It defines:
-
-- required and optional fields;
-- data types and units;
-- allowed values for fields such as route or fallback reason;
-- sensitivity and access classification;
-- producer and owner;
-- schema version;
-- compatibility rules for future changes.
-
-Units deserve explicit names. If one producer writes latency in seconds and another writes milliseconds, both values are valid numbers. A dashboard may quietly report the wrong result. A field named `duration_ms` removes the guess.
-
-Time also has several meanings. `decision_time` records the moment the service made the prediction. `event_time` records the source event's time if the prediction describes an earlier event. `observed_at` records the time the collection system received the event. Comparing these values reveals late delivery.
-
-A timestamp such as `decision_time` should use RFC 3339. RFC 3339 is a standard text format that records the date, clock time, and time-zone offset, so producers and consumers interpret the same instant consistently.
-
-A compact event can look like this:
-
-```json
-{
-  "event_name": "prediction_completed",
-  "schema_version": 3,
-  "prediction_id": "pred_01K0Q7H7T8Z6M3X2",
-  "request_id": "req_01K0Q7H6Y4W1P9VN",
-  "trace_id": "9f8c4f0c9d9b47f5ad7c5f922cf176a3",
-  "decision_time": "<RFC 3339 timestamp>",
-  "service": "risk-scoring-api",
-  "model_version": "application-risk-42",
-  "model_route": "primary",
-  "feature_set_version": "application-v7",
-  "policy_version": "approval-thresholds-12",
-  "input_summary": {
-    "region_group": "eea",
-    "feature_count": 37,
-    "missing_required_count": 0
-  },
-  "output": {
-    "score": 0.73,
-    "decision": "manual_review"
-  },
-  "fallback_used": false,
-  "duration_ms": 84.6
-}
+```text
+fraud-v45
 ```
 
-The record uses a coarse region group and feature counts. It leaves out names, exact addresses, and feature values.
+But the disputed prediction happened six weeks ago. At that time traffic may have been split:
 
-### Change The Schema Without Breaking Consumers
+```text
+v41 → 80%
+v42 → 20%
+```
 
-Production schemas evolve. A team may add a new fallback reason, replace `model_id` with `model_version`, or split one decision class into two.
+If your record only says:
 
-Adding an optional field is usually safe. Renaming a required field or changing its meaning can break dashboards, monitors, and label joins even though the event still parses.
+```text
+model = fraud_model
+```
 
-A controlled change uses an overlap period:
+you cannot reliably reconstruct behaviour. Instead preserve immutable or sufficiently precise version information:
 
-1. Publish the new schema and consumer changes.
-2. Allow consumers to read both versions.
-3. Send a small production canary with the new version.
-4. Compare counts, rejection rates, and downstream outputs.
-5. Move full traffic only after all required consumers report coverage.
-6. Remove the old version after its retention and replay windows have passed.
+```text
+model_name        = fraud_classifier
+model_version     = v42
+model_artifact_id = sha256:...
+```
 
-Retries also affect the contract. A producer may send the same event twice after losing an acknowledgement. The durable table can use `prediction_id` plus `event_name` as a deduplication key. Duplicate count remains visible as a pipeline-health signal.
+Similarly, preprocessing may matter:
 
-This is why event versioning and idempotency belong to logging design. They protect monitoring from quiet double-counting and partial migrations.
+```text
+feature_version
+schema_version
+preprocessing_version
+threshold_version
+```
 
-## Keep Raw Inputs And Secrets Outside General Telemetry
-<!-- section-summary: A field-level safety boundary preserves useful summaries while raw payloads and direct identifiers stay in governed systems. -->
+Because the model artifact alone may not determine the final decision. Suppose the model returns:
 
-Prediction systems often handle the most sensitive data in an application. A healthcare model may receive clinical notes. A fraud model may use account activity. An LLM service may process private code or customer conversations.
+$$
+p(\text{fraud}) = 0.78
+$$
 
-Copying those inputs into a broad logging system creates another sensitive database. It may have different users, exports, backups, retention rules, and deletion behavior. The copy can outlive the original source.
+But business logic says:
 
-The safer default is an **allowlist**: the application emits only fields that have been reviewed. A later redaction processor provides a second line of defense, rather than the primary privacy control.
+```text
+if probability >= 0.80:
+    BLOCK
+else:
+    ALLOW
+```
 
-Useful safe summaries often include:
+The user receives:
 
-- schema or template version;
-- item, page, token, or feature count;
-- size or confidence band;
-- coarse region or language;
-- missing-field count;
-- model route and version;
-- decision class;
-- bounded error or fallback reason.
+```text
+ALLOW
+```
 
-Fields that usually stay out of ordinary logs include:
+If you log only:
 
-- raw prompts and responses;
-- full feature vectors;
-- images and documents;
-- names, email addresses, account numbers, and exact locations;
-- access tokens, signed URLs, credentials, and encryption keys;
-- unrestricted exception messages;
-- customer-controlled values used as field names or log templates.
+```text
+prediction = 0.78
+```
 
-OWASP's logging guidance specifically warns against recording access tokens, passwords, connection strings, encryption keys, sensitive personal data, and other secrets directly. It also recommends recording access to the logs and enforcing retention and disposal.
+you lose the final behaviour. A better conceptual record separates:
 
-### Hashing is not automatic anonymity
+```text
+raw model output
+        │
+        ▼
+postprocessing / policy
+        │
+        ▼
+final decision
+```
 
-A team may replace an email address with a hash and assume the value is safe. Email addresses come from a guessable set. An attacker can hash likely addresses and compare the results.
+For example:
 
-A keyed **Hash-based Message Authentication Code (HMAC)** combines the original value with a secret key to create a stable pseudonymous join value. An attacker needs that key to reproduce the value. The result still counts as sensitive under many policies because the organization can connect it back to a person. The key needs controlled storage, rotation, access, and a version field.
+```text
+score              = 0.78
+threshold          = 0.80
+final_decision     = ALLOW
+policy_version     = risk-policy-v7
+```
 
-Suppose a model-quality report compares outcomes over six months. Rotating the HMAC key without a migration plan breaks the historical join. The team can use a short dual-write window or a protected crosswalk, then remove the old value after the agreed join period.
+This matters because many production “model decisions” are actually:
 
-### Apply Data Boundaries To Managed Capture
+$$
+\text{Final Decision}
+=
+f(\text{Model Output},\text{Rules},\text{Thresholds},\text{Context})
+$$
 
-Managed platforms can record request and response data with little application code. Azure Machine Learning's data collector can log payloads or custom pandas DataFrames from online endpoints into Azure Blob Storage. It also supports a sampling rate. The collector initializes after traffic first reaches an endpoint, so some early request and response records can be missing or unmatched. A rollout should send warm-up requests, compare endpoint request counts with stored rows, and reconcile unmatched request and response records before the captured data supports a monitoring decision.
-
-Databricks Unity AI Gateway inference tables write serving requests and responses into Delta tables governed through Unity Catalog. The feature is Beta and delivery is best effort. It is useful for supported monitoring and debugging workflows. A decision process that cannot tolerate missing evidence still needs an application-owned event or transactional outbox, a governed durable table, and reconciliation against accepted predictions.
-
-These managed features reduce collection and storage work. The team still decides whether a raw prompt, medical document, or direct identifier is appropriate to retain, and it measures whether the captured rows are complete enough for the intended use.
-
-For an endpoint carrying sensitive data, the team may choose custom safe summaries instead of automatic full-payload capture. It then verifies storage permissions, encryption, retention, deletion, sampling, and downstream table access.
-
-Managed features also have lifecycle and availability constraints. Databricks has retired its legacy inference-table path in favor of AI Gateway-enabled tables. AWS has announced restricted new-customer access for SageMaker Model Monitor, so that path suits existing estates more than a greenfield default. Platform selection includes a check of current support status, regional availability, delivery guarantees, and migration guidance.
+Prediction logging should reflect the system that users actually experience.
 
 ![Prediction evidence surfaces separating operational logs, durable decision records, and restricted source data, with shared identifiers and an approved-access investigation gate](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-evidence-surfaces.png)
 
 *Operational logs, durable decision records, and restricted source data answer different questions. Shared identifiers connect them without copying original payloads into every system.*
 
-## How Prediction Records Reach Search And Storage
-<!-- section-summary: Production logging separates fast operational search from durable analytical evidence and isolates telemetry failures from inference. -->
+## How Should Feature Evidence, Privacy, Secrets, References, and Time Be Handled?
+<!-- section-summary: Feature metadata must support investigation without copying unnecessary sensitive values; secrets are excluded, while governed references, hashes, and several timestamps preserve safer evidence. -->
 
-The application first creates a prediction record in memory. That record still needs a reliable path to systems where operators can search recent events and analysts can rebuild long-term decision history. The delivery path must avoid slowing or breaking the prediction service during a logging-backend outage.
+Feature metadata must support investigation without copying unnecessary sensitive values; secrets are excluded, while governed references, hashes, and several timestamps preserve safer evidence.
 
-The design sends evidence along two paths:
+This becomes more complicated. At first, it seems useful to log:
 
-1. a small operational event goes to recent log search;
-2. a durable decision event goes to analytical storage.
+```text
+age = 37
+income = £58,000
+address = ...
+email = ...
+transaction details = ...
+```
 
-The records share identifiers, yet they serve different jobs.
+because these inputs help explain a prediction. But raw input data may contain:
+
+* personal information,
+* authentication credentials,
+* confidential business information,
+* regulated data,
+* customer secrets,
+* large documents or images.
+
+General-purpose telemetry systems are often copied, indexed and accessible to many engineers. So:
+
+**The fact that information is useful for debugging does not mean it belongs in ordinary logs.**
+
+This is one of the most important principles of prediction logging. Instead of blindly storing raw inputs in logs, you might record safe summaries. For example, instead of:
+
+```text
+customer_email = alice@example.com
+```
+
+you may not log the email at all. Instead of storing the entire feature vector:
+
+```text
+[37, 58000, ..., hundreds of values]
+```
+
+you might store:
+
+```text
+feature_schema_version = v18
+feature_count          = 142
+missing_feature_count  = 2
+feature_validation     = passed
+```
+
+Sometimes specific non-sensitive features may be safe to record. Sometimes no raw features should enter telemetry. Sometimes regulated investigations require raw evidence, but that evidence belongs in a **separate restricted store** rather than ordinary logs.
+
+Conceptually:
+
+```text
+                 prediction
+                     │
+          ┌──────────┴──────────┐
+          ▼                     ▼
+general telemetry        restricted evidence
+          │                     │
+safe metadata             sensitive details
+broad access              narrow access
+short retention           governed retention
+```
+
+The exact boundary depends on the application, data classification and legal requirements. A logging pipeline should not casually collect things like:
+
+```text
+API keys
+passwords
+session tokens
+authorization headers
+private keys
+database credentials
+```
+
+A production incident can become much worse if debugging telemetry itself leaks credentials. A useful rule is:
+
+**Logging should capture enough evidence to understand behaviour without turning the logging system into a copy of every secret and customer input flowing through production.**
+
+Suppose you need to determine whether two predictions used the same input without storing that input. A digest may help:
+
+```text
+input_fingerprint = H(normalized_input)
+```
+
+Then:
+
+```text
+prediction A → fingerprint X
+prediction B → fingerprint X
+```
+
+suggests they used equivalent normalized inputs. Or the log can store a reference:
+
+```text
+input_record_id = secure-store://...
+```
+
+while the sensitive record itself remains elsewhere under stricter controls. This gives you **traceability without duplication**. But hashes are not automatically anonymous; predictable or low-entropy values can sometimes be guessed. Data classification still matters. A prediction without a timestamp is difficult to place in context. Suppose:
+
+```text
+prediction score = 0.91
+model version    = v42
+```
+
+You still need to know:
+
+```text
+Did this happen before or after deployment
+Was the feature store degraded
+Was traffic unusually high
+Was an experiment active
+```
+
+A timestamp lets you correlate the prediction with the rest of the system.
+
+Conceptually:
+
+```text
+09:59 deploy v42
+10:02 GPU saturation begins
+10:04 prediction P91 occurs
+10:05 error rate rises
+10:11 rollback
+```
+
+Now the event has historical context.
+
+## How Do Prediction Events Reach Storage with Versioning, Bounded Volume, Retention, and Access Control?
+<!-- section-summary: A durable event path needs shared metric dimensions, delivery semantics, schema versions, volume controls, deliberate sampling, differentiated retention, and authorized access. -->
+
+A durable event path needs shared metric dimensions, delivery semantics, schema versions, volume controls, deliberate sampling, differentiated retention, and authorized access.
+
+Suppose your dashboard shows:
+
+```text
+error rate for model_version=v42
+rose sharply at 10:04
+```
+
+You investigate logs using the same dimensions:
+
+```text
+model_version = v42
+timestamp between 10:03 and 10:05
+region = eu-west
+```
+
+Then you find specific prediction events. This creates a useful drill-down path:
+
+```text
+Metric
+  │
+  │ "v42 errors increased"
+  ▼
+Prediction logs
+  │
+  │ "these requests failed"
+  ▼
+Trace
+  │
+  │ "feature service timed out"
+  ▼
+Detailed evidence
+```
+
+Good observability systems are designed so that these evidence sources can be correlated. Inside an application, logging a prediction is only the first step. A typical path looks like:
+
+```text
+Prediction Service
+      │
+      │ emits event
+      ▼
+Logging / Event Agent
+      │
+      ▼
+Transport / Queue
+      │
+      ▼
+Processing Pipeline
+      │
+      ├── validate
+      ├── redact
+      ├── enrich
+      └── route
+      │
+      ▼
+Storage / Search System
+      │
+      ▼
+Dashboard / Query / Investigation
+```
+
+Why have a pipeline instead of writing directly into one database?
+
+Because logging should ideally not make inference fragile. Imagine the log database is temporarily unavailable. You usually do not want:
+
+```text
+log database fails
+       ↓
+prediction request fails
+```
+
+unless logging is itself a strict business or regulatory requirement. A buffer or asynchronous transport can decouple them:
+
+```text
+prediction
+    │
+    ├────► return result
+    │
+    └────► queue log event
+               │
+               ▼
+          process later
+```
+
+This protects inference latency and reliability. Suppose the model produces 100,000 predictions. The service succeeds. But the logging pipeline silently drops 20,000 records. Your service-health dashboard may say:
+
+```text
+service healthy
+```
+
+while your future investigations are missing evidence. Therefore the **logging system itself must be monitored**. Useful signals include:
+
+```text
+events emitted
+events accepted
+events rejected
+queue depth
+delivery failures
+serialization failures
+schema-validation failures
+dropped-event count
+processing delay
+```
+
+The prediction system and the prediction-observability system are two separate systems. Both can fail. Suppose prediction logs originally look like:
+
+```json
+{
+  "score": 0.94
+}
+```
+
+Later someone changes them to:
+
+```json
+{
+  "probability": 0.94
+}
+```
+
+Old dashboards may suddenly stop working. Or two application versions might emit different shapes simultaneously. So production logging benefits from explicit schema evolution:
+
+```text
+event_schema_version = 3
+```
+
+Then consumers can understand how to interpret the record. The deeper principle is:
+
+Logs are an interface between the producing service and every system that consumes the telemetry.
+
+Interfaces need stability. Imagine an inference service handles:
+
+$$
+10,000 \text{ predictions/second}
+$$
+
+That gives:
+
+$$
+10,000 \times 60 \times 60 \times 24
+=
+864,000,000
+$$
+
+prediction events per day. If each record is only 2 KB:
+
+$$
+864,000,000 \times 2 KB
+\approx 1.7 TB/day
+$$
+
+So “just log every prediction” can create serious cost. This introduces three design questions:
+
+```text
+How much should we log
+How long should we keep it
+Where should we keep it
+```
+
+Suppose full prediction logging would be too expensive. You might retain:
+
+```text
+1% of ordinary successful predictions
+100% of errors
+100% of suspicious cases
+100% of canary-version traffic
+```
+
+This is **sampling**. Sampling trades completeness for cost. If:
+
+$$
+p = 0.01
+$$
+
+then roughly one prediction in 100 is retained. That can still provide statistical visibility. However, sampling has consequences. If a customer asks about a specific unlogged prediction:
+
+```text
+prediction not sampled
+```
+
+you may have no detailed record. So sampling policy should derive from what investigations must be possible. You may not need every field for the same amount of time.
+
+For example:
+
+```text
+high-volume operational logs
+→ short retention
+
+aggregated metrics
+→ longer retention
+
+prediction metadata
+→ medium retention
+
+regulated audit records
+→ retention defined by policy
+```
+
+Again, there is no universally correct retention period. The principle is:
+
+$$
+\text{Retention}
+=
+f(\text{investigation needs},\text{cost},\text{risk},\text{regulation})
+$$
+
+Keeping data forever is not automatically safer. More stored data also means more:
+
+```text
+cost
+security exposure
+privacy exposure
+governance burden
+```
+
+Prediction evidence may be sensitive even when obvious secrets have been removed. For example, seeing:
+
+```text
+prediction_id
+customer segment
+fraud score
+model decision
+timestamp
+```
+
+might reveal important business or customer information. Therefore logging needs access controls just like production databases. Typical principles include:
+
+```text
+least privilege
+authenticated access
+authorization by role
+audit trails
+retention policies
+redaction
+encryption
+```
+
+Prediction logging is not merely an engineering convenience. It is a data system.
+
+## How Do Prediction Records Join Outcomes and Reconstruct One Decision Path?
+<!-- section-summary: Once outcomes arrive, a prediction record supports individual disputes and population analysis by reconnecting the complete feature, model, policy, and result path. -->
+
+Once outcomes arrive, a prediction record supports individual disputes and population analysis by reconnecting the complete feature, model, policy, and result path.
+
+This is one of the most important ideas in ML monitoring. At prediction time, you often do not know whether the prediction was correct. Suppose:
+
+```text
+Day 1:
+model says transaction = fraud
+```
+
+Only later do you learn:
+
+```text
+Day 30:
+transaction confirmed legitimate
+```
+
+To evaluate the model, you need to join:
+
+```text
+prediction
+    +
+eventual outcome
+```
+
+A stable prediction ID makes this possible.
+
+For example:
+
+```text
+prediction_id = P17
+prediction    = FRAUD
+probability   = 0.91
+
+30 days later:
+
+prediction_id = P17
+ground_truth  = LEGITIMATE
+```
+
+Now you can determine:
+
+```text
+false positive
+```
+
+Across many records, you can calculate:
+
+$$
+Accuracy =
+\frac{\text{Correct Predictions}}
+{\text{Predictions With Known Outcomes}}
+$$
+
+or precision, recall, calibration and other model-quality metrics. This is where prediction logging becomes part of the **feedback loop**. Without prediction records:
+
+```text
+input
+  ↓
+model
+  ↓
+prediction
+  ↓
+gone
+```
+
+With prediction logging and later outcomes:
+
+```text
+input
+  │
+  ▼
+model
+  │
+  ▼
+prediction ───────► prediction record
+                        │
+                        │
+future outcome ─────────┘
+                        │
+                        ▼
+                    evaluation
+                        │
+                        ▼
+                  model monitoring
+                        │
+                        ▼
+                 retraining / action
+```
+
+This connects real production behaviour back to model development. The word **feedback** becomes literal. The world eventually tells you whether previous predictions were useful. Suppose a customer says:
+
+“Your system incorrectly rejected my loan application yesterday.”
+
+The investigation might begin with:
+
+```text
+prediction_id = pred_8172
+```
+
+The prediction event says:
+
+```text
+timestamp           = 14:07:31
+model_version       = credit-v19
+feature_version     = v32
+prediction_score    = 0.73
+decision_threshold  = 0.70
+final_decision      = reject
+missing_features    = 1
+experiment          = new-income-pipeline
+```
+
+Immediately, several things become clear. The prediction was not made by today's model:
+
+```text
+credit-v19
+```
+
+It crossed the rejection threshold only narrowly:
+
+```text
+score     = 0.73
+threshold = 0.70
+```
+
+And it used an experimental feature pipeline. You follow the trace and discover:
+
+```text
+income feature lookup timed out
+```
+
+The system substituted a fallback value. Now the causal path becomes:
+
+```text
+feature lookup timeout
+        │
+        ▼
+fallback income value
+        │
+        ▼
+different feature vector
+        │
+        ▼
+score = 0.73
+        │
+        ▼
+threshold = 0.70
+        │
+        ▼
+REJECT
+```
+
+Without prediction evidence, the conversation might have been:
+
+“We tested the current model and it seems fine.”
+
+With prediction logging, you can investigate the actual event that occurred. Prediction logs are not useful only for one-off cases. Suppose monitoring shows:
+
+```text
+positive prediction rate
+
+Monday     31%
+Tuesday    30%
+Wednesday  29%
+Thursday   11%  ← sudden change
+```
+
+The metric tells you **something changed**. Prediction logs let you investigate the population behind the metric. You might query Thursday's records and discover:
+
+```text
+model version unchanged
+threshold unchanged
+region unchanged
+missing_feature_count sharply increased
+```
+
+Then:
+
+```text
+missing features
+      ↓
+input distributions changed
+      ↓
+model scores changed
+      ↓
+positive prediction rate collapsed
+```
+
+So:
+
+**Metrics tell you where to look; prediction records provide evidence about what actually happened.**
+
+A strong conceptual question is:
+
+“If I received only this record six months from now, how much of the prediction could I reconstruct?”
+
+You may want to know:
+
+```text
+when it happened
+which model ran
+which preprocessing ran
+which important configuration applied
+what quality checks occurred
+what the model returned
+what postprocessing occurred
+what the final service returned
+```
+
+You do not necessarily need enough information to mathematically reproduce the exact prediction. Exact reproducibility can require:
+
+```text
+the exact model artifact
+exact feature values
+exact libraries
+hardware/runtime behaviour
+random seeds
+external dependency state
+```
+
+That can be expensive or impossible. Instead distinguish:
+
+```text
+Explainability
+→ enough evidence to understand what happened
+
+Reproducibility
+→ enough information to recreate what happened exactly
+```
+
+Some systems need one; some need both.
 
 ![One prediction creating a recent operational-search path and a durable decision-evidence path linked by prediction identity, with bounded outage and replay controls](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-evidence-delivery-paths.png)
 
 *One prediction sends a small event to recent search and a durable decision event to governed analytical storage. A bounded outage path protects inference and records enough evidence to replay and reconcile safely.*
 
-### Send Recent Events To Operational Telemetry
+## How Do You Keep Logging Reliable, Non-Disruptive, and Verifiably Complete?
+<!-- section-summary: Logging stays outside the prediction's critical behaviour, fails safely, and is tested for both delivery and content so missing or malformed evidence is detected. -->
 
-Containers commonly write structured JSON to standard output. A node agent, cloud logging agent, Fluent Bit, or OpenTelemetry Collector reads the stream and attaches trusted service metadata.
+Logging stays outside the prediction's critical behaviour, fails safely, and is tested for both delivery and content so missing or malformed evidence is detected.
 
-The destination may be Cloud Logging, Azure Monitor Logs, CloudWatch Logs, Loki, OpenSearch, or another search backend. Google Cloud Logging, for example, stores JSON objects as structured payloads and can correlate them with traces through trace and span fields.
+Observability is supposed to observe the system. It should not unexpectedly become the dominant cause of latency or failure. Suppose logging adds 400 ms to a 50 ms prediction. Then monitoring has changed the thing being monitored. Or suppose:
 
-The application owns the first allowlist because it knows the meaning of the data. A Collector processor can remove unexpected attributes as a second protection layer. If the application suddenly emits a raw prompt under a new field name, a generic downstream filter may miss it.
-
-### Store Decision Records For Long-Term Use
-
-A low-volume service can send compact decision records through a managed queue or asynchronous writer into a warehouse table. A high-volume platform may publish them to Kafka or a managed event stream, validate them with Spark Structured Streaming, and write an append-only Delta or Iceberg table.
-
-Kafka is useful if several downstream systems need the event or if the throughput justifies an event platform. It also brings partitioning, retention, consumer lag, schema compatibility, and operational ownership. A small endpoint that produces a few hundred records per hour may fit a managed collector or database writer better.
-
-The analytical table usually feeds dbt or Spark models for:
-
-- event freshness;
-- prediction counts by route and version;
-- label join coverage;
-- score and decision distributions;
-- fallback and policy analysis;
-- training-data or evaluation extracts.
-
-Databricks AI Gateway inference tables and Azure Machine Learning data collection provide convenient capture paths for supported endpoints. Their stored rows need the same freshness, count, and join-coverage checks as a custom pipeline. Azure endpoints also need warm-up and request-response reconciliation; Databricks inference tables use best-effort delivery. An application-owned outbox or durable event stream remains the stronger design for decisions whose evidence must be complete.
-
-### Avoid Writing The Same Decision Independently To Two Systems
-
-Suppose the service writes the business decision to a database and then sends the decision event to Kafka. The database write succeeds, but the process crashes before Kafka acknowledges the event. The user received a decision with no durable evidence.
-
-A **transactional outbox** addresses this gap. The service writes the business result and a pending evidence row in one database transaction. A separate publisher reads the outbox and sends the event. After acknowledgement, it marks the row as delivered.
-
-The outbox does not guarantee exactly one delivery. A crash after publication may cause a retry. The consumer therefore deduplicates by event identity.
-
-For a model service without a business database, a bounded local queue, sidecar, or managed capture path can isolate telemetry delivery. The correct choice depends on how serious evidence loss is.
-
-### Define What Happens During An Evidence Outage
-
-Telemetry must not consume unlimited memory or block inference forever.
-
-For a low-risk recommendation service, the team may allow predictions to continue during a logging outage. A bounded queue fills, routine operational events are dropped, and an alert reports the loss. Durable decision events may spool to disk for a limited period.
-
-For a regulated high-impact decision, required evidence may be part of the product control. If the system cannot preserve it, the safe response may route the decision to manual review or stop new automated decisions.
-
-That choice belongs in policy before the incident. The implementation needs:
-
-- a maximum queue or spool size;
-- retry and timeout limits;
-- counters for accepted, retried, rejected, and dropped events;
-- a documented degraded mode;
-- a recovery process for replay and deduplication.
-
-## Control Volume, Retention, And Access
-<!-- section-summary: Sampling, retention, and access policies preserve valuable evidence while controlling cost and exposure. -->
-
-A busy endpoint can create millions of events each day. Keeping every detailed event in a fast search index may cost more than the evidence is worth. Blindly dropping 99 percent of events can erase the rare failures the team cares about.
-
-**Sampling** selects which events retain detailed diagnostic information.
-
-Uniform random sampling gives a representative view of common traffic. Rule-based sampling gives more attention to rare, important paths. A practical policy may keep:
-
-- every error;
-- every reviewed fallback;
-- every safety-policy intervention;
-- every candidate-route event during a canary;
-- one percent of routine successful operational events;
-- every compact decision record required for monitoring and feedback.
-
-Consider a fallback used for only 0.2 percent of predictions. A one-percent uniform sample may preserve too few fallback events for investigation. Keeping every fallback event and sampling normal successes solves that problem.
-
-Each retained event should record its sampling class and probability. Analysts can then distinguish complete counts from samples. A dashboard must not multiply a deliberately complete error stream by the inverse of a normal-success sample rate.
-
-```mermaid
-flowchart TD
-    A["Prediction event"] --> B{"Which path did<br/>the request take?"}
-    B -->|"Error, fallback, safety,<br/>or candidate release"| C["Keep detailed event"]
-    B -->|"Routine success"| D["Hash prediction ID<br/>against sample threshold"]
-    D -->|"Selected"| E["Keep detailed event"]
-    D -->|"Not selected"| F["Keep only required<br/>compact decision record"]
-    C --> G["Record sampling class<br/>and probability"]
-    E --> G
-    F --> G
-
-    class A,B,D source
-    class C,E keep
-    class F compact
-    class G metadata
+```text
+logging service unavailable
+        ↓
+prediction endpoint returns 500
 ```
 
-### Set Retention From The Investigation Or Audit Need
+The observability mechanism has become a critical dependency. Sometimes that is intentionally required, but often it is undesirable. So high-throughput systems frequently design prediction logging to be:
 
-Operational logs may need a few weeks of fast search for incident response. Decision records may need several months because labels mature slowly. Restricted payloads may deserve a shorter period because they carry greater risk.
-
-Suppose a repayment outcome arrives after 90 days. Deleting the compact prediction record after seven days makes model-quality measurement impossible. Keeping the complete application payload in a general log index for 90 days adds risk without analytical value.
-
-The team chooses each period from:
-
-- incident lookback;
-- label delay;
-- appeal or review window;
-- regulatory and contractual obligations;
-- storage and indexing cost;
-- deletion requirements.
-
-Table maintenance needs careful wording. Deleting old decision rows controls business-data retention. Delta `VACUUM` and Iceberg snapshot expiration clean up unreferenced historical files and snapshots. Those maintenance operations do not automatically apply the business retention policy to active rows. Generic object-store deletion can damage a table if it removes files without updating table metadata.
-
-### Grant Access From Job Responsibility
-
-Service responders need sanitized errors, latency, route, and correlation values. Model teams need approved decision attributes and aggregate segments. A narrow review group may access original payloads through a purpose-bound workflow.
-
-**Identity and Access Management (IAM)** roles define which people and services may perform actions on a resource. IAM roles, Unity Catalog grants, warehouse row or column policies, encryption keys, and query audit logs enforce the separation. Exports and notebooks count as additional copies and need the same retention and deletion plan.
-
-The most important rule is simple: retention and access belong to fields and purposes, rather than to a vague category called “logs.”
-
-## Investigate A Production Problem With Prediction Evidence
-<!-- section-summary: Prediction evidence narrows a broad monitoring symptom to the route, version, dependency, or policy that needs action. -->
-
-An alert usually describes a population. It may say that fallback use doubled in one region or that manual reviews increased after a release. A prediction record helps the team inspect the decisions inside that population.
-
-Suppose fallback use rises from 2 percent to 18 percent for European traffic. The model service still returns `200 OK`, so the error-rate dashboard remains quiet.
-
-The investigation proceeds in layers:
-
-1. Confirm that decision events are fresh and complete.
-2. Group affected predictions by fallback reason, model route, feature version, and policy version.
-3. Open recent operational events and traces for the dominant group.
-4. Compare the timing with deployment records.
-5. Contain the responsible release or dependency.
-6. Verify both service recovery and evidence recovery.
-
-A short warehouse query exposes the first split:
-
-```sql
-select
-  feature_set_version,
-  fallback_reason,
-  count(*) as predictions
-from monitoring.prediction_events
-where decision_time >= current_timestamp - interval '30 minutes'
-  and region_group = 'eea'
-  and fallback_used = true
-group by 1, 2
-order by predictions desc;
+```text
+buffered
+asynchronous
+batched
+failure-isolated
 ```
 
-Assume the result shows that nearly every fallback uses `feature_set_version="application-v8"` with `fallback_reason="feature_timeout"`. The model routes are mixed.
+while still monitoring whether records are successfully delivered. Imagine the application contains:
 
-The result points away from one model artifact and toward the feature path. Operational logs show timeouts for the same prediction IDs. Traces place the delay in the online-feature call. The release system confirms that version 8 received traffic just before the fallback increase.
-
-The feature owner routes traffic back to the reviewed version. Recovery needs more than a successful deployment:
-
-- fallback ratio returns to the expected range;
-- feature-call latency recovers;
-- recent decision events use the intended version;
-- durable event count matches accepted predictions;
-- the delayed-event backlog drains without duplicate decisions.
-
-The investigation can reveal a different problem. Request traffic may remain steady while decision-event volume drops by half. Before drawing a conclusion about model behavior, the team checks producer rejection, Collector or stream delivery, consumer lag, table freshness, and schema-version counts. A broken evidence path can make a healthy service look as if traffic disappeared.
-
-## Test That Prediction Logging Works End To End
-<!-- section-summary: Contract, privacy, delivery, reconciliation, and reconstruction tests verify that prediction evidence stays safe and useful. -->
-
-Prediction logging can fail silently. The service keeps answering requests while a renamed field breaks label joins, a stalled consumer delays every record, or a new exception path leaks a secret.
-
-Testing therefore covers the entire evidence path.
-
-### Validate The Event Before Deployment
-
-Contract tests validate required fields, types, allowed values, timestamps, identifiers, and units. Privacy tests send representative inputs containing names, tokens, and other forbidden values. They then assert that those values never appear in application output, Collector output, log search, or decision tables.
-
-The test uses realistic error paths too. Exception objects often contain URLs, query values, file paths, or input fragments. The application should map known failures to bounded classes such as `feature_timeout` or `model_runtime_error`.
-
-### Validate The Analytical Table
-
-dbt data tests can protect the curated decision model:
-
-```yaml
-models:
-  - name: prediction_events
-    columns:
-      - name: prediction_id
-        data_tests: [not_null, unique]
-      - name: schema_version
-        data_tests:
-          - accepted_values:
-              arguments:
-                values: [3]
+```text
+emit_prediction_event(...)
 ```
 
-This example assumes one terminal `prediction_completed` row per prediction. A table holding several event types would test a compound key instead.
+That does not prove usable prediction records exist. Many things can fail after that call:
 
-The dbt test runs after ingestion and deduplication. Producer tests still validate the complete JSON contract before publication. These layers catch different failures.
+```text
+serialization
+agent collection
+network delivery
+queue
+schema processing
+redaction
+indexing
+storage
+permissions
+querying
+```
 
-### Compare Service Request Counts With Stored Evidence
+So the complete path should be tested.
 
-If the service accepted 100,000 predictions, the durable store should explain how many rows arrived, how many were rejected, and how many remain in flight.
+Conceptually:
 
-A useful reconciliation reports:
+```text
+make known prediction
+        │
+        ▼
+prediction ID created
+        │
+        ▼
+event emitted
+        │
+        ▼
+collector receives
+        │
+        ▼
+pipeline accepts
+        │
+        ▼
+storage receives
+        │
+        ▼
+search by prediction ID
+        │
+        ▼
+record found and correct
+```
 
-**coverage = unique stored prediction records / accepted predictions**
+This is an **end-to-end observability test**. The important question is not:
 
-The comparison uses the same route and time window on both sides. It also allows for documented delivery delay. A healthy ratio close to one is more trustworthy than a single “pipeline succeeded” flag.
+“Does the application contain logging code?”
 
-### Test Logging Failure And Recovery
+It is:
 
-Stop the stream consumer or make the storage sink unavailable in a safe environment. Observe:
+“Can an engineer actually retrieve trustworthy evidence about a real prediction?”
 
-- application latency;
-- queue or spool growth;
-- retries and drops;
-- schema rejection;
-- consumer lag;
-- dataset freshness;
-- duplicate records after replay.
+Suppose the event reaches storage successfully:
 
-Suppose a Spark consumer is stopped for twenty minutes. Kafka lag rises, the newest decision time in Delta ages, and the monitoring job reports stale evidence. Inference continues within its latency objective because publication is asynchronous.
+```json
+{
+  "prediction_id": null,
+  "model_version": "unknown",
+  "score": 0.91
+}
+```
 
-After the consumer restarts, success requires the backlog to drain, event freshness to recover, counts to reconcile, and replayed events to deduplicate correctly. A green service dashboard alone does not prove evidence recovery.
+Technically the logging pipeline works. Operationally, the record may be useless. Testing should therefore verify semantics too:
 
-Finally, run a reconstruction exercise. Start from one prediction ID and locate:
+```text
+prediction ID is present
+timestamp is correct
+model version is correct
+schema is valid
+sensitive fields are absent
+decision matches response
+required correlation IDs exist
+```
 
-- the operational event;
-- the exact model and policy versions;
-- a trace if it was retained;
-- the durable decision row;
-- the later outcome;
-- the restricted source reference, if the reviewer is authorized.
+Logging quality matters as much as logging availability. A mature monitoring system usually has several layers of evidence.
 
-The exercise measures whether the system can answer the questions it promised to answer. A record with fifty fields still fails if the identifiers disagree or one store deleted its side of the join.
+```text
+                Production behaviour
+                        │
+        ┌───────────────┼────────────────┐
+        ▼               ▼                ▼
+     Metrics           Logs            Traces
+        │               │                │
+  "something       "this event       "this request
+   changed"         happened"         went here"
+                        │
+                        ▼
+                Prediction records
+                        │
+                "this model made
+                 this prediction"
+```
 
-## The Main Idea
-<!-- section-summary: Prediction logging gives a deployed model a safe, durable, and testable history of its decisions. -->
+And potentially a separate governed layer:
 
-Prediction logging gives production ML systems a trustworthy memory. It records enough information to explain a decision, connect it to service behavior, join it to a later outcome, and support monitoring over time.
+```text
+Restricted evidence
+        │
+        ▼
+raw/sensitive information
+when genuinely necessary
+```
 
-The design starts with questions. Stable identifiers connect the evidence. A versioned structured event gives fields consistent meaning. Safe summaries enter operational and analytical systems, while sensitive source data remains under stronger controls.
+Different tools answer different questions. Trying to make one system contain everything usually creates poor observability.
 
-Current production stacks divide the work. Structured application logs and OpenTelemetry-compatible collection support recent debugging. Warehouses, Delta or Iceberg tables, and managed inference tables support durable analysis. dbt or Spark validates and transforms the evidence. IAM, catalog policy, retention, sampling, and deletion keep the data proportionate to its purpose.
+## How Do Prediction Logs Support Model and Service Monitoring without Collecting Everything?
+<!-- section-summary: The minimum evidence set follows real investigation questions and links model-health and service-health signals without turning telemetry into an uncontrolled data copy. -->
 
-The logging path is part of the production system. Teams monitor freshness, rejection, lag, loss, and duplicate delivery. They test privacy boundaries, backend outages, replay, reconciliation, and full decision reconstruction. Those practices turn a pile of log lines into evidence that people can safely trust.
+The minimum evidence set follows real investigation questions and links model-health and service-health signals without turning telemetry into an uncontrolled data copy.
+
+Prediction logs often become the raw material for higher-level model metrics. Suppose each event contains:
+
+```text
+timestamp
+model_version
+prediction_probability
+predicted_class
+```
+
+Over many events, you can calculate:
+
+$$
+\text{Mean Prediction Score}
+$$
+
+$$
+\text{Positive Prediction Rate}
+$$
+
+$$
+P(\hat{Y}=1)
+$$
+
+You can compare:
+
+```text
+v41 vs v42
+today vs last week
+region A vs region B
+```
+
+If eventual labels arrive, you can compute:
+
+```text
+accuracy
+precision
+recall
+false-positive rate
+calibration
+```
+
+So there is a hierarchy:
+
+```text
+individual prediction events
+            │
+            ▼
+      aggregated metrics
+            │
+            ▼
+     model-health signals
+            │
+            ▼
+       alerts/actions
+```
+
+Prediction logging often provides the evidence beneath model monitoring. The same record can sometimes connect ML behaviour to operational behaviour. Imagine:
+
+```text
+prediction_score = 0.81
+model_version    = v42
+latency          = 1.4 sec
+GPU_type         = ...
+region           = eu-west
+```
+
+Now you can investigate questions like:
+
+Does v42 produce different predictions on one hardware path
+
+or:
+
+Are timeouts concentrated around unusually large requests
+
+or:
+
+Did fallback predictions increase when the feature service slowed down
+
+This is where service health and model health meet.
+
+```text
+SERVICE EVIDENCE                    MODEL EVIDENCE
+
+latency                             score
+error                               class
+region                              model version
+dependency status                   feature version
+            \                       /
+             \                     /
+              ── prediction ID ───
+```
+
+The stable identity lets both sides describe the same event. This instinct seems safe:
+
+“Storage is cheap. We'll keep everything.”
+
+But unrestricted prediction logging can create several problems at once:
+
+```text
+huge storage costs
+slow searches
+high-cardinality indexes
+privacy exposure
+security exposure
+regulatory burden
+unclear ownership
+difficult retention
+too much noise
+```
+
+More telemetry is not automatically more observability. Observability means being able to answer important questions efficiently. A million irrelevant fields can make that harder. For every proposed field, ask:
+
+“What investigation does this field enable?”
+
+For example:
+
+```text
+model_version
+→ identify release-specific behaviour
+
+prediction_id
+→ retrieve one prediction
+
+trace_id
+→ connect prediction to distributed request
+
+missing_feature_count
+→ identify feature-quality failures
+
+score
+→ analyze output distribution
+
+policy_version
+→ understand final decision logic
+```
+
+If nobody can explain why a field is useful, it may not need to be recorded. If a field is highly sensitive, its investigative benefit must justify the risk.
+
+## What Does a Complete Prediction Record and Feedback Loop Look Like?
+<!-- section-summary: The final record model and worked example show how identity, versions, safe context, timings, decisions, outcomes, monitoring, and investigation form one feedback loop. -->
+
+The final record model and worked example show how identity, versions, safe context, timings, decisions, outcomes, monitoring, and investigation form one feedback loop.
+
+You can think of a useful prediction event as answering six questions:
+
+```text
+WHEN
+timestamp
+
+WHICH EVENT
+prediction_id
+
+WHAT SYSTEM
+model / feature / policy versions
+
+WHAT HAPPENED
+score / class / final decision
+
+UNDER WHAT CONDITIONS
+safe contextual metadata
+
+HOW CAN I FOLLOW IT
+trace ID / request ID / outcome key
+```
+
+Notice what is intentionally absent:
+
+```text
+"copy every piece of input data"
+```
+
+That should be a separate, deliberate decision. Now combine everything.
+
+```text
+                         PRODUCTION REQUEST
+                                │
+                                ▼
+                          Feature Retrieval
+                                │
+                                ▼
+                           Model Inference
+                                │
+                                ▼
+                         Prediction / Decision
+                          │             │
+                          │             ▼
+                          │          Response
+                          │
+                          ▼
+                    Prediction Event
+                          │
+             ┌────────────┼─────────────┐
+             ▼            ▼             ▼
+         Search        Metrics       Investigation
+             │            │
+             │            ▼
+             │       Drift / quality
+             │        monitoring
+             │
+             ▼
+      Later ground truth
+             │
+             ▼
+      Join prediction
+        with outcome
+             │
+             ▼
+     Evaluate behaviour
+             │
+             ▼
+       Improve model,
+      data or service
+```
+
+This is why prediction logging belongs under **Monitoring and Feedback**, rather than merely “debugging.” It provides the historical evidence that lets future information be connected to past model behaviour. Suppose a recommendation system emits this event:
+
+```json
+{
+  "event_schema_version": 4,
+  "timestamp": "2026-08-30T10:21:08Z",
+  "prediction_id": "pred_42af",
+  "trace_id": "trace_c901",
+  "model_version": "recommendation-v18",
+  "feature_version": "features-v11",
+  "candidate_count": 523,
+  "recommendation_count": 20,
+  "fallback_used": false,
+  "latency_ms": 84
+}
+```
+
+Notice that it does **not** contain:
+
+```text
+customer name
+email address
+authentication token
+full browsing history
+raw private feature vector
+```
+
+Later, the system records:
+
+```text
+prediction_id = pred_42af
+clicked_item  = item_871
+```
+
+Now the team can connect:
+
+```text
+prediction
+    │
+    ▼
+recommendations shown
+    │
+    ▼
+user outcome
+```
+
+Across millions of such events, the team can evaluate whether `recommendation-v18` actually improved user outcomes. If a release behaves strangely, they can isolate its records. If one prediction is disputed, they can retrieve its evidence. If the logging pipeline starts dropping events, telemetry-health metrics reveal it. That is prediction logging functioning as a feedback infrastructure rather than simply printing debugging messages. The deepest way to think about prediction logging is this:
+
+> **A prediction is a temporary computation, but production systems need durable evidence of important decisions. Prediction logging creates that evidence.**
+
+The reasoning chain is:
+
+```text
+Predictions happen
+      │
+      ▼
+Their internal state disappears
+      │
+      ▼
+Questions arise later
+      │
+      ▼
+We need preserved evidence
+      │
+      ▼
+Create a structured prediction event
+      │
+      ├── stable identity
+      ├── timestamp
+      ├── model/configuration provenance
+      ├── result
+      └── safe investigation metadata
+      │
+      ▼
+Deliver it reliably to governed storage
+      │
+      ▼
+Search individual cases
+      +
+aggregate population behaviour
+      +
+join later outcomes
+      │
+      ▼
+Understand what happened
+      │
+      ▼
+Improve model and service
+```
+
+So prediction logging is not fundamentally about producing text files. It is about creating a **trustworthy historical record of model behaviour**. And the key design principle is:
+
+**Record enough evidence to explain, correlate, evaluate, and improve predictions later—while deliberately limiting sensitive data, cost, and operational risk.**
 
 ![Prediction-logging investigation summary tracing a fallback increase from affected European traffic through application-v8 feature timeouts to containment and evidence-complete recovery](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-logging-investigation-summary.png)
 
 *Joinable evidence traces a fallback increase from the affected population to a timed-out feature version. Recovery requires both service restoration and complete, deduplicated decision evidence.*
 
-## References
+## Check Your Answers
 
-- [OpenTelemetry logs](https://opentelemetry.io/docs/concepts/signals/logs/)
-- [OpenTelemetry log data model](https://opentelemetry.io/docs/specs/otel/logs/data-model/)
-- [OpenTelemetry Python status](https://opentelemetry.io/docs/languages/python/)
-- [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
-- [OpenTelemetry Collector internal telemetry](https://opentelemetry.io/docs/collector/internal-telemetry/)
-- [W3C Trace Context](https://www.w3.org/TR/trace-context/)
-- [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)
-- [Google Cloud structured logging](https://cloud.google.com/logging/docs/structured-logging)
-- [Google Cloud log and trace correlation](https://cloud.google.com/trace/docs/trace-log-integration)
-- [Azure Machine Learning production data collection](https://learn.microsoft.com/en-us/azure/machine-learning/concept-data-collection)
-- [Azure Machine Learning online endpoint monitoring](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints)
-- [Databricks AI Gateway inference tables](https://docs.databricks.com/en/ai-gateway/inference-tables)
-- [Databricks inference-table migration guidance](https://docs.databricks.com/en/machine-learning/model-serving/inference-tables.html)
-- [AWS SageMaker AI data capture](https://docs.aws.amazon.com/sagemaker/latest/dg/model-monitor-data-capture.html)
-- [Apache Kafka documentation](https://kafka.apache.org/documentation/)
-- [Delta Lake documentation](https://docs.delta.io/)
-- [Delta Lake table utility and VACUUM](https://docs.delta.io/delta-utility/)
-- [Apache Iceberg documentation](https://iceberg.apache.org/docs/latest/)
-- [Apache Iceberg maintenance](https://iceberg.apache.org/docs/latest/maintenance/)
-- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Why Must a Production System Preserve Evidence about Individual Predictions?]{kind="recap"}
+Prediction logging turns a temporary inference into structured historical evidence that can answer what happened, under which conditions, and why an individual decision occurred.
+:::
+
+:::expand[Which Identities, Structured Fields, Model Details, and Outputs Belong in a Prediction Record?]{kind="recap"}
+Stable prediction and correlation identities connect a structured event to the model that ran, the score and decision returned, thresholds, fallbacks, and other behaviour-affecting context.
+:::
+
+:::expand[How Should Feature Evidence, Privacy, Secrets, References, and Time Be Handled?]{kind="recap"}
+Feature metadata must support investigation without copying unnecessary sensitive values; secrets are excluded, while governed references, hashes, and several timestamps preserve safer evidence.
+:::
+
+:::expand[How Do Prediction Events Reach Storage with Versioning, Bounded Volume, Retention, and Access Control?]{kind="recap"}
+A durable event path needs shared metric dimensions, delivery semantics, schema versions, volume controls, deliberate sampling, differentiated retention, and authorized access.
+:::
+
+:::expand[How Do Prediction Records Join Outcomes and Reconstruct One Decision Path?]{kind="recap"}
+Once outcomes arrive, a prediction record supports individual disputes and population analysis by reconnecting the complete feature, model, policy, and result path.
+:::
+
+:::expand[How Do You Keep Logging Reliable, Non-Disruptive, and Verifiably Complete?]{kind="recap"}
+Logging stays outside the prediction's critical behaviour, fails safely, and is tested for both delivery and content so missing or malformed evidence is detected.
+:::
+
+:::expand[How Do Prediction Logs Support Model and Service Monitoring without Collecting Everything?]{kind="recap"}
+The minimum evidence set follows real investigation questions and links model-health and service-health signals without turning telemetry into an uncontrolled data copy.
+:::
+
+:::expand[What Does a Complete Prediction Record and Feedback Loop Look Like?]{kind="recap"}
+The final record model and worked example show how identity, versions, safe context, timings, decisions, outcomes, monitoring, and investigation form one feedback loop.
+:::

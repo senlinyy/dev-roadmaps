@@ -1,1 +1,9 @@
-`find /etc -name "*.conf"` searches for files whose name ends in `.conf`. For log files, swap the path and pattern: `find /var/log -name "*.log"`. `tree -L 2 /etc` limits the display to two levels. For large files, use `find /var -type f -size +1M`.
+Use the live filesystem search command when the name is known but the complete path is not.
+
+---
+
+Combine a starting directory with a regular-file filter and a filename pattern.
+
+---
+
+The tree viewer accepts a depth limit. A wildcard pattern can select every filename ending in `.conf`.

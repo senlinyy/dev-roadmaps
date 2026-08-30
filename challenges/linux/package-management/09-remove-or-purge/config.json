@@ -1,0 +1,39 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/usr/sbin/nginx": { "type": "file", "content": "simulated nginx binary\n", "mode": 493 },
+    "/etc/nginx": { "type": "dir" },
+    "/etc/nginx/nginx.conf": { "type": "file", "content": "events {}\nhttp {}\n" }
+  },
+  "commandModules": ["packages"],
+  "packages": {
+    "manager": "apt",
+    "indexFresh": true,
+    "repositories": [
+      { "id": "noble", "name": "Ubuntu", "family": "apt", "url": "http://archive.ubuntu.com/ubuntu noble", "enabled": true, "trusted": true }
+    ],
+    "packages": [
+      { "name": "nginx", "architecture": "amd64", "installedVersion": "1.24.0-2ubuntu7.3", "candidateVersion": "1.24.0-2ubuntu7.3", "repository": "noble", "summary": "Nginx web and reverse proxy server", "files": ["/usr/sbin/nginx"], "configFiles": ["/etc/nginx/nginx.conf"] }
+    ]
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["nginx.conf"],
+    "expectedPackages": { "absent": ["nginx"] },
+    "expectedFs": {
+      "/usr/sbin/nginx": { "type": "file", "exists": false },
+      "/etc/nginx/nginx.conf": { "type": "file", "exists": false }
+    },
+    "requireCommands": ["apt", "ls", "find"],
+    "requireCommandPatterns": [
+      "^sudo\\s+apt\\s+remove\\s+nginx$",
+      "^ls\\s+/etc/nginx/?$",
+      "^sudo\\s+apt\\s+purge\\s+nginx$",
+      "^find\\s+/etc/nginx\\s+-type\\s+f$"
+    ],
+    "minCommandCount": 4
+  }
+}

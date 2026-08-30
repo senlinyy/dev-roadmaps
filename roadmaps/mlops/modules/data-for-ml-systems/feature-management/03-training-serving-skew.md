@@ -14,375 +14,2167 @@ aliases:
 
 ## Table of Contents
 
-1. [A Healthy Endpoint Can Still Feed the Model the Wrong Inputs](#a-healthy-endpoint-can-still-feed-the-model-the-wrong-inputs)
-2. [Six Ways Training And Production Inputs Become Different](#six-ways-training-and-production-inputs-become-different)
-3. [Define One Meaning For Every Feature](#define-one-meaning-for-every-feature)
-4. [Different Transformation Code Changes The Value](#different-transformation-code-changes-the-value)
-5. [Different Data Sources Change The Underlying Record](#different-data-sources-change-the-underlying-record)
-6. [Different Time Cutoffs Change What The Model Can Know](#different-time-cutoffs-change-what-the-model-can-know)
-7. [Different Defaults Change The Meaning Of Missing Data](#different-defaults-change-the-meaning-of-missing-data)
-8. [Different Dependency Versions Change Supporting Assets](#different-dependency-versions-change-supporting-assets)
-9. [Different Environments Change Runtime Behaviour](#different-environments-change-runtime-behaviour)
-10. [Reuse Definitions And Code Across Training And Production](#reuse-definitions-and-code-across-training-and-production)
-11. [Compare Training And Production Values For The Same Cases](#compare-training-and-production-values-for-the-same-cases)
-12. [Test Training And Production Paths Before Release](#test-training-and-production-paths-before-release)
-13. [Contain And Repair A Training-Production Mismatch](#contain-and-repair-a-training-production-mismatch)
-14. [Confirm The Feature Values Recovered And Keep Monitoring](#confirm-the-feature-values-recovered-and-keep-monitoring)
-15. [References](#references)
+1. [What Is Training-Serving Skew?](#what-is-training-serving-skew)
+2. [How Do Logic, Sources, and Time Create Different Feature Values?](#how-do-logic-sources-and-time-create-different-feature-values)
+3. [How Do Missing Values, Dependencies, and Runtime Environments Create Skew?](#how-do-missing-values-dependencies-and-runtime-environments-create-skew)
+4. [Why Must Both Feature Programs Share an Explicit Contract?](#why-must-both-feature-programs-share-an-explicit-contract)
+5. [How Do Golden Cases and Direct Value Comparisons Detect Skew?](#how-do-golden-cases-and-direct-value-comparisons-detect-skew)
+6. [How Do Release Tests Separate Skew from Data and Model Drift?](#how-do-release-tests-separate-skew-from-data-and-model-drift)
+7. [How Can Gradual, Schema, Vocabulary, and Freshness Skew Be Monitored?](#how-can-gradual-schema-vocabulary-and-freshness-skew-be-monitored)
+8. [How Should a Team Contain, Repair, and Verify a Skew Incident?](#how-should-a-team-contain-repair-and-verify-a-skew-incident)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## A Healthy Endpoint Can Still Feed the Model the Wrong Inputs
-<!-- section-summary: Training-serving skew appears when the production feature path gives a model different evidence from the feature path used during training. -->
+A purchase model was trained with `order_total` measured in dollars. A value of `$24.50` entered training as `24.5`. The production API receives the same amount in cents and sends `2450` to the model.
 
-A purchase model was trained with `order_total` measured in dollars. A historical value of `$24.50` entered the training table as `24.5`. The production API receives the same amount from a payment service in cents and passes `2450` into the model.
+The field exists, its type is numeric, the endpoint returns `200 OK`, and latency is normal. The model still receives a value one hundred times larger than the values it learned from.
 
-The request has the expected field. Its type is numeric. The endpoint returns `200 OK`, latency stays normal, and the model produces a well-formed score. Every ordinary service check can stay green while the model reads an amount one hundred times larger than the values it learned from.
+This is **training-serving skew**: the path that creates live model inputs disagrees with the path that created training inputs. The difference may come from logic, data sources, timestamps, missing-value rules, dependency versions, schema order, vocabularies, or runtime environments. Direct comparisons for the same logical case are the strongest way to find it.
 
-This is **training-serving skew**: the feature path used for production prediction disagrees with the path that created the model's training inputs. The disagreement can change a value, its meaning, its timestamp, or the policy used to fill a missing value.
+Trace those differences through these questions:
 
-Skew needs to be separated from **data drift** during investigation. If holiday shoppers genuinely spend more and both training and serving calculations represent those purchases in dollars, the population has changed. That is data drift. If the offline path uses dollars and the online path uses cents for the same purchase, the engineering paths disagree. That is a direct parity failure.
+1. **What Is Training-Serving Skew?**
+2. **How Do Logic, Sources, and Time Create Different Feature Values?**
+3. **How Do Missing Values, Dependencies, and Runtime Environments Create Skew?**
+4. **Why Must Both Feature Programs Share an Explicit Contract?**
+5. **How Do Golden Cases and Direct Value Comparisons Detect Skew?**
+6. **How Do Release Tests Separate Skew from Data and Model Drift?**
+7. **How Can Gradual, Schema, Vocabulary, and Freshness Skew Be Monitored?**
+8. **How Should a Team Contain, Repair, and Verify a Skew Incident?**
 
-Some platforms use “training-serving skew” more broadly for any distribution difference between a training baseline and live inputs. That broader signal is useful, although it overlaps with drift. A direct engineering test asks:
+## What Is Training-Serving Skew?
 
-**For the same logical example and prediction time, the training and serving paths should produce the same feature meaning and an equivalent value within the feature's declared tolerance.**
+<!-- section-summary: Training-serving skew occurs if production represents an equivalent situation differently from the representation used to train the model. -->
 
-This test gives responders something concrete to reproduce. They can pair one online feature value with an offline recomputation, identify the first layer that disagrees, and repair that layer without assuming the model needs retraining.
+> **The model should see the same kind of input in production that it learned from during training.**
 
-## Six Ways Training And Production Inputs Become Different
-<!-- section-summary: A six-part taxonomy separates calculation, source, time, fallback, version, and runtime differences so each failure reaches the right owner. -->
+If that condition fails, the model may be mathematically correct, the API may return `200 OK`, latency may look healthy, and yet predictions may still be wrong. That is training-serving skew.
 
-Skew is a family of failures. One alert may come from a changed SQL formula, another from a stale online store, and another from a different tokenizer library inside the serving image. Treating all of them as “feature drift” hides the responsible system.
+### What a model actually learns
 
-A useful investigation follows six layers:
+Suppose we train a fraud model. The model receives features:
 
-```mermaid
+$$
+X =
+[
+\text{transaction amount},
+\text{transactions in last 24h},
+\text{average spend in last 30d}
+]
+$$
 
-flowchart TD
-    A["Paired feature values disagree"] --> B["1. Transformation<br/>Formula, encoding, units, or feature order"]
-    B --> C["2. Data source<br/>Different records, keys, or materialization"]
-    C --> D["3. Time and availability<br/>Different cutoff, window, or freshness"]
-    D --> E["4. Default and fallback<br/>Different treatment of missing or stale data"]
-    E --> F["5. Dependency and version<br/>Different model companions or configuration"]
-    F --> G["6. Execution environment<br/>Different runtime, hardware, or numeric behaviour"]
-    G --> H["Contain the affected path<br/>and repair the first mismatch"]
+and a label:
 
-    class A signal
-    class B,C,D,E,F,G layer
-    class H action
+$$
+Y = \text{fraud or not}
+$$
+
+Training estimates some relationship:
+
+$$
+P(Y \mid X)
+$$
+
+Consider the model may learn:
+
+Customers whose current transaction is 8× larger than their normal spending pattern are unusually risky.
+
+But this only works if the production feature means the same thing. Suppose training calculates:
+
+$$
+\text{avg\_spend\_30d}=£50
+$$
+
+and production calculates:
+
+$$
+\text{avg\_spend\_30d}=£100
+$$
+
+for the exact same underlying history. Then a £400 transaction looks like:
+
+$$
+400/50 = 8
+$$
+
+during training, but:
+
+$$
+400/100 = 4
+$$
+
+during serving. The model has not changed. The world may not have changed.
+
+The **representation of the world changed**. That is the essence of training-serving skew.
+
+### A model does not understand feature names
+
+This is a useful first principle. A model does not know that column 17 is called:
+
+```text
+average_spend_30d
 ```
 
-The order starts with the closest explanation and moves outward. If the formula differs, a database investigation adds little value. If the formulas match, the team compares source records and materialization. Time rules follow because the same source may expose several historically valid values. Versions and runtime come later because they often explain a path that appears identical in code review.
+It only sees a number:
 
-Several layers can fail together. A new feature package may change a category vocabulary and introduce a new default. The taxonomy still helps because each mismatch receives its own evidence and recovery check.
+```text
+72.4
+```
+
+During training, perhaps it learned:
+
+$$
+x_{17}=72.4
+$$
+
+means:
+
+average value of approved card purchases over the previous 30 calendar days, excluding refunds.
+
+If production instead calculates:
+
+average value of all payment attempts over 30 days, including refunds
+
+the model is still given:
+
+```text
+72.4
+```
+
+or some other number in column 17. It has no way to know the meaning changed. Therefore:
+
+$$
+\boxed{\text{Feature names do not guarantee feature equivalence}}
+$$
+
+What matters is the **feature contract**.
+
+### Think of every feature as a function
+
+A feature is better represented as:
+
+$$
+x = f(D,t,c)
+$$
+
+where:
+
+* $$D$$ = underlying data
+* $$t$$ = prediction cutoff time
+* $$c$$ = configuration, code, lookup tables, defaults, versions, etc.
+* $$f$$ = transformation logic
+
+Training computes:
+
+$$
+x_{\text{train}}
+=
+f_{\text{train}}(D_{\text{train}}, t_{\text{train}}, c_{\text{train}})
+$$
+
+Production computes:
+
+$$
+x_{\text{serve}}
+=
+f_{\text{serve}}(D_{\text{serve}}, t_{\text{serve}}, c_{\text{serve}})
+$$
+
+For equivalent cases, what we want is approximately:
+
+$$
+\boxed{x_{\text{train}} = x_{\text{serve}}}
+$$
+
+Training-serving skew appears when some relevant part differs:
+
+$$
+f,\ D,\ t,\ c
+$$
+
+The result gives us a systematic way to understand nearly every kind of skew.
+
+### A healthy endpoint can still produce bad predictions
+
+Traditional software monitoring frequently checks things like:
+
+```text
+API uptime
+HTTP error rate
+CPU
+memory
+database health
+request latency
+```
+
+Suppose all of these are perfect:
+
+```text
+Availability:      99.99%
+p99 latency:       32 ms
+HTTP 5xx rate:     0.01%
+CPU:               40%
+```
+
+But an upstream change causes:
+
+```text
+customer_age_days
+```
+
+to be interpreted as hours instead of days. Training:
+
+```text
+customer_age_days = 730
+```
+
+Production:
+
+```text
+customer_age_days = 17,520
+```
+
+Technically:
+
+```text
+API works
+database works
+model works
+prediction returned
+```
+
+Semantically:
+
+```text
+model input is wrong
+```
+
+This is why ML systems need an additional notion of health:
+
+$$
+\boxed{\text{data correctness}}
+$$
+
+not merely service correctness.
+
+### Six common ways skew appears
+
+A useful classification is:
+
+1. transformation skew
+2. source skew
+3. temporal skew
+4. missing/default skew
+5. dependency/version skew
+6. environment/runtime skew
+
+They all violate the same deeper principle:
+
+$$
+\boxed{\text{Training and serving no longer implement the same feature contract}}
+$$
+
+Let's derive each one.
+
+## How Do Logic, Sources, and Time Create Different Feature Values?
+
+<!-- section-summary: A feature relies on transformation logic, source data, prediction cutoff, configuration, defaults, lookup tables, preprocessing assets, versions, and runtime. -->
+
+### Transformation skew
+
+This is the most obvious case. Training uses one transformation:
+
+```python
+log1p(amount)
+```
+
+Production uses:
+
+```python
+log(amount)
+```
+
+For:
+
+$$
+amount = 0
+$$
+
+training gets:
+
+$$
+\log(1+0)=0
+$$
+
+while production may get:
+
+$$
+\log(0)
+$$
+
+which is undefined. Or consider normalization. Training:
+
+$$
+x'=\frac{x-\mu}{\sigma}
+$$
+
+with:
+
+$$
+\mu=100,\quad \sigma=20
+$$
+
+For:
+
+$$
+x=120
+$$
+
+training produces:
+
+$$
+x'=1
+$$
+
+But production accidentally uses:
+
+$$
+\mu=90,\quad \sigma=30
+$$
+
+and produces:
+
+$$
+x'=1
+$$
+
+for some values, but different numbers for many others. The model was trained in one coordinate system and is now being served another. A particularly dangerous case is when both transformations produce plausible values.
+
+Nothing crashes. Predictions just degrade.
+
+### Tiny implementation differences can change semantics
+
+Suppose the intended feature is:
+
+```text
+transactions_last_24h
+```
+
+Offline implementation:
+
+```sql
+WHERE event_time >= prediction_time - INTERVAL '24 hours'
+  AND event_time < prediction_time
+```
+
+Online implementation effectively behaves as:
+
+```text
+event_time > prediction_time - 24h
+event_time <= prediction_time
+```
+
+At first glance they look almost identical. But one includes the current transaction and excludes the exact lower boundary. The other does the opposite.
+
+A single inequality can therefore produce:
+
+$$
+f_{\text{train}} \ne f_{\text{serve}}
+$$
+
+This is why feature logic needs precise semantics, including:
+
+```text
+window definition
+boundary inclusion
+timezone
+filters
+deduplication
+rounding
+null handling
+```
+
+### Data-source skew
+
+Training and production may run identical code but on different underlying data. Imagine training reads from the data warehouse:
+
+```text
+warehouse.transactions
+```
+
+Production reads from:
+
+```text
+payments_service
+```
+
+Suppose the warehouse contains:
+
+```text
+authorized payments
+captured payments
+refund corrections
+late deduplication
+```
+
+while the live service exposes:
+
+```text
+raw authorization attempts
+```
+
+Now this feature:
+
+```text
+successful_transactions_7d
+```
+
+can differ even if both implementations are literally:
+
+```text
+count(rows)
+```
+
+Because:
+
+$$
+D_{\text{train}}\ne D_{\text{serve}}
+$$
+
+The transformation is identical. The underlying facts are not.
+
+### Data-source skew is especially dangerous when schemas look identical
+
+Suppose both systems expose:
+
+```text
+status = "SUCCESS"
+```
+
+But in the warehouse:
+
+```text
+SUCCESS = settled transaction
+```
+
+while in the online service:
+
+```text
+SUCCESS = authorization accepted
+```
+
+Same column name. Same type. Same string value.
+
+Different meaning. The feature pipeline can pass every schema test and still be wrong. The result gives a deeper rule:
+
+$$
+\boxed{\text{Schema equivalence is weaker than semantic equivalence}}
+$$
+
+Matching field names do not prove that training and serving sources represent the same real-world facts.
+
+### Temporal skew
+
+Machine-learning inputs always have a hidden question:
+
+What was knowable when the prediction was made?
+
+Suppose a historical prediction occurred at:
+
+```text
+10:00
+```
+
+Training calculates:
+
+```text
+failed_logins_last_hour
+```
+
+using all events whose event timestamps are before 10:00. But one failed login occurred:
+
+```text
+event time:      09:58
+available online: 10:03
+```
+
+Training sees it. The real production system at 10:00 could not. So training computes:
+
+```text
+failed_logins = 4
+```
+
+while production would have seen:
+
+```text
+failed_logins = 3
+```
+
+This is a subtle form of skew:
+
+$$
+\boxed{\text{historical data knows more than the live system knew}}
+$$
+
+### Temporal skew can become leakage
+
+Suppose a customer makes a transaction at:
+
+```text
+10:00
+```
+
+and later:
+
+```text
+10:05 → another suspicious transaction
+10:20 → account frozen
+```
+
+A historical pipeline that mistakenly joins today's customer state could assign:
+
+```text
+account_status = frozen
+```
+
+to the 10:00 training example. But production at 10:00 saw:
+
+```text
+account_status = active
+```
+
+Now training has future information. This is both:
+
+* training-serving skew
+* target leakage / temporal leakage
+
+Offline results can then appear excellent because training received information the live prediction path can never provide.
 
 ![Training and production feature paths compared across transformation, source, time, default, version, and runtime mismatches](/content-assets/articles/article-mlops-data-for-ml-systems-training-serving-skew/six-skew-causes.png)
 
 *Both jobs may be healthy while their inputs disagree. The six mismatch layers help the team collect the right evidence and route the repair to the responsible boundary.*
 
-## Define One Meaning For Every Feature
-<!-- section-summary: A feature contract defines the value, entity, source, time, fallback, version, and tolerance that both paths must preserve. -->
+## How Do Missing Values, Dependencies, and Runtime Environments Create Skew?
 
-Parity requires a shared statement of what the feature means. A name such as `recent_orders` leaves the customer identity, order states, and clock open to interpretation. The window boundaries, currency, and response to missing history also need an explicit definition.
+<!-- section-summary: Logic skew changes formulas, filters, windows, boundaries, or deduplication. -->
 
-A **feature contract** records those choices in a form that engineers can test. It belongs in version control and travels into the training and release evidence.
+### Missing-value skew
 
-```yaml
-feature: completed_order_value_30d_usd
-entity: customer_id
-value: "Sum completed order value in USD during the previous 30 days."
-event_time: completed_at
-available_time: feature_available_at
-window: "(prediction_at - 30 days, prediction_at]"
-dtype: float64
-default: {value: 0.0, reason: no_completed_orders}
-max_age: 15 minutes
-tolerance: {absolute: 0.01}
-owner: purchase-features
+Missing data is not merely an absence of data. It has semantics. Suppose training uses:
+
+```text
+missing credit score → -1
 ```
 
-The entity identifies whose value is being calculated. The event and availability clocks decide which records were knowable. The window defines its open and closed boundaries. The default distinguishes a genuine zero from a lookup failure. The tolerance allows harmless floating-point differences while still catching a unit error.
+Production uses:
 
-The contract also names the source identities and transformation version in a real implementation. Those values may differ between offline and online storage because the warehouse and low-latency store serve different workloads. Their semantic rules must still agree.
-
-One golden example turns the contract into a test. Given a customer, a fixed prediction timestamp, two completed orders inside the window, one cancelled order, and one late-arriving correction, both paths should return the same expected total. Boundary examples cover an order exactly thirty days old, a value one microsecond outside the window, and a missing customer.
-
-## Different Transformation Code Changes The Value
-<!-- section-summary: Transformation skew arises when training and serving use different formulas, filters, units, encoders, feature order, or preprocessing logic. -->
-
-Start with one raw fact that both paths should interpret identically. **Transformation skew** occurs if the paths apply different calculations to that fact. The final feature then changes even though the source record is the same.
-
-The cents-versus-dollars failure is one example. Other common cases include a thirty-day median offline and a mean online, inclusive window boundaries in SQL and exclusive boundaries in Python, lowercased text during training and original case during serving, or category IDs generated in a different order.
-
-Schema validation may miss all of these. A `float64` remains a `float64` after a unit mistake. An input tensor keeps the same shape after two categorical positions swap. The contract and value comparison expose the semantic difference.
-
-The strongest prevention is one executable transformation used by both paths. TensorFlow Transform, for example, can calculate training-wide statistics such as a vocabulary or normalization constants and export the resulting TensorFlow graph for training and serving. The same graph then applies the learned mapping to live examples.
-
-Many teams use different engines for historical and online work, so literal code sharing may be impractical. A warehouse can calculate large historical windows efficiently while a streaming service maintains current aggregates. In that design, shared contracts, generated specifications, and golden examples define the common behaviour. Each engine implements the contract and must pass the same fixture suite.
-
-A transformation test should compare the final vector delivered to the model. Comparing only intermediate tables can miss feature ordering, casting, normalization, or encoder changes in the serving adapter.
-
-## Different Data Sources Change The Underlying Record
-<!-- section-summary: Data-source skew appears when offline and online paths select different records, identities, corrections, or materialized states. -->
-
-The formulas may match exactly and still produce different values. **Data-source skew** occurs if the paths read different records, identities, corrections, or materialized states for the same prediction.
-
-An offline table may contain corrected transactions while the online store keeps the first version. The warehouse may resolve an account alias immediately while the serving path still uses the old ID. A materialization job may skip one region, leaving yesterday's feature values in the online store.
-
-Source skew often hides behind a healthy lookup. The online database returns a row quickly, so the request path sees success. The row can still carry an old value or belong to the wrong entity.
-
-The feature contract should name both source paths and their relationship. For a materialized feature, the online value normally derives from a versioned offline table or the same governed event stream. Materialization evidence records the source version, target version, covered partitions, row count, maximum event time, and completion status.
-
-Feast models this split through Feature Views. Historical retrieval performs point-in-time joins against an offline source, while materialization loads the latest eligible values into an online store for low-latency retrieval. Feast's standard Feature View describes feature data and schema; transformation pipelines and materialization correctness remain operational responsibilities for the team.
-
-Databricks Feature Store can bind feature lookup metadata to a logged model. Model Serving can then retrieve required values automatically from supported online stores, and configured inference tables can preserve the augmented dataframe containing looked-up values. That evidence helps compare what the model received with an offline recomputation.
-
-Feature platforms reduce ad hoc source selection. They still need materialization-lag alerts, key-coverage checks, and versioned backfill policies.
-
-## Different Time Cutoffs Change What The Model Can Know
-<!-- section-summary: Time skew occurs when historical and live paths disagree about prediction time, event time, availability, windows, freshness, or late data. -->
-
-Features change over time. A training join needs the value available at the historical prediction moment, while online serving needs a sufficiently fresh value available now.
-
-Three clocks keep that distinction clear:
-
-- **event time** records when the business fact occurred;
-- **availability time** records when the feature path could use it;
-- **prediction time** records when the model made or would have made the decision.
-
-Suppose a transaction happened at 09:50, the prediction ran at 10:00, and a correction arrived at 11:30. A training query executed today can see the correction. That correction was unavailable to the live model at 10:00. Joining only on event time leaks later knowledge into the historical example.
-
-Point-in-time retrieval selects the latest feature value whose event and availability rules satisfy the prediction cutoff. Feast historical retrieval scans backward from each entity-row timestamp within the Feature View time-to-live window. Databricks feature tables also support point-in-time joins when the time-series keys and lookup metadata are defined.
-
-Online retrieval adds freshness. The latest stored value may be two hours old even though the contract allows fifteen minutes. The serving path should record feature event time, retrieval time, observed age, and the action taken after the freshness limit.
-
-Boundary fixtures are essential. Test a value exactly at the start and end of the window, a late arrival, two updates with the same event time, and a daylight-saving transition represented in UTC. These cases force both implementations to make the same choice.
-
-## Different Defaults Change The Meaning Of Missing Data
-<!-- section-summary: Default skew appears when training and serving assign different values or meanings to missing, stale, failed, or unseen inputs. -->
-
-A missing value carries information about the data path. Training might fill missing income with the training median. Serving might use zero after a lookup timeout. Both values are numeric and accepted by the model, yet they describe different situations.
-
-Four conditions should stay distinct:
-
-1. the entity genuinely has no history;
-2. the feature exists and is stale;
-3. lookup failed;
-4. the input category was unseen.
-
-One default value can collapse all four into the same model input. This hides incidents and creates a missingness pattern that training and production handle differently.
-
-The contract assigns a value and reason to each allowed fallback. A companion indicator such as `order_value_30d_missing` lets the model distinguish a real zero from an unavailable lookup. The prediction record captures `fallback_used`, `fallback_reason`, feature age, and source status.
-
-Suppose an online store timeout causes 18 percent of requests to receive zero while training used a median of 72.4. Distribution monitoring will detect a spike around zero, and paired comparison will show direct mismatches. The immediate response may use a previous cached value within an approved age limit or route to a fallback model trained without that feature.
-
-Fallbacks are product decisions. They need a maximum duration, an owner, an alert, a model compatibility check, and an exit condition. Quietly returning a default after every lookup error creates a permanent skew path.
-
-## Different Dependency Versions Change Supporting Assets
-<!-- section-summary: Version skew occurs when model, feature definitions, encoders, configuration, or preprocessing packages come from different releases. -->
-
-A model rarely travels alone. Its predictions depend on feature definitions, encoder vocabularies, scalers, tokenizers, lookup configuration, policy thresholds, and serving code.
-
-Imagine a model trained with vocabulary version 8, where `mobile=0`, `desktop=1`, and `unknown=2`. A serving deployment rebuilds the vocabulary from recent traffic and assigns `desktop=0`. Every request still produces an integer in the expected range. The model interprets each category using the old mapping.
-
-A release record should bind the model to immutable companion identities:
-
-```yaml
-release: purchase-propensity-42
-model: models:/purchase_propensity/17
-feature_contract: purchase_features_v12
-feature_service: purchase_online_v12
-encoder_digest: sha256:819b7a...
-preprocessing_package: feature_transforms==4.8.2
-serving_image: registry.example/purchase@sha256:3c218f...
-fallback_policy: purchase_fallback_v5
+```text
+missing credit score → 0
 ```
 
-Mutable labels such as `latest` cannot prove which bytes ran. Digests, immutable model versions, and reviewed configuration supply that evidence.
+The model learned:
 
-The serving process reports its loaded identities at startup and with bounded prediction telemetry. A readiness check can withhold traffic if model 17 expects `purchase_features_v12` while the process loaded version 11. Canary dashboards group parity and fallback results by the concrete release identity so mixed versions remain visible.
+$$
+-1 \Rightarrow \text{missing}
+$$
 
-Configuration changes deserve the same control as code. A feature flag that changes a window from thirty to seven days changes the feature definition and requires a new contract or release identity.
+But production communicates missingness as:
 
-## Different Environments Change Runtime Behaviour
-<!-- section-summary: Environment skew appears when equivalent code runs with different libraries, runtimes, hardware, locale, precision, or concurrency behaviour. -->
+$$
+0
+$$
 
-Matching source code still leaves one more layer to verify: the runtime executing it. **Execution-environment skew** occurs if libraries, hardware, locale, precision, or concurrency change the value.
+which perhaps means:
 
-Training may use a newer pandas or scikit-learn release than serving. One container may parse dates in UTC and another in local time. CPU inference may use `float64` while a GPU path casts to `float16`. Different image-resizing libraries can round pixels differently. Concurrent state updates can also change a live aggregate even though a batch test passes.
+an extremely low score
 
-Small numeric differences are expected for some workloads, so the feature contract declares an absolute or relative tolerance. Categorical IDs, booleans, and feature order usually require exact equality. A blanket tolerance can hide a serious discrete mismatch.
+That is not just a numeric difference. It changes meaning.
 
-Reproducible environments reduce this risk. Keep direct and transitive dependencies in a lockfile, build one reviewed OCI image, deploy by image digest, and record the hardware or execution provider where it affects results. MLflow Models can record Python dependencies, use a uv project or dependency locking, and validate prediction in an isolated environment before deployment.
+### Missingness itself can be predictive
 
-Environment parity still requires testing on the production target. A model that passes inside the training image may behave differently after conversion to ONNX, TensorRT, or a mobile runtime. Run the golden feature vectors and expected predictions through the actual serving artifact on each supported architecture.
+Suppose:
 
-The test result belongs to the release evidence. It records runtime, image digest, dependency lock digest, hardware class, input fixture version, and observed tolerance.
-
-## Reuse Definitions And Code Across Training And Production
-<!-- section-summary: Shared transformations, governed feature retrieval, explicit contracts, and bound release identities remove opportunities for the paths to diverge. -->
-
-Every independent implementation gives training and serving another opportunity to disagree. Prevention reduces those separate decisions while preserving the storage and compute patterns each workload needs.
-
-### Share Transformation Code Where The Workload Allows
-
-Package preprocessing with the model or in a shared versioned library. A scikit-learn `Pipeline` can carry column transformations and the estimator as one artifact. TensorFlow Transform can carry preprocessing statistics and operations in the exported graph. MLflow can package the model, code, dependencies, signature, and input example.
-
-Shared code covers formulas, casts, encoders, and feature order. It cannot make a stale online store fresh or reconstruct a historical cutoff. Those responsibilities need feature retrieval and time-aware storage.
-
-### Use One Feature Definition Across Historical And Online Retrieval
-
-A feature platform earns its place when several models reuse time-sensitive features or need low-latency lookup. Historical retrieval follows entity keys and prediction timestamps. Online retrieval follows the same registered feature references and returns current values from an online store.
-
-Feast supports this pattern with point-in-time historical retrieval, materialization, Feature Services, and online lookup. Databricks supports stable Unity Catalog feature tables, `FeatureLookup`, model lineage, online stores, and automatic lookup in Model Serving. Newer Databricks Feature Views add declarative feature computation, although they remain preview and should stay outside a production default until their lifecycle fits the workload.
-
-The feature platform coordinates definitions and retrieval. Source correctness, materialization coverage, freshness, fallback, and paired parity still need explicit controls.
-
-### Block Releases When Training And Production Checks Disagree
-
-CI runs schema checks and golden fixtures against every transformation change. The training job records the contract and feature source versions used to create the dataset. The model record binds those identities to preprocessing and dependencies. Deployment admits only a compatible set.
-
-This sequence catches a known mismatch before it reaches production and gives later comparisons stable identities.
-
-## Compare Training And Production Values For The Same Cases
-<!-- section-summary: Direct detection pairs an online feature value with an offline recomputation for the same prediction, then uses distribution monitoring as supporting evidence. -->
-
-The clearest skew measurement starts from the same logical event. Sample a production prediction, preserve safe feature evidence, and recompute the expected values using the contract, source version, and prediction cutoff that applied to that request.
-
-### Record Enough Input State To Rebuild The Comparison
-
-The prediction record first identifies the request, entity, and prediction time. It also records the feature contract, source or materialization, and serving release versions. Feature event time, observed value, and fallback reason complete the comparison evidence. Sensitive values can stay in a governed evidence store while general telemetry carries safe summaries and references.
-
-Logging only the model input value makes time and source failures hard to separate. Adding feature event time reveals staleness. Adding source version identifies a partial materialization. Adding fallback reason distinguishes genuine missing history from an online lookup error.
-
-### Compare Paired Values And Important Segments
-
-The recomputation joins by prediction ID and feature name. It pins historical data and enforces `available_at <= prediction_at`. Each feature applies its declared equality or numeric tolerance. This numeric example measures an absolute delta; discrete features use exact equality.
-
-```sql
-select
-  o.feature_name,
-  o.release_id,
-  o.region,
-  count(*) as compared_pairs,
-  avg(case when abs(o.value - r.value) > c.abs_tolerance then 1.0 else 0.0 end)
-    as mismatch_rate,
-  approx_percentile(abs(o.value - r.value), 0.99) as p99_delta
-from online_feature_capture o
-join offline_recomputation r
-  on r.prediction_id = o.prediction_id
- and r.feature_name = o.feature_name
-join feature_contract c
-  on c.feature_name = o.feature_name
- and c.contract_version = o.contract_version
-group by o.feature_name, o.release_id, o.region
+```text
+income
 ```
 
-A global mismatch rate can hide one broken region, model route, or fallback state. The parity job calculates required segment views and reports comparison coverage too. Low coverage may mean the logging or recomputation path failed before it found skew.
+is frequently missing for newly created accounts. The model might learn:
 
-### Use Distribution Monitoring As An Early Warning
+$$
+P(Y \mid income=\text{missing})
+$$
 
-Distribution comparison is cheaper than recomputing every row. Managed platforms such as Model Monitoring on Gemini Enterprise Agent Platform and warehouse functions such as BigQuery ML's `ML.VALIDATE_DATA_SKEW` can compare serving feature distributions with a training reference.
+because missingness correlates with account age. If production suddenly begins replacing missing values with:
 
-That signal cannot prove the cause. A real customer shift and a unit conversion bug can both change a distribution. Paired values distinguish engineering parity from population drift, while delayed outcome monitoring shows whether either change harms prediction quality.
+```text
+median income
+```
+
+the missingness signal disappears. Training:
+
+```text
+income_missing = visible
+```
+
+Serving:
+
+```text
+income_missing = concealed
+```
+
+Every live input may still be numeric and superficially clean while these changed encodings reduce model quality.
+
+### Zero, null, unavailable, and stale are different states
+
+Suppose the feature is:
+
+```text
+purchases_last_30d
+```
+
+These may all be different:
+
+```text
+0
+```
+
+means:
+
+We checked the customer's history and there were no purchases.
+
+```text
+NULL
+```
+
+may mean:
+
+No history exists.
+
+```text
+lookup_failed
+```
+
+means:
+
+We don't know because infrastructure failed.
+
+```text
+stale_value = 8
+```
+
+means:
+
+The last known value was 8, but it is old.
+
+If training collapses all of these to:
+
+```text
+0
+```
+
+but production handles them differently, or vice versa, skew appears. A robust feature contract must define these states explicitly.
+
+### Dependency-version skew
+
+Some features depend on more than raw data. Suppose a location feature is:
+
+$$
+\text{distance\_to\_nearest\_store}
+$$
+
+Its result depends on:
+
+```text
+store-location dataset
+geocoding library
+Earth-distance implementation
+store filtering rules
+```
+
+Training used:
+
+```text
+store_catalog_v17
+```
+
+Production uses:
+
+```text
+store_catalog_v21
+```
+
+If four stores opened or closed, values change. Similarly, a text model might depend on:
+
+```text
+tokenizer version
+vocabulary
+normalization rules
+embedding model
+```
+
+If training used tokenizer $$T_1$$ and production uses $$T_2$$:
+
+$$
+T_1(\text{text})\ne T_2(\text{text})
+$$
+
+then the model sees different inputs.
+
+### Preprocessing assets are part of the model
+
+Suppose you train a model with category encoding:
+
+```text
+London → 17
+Paris  → 23
+Tokyo  → 91
+```
+
+Production accidentally loads another encoder:
+
+```text
+London → 91
+Paris  → 17
+Tokyo  → 23
+```
+
+The model itself is identical. But input meaning has been permuted. Therefore:
+
+$$
+\boxed{\text{Model artifact} \neq \text{just model weights}}
+$$
+
+A deployable model frequently includes:
+
+```text
+weights
+feature schema
+encoders
+tokenizers
+normalization statistics
+lookup tables
+feature versions
+preprocessing code
+```
+
+Together these form the prediction system.
+
+### Environment skew
+
+Even identical source code can behave differently in different environments. Examples:
+
+```text
+different Python version
+different library version
+different timezone
+different locale
+different floating-point implementation
+different SQL engine
+different default collation
+different regex engine
+different integer width
+```
+
+Suppose training runs:
+
+```text
+timezone = UTC
+```
+
+and production runs:
+
+```text
+timezone = Europe/London
+```
+
+A feature such as:
+
+```text
+transactions_since_midnight
+```
+
+may now have different boundaries. Or consider category string normalization:
+
+```text
+"straße"
+```
+
+Different Unicode or locale handling can produce different canonical forms. This is less common than simple transformation mistakes, but extremely difficult to diagnose when it occurs.
+
+## Why Must Both Feature Programs Share an Explicit Contract?
+
+<!-- section-summary: Zero, null, unavailable, and stale states can follow different defaults. -->
+
+### Training and serving run separate programs
+
+Most ML systems accidentally build two separate programs. Program A:
+
+```text
+historical data
+    ↓
+offline transformations
+    ↓
+training matrix
+```
+
+Program B:
+
+```text
+live request
+    ↓
+online transformations
+    ↓
+model input
+```
+
+Even if both were initially written from the same specification, they can evolve independently. Someone changes the training pipeline:
+
+```text
+exclude refunded transactions
+```
+
+but forgets to update serving. Now:
+
+$$
+f_{\text{train}}^{(v2)}
+\ne
+f_{\text{serve}}^{(v1)}
+$$
+
+Training-serving skew is therefore frequently a **software duplication problem**.
+
+### Reusing code helps, but reuse alone is not enough
+
+A natural solution is:
+
+Use exactly the same feature code in training and serving.
+
+This is useful when possible. For example:
+
+```python
+def amount_ratio(amount, avg_amount):
+    return amount / max(avg_amount, 1)
+```
+
+can perhaps be shared directly. But this doesn't completely solve the problem. Training may invoke it with:
+
+```text
+warehouse avg_amount
+```
+
+while serving invokes it with:
+
+```text
+online-store avg_amount
+```
+
+If those underlying values differ, shared code still produces skew. So we need:
+
+$$
+\boxed{
+\text{shared logic}
++
+\text{equivalent inputs}
++
+\text{equivalent time semantics}
++
+\text{same supporting assets}
+}
+$$
+
+### Sometimes identical code is impractical
+
+Consider:
+
+```text
+count_transactions_last_24h
+```
+
+Offline, you may calculate it using SQL over billions of historical events. Online, you may maintain a rolling counter with a stream processor. Offline:
+
+```text
+warehouse SQL
+```
+
+Online:
+
+```text
+Kafka + stateful stream processor
+```
+
+The code cannot literally be identical. But the semantics should be. Both should implement:
+
+$$
+f(u,t)
+=
+\#\{
+e:
+e.user=u,
+t-24h \le e.time < t,
+e.status=\text{approved}
+\}
+$$
+
+Therefore the actual goal is:
+
+$$
+\boxed{\text{semantic equivalence, not necessarily code identity}}
+$$
+
+### Define features as contracts
+
+A strong defense against skew is to define every important feature precisely. For example:
+
+```text
+Feature:
+    approved_transactions_24h
+
+Entity:
+    account_id
+
+Type:
+    integer
+
+Meaning:
+    Count of approved card transactions for this account
+
+Window:
+    [prediction_time - 24 hours, prediction_time)
+
+Event time:
+    authorization_time
+
+Statuses included:
+    APPROVED
+
+Statuses excluded:
+    DECLINED, CANCELLED
+
+Deduplication:
+    one record per authorization_id
+
+Missing known account:
+    0
+
+Unknown account:
+    null
+
+Timezone:
+    UTC
+
+Maximum serving age:
+    60 seconds
+```
+
+Now training and serving have something concrete to agree on. Without this, people may both implement something called:
+
+```text
+approved_transactions_24h
+```
+
+and still mean different things.
+
+## How Do Golden Cases and Direct Value Comparisons Detect Skew?
+
+<!-- section-summary: The model interprets positions and numbers rather than feature names. -->
+
+### The strongest practical test: same case, both paths
+
+Suppose we define a synthetic user history:
+
+```text
+Alice:
+
+09:00 approved transaction
+09:20 declined transaction
+09:30 approved transaction
+10:00 prediction
+10:05 approved transaction
+```
+
+Feature:
+
+```text
+approved_transactions_last_hour
+```
+
+Expected value at 10:00:
+
+```text
+2
+```
+
+Now send the exact logical case through:
+
+```text
+offline feature pipeline
+online feature pipeline
+```
+
+and compare. We want:
+
+$$
+x_{\text{offline}} = 2
+$$
+
+$$
+x_{\text{online}} = 2
+$$
+
+This catches far more than ordinary unit tests. It tests the **contract across execution paths**.
+
+### Golden datasets are extremely useful
+
+For important features, maintain small known histories with exact expected results. Example:
+
+| Event |  Time | Status        |
+| ----- | ----: | ------------- |
+| A     | 08:59 | approved      |
+| B     | 09:15 | approved      |
+| C     | 09:50 | declined      |
+| D     | 10:00 | current event |
+
+For prediction at 10:00:
+
+```text
+approved_transactions_1h = 1
+```
+
+if the lower boundary is:
+
+$$
+[09{:}00,10{:}00)
+$$
+
+and the current event is excluded. These cases catch:
+
+```text
+off-by-one window bugs
+boundary mistakes
+timezone differences
+incorrect status filters
+current-event leakage
+deduplication differences
+```
+
+### Compare production values directly
+
+Synthetic tests are necessary but not sufficient. You also want real observations. For a sample of actual production requests, record:
+
+```text
+entity
+prediction timestamp
+feature values used online
+feature versions
+```
+
+Later, reconstruct the same feature values offline. For each feature:
+
+$$
+\Delta_i
+=
+x_{i,\text{offline}}
+-
+x_{i,\text{online}}
+$$
+
+Then examine:
+
+$$
+P(\Delta_i=0)
+$$
+
+and perhaps:
+
+$$
+E[|\Delta_i|]
+$$
+
+For categorical features:
+
+$$
+P(x_{\text{offline}}\ne x_{\text{online}})
+$$
+
+Teams often call this comparison **feature parity testing** or an offline-online consistency check.
+
+### Equality is not always realistic
+
+For some features, exact equality may be impossible. Suppose a streaming feature updates asynchronously. At prediction time:
+
+```text
+10:00:01
+```
+
+the online store contains state from:
+
+```text
+09:59:58
+```
+
+When reconstructed later, the warehouse knows about events through 10:00:01. So you might expect:
+
+$$
+x_{\text{offline}}\approx x_{\text{online}}
+$$
+
+rather than exact equality. The question becomes:
+
+Is the difference explainable by the feature's freshness contract?
+
+For example:
+
+```text
+allowed online lag ≤ 5 seconds
+```
+
+Then a discrepancy caused by 2 seconds of lag is acceptable. A discrepancy caused by 20 minutes is not.
+
+### Distribution comparison catches large-scale skew
+
+Suppose training saw:
+
+$$
+\text{mean account age} = 720\text{ days}
+$$
+
+Production suddenly reports:
+
+$$
+\text{mean account age} = 17{,}280
+$$
+
+This suggests days became hours. You can monitor:
+
+```text
+mean
+median
+quantiles
+null rate
+min/max
+category frequencies
+cardinality
+```
+
+Comparing:
+
+$$
+P_{\text{train}}(X)
+$$
+
+with:
+
+$$
+P_{\text{serve}}(X)
+$$
+
+can reveal problems. But be careful. Different distributions do not automatically mean skew.
+
+Reality itself can change.
 
 ![Offline recomputation and online records compared for the same entity, prediction time, release, value, fallback, and version](/content-assets/articles/article-mlops-data-for-ml-systems-training-serving-skew/paired-path-comparison.png)
 
 *A paired comparison holds the case identity, time, and release constant. Any remaining difference points to transformation, source, fallback, version, or runtime parity.*
 
-## Test Training And Production Paths Before Release
-<!-- section-summary: Golden fixtures, staging replay, shadow comparison, and explicit gates expose skew before a candidate serves user-facing decisions. -->
+## How Do Release Tests Separate Skew from Data and Model Drift?
 
-Unit tests catch formula mistakes inside one component. A release crosses more boundaries: storage, retrieval, packaging, configuration, and the serving runtime. The candidate needs evidence from each of them before it receives user-facing traffic.
+<!-- section-summary: Golden cases run known histories through both paths and catch boundary, null, unit, filter, and encoding differences. -->
 
-A strong progression uses four levels:
+### Skew and data drift are not the same
 
-```mermaid
+This distinction is essential. Suppose Christmas arrives and transaction amounts increase. Then:
 
-flowchart TD
-    A["1. Golden fixtures<br/>Known raw facts and expected vectors"] --> B["2. Staging replay<br/>Production-shaped requests through the full path"]
-    B --> C["3. Shadow comparison<br/>Copy live requests to the candidate"]
-    C --> D["4. Release gate<br/>Check parity, coverage, freshness, and fallback"]
-    D -->|Pass| E["Canary receives limited user traffic"]
-    D -->|Fail| F["Candidate stays isolated<br/>Evidence returns to its owner"]
+$$
+P_{\text{December}}(X)
+\ne
+P_{\text{July}}(X)
+$$
 
-    class A,B,C test
-    class D gate
-    class E pass
-    class F stop
+That's **data drift**. The pipeline may be perfectly correct. Training-serving skew instead means:
+
+The same underlying situation is being encoded differently.
+
+Example: Training:
+
+```text
+currency converted to GBP
 ```
 
-Golden fixtures cover edge conditions cheaply. Staging replay proves the packaged model and retrieval path. Shadow traffic sends a copy of real requests to the candidate while users continue to receive the stable release's response.
+Serving:
 
-Istio can mirror a percentage of live requests out of band, and Kubernetes Gateway API also defines request mirroring. The candidate response is discarded. The shadow service must suppress external side effects such as writing decisions, charging accounts, or sending notifications. It writes comparison evidence under a separate route identity.
-
-The release gate uses product-specific thresholds:
-
-```yaml
-parity_gate:
-  minimum_pair_coverage: 0.98
-  maximum_discrete_mismatch_rate: 0.001
-  maximum_p99_continuous_delta: 0.01
-  maximum_fallback_rate: 0.02
-  maximum_feature_age_seconds: 900
-  required_segments: [region, model_route]
+```text
+currency left in original units
 ```
 
-The gate also requires every expected feature and version identity. A low mismatch rate from a small or biased sample cannot approve the candidate. After the gate passes, a canary release exposes limited user traffic and continues the same comparisons.
+That is skew. A useful mental distinction:
 
-## Contain And Repair A Training-Production Mismatch
-<!-- section-summary: Incident response limits user impact, classifies the first mismatched layer, repairs its owner boundary, and replays captured evidence. -->
+$$
+\boxed{
+\text{Drift} = \text{world changed}
+}
+$$
 
-Skew incidents often arrive as a model-quality alert, a distribution change, or a spike in fallback. The first action is containment based on product risk.
+$$
+\boxed{
+\text{Skew} = \text{representation pipeline changed}
+}
+$$
 
-Containment may restore the previous complete model-and-feature release, route to a model trained without the failing feature, freeze a last-known-good value within its approved age, or reject requests whose inputs cannot be interpreted safely. Rolling back only the model can preserve the mismatch if the online feature set changed with it.
+### Model drift can also be confused with skew
 
-The investigation then walks the taxonomy:
+Suppose predictions get worse. Possible causes include:
 
-1. Compare final model input vectors for matched predictions.
-2. Check formulas, units, feature order, and encoders.
-3. Compare source rows, entity resolution, and materialization versions.
-4. Rebuild the time and availability cutoff.
-5. Inspect missingness and fallback reasons.
-6. Confirm release identities, dependencies, image digest, and runtime.
-
-Suppose parity failures begin immediately after an encoder release, and every mismatch belongs to an unseen device category. The team pins the earlier model and encoder pair, keeps the new candidate isolated, and replays captured requests against a corrected unknown-category mapping. The repaired release must pass exact category-vector equality before it reaches a canary.
-
-Preserve the failed pairs, source references, release record, and contract version. These records turn the incident into a permanent regression fixture without copying sensitive payloads into general logs.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Detected
-    Detected --> Contained: "Protect user decisions"
-    Contained --> Classified: "Find first mismatched layer"
-    Classified --> Repaired: "Create compatible release"
-    Repaired --> Replayed: "Run failed pairs and shadow traffic"
-    Replayed --> Recovered: "Parity and health gates pass"
-    Replayed --> Classified: "Evidence still disagrees"
-    Recovered --> [*]
+```text
+world changed
+label relationship changed
+feature distributions changed
+feature pipeline broke
+data source changed
+model artifact mismatched
 ```
 
-## Confirm The Feature Values Recovered And Keep Monitoring
-<!-- section-summary: Recovery requires direct parity, healthy retrieval, stable fallbacks, correct release identities, and later confirmation from outcomes. -->
+So degradation alone does not identify skew. You need feature-level observability to determine:
 
-A healthy endpoint proves only that the service can answer. Recovery needs evidence that the model receives the intended features again.
+$$
+\text{Was }X\text{ generated correctly?}
+$$
 
-The direct checks come first:
+before assuming:
 
-- matched mismatch rates return inside each feature's tolerance;
-- parity comparison covers the required routes and segments;
-- feature age and materialization lag recover;
-- lookup errors and fallback reasons return to their expected ranges;
-- every process reports the approved model, feature, encoder, policy, and image identities;
-- captured failed pairs pass through the repaired path.
+$$
+P(Y|X)\text{ changed}
+$$
 
-Prediction distributions should also stabilize relative to an appropriate reference. They may settle at a new healthy level if the population changed during the incident, so direct paired evidence remains the primary recovery test.
+### Release testing should test the entire prediction contract
 
-Labels arrive later. Outcome metrics eventually confirm that the repaired system restored product quality. Containment and direct parity verification proceed earlier because a severe mismatch can cause harm long before ground truth is available.
+Before deploying a new model or feature pipeline, test:
 
-Long-term prevention comes from converting the incident into a gate. Add the failed boundary value to the golden fixture suite, add the responsible version combination to compatibility checks, and keep a small governed sample of production pairs flowing through recomputation. This turns training-serving parity into a continuously tested property of the system.
+```text
+raw input
+    ↓
+data retrieval
+    ↓
+transformation
+    ↓
+feature vector
+    ↓
+model prediction
+```
+
+Do not test only:
+
+```text
+model.predict(X)
+```
+
+because most skew happens before the model sees $$X$$. A useful release test might say: For these 500 canonical cases:
+
+```text
+training pipeline produces X_train
+serving pipeline produces X_serve
+```
+
+require:
+
+$$
+X_{\text{train}} \approx X_{\text{serve}}
+$$
+
+within feature-specific tolerances. Then optionally require:
+
+$$
+\hat y_{\text{offline}}\approx\hat y_{\text{online}}
+$$
+
+### Prediction parity is useful, but feature parity is stronger
+
+Suppose two feature pipelines differ slightly, yet the final prediction happens to be similar. Example:
+
+```text
+offline score = 0.731
+online score  = 0.729
+```
+
+You might conclude everything is fine. But perhaps one important feature is already wrong, and today the model is just not sensitive to these particular cases. Feature-level comparison exposes the error directly.
+
+Therefore:
+
+$$
+\boxed{\text{compare inputs before comparing outputs}}
+$$
+
+Prediction parity is useful. Feature parity is more diagnostic.
+
+## How Can Gradual, Schema, Vocabulary, and Freshness Skew Be Monitored?
+
+<!-- section-summary: Release gates verify contracts, schemas, assets, versions, golden fixtures, and full-path parity before deployment. -->
+
+### Skew can happen gradually
+
+Not every mismatch begins as a dramatic incident. Suppose the serving system has a fallback:
+
+```text
+if customer feature lookup fails:
+    use default values
+```
+
+Initially:
+
+```text
+fallback rate = 0.1%
+```
+
+Months later:
+
+```text
+fallback rate = 8%
+```
+
+No service crashes. But increasingly many predictions are made using feature vectors unlike training. This is effectively a growing training-serving mismatch.
+
+So monitor:
+
+```text
+fallback rate
+missing feature rate
+stale feature rate
+default-value rate
+lookup failure rate
+```
+
+not just raw distributions.
+
+### Feature freshness can create skew
+
+Suppose training calculates:
+
+```text
+account_balance
+```
+
+exactly at the prediction cutoff. Production serves a cached balance that may be 20 minutes old. Training:
+
+```text
+balance = £50
+```
+
+Production:
+
+```text
+balance = £1,200
+```
+
+because a purchase occurred in between. The definition is nominally identical:
+
+```text
+account_balance
+```
+
+but the temporal state differs. So freshness belongs in the feature contract:
+
+```text
+balance value
++
+timestamp
++
+maximum acceptable age
+```
+
+A feature can be syntactically correct yet temporally invalid.
+
+### Feature order can itself create skew
+
+Some model interfaces accept positional arrays:
+
+```text
+[42, 7.1, 0, 18]
+```
+
+Suppose training order is:
+
+```text
+age
+avg_spend
+is_new_user
+tx_count
+```
+
+Production order becomes:
+
+```text
+age
+tx_count
+is_new_user
+avg_spend
+```
+
+Types may still match. Inference may still execute. But the model sees:
+
+```text
+avg_spend = 18
+tx_count = 7.1
+```
+
+This is catastrophic schema skew. For this reason, feature schemas should include:
+
+```text
+name
+type
+order
+version
+```
+
+or use strongly named structures where possible.
+
+### Categorical vocabularies are another common failure
+
+Suppose training saw:
+
+```text
+payment_type:
+    CARD       → 0
+    BANK       → 1
+    WALLET     → 2
+```
+
+Production encoder uses:
+
+```text
+CARD       → 2
+BANK       → 0
+WALLET     → 1
+```
+
+Everything is an integer. Every value is valid. Nothing crashes.
+
+But meanings are shuffled. This is one reason preprocessing artifacts should be versioned together with the model.
+
+### One-hot schemas can silently diverge
+
+Training model expects:
+
+```text
+country_FR
+country_GB
+country_US
+```
+
+Production adds:
+
+```text
+country_DE
+```
+
+and regenerates columns alphabetically:
+
+```text
+country_DE
+country_FR
+country_GB
+country_US
+```
+
+If the prediction system passes a positional vector without enforcing schema alignment, every later feature may shift. A harmless taxonomy update becomes a catastrophic inference bug. Again:
+
+$$
+\boxed{\text{input schema is part of the deployed model}}
+$$
+
+### NLP systems have the same problem
+
+Training-serving skew is not limited to tabular ML. Suppose a text classifier was trained with:
+
+```text
+lowercase text
+Unicode normalization
+URL replacement
+tokenizer v3
+max length 512
+```
+
+Production accidentally uses:
+
+```text
+no lowercase
+different normalization
+tokenizer v4
+max length 256
+```
+
+The model still receives token IDs. But:
+
+$$
+X_{\text{train}}\ne X_{\text{serve}}
+$$
+
+The principle is identical. For neural systems, skew can occur in:
+
+```text
+tokenization
+image preprocessing
+audio resampling
+embedding generation
+normalization
+cropping
+padding
+```
+
+### Recommendation systems have another subtle form
+
+Suppose training negatives are generated using:
+
+```text
+items available at historical time t
+```
+
+but production ranks:
+
+```text
+items currently eligible
+```
+
+That's reasonable. But if historical training accidentally samples from today's catalog, the model may train on products that didn't exist at the prediction time. Now the candidate-generation process itself creates skew.
+
+This illustrates a broader principle:
+
+$$
+\boxed{\text{The entire input-generation process can skew, not just individual columns}}
+$$
+
+### Training-serving skew can exist before feature engineering
+
+Suppose the model directly consumes images. Training images:
+
+```text
+high-quality JPEG
+center crop
+RGB
+224 × 224
+```
+
+Production camera feed:
+
+```text
+compressed WebP
+letterboxed
+BGR
+224 × 224
+```
+
+Same dimensions. Same model. Different representation.
+
+Or speech recognition: Training:
+
+```text
+16 kHz audio
+```
+
+Serving:
+
+```text
+8 kHz audio upsampled to 16 kHz
+```
+
+The concept generalizes:
+
+$$
+\boxed{\text{anything that changes }X\text{ between training and serving can create skew}}
+$$
+
+### One useful architecture: transform once, reuse everywhere
+
+Where possible:
+
+```text
+                 Feature definition
+                        │
+               shared transformation
+                   /          \
+                  /            \
+             offline          online
+                │                │
+                ▼                ▼
+            training          serving
+```
+
+This reduces duplicate logic. Examples of things worth sharing:
+
+```text
+normalization functions
+category mappings
+window definitions
+feature metadata
+null handling
+feature schemas
+```
+
+But again, shared code is only one defense. The data and timing must also agree.
+
+### Another architecture: generate online state from the same feature pipeline
+
+For expensive historical aggregates:
+
+```text
+raw events
+    ↓
+feature computation
+    ↓
+offline historical values
+    ↓
+materialization
+    ↓
+online latest values
+```
+
+This can reduce the chance that two separate teams independently implement:
+
+```text
+transactions_last_30d
+```
+
+One historical computation defines the feature, and the latest state is published for serving. Streaming features may still need separate implementations, but parity testing can verify semantics.
+
+### Version everything that changes meaning
+
+Suppose:
+
+```text
+customer_risk_score
+```
+
+changes from:
+
+```text
+v1:
+based on payment history
+```
+
+to:
+
+```text
+v2:
+payment history + identity signals
+```
+
+Do not silently overwrite the meaning if old models depend on v1. Conceptually:
+
+```text
+customer_risk_score_v1
+customer_risk_score_v2
+```
+
+Likewise version:
+
+```text
+feature definitions
+schemas
+encoders
+tokenizers
+lookups
+normalization statistics
+dependency bundles
+```
+
+You want to know:
+
+Exactly what transformation environment produced this model's inputs?
+
+### Model-feature compatibility should be explicit
+
+Instead of deploying:
+
+```text
+model = fraud_model_v42
+```
+
+think of the deployment artifact as:
+
+```text
+model:
+    fraud_model_v42
+
+requires:
+    feature_schema_v17
+    transaction_count_24h_v3
+    avg_spend_30d_v8
+    country_encoder_v4
+    normalization_bundle_v12
+```
+
+Then serving can reject an incompatible configuration. This turns a silent semantic bug into a visible deployment error. That's a large improvement.
+
+### Detecting skew in production
+
+A strong monitoring system looks at several layers.
+
+#### Schema
+
+Did type/order/name change?
+
+```text
+int64 → string
+```
+
+#### Availability
+
+Did a feature become missing?
+
+```text
+null rate:
+0.2% → 31%
+```
+
+#### Freshness
+
+Did updates stop?
+
+```text
+expected age: <5 min
+observed age: 2 hours
+```
+
+#### Distribution
+
+Did numeric/category distributions change unexpectedly?
+
+#### Offline-online parity
+
+For matched requests:
+
+$$
+x_{\text{offline}}\stackrel{?}{=}x_{\text{online}}
+$$
+
+#### Prediction effect
+
+Did scores, calibration, or downstream metrics move? Each catches different failure modes.
+
+## How Should a Team Contain, Repair, and Verify a Skew Incident?
+
+<!-- section-summary: Containment rolls back, disables the feature, uses a compatible fallback, narrows automation, or stops unsafe decisions. -->
+
+### What do you do when skew is detected?
+
+First contain the bad predictions. Depending on risk:
+
+```text
+rollback
+disable affected feature
+use previous model
+switch to fallback model
+use trusted default
+stop making automated decisions
+```
+
+Then identify which layer disagrees:
+
+```text
+source?
+time cutoff?
+feature logic?
+lookup table?
+schema?
+runtime?
+```
+
+A useful debugging path is:
+
+```text
+raw source record
+    ↓
+historical transformation
+    ↓
+historical feature value
+
+raw/live source record
+    ↓
+production transformation
+    ↓
+production feature value
+```
+
+Compare at every boundary.
+
+### Repair the contract, not merely the symptom
+
+Suppose you discover production used:
+
+```text
+transactions_since_midnight
+```
+
+instead of:
+
+```text
+transactions_last_24h
+```
+
+You could patch the code. But also ask why it happened. Maybe:
+
+```text
+feature was defined only by name
+there was no contract
+no parity test existed
+no owner existed
+two teams maintained separate implementations
+```
+
+A durable repair may include:
+
+```text
+formal feature definition
+shared implementation
+golden tests
+versioning
+monitoring
+clear ownership
+```
+
+Otherwise the same class of bug returns elsewhere.
+
+### After fixing skew, verify recovery
+
+Do not assume that deploying the fix means the system recovered. Confirm:
+
+$$
+P(x_{\text{offline}} = x_{\text{online}})
+$$
+
+returns to the expected level. Check:
+
+```text
+missing rate
+feature age
+distribution
+fallback usage
+prediction distribution
+business metric
+```
+
+For example:
+
+```text
+before incident:
+parity = 99.8%
+
+during incident:
+parity = 71%
+
+after fix:
+parity = 99.7%
+```
+
+Now you have evidence that the input pipeline recovered.
+
+### Keep monitoring after recovery
+
+Some feature problems recur periodically. Examples:
+
+```text
+midnight timezone bug
+month-end batch delay
+DST transition
+new categorical value
+schema changes
+source backfill
+holiday traffic
+late events
+```
+
+A one-time fix may appear successful for ordinary traffic and fail again at a boundary condition. So retain monitors rather than removing them once the incident closes.
+
+### A useful hierarchy of guarantees
+
+Think of production correctness as layers.
+
+#### Layer 1 — Request correctness
+
+Did we receive the intended input?
+
+#### Layer 2 — Source correctness
+
+Did we retrieve the right underlying records?
+
+#### Layer 3 — Temporal correctness
+
+Were only records knowable at prediction time used?
+
+#### Layer 4 — Transformation correctness
+
+Did we calculate the intended feature?
+
+#### Layer 5 — Schema correctness
+
+Did the model receive it in the expected position/type/encoding?
+
+#### Layer 6 — Model correctness
+
+Did the expected model consume those features? Training-serving skew can occur in Layers 2–5 even while Layer 6 works perfectly.
+
+### A concrete end-to-end example
+
+Suppose a loan model uses:
+
+```text
+income
+debt_to_income_ratio
+missed_payments_12m
+account_age_days
+```
+
+Training example:
+
+```text
+income = 60,000
+debt = 15,000
+missed_payments = 1
+account_age = 700 days
+```
+
+Therefore:
+
+$$
+DTI=\frac{15000}{60000}=0.25
+$$
+
+Production gets the same customer. But several things go wrong.
+
+#### Source skew
+
+Production income source reports monthly income:
+
+```text
+5000
+```
+
+rather than annual:
+
+```text
+60000
+```
+
+#### Transformation skew
+
+Production calculates:
+
+$$
+DTI=\frac{income}{debt}
+$$
+
+rather than:
+
+$$
+\frac{debt}{income}
+$$
+
+#### Temporal skew
+
+Production's `missed_payments_12m` is five days stale.
+
+#### Missing skew
+
+Missing account age gets:
+
+```text
+0
+```
+
+instead of the training sentinel:
+
+```text
+-1
+```
+
+#### Dependency skew
+
+Production uses a new currency conversion table.
+
+#### Environment skew
+
+Production interprets timestamps in local time instead of UTC. The endpoint still returns:
+
+```text
+risk_score = 0.83
+```
+
+The question is no longer:
+
+Did inference execute?
+
+It did. The real question is:
+
+Did the model receive the inputs it was trained to interpret?
+
+That is the correct framing.
+
+### Compare both paths as functions
+
+A supervised model learns a function:
+
+$$
+g:X\rightarrow Y
+$$
+
+But $$X$$ itself is commonly produced by another system:
+
+$$
+h:\text{world state}\rightarrow X
+$$
+
+Training actually learns:
+
+$$
+g(h_{\text{train}}(\text{world}))
+$$
+
+Production executes:
+
+$$
+g(h_{\text{serve}}(\text{world}))
+$$
+
+For the learned model to remain valid, we need:
+
+$$
+\boxed{
+h_{\text{train}}
+\approx
+h_{\text{serve}}
+}
+$$
+
+for equivalent world states. Training-serving skew is merely the violation:
+
+$$
+\boxed{
+h_{\text{train}}
+\ne
+h_{\text{serve}}
+}
+$$
+
+That is the most general definition. It applies to:
+
+```text
+SQL features
+streaming aggregates
+tokenizers
+image preprocessing
+categorical encoders
+embedding models
+lookup tables
+default values
+candidate generation
+feature freshness
+```
+
+### What to remember
+
+Training-serving skew is not fundamentally:
+
+“The training code and production code are different.”
+
+That's only one cause. The deeper definition is:
+
+> **The model learned to interpret one representation of reality, but production gives it another.**
+
+You can summarize the major causes as:
+
+$$
+\boxed{
+\text{Skew}
+=
+\text{different logic}
++
+\text{different data}
++
+\text{different time}
++
+\text{different defaults}
++
+\text{different dependencies}
++
+\text{different runtime}
+}
+$$
+
+The main engineering defenses are therefore:
+
+$$
+\boxed{
+\begin{aligned}
+&\text{Define one precise contract for each feature}\\
+&\text{Reuse transformations where practical}\\
+&\text{Version data-processing dependencies}\\
+&\text{enforce point-in-time correctness}\\
+&\text{compare offline and online values on identical cases}\\
+&\text{test full serving paths before release}\\
+&\text{monitor feature parity, freshness, missingness and distributions}
+\end{aligned}
+}
+$$
+
+And the most important diagnostic question in an ML production incident is frequently not:
+
+**“Is the model service up?”**
+
+but:
+
+**“Is the model seeing what we think it is seeing?”**
 
 ![Prevention, testing, detection, containment, and repair organized around one shared feature contract](/content-assets/articles/article-mlops-data-for-ml-systems-training-serving-skew/skew-prevention-recovery-summary.png)
 
-*The feature contract defines acceptable parity. Tests and paired evidence keep that contract active before release, during operation, and through recovery.*
+*The feature contract defines acceptable parity. Tests and paired evidence preserve that contract active before release, during operation, and through recovery.*
+
+## Check Your Answers
+
+Use these answers to revisit the evidence, boundaries, and operating decisions behind each question.
+
+:::expand[What Is Training-Serving Skew?]{kind="recap"}
+Training-serving skew occurs if production represents an equivalent situation differently from the representation used to train the model.
+
+The weights and API may remain healthy while changed inputs invalidate learned relationships. Direct skew is an engineering parity failure; natural drift means the world changed while the representation remained correct.
+:::
+
+:::expand[How Do Logic, Sources, and Time Create Different Feature Values?]{kind="recap"}
+A feature relies on transformation logic, source data, prediction cutoff, configuration, defaults, lookup tables, preprocessing assets, versions, and runtime.
+
+Training and serving can diverge in any of them. A shared feature name or matching schema cannot prove that the values preserve the same semantic contract.
+:::
+
+:::expand[How Do Missing Values, Dependencies, and Runtime Environments Create Skew?]{kind="recap"}
+Logic skew changes formulas, filters, windows, boundaries, or deduplication.
+
+Source skew reads systems whose similar fields represent different business events. Temporal skew gives historical training cleaner, later, or more complete information than live production possessed. Precise contracts and point-in-time fixtures expose all three.
+:::
+
+:::expand[Why Must Both Feature Programs Share an Explicit Contract?]{kind="recap"}
+Zero, null, unavailable, and stale states can follow different defaults.
+
+Store catalogs, tokenizers, vocabularies, encoders, normalization statistics, and embedding models can change feature meaning. Python, library, SQL engine, locale, time zone, Unicode, and numeric differences can change execution. Those dependencies belong to the recorded serving package.
+:::
+
+:::expand[How Do Golden Cases and Direct Value Comparisons Detect Skew?]{kind="recap"}
+The model interprets positions and numbers rather than feature names.
+
+Column order, type, category mapping, one-hot layout, tokenizer, scaler, image transform, and candidate-generation policy give those numbers meaning. Versioning and compatibility checks must bind these assets to the model so a valid-looking vector cannot silently represent different inputs.
+:::
+
+:::expand[How Do Release Tests Separate Skew from Data and Model Drift?]{kind="recap"}
+Golden cases run known histories through both paths and catch boundary, null, unit, filter, and encoding differences.
+
+Production parity records the values actually served, reconstructs matched cases offline, and compares each feature under its tolerance. Feature comparison is more diagnostic than relying on similar final predictions.
+:::
+
+:::expand[How Can Gradual, Schema, Vocabulary, and Freshness Skew Be Monitored?]{kind="recap"}
+Release gates verify contracts, schemas, assets, versions, golden fixtures, and full-path parity before deployment.
+
+Monitoring tracks mismatch, freshness, missingness, fallback, distribution, and prediction effects. Matched-case disagreement identifies skew; a changed distribution with preserved parity suggests real drift and requires a different investigation.
+:::
+
+:::expand[How Should a Team Contain, Repair, and Verify a Skew Incident?]{kind="recap"}
+Containment rolls back, disables the feature, uses a compatible fallback, narrows automation, or stops unsafe decisions. Engineers compare raw and transformed values at each boundary, repair the failed contract, redeploy compatible assets, replay captured cases, and confirm parity, freshness, fallback, and version metrics recovered before closing the incident.
+:::
 
 ## References
 
@@ -390,13 +2182,6 @@ Long-term prevention comes from converting the incident into a gate. Add the fai
 - [Google Rules of Machine Learning: measure training-serving skew](https://developers.google.com/machine-learning/guides/rules-of-ml/#rule_37_measure_trainingserving_skew)
 - [TensorFlow Transform pipeline component](https://www.tensorflow.org/tfx/guide/transform)
 - [TensorFlow Transform preprocessing recommendations](https://www.tensorflow.org/tfx/guide/tft_bestpractices)
-- [Feast Feature Views](https://docs.feast.dev/getting-started/concepts/feature-view)
-- [Feast point-in-time joins](https://docs.feast.dev/getting-started/concepts/point-in-time-joins)
-- [Feast platform components](https://docs.feast.dev/getting-started/components/overview)
-- [Databricks Feature Store](https://docs.databricks.com/aws/en/machine-learning/feature-store)
-- [Databricks Model Serving with automatic feature lookup](https://docs.databricks.com/aws/en/machine-learning/feature-store/automatic-feature-lookup)
-- [MLflow model dependency management](https://mlflow.org/docs/latest/ml/model/dependencies/)
 - [Provide schemas to Gemini Enterprise Agent Platform Model Monitoring](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-monitoring/schemas)
 - [Google Cloud: Vertex AI to Gemini Enterprise Agent Platform naming changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/release-notes)
-- [BigQuery ML.VALIDATE_DATA_SKEW](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-validate-data-skew)
 - [Istio request mirroring](https://istio.io/latest/docs/tasks/traffic-management/mirroring/)

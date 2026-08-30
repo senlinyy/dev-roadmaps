@@ -1,0 +1,31 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["packages"],
+  "packages": {
+    "manager": "apt",
+    "indexFresh": false,
+    "repositories": [
+      { "id": "noble-updates", "name": "Ubuntu", "family": "apt", "url": "http://archive.ubuntu.com/ubuntu noble-updates", "enabled": true, "trusted": true }
+    ],
+    "packages": [
+      { "name": "ca-certificates", "architecture": "amd64", "installedVersion": "20240203", "candidateVersion": "20240203", "repository": "noble-updates", "summary": "Common CA certificates" },
+      { "name": "curl", "architecture": "amd64", "candidateVersion": "8.5.0-2ubuntu10.6", "repository": "noble-updates", "summary": "Command line data transfer tool", "dependencies": [{ "name": "ca-certificates" }] }
+    ]
+  },
+  "grader": {
+    "strategy": "package-state",
+    "expectedPackages": {
+      "indexFresh": true,
+      "installed": { "curl": "8.5.0-2ubuntu10.6" }
+    },
+    "requireCommands": ["apt"],
+    "requireCommandPatterns": [
+      "^sudo\\s+apt\\s+update$",
+      "^sudo\\s+apt\\s+install\\s+curl$",
+      "^apt\\s+list\\s+--installed$"
+    ],
+    "minCommandCount": 3
+  }
+}

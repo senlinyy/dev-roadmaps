@@ -1,11 +1,9 @@
 ```bash
-$ cd /etc
-$ ls
-$ cat hostname
-$ cat resolv.conf
-$ cd /var/log
-$ tail -n 5 syslog
-$ cat /etc/os-release
+cat /etc/orders-api/app.conf
+tail -n 2 /var/log/orders-api/error.log
+ls /srv/orders-api
+cat /run/orders-api.pid
 ```
 
-- `/etc` holds all system-wide configuration. `hostname` is the machine name, `resolv.conf` configures DNS. `/var/log` stores runtime logs. `tail -n 5` grabs the latest entries. `os-release` identifies the distribution and version.
+- `/etc`, `/var/log`, `/srv`, and `/run` answer different operational questions.
+- The PID file is runtime state, so it does not belong with persistent configuration.

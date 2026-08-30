@@ -16,829 +16,2324 @@ id: "article-mlops-model-serving-inference-optimization-accuracy-gates"
 
 ## Table of Contents
 
-1. [What Inference Optimization Changes](#what-inference-optimization-changes)
-2. [Define The Product Constraint And Measure The Bottleneck](#define-the-product-constraint-and-measure-the-bottleneck)
-3. [Profile The Complete Request Path](#profile-the-complete-request-path)
-4. [Optimize The Layer That Causes The Bottleneck](#optimize-the-layer-that-causes-the-bottleneck)
-5. [Treat The Exported Model As A New Executable Candidate](#treat-the-exported-model-as-a-new-executable-candidate)
-6. [Understand Which Operations Run In The Optimized Engine Or Fallback](#understand-which-operations-run-in-the-optimized-engine-or-fallback)
-7. [Measure How Kernel Fusion And Engine Caches Affect Runtime](#measure-how-kernel-fusion-and-engine-caches-affect-runtime)
-8. [Calibrate Lower Precision With Representative Data](#calibrate-lower-precision-with-representative-data)
-9. [Build Benchmarks Across Representative Workloads](#build-benchmarks-across-representative-workloads)
-10. [Use Open And Closed Load Tests For Different Questions](#use-open-and-closed-load-tests-for-different-questions)
-11. [Check Numerical, Model, And Product Quality](#check-numerical-model-and-product-quality)
-12. [Check Whether Optimization Moves Decision Thresholds](#check-whether-optimization-moves-decision-thresholds)
-13. [Release The Optimized Model Through Shadow, Canary, And Rollback Stages](#release-the-optimized-model-through-shadow-canary-and-rollback-stages)
-14. [Use Benchmark Evidence To Diagnose Regressions](#use-benchmark-evidence-to-diagnose-regressions)
-15. [The Main Idea](#the-main-idea)
-16. [References](#references)
+1. [What Product Constraint and Bottleneck Should an Inference Optimization Address?](#what-product-constraint-and-bottleneck-should-an-inference-optimization-address)
+2. [How Do Export, Operator Coverage, Fusion, Shapes, and Engine Caches Create a New Candidate?](#how-do-export-operator-coverage-fusion-shapes-and-engine-caches-create-a-new-candidate)
+3. [How Do Lower Precision and Model Type Change Accuracy Equivalence?](#how-do-lower-precision-and-model-type-change-accuracy-equivalence)
+4. [How Should Workload Distributions and Service Benchmarks Measure the Performance Envelope?](#how-should-workload-distributions-and-service-benchmarks-measure-the-performance-envelope)
+5. [How Do Accuracy Gates, Slices, Shadow Traffic, Canaries, Hardware, and Rollback Control Release?](#how-do-accuracy-gates-slices-shadow-traffic-canaries-hardware-and-rollback-control-release)
+6. [How Do Benchmark Ladders and Resource Counters Separate Real Gains from Noise?](#how-do-benchmark-ladders-and-resource-counters-separate-real-gains-from-noise)
+7. [How Do Worked Examples and a Pareto Frontier Guide Iterative Optimization?](#how-do-worked-examples-and-a-pareto-frontier-guide-iterative-optimization)
+8. [Why Are Accuracy Gates Inseparable from Inference Optimization?](#why-are-accuracy-gates-inseparable-from-inference-optimization)
+9. [Check Your Answers](#check-your-answers)
 
-## What Inference Optimization Changes
+A team converts a model to lower precision and measures a 30% faster kernel. The full service improves by only 4%, one rare segment crosses a decision threshold more often, and cold startup takes longer because a new engine must compile. The optimization moved several constraints at once.
 
-<!-- section-summary: Inference optimization changes request handling, model representation, numerical precision, runtime execution, or hardware to improve a measured production constraint. -->
+Inference optimization changes an executable prediction system under product limits for quality, latency, throughput, memory, and cost. Export, fusion, quantization, shape assumptions, engine caches, and hardware paths all create a new candidate that needs both performance evidence and accuracy gates.
 
-An accurate model may still be too slow, memory-hungry, or expensive for its production deadline. **Inference optimization** changes the serving path so the model delivers predictions with less delay, more capacity, less memory, or lower cost. The work can happen before the model runs, inside the model, inside the serving runtime, or on the hardware that executes it.
+These questions follow the optimization loop from profiling the real bottleneck to a canary-ready Pareto choice:
 
-Consider an image classifier behind an API. One request may wait in a queue,
-download an image, decode it, resize it, copy a tensor to a GPU, run the neural
-network, convert scores into a decision, and serialize the response. Replacing
-the model runtime can accelerate only part of that path. If downloading and
-decoding consume most of the request time, a faster GPU kernel produces a small
-service-level improvement.
+1. **What Product Constraint and Bottleneck Should an Inference Optimization Address?**
+2. **How Do Export, Operator Coverage, Fusion, Shapes, and Engine Caches Create a New Candidate?**
+3. **How Do Lower Precision and Model Type Change Accuracy Equivalence?**
+4. **How Should Workload Distributions and Service Benchmarks Measure the Performance Envelope?**
+5. **How Do Accuracy Gates, Slices, Shadow Traffic, Canaries, Hardware, and Rollback Control Release?**
+6. **How Do Benchmark Ladders and Resource Counters Separate Real Gains from Noise?**
+7. **How Do Worked Examples and a Pareto Frontier Guide Iterative Optimization?**
+8. **Why Are Accuracy Gates Inseparable from Inference Optimization?**
 
-Optimization can also change predictions. An exported graph may use a different
-operator implementation. A compiler may combine several operations. FP16 or INT8
-arithmetic stores fewer numerical details than FP32. Those changes are often
-small, but a small score change near a business threshold can send a request
-down a different route.
+## What Product Constraint and Bottleneck Should an Inference Optimization Address?
+<!-- section-summary: Optimization is a constrained product problem, so profiling the full request and applying Amdahl's law identifies the limiting resource worth changing. -->
 
-The production question therefore has two parts:
+A faster kernel is irrelevant when another stage dominates the product deadline, so optimization starts from the constraint and measured bottleneck.
 
-- Did the candidate improve the required performance or cost constraint?
-- Did it preserve the model behaviour and product decisions the service depends
-  on?
+Inference optimization begins with a tension. You have some model that produces useful predictions:
 
-This framework keeps a speed experiment connected to the production problem it
-is supposed to solve.
+$$
+y = F(x)
+$$
 
-## Define The Product Constraint And Measure The Bottleneck
+but serving it consumes finite resources:
 
-<!-- section-summary: An optimization target combines a service-level requirement, representative traffic, and an explicit quality boundary. -->
+$$
+\text{time},\quad
+\text{compute},\quad
+\text{memory},\quad
+\text{bandwidth},\quad
+\text{money}.
+$$
 
-“Make inference faster” gives an engineering team no finish line. A measurable
-target describes the user-facing constraint and the traffic conditions around
-it. For example: keep p95 latency below 100 milliseconds at 80 requests per
-second, hold error rate below 0.1%, preserve the recall of the high-risk class
-within 0.5 percentage points, and fit one replica inside 8 GiB of accelerator
-memory.
+You therefore transform the serving system so that predictions are produced faster or more cheaply. The danger is that many optimizations also change the actual computation. After optimization, you may no longer be running exactly $$F$$. You may instead be running:
 
-**p95 latency** is the duration that 95% of requests finish within. It exposes
-slow requests that an average can hide. The traffic rate matters because a
-service may meet the latency target at ten requests per second and miss it after
-the queue grows at eighty. The quality limit matters because the fastest
-candidate has no value if it changes an important decision beyond the accepted
-boundary.
+$$
+\tilde F(x).
+$$
 
-After defining the target, measure where the budget goes. Suppose p95 latency is
-140 milliseconds. Tracing shows 15 milliseconds in authentication and
-networking, 60 in image decoding and resizing, 35 in GPU execution, 20 in
-queueing, and 10 in postprocessing. A 30% improvement in GPU execution saves
-about 10 milliseconds. Moving image decoding away from the request path or
-optimizing preprocessing has far more room to help.
+Perhaps $$\tilde F$$ uses:
 
-The same arithmetic applies to cost. Low GPU utilization may come from a small
-model, serial CPU preprocessing, insufficient concurrency, variable shapes, or
-an oversized accelerator. Buying a newer GPU treats very different causes as one
-hardware problem.
+* lower numerical precision;
+* fused operators;
+* a different compiler;
+* different kernels;
+* quantized weights;
+* an exported graph;
+* different batching;
+* a different accelerator;
+* approximate algorithms.
 
-```mermaid
-flowchart TD
-    A["Service Requirement<br/>(target plus traffic conditions)"] --> B{"Largest Measured Cost<br/>(which stage owns the budget?)"}
-    B -->|Queue| C["Capacity Layer<br/>(replicas, admission, batching)"]
-    B -->|Preprocess| D["Request Layer<br/>(decode, transform, cache)"]
-    B -->|Model| E["Execution Layer<br/>(graph, precision, runtime)"]
-    B -->|Transfer| F["Device Boundary<br/>(layout, copies, placement)"]
-    B -->|Memory| G["Model Or Hardware<br/>(artifact size, cache, device)"]
+The central question therefore becomes:
 
-    class A,B question;
-    class C,D,E,F,G answer;
+$$
+\boxed{
+\text{Is }\tilde F\text{ cheaper/faster enough, while remaining equivalent enough to }F
+}
+$$
+
+That is the foundation of both **inference optimization** and **accuracy gates**. A common mistake is thinking:
+
+Optimization means making inference as fast as possible.
+
+That is not the actual goal. Suppose the original service has:
+
+$$
+p99 = 900\text{ ms}
+$$
+
+and costs:
+
+$$
+\$0.01/\text{prediction}.
+$$
+
+An optimized implementation produces:
+
+$$
+p99 = 250\text{ ms}
+$$
+
+and costs:
+
+$$
+\$0.003/\text{prediction}.
+$$
+
+Excellent—unless model quality falls so much that customers no longer trust it. The real optimization problem looks more like:
+
+$$
+\min \text{Cost}
+$$
+
+subject to:
+
+$$
+L_{p99}\le L_{\max},
+$$
+
+$$
+Q\ge Q_{\min},
+$$
+
+$$
+E\le E_{\max},
+$$
+
+where:
+
+* $$L$$ = latency,
+* $$Q$$ = model/product quality,
+* $$E$$ = error or failure rate.
+
+Or perhaps you want:
+
+$$
+\max \text{Throughput}
+$$
+
+under those same constraints. So optimization means:
+
+$$
+\boxed{
+\text{improve efficiency without leaving the product's acceptable operating region}
+}
+$$
+
+not simply "produce a bigger benchmark number." Before modifying the model, ask what actually matters to the product. Consider three systems. A recommendation batch job might tolerate:
+
+$$
+5\text{ seconds}
+$$
+
+per batch but care intensely about infrastructure cost. An autocomplete service might require:
+
+$$
+p99 < 100\text{ ms}
+$$
+
+even if GPUs sit partially idle. A fraud detector might tolerate moderate latency but require extremely strict false-negative behavior. These systems should not use the same optimization objective. A useful abstraction is:
+
+$$
+\text{Objective}
+=
+f(
+\text{latency},
+\text{throughput},
+\text{cost},
+\text{quality},
+\text{reliability}
+).
+$$
+
+Before optimizing, define the boundaries.
+
+For example:
+
+$$
+p99 < 300ms
+$$
+
+$$
+\text{accuracy drop}<0.2\%
+$$
+
+$$
+\text{critical-class recall drop}<0.05\%
+$$
+
+$$
+\text{cost/result}<\$0.002.
+$$
+
+Now you know what "better" means. Suppose an API request takes:
+
+$$
+500ms.
+$$
+
+You discover model execution takes:
+
+$$
+80ms.
+$$
+
+Optimizing the model from 80 ms to 40 ms cannot make the whole request 2× faster. Original latency:
+
+$$
+500ms.
+$$
+
+Maximum saving:
+
+$$
+40ms.
+$$
+
+New latency:
+
+$$
+460ms.
+$$
+
+Only an 8% improvement. This follows from a fundamental rule:
+
+$$
+\boxed{
+\text{You cannot significantly accelerate a system by optimizing a component that consumes little of its time.}
+}
+$$
+
+This is essentially Amdahl's law. Suppose fraction $$p$$ of request time can be accelerated by factor $$s$$. Overall speedup is approximately:
+
+$$
+S=
+\frac{1}
+{(1-p)+\frac{p}{s}}.
+$$
+
+Imagine model execution represents:
+
+$$
+p=0.2
+$$
+
+of total latency. You somehow make inference:
+
+$$
+s=10\times
+$$
+
+faster. Overall speedup is only:
+
+$$
+S=
+\frac{1}
+{0.8+0.02}
+\approx1.22.
+$$
+
+Your spectacular 10× model optimization produces only about a 22% end-to-end improvement. If instead the model represents:
+
+$$
+p=0.9,
+$$
+
+then:
+
+$$
+S=
+\frac{1}
+{0.1+0.09}
+\approx5.26.
+$$
+
+Same model optimization. Completely different product impact. That is why profiling comes before optimization. A production request may look like:
+
+$$
+L_{\text{total}}
+=
+L_{\text{network}}
++
+L_{\text{queue}}
++
+L_{\text{preprocess}}
++
+L_{\text{transfer}}
++
+L_{\text{inference}}
++
+L_{\text{postprocess}}
++
+L_{\text{return}}.
+$$
+
+Suppose measurements show:
+
+| Stage           | p50 contribution |
+| --------------- | ---------------: |
+| Network/gateway |            20 ms |
+| Queue           |           180 ms |
+| Tokenization    |            30 ms |
+| GPU inference   |           120 ms |
+| Postprocessing  |            10 ms |
+| Response        |            15 ms |
+| **Total**       |       **375 ms** |
+
+If your latency target is 250 ms, optimizing only kernels may not be the first move. Queueing is larger. Perhaps the real problem is saturation. Adding capacity, changing concurrency, or controlling queue depth could matter more than rewriting model execution. Suppose your service is slow because CPU tokenization consumes every available CPU core. Replacing FP16 inference with INT8 might improve GPU execution by 30%, yet end-to-end throughput barely changes because the GPU was already waiting for the CPU. Another service may be constrained by:
+
+$$
+\text{GPU memory capacity}.
+$$
+
+Quantization could be transformational because it allows more concurrent requests. Another could be:
+
+$$
+\text{memory-bandwidth bound}.
+$$
+
+Reducing weight size may substantially improve token generation speed. Another could be:
+
+$$
+\text{compute bound}.
+$$
+
+Better tensor-core kernels may dominate. The general procedure is:
+
+$$
+\text{observe}
+\rightarrow
+\text{identify limiting resource}
+\rightarrow
+\text{change that resource relationship}
+\rightarrow
+\text{measure again}.
+$$
+
+Optimization should be causal. Imagine:
+
+```text
+Before optimization
+
+CPU preprocessing = 20%
+GPU inference     = 70%
+network           = 10%
 ```
 
-A candidate earns further work only if its chosen layer can materially improve
-the stated constraint.
+You make GPU inference 4× faster. The new proportions might become:
+
+```text
+After optimization
+
+CPU preprocessing = 47%
+GPU inference     = 41%
+network           = 12%
+```
+
+GPU optimization worked. But GPU inference is no longer the dominant problem. Continuing to optimize GPU kernels may produce rapidly diminishing returns. This is normal. Successful optimization often means:
+
+$$
+\boxed{\text{the bottleneck moves}}
+$$
+
+because you removed the previous bottleneck.
+
+## How Do Export, Operator Coverage, Fusion, Shapes, and Engine Caches Create a New Candidate?
+<!-- section-summary: Exported graphs, operator support, fallback, fusion, shape assumptions, and engine caches produce a distinct executable candidate with versioned build identity. -->
+
+Changing the executable graph or engine creates a new candidate whose operator coverage, fallbacks, shapes, and startup state need verification.
+
+Suppose you trained a model in PyTorch. You then export it into another representation and compile it for an optimized inference runtime. It is tempting to think:
+
+Same weights, therefore same model.
+
+Operationally, that is unsafe. Your training implementation may execute:
+
+$$
+F_{\text{framework}}(x)
+$$
+
+while the exported engine executes:
+
+$$
+F_{\text{engine}}(x).
+$$
+
+Those implementations can differ because of:
+
+* graph transformations;
+* operator substitutions;
+* fused operations;
+* numerical precision;
+* constant folding;
+* kernel selection;
+* shape assumptions;
+* runtime implementations.
+
+Therefore treat the exported artifact as a new executable implementation that must be tested. The source model is the specification candidate. The optimized engine is a compiled candidate. Suppose your original graph is:
+
+$$
+z = \operatorname{ReLU}(Wx+b).
+$$
+
+A runtime might transform:
+
+```text
+matrix multiply
+↓
+bias addition
+↓
+ReLU
+```
+
+into one optimized kernel. Mathematically, these should represent approximately the same function. But the sequence of floating-point operations can change. And floating-point arithmetic is not exact real-number arithmetic.
+
+For example:
+
+$$
+(a+b)+c
+$$
+
+need not equal:
+
+$$
+a+(b+c)
+$$
+
+bit-for-bit in finite precision. A compiler is therefore allowed to preserve intended semantics while changing low-level numerical details. ML systems need to decide how much difference is acceptable. Suppose the exact mathematical result should be:
+
+$$
+1.0000001.
+$$
+
+One implementation rounds intermediate values differently and produces:
+
+$$
+1.0000000.
+$$
+
+Another produces:
+
+$$
+1.0000002.
+$$
+
+Usually irrelevant. But now imagine these values become logits near a decision boundary. Class A:
+
+$$
+2.000001
+$$
+
+Class B:
+
+$$
+2.000000.
+$$
+
+A tiny numerical shift can swap them. Or suppose a business rule says:
+
+$$
+score \ge 0.7
+\Rightarrow
+\text{approve}.
+$$
+
+A prediction changing from:
+
+$$
+0.70001
+$$
+
+to:
+
+$$
+0.69998
+$$
+
+changes the final decision. This is why accuracy gates must operate at multiple levels. Suppose your optimized engine supports:
+
+```text
+matrix multiplication
+convolution
+normalization
+attention
+```
+
+but your model contains a custom operator:
+
+```text
+weird_special_transform
+```
+
+The runtime might:
+
+1. reject the model entirely;
+2. execute that operator in a fallback framework;
+3. move it to CPU;
+4. use an unoptimized generic kernel.
+
+All can dramatically affect performance. Imagine:
+
+```text
+GPU optimized ops
+█████████████
+          ↓
+CPU fallback
+     20 ms
+          ↓
+GPU optimized ops
+█████████████
+```
+
+Now the system may repeatedly synchronize and move data between execution environments. A tiny unsupported operation can dominate latency. Suppose 98% of graph operations execute inside the optimized engine. Sounds excellent. But if the remaining 2% accounts for:
+
+$$
+40\%
+$$
+
+of execution time, coverage by operation count is misleading. What matters is closer to:
+
+$$
+\boxed{
+\text{fraction of actual expensive work executing on the intended fast path}
+}
+$$
+
+not simply percentage of graph nodes. You want to know:
+
+* which operations are optimized;
+* which fall back;
+* how much time fallback consumes;
+* whether transfers or synchronization are introduced.
+
+A correct model with partial acceleration may perform worse than the original runtime. Suppose original framework latency:
+
+$$
+100ms.
+$$
+
+The new engine accelerates most computation to:
+
+$$
+50ms.
+$$
+
+But unsupported sections require:
+
+$$
+10ms
+$$
+
+of data movement and:
+
+$$
+50ms
+$$
+
+of fallback execution. Total:
+
+$$
+50+10+50=110ms.
+$$
+
+You've introduced an "optimized" engine that is 10% slower. This is why you benchmark the complete executable path rather than extrapolating from individual optimized kernels. Imagine a sequence:
+
+$$
+A\rightarrow B\rightarrow C.
+$$
+
+Without fusion:
+
+```text
+read inputs
+run A
+write intermediate
+read intermediate
+run B
+write intermediate
+read intermediate
+run C
+write output
+```
+
+With fusion:
+
+```text
+read inputs
+run A+B+C together
+write output
+```
+
+Fusion can reduce:
+
+* kernel launch overhead;
+* synchronization;
+* intermediate memory writes;
+* intermediate memory reads.
+
+On memory-bound workloads, reducing data movement can matter as much as reducing arithmetic. Suppose operations A and B each produce a:
+
+$$
+100MB
+$$
+
+intermediate tensor. Without fusion:
+
+$$
+100MB
+$$
+
+must be written, then read again. That's approximately:
+
+$$
+200MB
+$$
+
+of memory traffic just to cross the boundary. If fused, the intermediate may remain in registers, cache, or otherwise avoid full materialization. The model's mathematical operation count may barely change. Yet latency improves because:
+
+$$
+\boxed{\text{less data moves through expensive memory hierarchy levels}.}
+$$
+
+This illustrates why FLOPs alone do not determine inference speed. A general framework must handle enormous flexibility:
+
+* arbitrary shapes;
+* dynamic control;
+* many devices;
+* training;
+* debugging;
+* many data types.
+
+An inference engine can often specialize for a much narrower environment. Suppose it knows:
+
+$$
+\text{batch}\in[1,32]
+$$
+
+and:
+
+$$
+\text{sequence length}\le4096.
+$$
+
+It may select or generate kernels optimized specifically for those shapes. Specialization trades flexibility for performance. That trade needs to match real production traffic. Suppose you optimized an engine using examples around:
+
+$$
+512\text{ tokens}.
+$$
+
+Production frequently sees:
+
+$$
+8,000\text{ tokens}.
+$$
+
+Possible results include:
+
+* engine rejection;
+* fallback;
+* runtime recompilation;
+* inefficient kernels;
+* unexpectedly large workspace memory;
+* poor latency.
+
+So representative shapes matter both in optimization and benchmarking. A model isn't a single workload. It is a family of computations parameterized by input shape. Optimized runtimes may perform expensive work such as:
+
+* benchmarking candidate kernels;
+* compiling code;
+* autotuning;
+* generating execution plans.
+
+Suppose first startup requires:
+
+$$
+90s.
+$$
+
+If the resulting engine or compiled kernels can be cached, subsequent starts might require:
+
+$$
+15s.
+$$
+
+That's excellent. But now the cache itself has an identity problem. A compiled engine may depend on:
+
+$$
+(
+\text{model},
+\text{GPU architecture},
+\text{runtime},
+\text{precision},
+\text{shapes},
+\text{compiler settings}
+).
+$$
+
+Reusing it under an incompatible stack may be invalid. Conceptually, an engine-cache key might represent:
+
+$$
+K=
+H(
+\text{model checksum}
+\Vert
+\text{runtime version}
+\Vert
+\text{hardware target}
+\Vert
+\text{precision config}
+\Vert
+\text{shape profile}
+).
+$$
+
+The exact implementation varies. The important principle is:
+
+A compiled artifact is reusable only when the assumptions under which it was compiled still hold.
+
+This is the same first-principles reasoning used for prediction caching—only now you are caching executable optimization work rather than predictions.
 
 ![A 140-millisecond p95 inference profile split into authentication and network, image preprocessing, GPU execution, queueing, and postprocessing, comparing a faster kernel with a change to the largest stage.](/content-assets/articles/article-mlops-model-serving-inference-optimization-accuracy-gates/optimize-measured-bottleneck.png)
 
 *The profile gives optimization a finish line: target the stage with enough measured budget to change the product constraint, then reprofile the complete path rather than assuming the bottleneck stayed put.*
 
-## Profile The Complete Request Path
+## How Do Lower Precision and Model Type Change Accuracy Equivalence?
+<!-- section-summary: Precision and quantization approximate computation; calibration and model-specific numerical, decision, ranking, or generation tests define acceptable equivalence. -->
 
-<!-- section-summary: End-to-end profiling separates queueing, application work, device transfers, model execution, and response work before the team changes the model runtime. -->
+Numerical changes then require a definition of acceptable equivalence that matches the model's actual decisions and outputs.
 
-A request-level timer tells the team that the service is slow. It does not
-identify the cause. Add trace spans or structured timers around the major
-stages: queue wait, request parsing, feature retrieval, decoding, preprocessing,
-host-to-device transfer, model execution, device-to-host transfer,
-postprocessing, and serialization.
+Suppose a model uses FP32 values. Each weight occupies approximately:
 
-For a tabular model, feature retrieval can dominate the request. For an image
-model, decoding and resizing may dominate. An LLM profile separates queue wait
-from prompt processing and token generation. It also tracks pressure on the
-key-value cache, which stores attention state from earlier tokens. The profile
-must reflect the actual service instead of only timing `model(input)` in a
-notebook.
+$$
+4\text{ bytes}.
+$$
 
-GPU timing needs extra care because GPU operations usually run asynchronously.
-The CPU launches work and continues before the GPU finishes. A normal wall-clock
-timer around a kernel can therefore measure launch time instead of completed
-execution. Dedicated microbenchmarks should use device events or synchronize
-around the measured region. Production request handlers should avoid adding
-synchronization to every request because forced waiting can reduce concurrency.
+Changing to FP16 gives roughly:
 
-Measure cold and warm behaviour separately. A cold request may load weights,
-compile kernels, create memory pools, or build an engine. Warm measurements
-describe steady traffic after those activities settle. Record p50, p95, and p99
-latency, achieved throughput, offered load, queue depth, batch-size
-distribution, CPU and accelerator utilization, memory, errors, timeouts, and
-fallbacks.
+$$
+2\text{ bytes}.
+$$
 
-```mermaid
-flowchart TD
-    A["Incoming Request<br/>(arrival timestamp)"] --> B["Queue Wait<br/>(capacity and admission)"]
-    B --> C["Prepare Input<br/>(fetch, decode, transform)"]
-    C --> D["Move To Device<br/>(host-to-accelerator copy)"]
-    D --> E["Run Model<br/>(operators and kernels)"]
-    E --> F["Interpret Output<br/>(thresholds and postprocessing)"]
-    F --> G["Return Response<br/>(serialization and network)"]
+INT8 gives roughly:
 
-    class A,G edge;
-    class B,C,D,E,F stage;
+$$
+1\text{ byte}.
+$$
+
+Nominal 4-bit representations use roughly:
+
+$$
+0.5\text{ bytes}
+$$
+
+per raw parameter before metadata. This immediately affects:
+
+$$
+\text{memory capacity}
+$$
+
+and:
+
+$$
+\text{memory bandwidth}.
+$$
+
+If the accelerator also supports faster arithmetic at lower precision, it can affect:
+
+$$
+\text{compute throughput}
+$$
+
+too. So lower precision can attack several serving bottlenecks simultaneously. Suppose a floating-point weight is:
+
+$$
+w=0.13742.
+$$
+
+A lower-precision representation might store something corresponding to:
+
+$$
+\hat w=0.136.
+$$
+
+The error is:
+
+$$
+\epsilon = \hat w-w.
+$$
+
+A neural network contains millions or billions of such approximations. The key question isn't whether:
+
+$$
+\epsilon=0.
+$$
+
+Usually it isn't. The question is whether accumulated approximation changes predictions enough to matter. For a simplified INT8 example, we might map real values into integers:
+
+$$
+q
+=
+\operatorname{round}
+\left(
+\frac{x}{s}
+\right)
+$$
+
+where $$s$$ is a scale. Approximate reconstruction is:
+
+$$
+\hat x=sq.
+$$
+
+The quality of this approximation depends heavily on choosing a suitable scale. Suppose most values lie between:
+
+$$
+-1
+\text{ and }
+1,
+$$
+
+but one outlier is:
+
+$$
+50.
+$$
+
+If the quantization range must include 50, much of the integer range may be wasted representing an outlier. Values around zero may then be represented very coarsely. This is why calibration matters. For post-training quantization, you often run representative inputs through the model to observe activation distributions. Suppose an activation typically lies in:
+
+$$
+[-3,3]
+$$
+
+but your calibration dataset happens to contain only easy examples where it lies in:
+
+$$
+[-0.5,0.5].
+$$
+
+You derive quantization parameters from the narrow distribution. Production later sees values around:
+
+$$
+2.5.
+$$
+
+Those may clip badly. So calibration data must represent production's numerical behavior. Not merely its semantic labels. Suppose production inputs consist of:
+
+$$
+95\%
+$$
+
+ordinary examples and:
+
+$$
+5\%
+$$
+
+rare difficult examples. If the rare examples produce unusually large activation ranges, excluding them can make the quantized model look excellent in testing but fail precisely where robustness matters. Representative calibration should therefore account for meaningful variation such as:
+
+* input sizes;
+* user populations;
+* rare classes;
+* language;
+* image conditions;
+* long sequences;
+* unusual feature values.
+
+Calibration is not just "take 100 random samples." It is an attempt to expose the optimized representation to the numerical regimes it must survive. This distinction is important. **Calibration data** helps choose parameters of the optimized numerical representation. **Evaluation data** tests whether the resulting model is acceptable. Using exactly the same data for both can make your confidence too optimistic.
+
+Conceptually:
+
+$$
+\text{calibration}
+\rightarrow
+\text{build candidate}
+$$
+
+then:
+
+$$
+\text{held-out evaluation}
+\rightarrow
+\text{judge candidate}.
+$$
+
+This is analogous to training and testing. Suppose a classifier's top-line accuracy changes:
+
+$$
+95.0\%
+\rightarrow
+94.9\%.
+$$
+
+A 0.1 percentage-point loss seems harmless. But perhaps one rare safety-critical category changed:
+
+$$
+80\%\text{ recall}
+\rightarrow
+60\%.
+$$
+
+Aggregate accuracy hid a catastrophic regression. So an accuracy gate needs to reflect actual product risk. For different models, relevant metrics might include:
+
+* precision;
+* recall;
+* F1;
+* calibration;
+* ranking NDCG;
+* retrieval recall;
+* word error rate;
+* semantic similarity;
+* task success;
+* refusal correctness;
+* safety violations.
+
+The gate should be defined from product behavior, not merely whichever benchmark the model originally reported. When comparing baseline model $$F$$ and optimized candidate $$\tilde F$$, you can check increasingly meaningful levels.
+
+### Numerical equivalence
+
+Are raw tensors close?
+
+For example:
+
+$$
+|F(x)-\tilde F(x)|<\epsilon.
+$$
+
+Useful for finding implementation mistakes. But raw numerical difference isn't necessarily product impact.
+
+### Model-metric equivalence
+
+Do metrics such as accuracy or recall stay within limits
+
+For example:
+
+$$
+\Delta\text{accuracy}>-0.2\%.
+$$
+
+Much better.
+
+### Product-decision equivalence
+
+Do actual downstream decisions remain acceptable
+
+For example:
+
+$$
+\text{fraud blocks}
+$$
+
+or:
+
+$$
+\text{search result ordering}
+$$
+
+or:
+
+$$
+\text{successful assistant task completion}.
+$$
+
+This is often the most important level. Suppose baseline output:
+
+$$
+p=0.50001.
+$$
+
+Optimized output:
+
+$$
+\hat p=0.49999.
+$$
+
+Absolute error:
+
+$$
+|p-\hat p|
+=
+0.00002.
+$$
+
+Excellent numerical agreement. But if your decision rule is:
+
+$$
+p\ge0.5
+\Rightarrow
+A,
+$$
+
+then the decision changed. Therefore:
+
+$$
+\boxed{\text{tiny numerical error can create large discrete product effects near thresholds}.}
+$$
+
+This is one of the most important reasons for testing downstream decisions. Suppose a fraud system uses:
+
+$$
+\text{block transaction if }p_{\text{fraud}}>0.8.
+$$
+
+Quantization shifts predictions slightly. Most predictions are far from 0.8:
+
+```text
+0.03
+0.10
+0.25
+0.95
+0.99
 ```
 
-If GPU execution falls from 40 to 20 milliseconds but p95 service latency barely
-moves, inspect the other spans. The optimization may have shifted the bottleneck
-into queueing, preprocessing, or transfers.
+They remain unaffected. But suppose many transactions cluster around:
 
-## Optimize The Layer That Causes The Bottleneck
+$$
+0.79\text{–}0.81.
+$$
 
-<!-- section-summary: Request, batching, model, graph, precision, runtime, and hardware changes solve different bottlenecks and carry different risks. -->
+Tiny changes can flip many business decisions. The relevant question is not just:
 
-Inference systems have several optimization layers. Each layer changes a
-different part of the request path and carries its own release risk. A
-preprocessing change affects the input contract, a batching change affects queue
-delay, and a precision change affects arithmetic. The measured bottleneck
-indicates which layer deserves investigation first.
+$$
+E[|p-\hat p|].
+$$
 
-### Request And Preprocessing Layer
+You should also inspect:
 
-This layer controls payload size, decoding, feature retrieval, tokenization,
-resizing, and other preparation. Common changes include canonical input shapes,
-vectorized transforms, caching deterministic features, avoiding duplicate
-serialization, and moving expensive preparation into an upstream pipeline.
+$$
+P(
+\text{decision}_F(x)
+\ne
+\text{decision}_{\tilde F}(x)
+).
+$$
 
-Caching needs a stable key, an explicit freshness policy, access controls, and
-invalidation rules. A cached embedding from an older model or preprocessing
-version can silently feed incompatible data into the current model. Include the
-model and preprocessing versions in the key if those versions affect the value.
+Call this the **decision flip rate**. That can be far more meaningful than average tensor error. Suppose quantization shifts score calibration but ranking quality remains excellent. Original score distributions:
 
-### Queue And Batch Layer
+$$
+0.1,\;0.4,\;0.81,\;0.95.
+$$
 
-Batching combines several requests into one model call. Accelerators can process
-a batch more efficiently than many tiny calls, so throughput often rises. Each
-request waits while the batch forms, which spends part of the latency budget.
+Optimized model tends to produce slightly lower probabilities. Maybe the model itself remains useful but threshold 0.8 is no longer calibrated appropriately. There are two different changes:
 
-Dynamic batching uses a maximum queue delay and preferred batch sizes. A
-synchronous risk decision with a strict latency objective may allow only a tiny
-delay. An offline embedding job can use larger batches because throughput
-matters more than per-item response time. NVIDIA Triton exposes dynamic batching
-and instance-group controls; its Perf Analyzer and Model Analyzer help compare
-the resulting latency, throughput, and GPU-memory tradeoffs.
+$$
+\text{model representation changed}
+$$
 
-### Model And Graph Layer
+and possibly:
 
-Architecture changes include choosing a smaller backbone or a task-specific
-model. Pruning removes selected weights or structures, while distillation trains
-a smaller model to imitate a larger one. Early-exit models can stop computation
-after reaching sufficient confidence. These changes can deliver large gains.
-They also change the learned function and therefore require full training and
-evaluation evidence.
+$$
+\text{decision threshold should change}.
+$$
 
-Graph optimization keeps the learned weights but changes their executable
-representation. Exporters and compilers can remove constant work, select
-optimized operators, and fuse operations. ONNX Runtime, TensorRT, OpenVINO, and
-`torch.compile` are common choices in this layer.
+Do not silently alter both during one experiment and then declare success. Otherwise you can't tell what produced the behavior. Evaluate the optimized model with existing product rules first, then explicitly evaluate recalibration if appropriate. Suppose your ranker outputs:
 
-### Precision Runtime And Hardware Layers
+Baseline:
 
-Precision changes the numerical format used for weights or calculations. FP16,
-BF16, FP8, and INT8 can reduce memory traffic and unlock faster hardware paths.
-Runtime configuration chooses thread pools, execution providers, memory arenas,
-streams, and compiled engines. Hardware selection chooses the CPU, GPU,
-accelerator family, and instance size.
+$$
+A=0.901,\quad B=0.900.
+$$
 
-The practical rule is to choose the smallest change that can address the
-measured bottleneck. Reprofile after every major change because improving one
-layer can expose the next limiting stage.
+Optimized:
 
-## Treat The Exported Model As A New Executable Candidate
+$$
+A=0.899,\quad B=0.900.
+$$
 
-<!-- section-summary: Export translates a framework model into another graph and tensor contract, so compatibility and output validation precede performance claims. -->
+Numerical differences are tiny. But ranking changed:
 
-Training frameworks can execute flexible Python logic. Production runtimes
-usually want a more constrained computation graph. **Model export** translates
-the trained model into that graph, including its operators, weights, inputs,
-outputs, data types, and supported shapes.
+$$
+A>B
+$$
 
-ONNX is a common exchange format. An ONNX graph describes operations such as
-matrix multiplication, convolution, normalization, and activation through
-versioned operator definitions. The **opset** identifies the version of those
-operator definitions. A runtime must support the operators and opset used by the
-exported model.
+became:
 
-Shapes also form part of the contract. A static graph might accept only batch
-size 1 and images of 224 by 224 pixels. A dynamic dimension permits a declared
-axis, such as batch size, to vary at runtime. Dynamic shapes add flexibility and
-can limit compiler optimization or require shape ranges for engines such as
-TensorRT. Declare only the dimensions the service genuinely needs.
+$$
+B>A.
+$$
 
-PyTorch’s current ONNX path uses the `torch.export`-based exporter through
-`dynamo=True`. `dynamic_shapes` is the preferred shape declaration for that
-path. A focused export looks like this:
+If A and B are nearly equivalent, this may be harmless. If A is the only relevant item, it may matter greatly. So ranking quality should be evaluated with ranking metrics and product outcomes—not merely score difference. For an LLM:
 
-```python
-import torch
+$$
+F(x)
+$$
 
-model = model.eval().cpu()
-example = torch.randn(1, 3, 224, 224)
+may not have one uniquely correct string output. Even baseline execution can vary due to sampling. So comparing:
 
-onnx_program = torch.onnx.export(
-    model,
-    (example,),
-    input_names=["pixel_values"],
-    output_names=["logits"],
-    dynamic_shapes=({0: "batch"},),
-    dynamo=True,
-    verify=True,
-)
-onnx_program.save("image_classifier.onnx")
+```text
+baseline output == optimized output
 ```
 
-`verify=True` asks the exporter to check the exported program with ONNX Runtime
-if the required dependency is available. The release pipeline still needs its
-own comparison on representative inputs. Exporter verification cannot prove
-product quality. The generic example lets the exporter choose its recommended
-opset. Pin an explicit opset only if the tested target runtime or deployment
-contract requires one, and record the emitted opset with the release artifact.
+is usually too strict. You may instead evaluate:
 
-Operator compatibility failures tend to appear in three forms. The exporter
-cannot translate an operation. The runtime can load the graph but sends an
-unsupported operation to a slower provider. The graph runs, but an operator or
-numerical order produces outputs outside the accepted tolerance. Pin the
-framework, exporter, opset, runtime, and preprocessing versions so the artifact
-can be reproduced.
+* task correctness;
+* semantic quality;
+* instruction following;
+* safety;
+* factuality;
+* structured-output validity;
+* tool-use success;
+* human preference.
 
-```mermaid
-flowchart TD
-    A["Framework Model<br/>(training representation)"] --> B["Export Translation<br/>(operators, shapes, and types)"]
-    B --> C{"Compatibility Checks<br/>(can the target runtime execute it?)"}
-    C -->|Fail| D["Repair Export<br/>(operator, shape, or version)"]
-    C -->|Pass| E["Paired Output Check<br/>(same inputs, explicit tolerance)"]
-    E -->|Fail| F["Investigate Difference<br/>(graph or numerical path)"]
-    E -->|Pass| G["Performance Benchmark<br/>(representative traffic)"]
+For deterministic or nearly deterministic decoding, exact-output disagreement can still be a useful diagnostic even if it isn't the final quality gate. Suppose token probabilities are:
 
-    class A source;
-    class B,E,G work;
-    class C gate;
-    class D,F fail;
+$$
+P(A)=0.50001
+$$
+
+$$
+P(B)=0.49999.
+$$
+
+A tiny numerical perturbation reverses them. Baseline chooses:
+
+$$
+A.
+$$
+
+Optimized version chooses:
+
+$$
+B.
+$$
+
+Now the next token distribution is conditioned on a different history. The trajectories diverge:
+
+```text
+baseline:
+A → C → D → E...
+
+optimized:
+B → X → Y → Z...
 ```
 
-Boundary inputs deserve special attention: minimum and maximum supported shapes,
-empty or padded sequences, unusual image sizes, rare classes, missing-value
-patterns, and examples close to decision thresholds.
+A microscopic numerical difference can produce macroscopically different text. Therefore generative-model evaluation must focus on resulting behavior, not assume output identity.
 
-## Understand Which Operations Run In The Optimized Engine Or Fallback
+## How Should Workload Distributions and Service Benchmarks Measure the Performance Envelope?
+<!-- section-summary: Representative micro and service benchmarks cover open and closed loop, cold and warm paths, steady state, tails, and the workload performance envelope. -->
 
-<!-- section-summary: A runtime assigns supported parts of an exported graph to execution providers, and unsupported parts may fall back to another device. -->
+Those quality tests need performance measurements on the same representative workload and across the complete service path.
 
-An **execution provider** connects a runtime to a hardware-specific
-implementation. ONNX Runtime can register providers such as TensorRT, CUDA,
-OpenVINO, and CPU. Provider order expresses priority. For example, TensorRT may
-receive supported subgraphs, CUDA may execute other GPU-compatible nodes, and
-CPU may handle the remainder.
+Suppose you benchmark a transformer only with:
 
-The assignment process is called **graph partitioning**. Think of the exported
-model as a chain of operations. The runtime groups operations that a provider
-supports into subgraphs and sends each group to that provider. A graph split
-across TensorRT, CUDA, and CPU can still return the correct answer, but it may
-copy data between devices several times. Those transfers can erase the expected
-speedup and create unstable tail latency.
+$$
+\text{batch}=32,\quad
+\text{sequence}=512.
+$$
 
-Provider availability proves only that the runtime loaded the provider. It does
-not prove that the important graph regions executed there. Enable runtime
-profiling, inspect optimized subgraphs or provider logs, and treat unexpected
-CPU placement as benchmark evidence.
+You get:
 
-```python
-import json
-import onnxruntime as ort
+$$
+4,000\text{ sequences/sec}.
+$$
 
-required = {"TensorrtExecutionProvider", "CUDAExecutionProvider"}
-available = set(ort.get_available_providers())
-missing = required - available
-if missing:
-    raise RuntimeError(f"Missing execution providers: {sorted(missing)}")
+Production looks like:
 
-options = ort.SessionOptions()
-options.enable_profiling = True
-session = ort.InferenceSession(
-    "image_classifier.onnx",
-    sess_options=options,
-    providers=[
-        ("TensorrtExecutionProvider", {"trt_fp16_enable": True}),
-        "CUDAExecutionProvider",
-        "CPUExecutionProvider",
-    ],
-)
-
-session.run(None, {"pixel_values": representative_batch})
-profile_path = session.end_profiling()
-profile = json.loads(open(profile_path, encoding="utf-8").read())
-cpu_nodes = [
-    event.get("name")
-    for event in profile
-    if event.get("args", {}).get("provider") == "CPUExecutionProvider"
-]
-print({"providers": session.get_providers(), "cpu_nodes": cpu_nodes})
+```text
+batch often 1–8
+sequence lengths 20–20,000
+bursty arrivals
+variable outputs
 ```
 
-The provider assertion catches a packaging error, such as installing a CPU-only
-runtime inside a GPU image. The profile supports the second question: where did
-the graph actually run? Production pipelines usually store the profile as an
-artifact and enforce a reviewed allowlist for expected fallback nodes instead of
-requiring zero CPU nodes for every model.
+The benchmark is not false. It answers the wrong question. An inference benchmark should approximate the workloads the service will actually see. Model serving performance is a surface, not a point.
 
-```mermaid
-flowchart TD
-    A["Exported Graph<br/>(all model operations)"] --> B["Runtime Partitioning<br/>(provider support decides placement)"]
-    B --> C["TensorRT Subgraph<br/>(compiled supported operations)"]
-    B --> D["CUDA Subgraph<br/>(remaining GPU operations)"]
-    B --> E["CPU Subgraph<br/>(fallback operations)"]
-    C --> F["Combined Output<br/>(copies connect each partition)"]
-    D --> F
-    E --> F
+Conceptually:
 
-    class A,F graph;
-    class B runtime;
-    class C,D,E provider;
+$$
+T=
+f(
+\text{batch size},
+\text{input length},
+\text{output length},
+\text{concurrency},
+\text{hardware}
+).
+$$
+
+For example:
+
+| Batch | Sequence | Latency | Throughput |
+| ----: | -------: | ------: | ---------: |
+|     1 |      128 |   10 ms |      100/s |
+|     8 |      128 |   20 ms |      400/s |
+|    32 |      128 |   50 ms |      640/s |
+|     1 |     4096 |  100 ms |       10/s |
+|     8 |     4096 |  300 ms |       27/s |
+
+A candidate runtime may outperform baseline for large batches but lose for batch 1. Whether that's useful depends on production. A **microbenchmark** asks questions such as:
+
+How fast does this model execute on a GPU at batch size 16
+
+Useful for isolating engine performance. A **service benchmark** asks:
+
+At 500 requests/sec with realistic traffic, what latency distribution and error rate do users see
+
+That includes:
+
+* queueing;
+* scheduling;
+* batching;
+* preprocessing;
+* networking;
+* contention.
+
+Both are useful. But never substitute the former for the latter. Suppose baseline model execution:
+
+$$
+100ms.
+$$
+
+Optimized:
+
+$$
+70ms.
+$$
+
+But the new runtime's batching policy waits longer to build batches. Baseline:
+
+$$
+20ms\text{ queue/batch}+100ms
+=
+120ms.
+$$
+
+Optimized:
+
+$$
+80ms\text{ queue/batch}+70ms
+=
+150ms.
+$$
+
+The model got 30% faster. The service got 25% slower. This is why the benchmark needs to include the serving scheduler. A closed-loop client behaves roughly like:
+
+```text
+send request
+↓
+wait for response
+↓
+send next request
 ```
 
-OpenVINO fills a similar role for Intel CPUs, GPUs, and NPUs. Its executable
-graph and performance counters help reveal actual device placement. Choose the
-runtime from the deployment hardware and supported operator set, then validate
-the resulting executable path.
+This is useful for questions such as:
 
-## Measure How Kernel Fusion And Engine Caches Affect Runtime
+How many requests can a fixed number of clients complete
 
-<!-- section-summary: Kernel fusion reduces launches and memory traffic, while engine caches preserve expensive compilation results for compatible deployments. -->
+It naturally incorporates client-perceived latency. But it has a dangerous property. If the server slows down, clients automatically send less traffic. Thus overload reduces offered load. That can hide saturation. An open-loop generator sends requests according to a schedule independent of completion:
 
-A neural-network graph often contains many small operations. Each operation can
-launch a separate hardware **kernel**, which is the function executed on a CPU
-or accelerator. Launching kernels and writing intermediate tensors to memory
-costs time.
-
-**Kernel fusion** combines compatible operations into one optimized kernel. A
-matrix multiplication followed by bias addition and an activation may execute as
-one unit. Fusion reduces launch overhead and can keep intermediate values in
-fast device memory. It also changes operation order and rounding, so fused
-output still passes numerical and task gates.
-
-TensorRT goes further by building an **engine** for a particular graph,
-precision, supported shape range, and target GPU. During the build, it evaluates
-implementation strategies, often called tactics, and chooses an execution plan.
-This compilation may take seconds or minutes.
-
-An **engine cache** stores that compiled result so a new replica can start
-without repeating the full build. A **timing cache** stores measured tactic
-information that can accelerate later builds. These caches are deployable
-artifacts, not universal binaries. Their validity can depend on the model graph,
-TensorRT and CUDA versions, precision options, shape profiles, plugins, and GPU
-compatibility.
-
-The release process should build or warm the engine in a controlled environment,
-record its compatibility identity, and test startup on the target hardware. If a
-cache is missing or invalid, the service must follow a declared policy: rebuild
-within a startup budget, fall back to another reviewed provider, or fail
-readiness and keep traffic on the previous release.
-
-For OpenVINO, model caching serves a comparable startup purpose on supported
-devices. For ONNX Runtime, offline graph optimization can serialize an optimized
-model. The exact cache mechanism differs, but the operational questions stay the
-same: what produced the cached artifact, which environment can reuse it, and
-what happens after a cache miss?
-
-## Calibrate Lower Precision With Representative Data
-
-<!-- section-summary: Lower-precision execution improves memory and compute efficiency, while calibration and mixed precision protect sensitive outputs. -->
-
-Numbers inside a model use a finite format. FP32 provides a wide range and
-relatively high detail. FP16 uses fewer bits and can run faster on many GPUs,
-but it has a smaller numerical range. BF16 keeps a range similar to FP32 with
-fewer precision bits. FP8 and INT8 reduce storage and memory traffic further and
-require stronger hardware support and validation.
-
-**Quantization** maps weights or activations into a lower-precision
-representation. Weight-only quantization reduces model memory while leaving more
-of the calculation at higher precision. Dynamic quantization chooses some
-activation scaling during execution. Static post-training quantization
-calculates activation ranges ahead of deployment.
-
-Static quantization uses a **calibration dataset**: a representative collection
-of real model inputs passed through the model to estimate useful numerical
-ranges. In this context, calibration selects those ranges. Probability
-calibration is a separate quality property discussed later. Labels are usually
-optional for numerical range selection. Every sample must still pass through the
-exact production preprocessing.
-
-Suppose an image model usually sees well-lit images and occasionally receives
-dark, high-contrast images from older devices. A calibration set containing only
-the common bright images may choose activation ranges that clip important values
-from the rarer group. Include ordinary traffic, important segments, supported
-shapes, and difficult boundary cases. Keep final evaluation data separate so the
-same examples do not choose quantization ranges and judge the result.
-
-OpenVINO’s current NNCF flow wraps representative inputs in an `nncf.Dataset`
-and supplies it to `nncf.quantize`. TensorRT and ONNX Runtime provide their own
-quantization and calibration paths. Artifact formats and supported operators
-vary, so the team should build a candidate for the exact target runtime instead
-of treating one INT8 file as portable across every provider.
-
-```mermaid
-flowchart TD
-    A["Representative Inputs<br/>(production shapes and segments)"] --> B["Calibration Pass<br/>(observe activation ranges)"]
-    B --> C["Quantized Candidate<br/>(lower-precision representation)"]
-    C --> D["Numerical Comparison<br/>(paired outputs and tolerances)"]
-    D --> E["Task And Segment Tests<br/>(accuracy, recall, calibration)"]
-    E --> F{"All Gates Pass?<br/>(declared release limits)"}
-    F -->|Yes| G["Performance Test<br/>(target hardware and load)"]
-    F -->|No| H["Repair Or Reject<br/>(data, mixed precision, or baseline)"]
-
-    class A data;
-    class B,C,D,E,G work;
-    class F gate;
-    class H fail;
+```text
+t=0ms     request
+t=10ms    request
+t=20ms    request
+t=30ms    request
+...
 ```
 
-If a small set of layers causes most of the error, **mixed precision** keeps
-those layers at a higher precision and quantizes the rest. TensorRT exposes
-layer-level precision controls, and NNCF can exclude sensitive scopes. Rebuild
-and rerun the complete gate after changing the precision plan.
+If the server slows, arrivals continue. Now queues reveal themselves. This is useful for asking:
 
-## Build Benchmarks Across Representative Workloads
+Can the service sustain an external arrival process of 100 RPS while meeting the SLO
 
-<!-- section-summary: A benchmark matrix compares complete serving candidates across real inputs, load levels, shapes, hardware, and startup states. -->
+For capacity determination, this is often crucial. A closed-loop test can help explore:
 
-A production benchmark compares complete candidates. “ONNX is 2× faster” omits the
-model version, runtime, provider, precision, shape, batch size, hardware,
-traffic, and measured boundary. Record all of them.
+$$
+\text{maximum achieved throughput}
+$$
 
-Start with a small matrix driven by the deployment requirement:
+under controlled client concurrency. An open-loop test better exposes:
 
-- Baseline framework runtime and candidate runtime.
-- Required precision modes, such as FP32 and FP16, plus INT8 only if it has a
-  real hardware path.
-- Common input shapes and the largest supported shape.
-- Batch sizes or concurrency levels that the service can actually produce.
-- The production hardware SKU, driver, accelerator libraries, runtime image, and
-  power mode.
-- Cold startup, warm steady state, and any engine-cache miss path.
-- Ordinary traffic, expected peak traffic, and a controlled overload point.
+$$
+\text{stability under an imposed arrival rate}.
+$$
 
-Change one major variable per diagnostic comparison. First compare baseline and
-exported FP32 on the same device. Then add graph compilation. Then change
-precision. Then tune batching. This sequence reveals the source of each gain or
-regression. Run the final combined candidate afterward because optimizations
-interact.
+Suppose service capacity is approximately:
 
-Input data affects both performance and quality. Variable-length text changes
-padding and compute. Image resolution changes tensor size. Object detection can
-spend different time in postprocessing according to the number of proposed
-boxes. LLM benchmarks need representative prompt lengths, output lengths,
-streaming behaviour, and request cancellation.
+$$
+100\text{ req/s}.
+$$
 
-For conventional models served with Triton, Perf Analyzer can sweep concurrency
-or request rate and report latency and throughput. Model Analyzer can explore
-batch sizes and instance counts while collecting GPU memory and utilization.
-OpenVINO’s `benchmark_app` helps compare latency and throughput hints on target
-Intel hardware. These tools measure the model or server configuration supplied
-to them; an application-level load test still covers authentication, feature
-calls, payload work, and network boundaries.
+An open-loop test sends:
 
-For vLLM, measure time to first token, inter-token latency, end-to-end request
-latency, output-token throughput, and request throughput. Prompt length,
-generated length, KV-cache capacity, prefix reuse, quantization, and continuous
-batching all affect the result. **KV cache** stores attention state from earlier
-tokens. **Prefix caching** can reuse matching prompt prefixes. A benchmark with
-repeated prompts can therefore overstate production performance if real users
-rarely share prefixes.
+$$
+110/s.
+$$
 
-## Use Open And Closed Load Tests For Different Questions
+Backlog grows:
 
-<!-- section-summary: Closed-load tests study capacity under fixed concurrency, while open-load tests reveal queue growth under a fixed arrival rate. -->
+$$
+10/s.
+$$
 
-Load generators answer different questions according to how they send work. The
-difference matters because a fixed number of active clients reacts to a
-slowdown, while independent user arrivals continue at their scheduled rate. A
-benchmark plan uses both behaviours to expose capacity and queueing risk.
+After 60 seconds:
 
-A **closed-load model** keeps a fixed number of requests in flight. A client
-sends another request after one completes. Triton Perf Analyzer’s concurrency
-mode follows this pattern. It is useful for finding saturation throughput and
-comparing how many simultaneous requests a configuration can process. A slower
-server also slows the rate at which the client creates new work, so queue growth
-can look controlled.
+$$
+600
+$$
 
-An **open-load model** sends requests according to an external arrival schedule,
-independent of response completion. Request-rate mode with a constant or Poisson
-distribution is one practical implementation. It resembles an online service
-whose users continue arriving during a slowdown. If arrival rate exceeds
-sustainable capacity, queue depth and tail latency rise sharply.
+requests of backlog accumulate. That's real overload. A closed-loop test may throttle itself and hide much of that behavior. Optimized engines can have several phases:
 
-Run both. Closed load helps compare capacity across batch sizes, model
-instances, and runtimes. Open load checks the production objective at the
-expected and peak arrival rates. Record offered requests, completed requests,
-rejected requests, timeouts, and fallback responses. Completed throughput alone
-can reward a candidate that drops difficult work.
-
-```mermaid
-flowchart TD
-    A["Benchmark Question<br/>(capacity or production latency?)"] --> B{"Load Model<br/>(how are requests created?)"}
-    B -->|Fixed in-flight work| C["Closed Load<br/>(capacity and saturation)"]
-    B -->|Independent arrivals| D["Open Load<br/>(queue growth and tail latency)"]
-    C --> E["Compare Configurations<br/>(batch, instances, runtime)"]
-    D --> F["Check Service Objective<br/>(normal, peak, and overload)"]
-    E --> G["Complete Evidence<br/>(latency, throughput, drops, resources)"]
-    F --> G
-
-    class A,B question;
-    class C,D,E,F mode;
-    class G result;
+```text
+startup
+↓
+warmup
+↓
+steady state
 ```
 
-Warm-up and repetition are part of the protocol. Declare the warm-up condition,
-run several trials, and report variation. Store the configuration, raw results,
-environment identity, and quality report together so another engineer can
-reproduce the decision.
+During startup:
 
-## Check Numerical, Model, And Product Quality
+* weights load;
+* kernels compile;
+* caches populate;
+* memory pools grow;
+* execution plans build.
 
-<!-- section-summary: Numerical, task, calibration, segment, and product-decision gates protect different consequences of an optimization. -->
+If you benchmark only after a perfect warmup, you understand steady-state efficiency. That's important. But production also experiences:
 
-Performance evidence answers whether the system improved. Quality gates examine
-whether the candidate still performs the intended job. A small numerical
-difference can preserve the final action, change a class, distort a probability,
-or affect only one important segment. Separate gates make each consequence
-visible.
+* rollout;
+* autoscaling;
+* crash recovery;
+* node replacement.
 
-A **numerical gate** compares baseline and candidate outputs on identical
-inputs. Absolute tolerance limits the raw difference, while relative tolerance
-scales the allowance with the reference value. For an output value `b` from the
-baseline and `c` from the candidate, a common rule accepts the pair if
-`|c - b| <= absolute_tolerance + relative_tolerance × |b|`.
+So startup characteristics need separate benchmarks. Suppose:
 
-A **tolerance** is the predeclared amount of numerical difference the system
-accepts. It should come from output scale, downstream sensitivity, baseline
-nondeterminism, and product risk. Choosing it after seeing the candidate turns
-the gate into an explanation for a preferred result.
+$$
+T_{\text{cold startup}}=120s.
+$$
 
-Numerical closeness cannot replace a task metric. A **task gate** recomputes the
-metrics that describe model performance: macro-F1 and per-class recall for
-classification, NDCG for ranking, mean absolute error for regression,
-intersection over union for segmentation, or a task-specific evaluation for
-generation.
+Once warm:
 
-Probability-producing classifiers also need a **calibration gate**. Probability
-calibration asks whether predictions labelled around 0.8 succeed about 80% of
-the time. Brier score, expected calibration error, and reliability plots can
-reveal a probability shift even if class labels remain similar.
+$$
+p99=200ms.
+$$
 
-Finally, evaluate important segments. Overall accuracy may stay flat while one
-language or device type regresses. The same risk applies to a region, an
-input-size band, or a rare class. Define protected slices before candidate
-evaluation. Each slice also needs enough examples to make its result meaningful.
+A candidate runtime improves warm latency to:
 
-This focused gate uses paired baseline and candidate probabilities for a binary
-classifier. The same rows feed every comparison, so changed decisions can be
-inspected directly:
+$$
+150ms
+$$
 
-```python
-import numpy as np
-import pandas as pd
-from sklearn.metrics import brier_score_loss, recall_score
+but increases startup to:
 
-rows = pd.read_parquet("paired_predictions.parquet")
-threshold = 0.70
+$$
+600s.
+$$
 
-rows["baseline_decision"] = rows.baseline_probability >= threshold
-rows["candidate_decision"] = rows.candidate_probability >= threshold
-rows["decision_changed"] = (
-    rows.baseline_decision != rows.candidate_decision
-)
+For a permanent batch cluster, this might be excellent. For aggressively autoscaled online inference, it could be disastrous. Different product constraints produce different winners. Suppose baseline and optimized runtime look like:
 
-max_error = np.abs(
-    rows.candidate_probability - rows.baseline_probability
-).max()
-recall_delta = recall_score(
-    rows.label, rows.candidate_decision
-) - recall_score(rows.label, rows.baseline_decision)
-brier_delta = brier_score_loss(
-    rows.label, rows.candidate_probability
-) - brier_score_loss(rows.label, rows.baseline_probability)
-changed_rate = rows.decision_changed.mean()
+|    Load | Baseline p99 | Optimized p99 |
+| ------: | -----------: | ------------: |
+| 100 RPS |       100 ms |         90 ms |
+| 300 RPS |       140 ms |        110 ms |
+| 500 RPS |       250 ms |        160 ms |
+| 600 RPS |          2 s |        300 ms |
+| 700 RPS |         10 s |           4 s |
 
-assert max_error <= 0.02
-assert recall_delta >= -0.005
-assert brier_delta <= 0.002
-assert changed_rate <= 0.001
+The optimized runtime didn't just save 10–50 ms. It moved the saturation knee. That can be much more valuable because safe capacity changed dramatically. Optimization should therefore measure:
+
+$$
+\text{throughput under latency constraint}
+$$
+
+not just unloaded latency. A serving candidate can be described by a region:
+
+$$
+\mathcal{R}
+=
+\{
+(\lambda,L,Q,C)
+:
+L\le L_{\max},
+Q\ge Q_{\min},
+C\le C_{\max}
+\}.
+$$
+
+You want the optimized candidate's acceptable region to be better than baseline. Perhaps it:
+
+* supports higher arrival rate;
+* uses less hardware;
+* lowers latency;
+* preserves quality.
+
+This is a stronger claim than:
+
+"The kernel benchmark is 1.7× faster."
+
+## How Do Accuracy Gates, Slices, Shadow Traffic, Canaries, Hardware, and Rollback Control Release?
+<!-- section-summary: Accuracy, uncertainty, slices, product quality, shadow and canary evidence, equivalent traffic and hardware, and complete rollback form release gates. -->
+
+A candidate is ready for release only after accuracy, slices, product guardrails, shadow or canary evidence, hardware comparability, and rollback all pass.
+
+An **accuracy gate** is simply a rule saying:
+
+This optimized candidate cannot progress unless measured quality remains within an acceptable range.
+
+For example:
+
+$$
+\Delta\text{accuracy}\ge -0.1\%
+$$
+
+and:
+
+$$
+\Delta\text{critical recall}\ge -0.02\%
+$$
+
+and:
+
+$$
+\text{decision flip rate}\le0.1\%.
+$$
+
+For an LLM, the gate might instead be based on:
+
+$$
+\text{task success rate}
+$$
+
+$$
+\text{safety evaluations}
+$$
+
+$$
+\text{structured-output validity}
+$$
+
+and domain-specific quality evaluations. A gate turns "looks okay" into an explicit engineering constraint. Suppose baseline accuracy is measured as:
+
+$$
+90.00\%
+$$
+
+and optimized accuracy:
+
+$$
+89.95\%.
+$$
+
+Is the candidate truly worse by 0.05 points? Maybe. But measurement itself has statistical noise. With only 100 examples, the apparent difference may be meaningless. With 10 million representative examples, it may be highly meaningful. Therefore quality gates should account for:
+
+* sample size;
+* confidence intervals;
+* variance;
+* repeated trials when nondeterminism exists.
+
+A quality comparison should distinguish:
+
+$$
+\text{observed difference}
+$$
+
+from:
+
+$$
+\text{credible underlying difference}.
+$$
+
+Suppose overall error changes:
+
+$$
+5.00\%
+\rightarrow5.05\%.
+$$
+
+Looks harmless. But inspect groups:
+
+| Slice           | Baseline error | Candidate error |
+| --------------- | -------------: | --------------: |
+| Common A        |             4% |              4% |
+| Common B        |             6% |              6% |
+| Rare critical C |             8% |             20% |
+
+Aggregate metrics hid the failure. Representative evaluation therefore needs meaningful slices. The relevant slices depend on the product, but the principle is:
+
+$$
+\boxed{\text{optimization must not hide unacceptable local regressions behind acceptable global averages}.}
+$$
+
+The same idea applies to speed. Suppose average latency improves 30%. But:
+
+```text
+short requests  → 2× faster
+long requests   → 2× slower
 ```
 
-The four assertions protect different risks. The numerical limit catches broad
-output divergence. Recall protects missed positive cases. Brier score protects
-probability calibration. Changed-decision rate measures the direct effect of the
-existing threshold.
+If production contains important long-context traffic, the average is misleading. So both sides need distributions:
 
-Add per-segment assertions around the same calculations for protected groups.
-Store the identifiers of changed cases for review, subject to data-access and
-privacy rules. Unit-test the gate with deliberately altered fixtures so a
-rare-class miss, calibration shift, and threshold crossing each cause the
-expected failure.
+$$
+\text{quality distributions}
+$$
 
-## Check Whether Optimization Moves Decision Thresholds
+and:
 
-<!-- section-summary: Scores close to a product threshold can change actions even if aggregate model metrics remain stable. -->
+$$
+\text{performance distributions}.
+$$
 
-Many models do not expose a prediction directly to a user. A policy converts the
-score into an action. A probability above 0.70 may trigger manual review; a
-lower score may continue automatically. This threshold is part of the production
-decision system.
+Optimization is multidimensional. Imagine a search model. Offline NDCG is unchanged. But the optimized runtime occasionally outputs NaN for unusual inputs. Maybe only:
 
-Suppose the baseline produces 0.701 and an FP16 candidate produces 0.699 for the
-same input. The absolute difference is only 0.002, yet the action changes.
-Thousands of inputs near the threshold can alter review volume, user delay, and
-downstream cost without causing a large change in aggregate accuracy.
+$$
+0.01\%
+$$
 
-Measure the changed-decision rate overall and by protected segment. Plot or
-count score movement in bands around every operational threshold. Recompute
-action rates, manual-review volume, false-positive cost, missed-positive cost,
-and capacity limits for downstream teams.
+of requests. An offline ranking metric may barely notice. Production users see broken pages. So the quality gate also needs operational correctness:
 
-Silently retuning the threshold to match the old action rate hides a second
-production change. Treat a new threshold as a new policy candidate. Evaluate it
-against the product outcome and downstream capacity. Give the approved policy
-its own version and release record. Separate model and policy versions let
-incident responders trace a changed action to arithmetic, model quality, or
-policy.
+$$
+\text{finite outputs}
+$$
 
-```mermaid
-flowchart TD
-    A["Paired Model Scores<br/>(baseline and candidate)"] --> B["Numerical Difference<br/>(absolute and relative tolerance)"]
-    A --> C["Policy Thresholds<br/>(scores converted to actions)"]
-    C --> D["Changed Decisions<br/>(overall and by segment)"]
-    D --> E["Operational Effect<br/>(review volume, risk, and cost)"]
-    B --> F{"Release Gate<br/>(all limits evaluated together)"}
-    E --> F
+$$
+\text{correct schemas}
+$$
 
-    class A input;
-    class B,C,D,E work;
-    class F gate;
+$$
+\text{valid ranges}
+$$
+
+$$
+\text{no crashes}
+$$
+
+$$
+\text{correct fallback behavior}.
+$$
+
+"Accuracy" is best understood broadly as preserving the model-serving contract. Suppose baseline is production model A. You introduce optimized candidate B. In shadow mode:
+
+```text
+production request
+        │
+        ├────────→ A → response to user
+        │
+        └────────→ B → comparison only
 ```
 
-For ranking and generation systems, the corresponding product gate may compare
-reordered items, tool choices, safety routes, refusal decisions, or human-review
-outcomes. The exact gate follows the action produced by the model.
+Users continue receiving A. B receives real production inputs. Now you can compare:
+
+$$
+A(x)
+$$
+
+versus:
+
+$$
+B(x)
+$$
+
+on real traffic without exposing B's outputs. This is extremely useful for optimization releases because synthetic datasets rarely reproduce every production shape or edge case. Shadowing can validate:
+
+* compatibility;
+* outputs;
+* latency;
+* memory;
+* runtime errors.
+
+But performance measurements need care. If B receives only shadow traffic on separate hardware, it may not experience production queueing exactly. If A and B share resources, the shadow itself can alter performance. And shadowing doesn't reveal user/business reaction because users never receive B. Therefore shadow testing is evidence, not final proof. After shadow validation, route a small percentage of real traffic to B.
+
+For example:
+
+$$
+1\%
+$$
+
+then perhaps:
+
+$$
+5\%,20\%,50\%,100\%.
+$$
+
+Now B's outputs affect real requests. Compare:
+
+$$
+\text{latency},
+\quad
+\text{errors},
+\quad
+\text{model quality proxies},
+\quad
+\text{business outcomes}.
+$$
+
+The key is to preserve an easy path back to A. Suppose candidate B receives mostly small requests while A gets random traffic. You observe:
+
+$$
+B\text{ is 30\% faster}.
+$$
+
+That may be pure workload bias. You need enough randomization or workload matching that:
+
+$$
+P(x\mid A)
+\approx
+P(x\mid B).
+$$
+
+Otherwise you're measuring traffic differences rather than runtime differences. This applies to:
+
+* input size;
+* geography;
+* model variant;
+* tenant;
+* hardware;
+* concurrency;
+* time of day.
+
+Suppose:
+
+```text
+A → older GPU
+B → newer GPU
+```
+
+and B is faster. Was the optimization responsible You don't know. Likewise:
+
+```text
+A → driver version X
+B → driver version Y
+```
+
+confounds the comparison. A good performance experiment minimizes uncontrolled changes. Ideally:
+
+$$
+\text{candidate difference}
+=
+\text{optimization being evaluated}.
+$$
+
+Reality is rarely perfect, but every additional changed variable weakens causal confidence. Suppose B uses a new engine format. You deploy:
+
+* new runtime;
+* new driver;
+* new model export;
+* new batching config.
+
+Then discover quality degradation. Rolling back only model weights may not restore A. The rollback unit should be the full compatible serving artifact:
+
+$$
+(
+\text{model},
+\text{runtime},
+\text{libraries},
+\text{configuration},
+\text{hardware assumptions}
+).
+$$
+
+Optimization increases the importance of reproducible serving stacks because more layers influence behavior.
 
 ![An exported and optimized model becoming a versioned executable candidate, then passing compatibility, numerical, model-quality, and product-decision gates before benchmarking, with a threshold-crossing example.](/content-assets/articles/article-mlops-model-serving-inference-optimization-accuracy-gates/optimized-candidate-gates.png)
 
 *Export, provider placement, compilation, and reduced precision create a new executable candidate; even a small paired-score difference must pass the product-action gate before faster execution can advance.*
 
-## Release The Optimized Model Through Shadow, Canary, And Rollback Stages
+## How Do Benchmark Ladders and Resource Counters Separate Real Gains from Noise?
+<!-- section-summary: A benchmark ladder, resource counters, repeated trials, and operational effect thresholds distinguish bottleneck improvements from measurement noise. -->
 
-<!-- section-summary: Shadow and canary stages expose the optimized candidate to current traffic while a complete baseline release remains ready for recovery. -->
+Small speedups can disappear in noise or fail to affect service capacity, so a benchmark ladder and resource counters must explain the gain.
 
-Offline gates cannot reproduce every production shape, driver interaction, queue
-pattern, or downstream effect. Progressive release adds live evidence without
-sending all traffic to an unproven candidate.
+Suppose candidate B is slower. There are many possible explanations:
 
-Start in staging. Verify the model digest, preprocessing version, runtime image,
-execution-provider order, engine or model cache, supported shapes, startup time,
-readiness behaviour, telemetry, and paired golden fixtures. Run the
-representative load test on the same class of hardware used in production.
+$$
+\text{fallback operator},
+$$
 
-**Shadow traffic** copies real requests to the candidate while the baseline
-response remains authoritative. Compare provider placement and unsupported
-shapes first. Then compare prediction differences, memory, queueing, and
-latency. Shadowing may need redaction, sampling, and strict retention because
-copied requests still carry production data. Side effects such as writes,
-notifications, and billing must stay disabled.
+$$
+\text{wrong kernel},
+$$
 
-A **canary** sends a small controlled share of real decisions to the candidate.
-Increase exposure only after the observation window covers normal load and
-important segments. Service stop signals cover latency, errors, timeouts,
-fallback, and resource use. Quality stop signals cover output divergence,
-decision changes, task proxies, and downstream action volume.
+$$
+\text{engine cache miss},
+$$
 
-Rollback restores the complete baseline release: model artifact, preprocessing,
-runtime image, precision plan, execution-provider configuration, batching
-policy, policy threshold, and compatible cache. Reverting only the model file
-can leave the faulty runtime or precision setting in place.
+$$
+\text{different precision path},
+$$
 
-```mermaid
-flowchart TD
-    A["Offline Candidate<br/>(benchmark and quality gates)"] --> B["Staging Verification<br/>(identity, startup, load, telemetry)"]
-    B --> C["Shadow Traffic<br/>(live inputs, baseline decisions)"]
-    C --> D["Small Canary<br/>(limited candidate decisions)"]
-    D --> E{"Stop Signals Healthy?<br/>(service, quality, and cost)"}
-    E -->|Yes| F["Gradual Expansion<br/>(larger traffic share)"]
-    E -->|No| G["Complete Rollback<br/>(restore baseline release)"]
-    F --> H["Full Release<br/>(continued monitoring)"]
+$$
+\text{new batching behavior},
+$$
 
-    class A,B,C,D,F work;
-    class E gate;
-    class H good;
-    class G bad;
+$$
+\text{extra copies},
+$$
+
+$$
+\text{CPU overhead},
+$$
+
+$$
+\text{different GPU clocks},
+$$
+
+$$
+\text{different workload}.
+$$
+
+The correct response isn't:
+
+"TensorRT/ONNX/CUDA must be slower."
+
+You need evidence that narrows the causal chain. A useful debugging strategy is to move from narrow to broad measurements. You might compare:
+
+$$
+\text{individual kernels}
+$$
+
+then:
+
+$$
+\text{model execution}
+$$
+
+then:
+
+$$
+\text{model server}
+$$
+
+then:
+
+$$
+\text{end-to-end service}.
+$$
+
+Suppose:
+
+```text
+kernel benchmark      2× faster
+model execution       1.7× faster
+server throughput     1.1× faster
+user latency          unchanged
 ```
 
-Record the baseline and candidate as immutable release identities. The evidence
-packet should connect benchmark results, quality reports, approval, runtime
-configuration, and rollback target.
+You have learned something valuable. The optimization is being lost between the model and product layers. Now inspect:
 
-## Use Benchmark Evidence To Diagnose Regressions
+* scheduling;
+* queueing;
+* CPU;
+* network;
+* batching.
 
-<!-- section-summary: Incident diagnosis starts with the failing signal and follows it back to the optimization layer that can produce it. -->
+Suppose candidate B is 20% slower. You observe:
 
-An optimized release can fail through performance, correctness, compatibility,
-or operations. Start with the observed signal, compare the candidate with the
-baseline, and follow the evidence toward the changed layer.
-
-If latency rises while model execution time stays stable, inspect arrival rate,
-queue depth, batch formation, preprocessing, transfers, and downstream calls. If
-GPU execution rises, inspect shape distribution, provider placement, kernel
-selection, thermal state, and competing workloads. A sudden CPU increase
-alongside slower GPU inference often points to graph fallback or additional
-host-side work.
-
-If only the first requests are slow, inspect model loading, engine compilation,
-cache identity, memory-pool creation, and warm-up. A cache built for a different
-GPU, runtime, graph, or shape profile may be rejected or rebuilt. Readiness
-should prevent traffic from reaching an unprepared replica.
-
-If predictions diverge, reproduce the same input against both immutable
-releases. Compare preprocessing first, then exported outputs, provider path,
-precision, and postprocessing. Broad small differences suggest precision or
-operator ordering. Large differences limited to certain shapes suggest export or
-dynamic-shape behaviour. Segment-specific failures can point to poor calibration
-coverage or a sensitive layer.
-
-If model scores remain close but product actions change, inspect threshold
-crossings and policy versions. The model may have passed a general numerical
-tolerance while moving many cases clustered around the decision boundary.
-
-```mermaid
-flowchart TD
-    A["Observed Regression<br/>(latency, startup, output, or action)"] --> B{"Primary Signal<br/>(which evidence changed?)"}
-    B -->|Queue or tail latency| C["Traffic Path<br/>(arrival, batch, capacity, preprocess)"]
-    B -->|Device execution| D["Runtime Path<br/>(shape, provider, kernel, hardware)"]
-    B -->|Cold start| E["Startup Path<br/>(load, compile, cache, readiness)"]
-    B -->|Prediction| F["Quality Path<br/>(preprocess, graph, precision, output)"]
-    B -->|Action only| G["Policy Path<br/>(threshold and policy version)"]
-    C --> H["Compare With Baseline<br/>(same input and environment)"]
-    D --> H
-    E --> H
-    F --> H
-    G --> H
-
-    class A incident;
-    class B question;
-    class C,D,E,F,G,H path;
+```text
+GPU compute activity: similar
+memory bandwidth: significantly higher
 ```
 
-Rollback first if a blocking limit is breached and the baseline is healthy.
-Preserve profiles, traces, paired outputs, cache logs, shapes, and environment
-identity for the follow-up investigation.
+Hypothesis:
 
-## The Main Idea
+Candidate is moving more data.
 
-<!-- section-summary: Safe inference optimization connects one measured constraint to a targeted change, representative evidence, protected quality, and a complete recovery path. -->
+Or:
 
-Inference optimization is a controlled change to a production decision system.
-The work starts with a service constraint and a measured bottleneck. The team
-changes the layer that owns that bottleneck, benchmarks the complete candidate
-under representative inputs and traffic, and applies numerical, task,
-calibration, segment, and product-decision gates.
+```text
+GPU activity: lower
+CPU utilization: much higher
+```
 
-ONNX Runtime, TensorRT, OpenVINO, Triton, and vLLM provide valuable execution
-and measurement capabilities. Their settings only make sense in relation to the
-model contract, hardware, workload, and product decision. A production-ready
-candidate carries enough evidence to explain the improvement, the accepted
-numerical difference, the live stop signals, and the exact baseline release used
-for recovery.
+Hypothesis:
+
+Host-side processing or fallback is limiting the GPU.
+
+Or:
+
+```text
+GPU activity: high
+batch size: much smaller
+```
+
+Hypothesis:
+
+Scheduling changed and reduced batching efficiency.
+
+Performance diagnosis is much easier if latency changes are connected to physical resource changes. GPU performance can vary because of:
+
+* warmup;
+* clock behavior;
+* concurrent workloads;
+* thermal state;
+* input distribution;
+* compilation;
+* cache state.
+
+Suppose baseline runs once at:
+
+$$
+10.0ms
+$$
+
+and candidate once at:
+
+$$
+9.8ms.
+$$
+
+Claiming a 2% win would be weak evidence. You need repeated measurements and sufficiently long runs. The smaller the claimed improvement, the stronger your measurement discipline needs to be. Suppose candidate improves model execution:
+
+$$
+100ms\rightarrow98ms.
+$$
+
+But:
+
+* implementation becomes far more complicated;
+* startup takes longer;
+* quality validation becomes harder;
+* runtime is less mature.
+
+The optimization may have negative total value. An optimization should justify its complexity. A useful conceptual metric is:
+
+$$
+\frac{\text{production value gained}}
+{\text{operational complexity introduced}}.
+$$
+
+You don't need to compute it numerically, but you should reason about it.
+
+## How Do Worked Examples and a Pareto Frontier Guide Iterative Optimization?
+<!-- section-summary: Classification and LLM examples expose quality-performance tradeoffs, and the Pareto frontier selects candidates that are not dominated on relevant objectives. -->
+
+Worked examples and a Pareto frontier make the iterative trade between latency, throughput, memory, cost, and quality explicit.
+
+Suppose you serve a fraud classifier. Baseline:
+
+$$
+p99=80ms
+$$
+
+$$
+\text{throughput}=2,000\text{ req/s/GPU}
+$$
+
+$$
+\text{fraud recall}=96.0\%
+$$
+
+$$
+\text{false-positive rate}=1.5\%.
+$$
+
+Product requirements are:
+
+$$
+p99<100ms
+$$
+
+$$
+\text{fraud recall}\ge95.8\%
+$$
+
+$$
+\text{false-positive rate}\le1.6\%.
+$$
+
+You quantize from FP16 to INT8. Microbenchmark:
+
+$$
+2,000\rightarrow3,100\text{ req/s/GPU}.
+$$
+
+Excellent. Numerical comparison shows average probability error:
+
+$$
+0.001.
+$$
+
+Looks tiny. Overall accuracy changes:
+
+$$
+97.2\%\rightarrow97.1\%.
+$$
+
+Still fine. But threshold analysis reveals transactions near the fraud threshold flip more frequently than expected. Critical fraud recall becomes:
+
+$$
+95.4\%.
+$$
+
+The candidate fails. Even though it is:
+
+$$
+55\%
+$$
+
+faster. That is an accuracy gate doing its job. The correct conclusion is not:
+
+INT8 doesn't work.
+
+It is:
+
+This INT8 configuration fails the current product constraint.
+
+You might investigate:
+
+* different calibration data;
+* per-channel quantization;
+* keeping sensitive layers at higher precision;
+* threshold recalibration, evaluated as a separate product change.
+
+Suppose most layers tolerate INT8, but one numerically sensitive operation causes most degradation. Instead of:
+
+$$
+\text{everything FP16}
+$$
+
+or:
+
+$$
+\text{everything INT8},
+$$
+
+you can run:
+
+$$
+\text{most operations INT8}
+$$
+
+while preserving certain operations in:
+
+$$
+\text{FP16/FP32}.
+$$
+
+You sacrifice some performance gain but recover quality. Optimization is not necessarily binary. The best candidate often lies somewhere on a Pareto frontier. Imagine candidate configurations:
+
+| Candidate |    p99 |  Cost | Quality |
+| --------- | -----: | ----: | ------: |
+| A         | 500 ms | $1.00 |    99.0 |
+| B         | 350 ms | $0.80 |    99.0 |
+| C         | 250 ms | $0.60 |    98.9 |
+| D         | 180 ms | $0.45 |    96.0 |
+
+A is dominated by B: B is faster and cheaper at equal quality. D is much faster but perhaps fails the quality gate. C might be the best production choice. There isn't necessarily one scalar "best model." There is a set of tradeoffs:
+
+$$
+\boxed{
+\text{latency}
+\leftrightarrow
+\text{cost}
+\leftrightarrow
+\text{quality}
+}
+$$
+
+and the product constraints choose the acceptable point. Suppose an LLM server currently uses BF16. Measured workload:
+
+```text
+input tokens:
+p50 = 500
+p95 = 8,000
+
+output tokens:
+p50 = 150
+p95 = 1,000
+```
+
+Baseline:
+
+$$
+TTFT_{p99}=900ms
+$$
+
+$$
+\text{decode}=60\text{ tok/s/user}
+$$
+
+$$
+\text{fleet throughput}=25,000\text{ tokens/s/GPU}.
+$$
+
+You introduce:
+
+* quantized weights;
+* fused attention;
+* optimized engine.
+
+Microbenchmarks show:
+
+$$
+40,000\text{ tokens/s/GPU}.
+$$
+
+A 60% improvement. But further inspection finds the improvement is uneven. Short prompts:
+
+$$
++80\%.
+$$
+
+Long prefill:
+
+$$
++20\%.
+$$
+
+At batch 1:
+
+$$
++10\%.
+$$
+
+At high concurrency:
+
+$$
++70\%.
+$$
+
+So whether the change is valuable depends on production traffic. Quality evaluation then finds:
+
+```text
+general task success: unchanged
+code generation: -0.2%
+long-context retrieval: -2.5%
+structured JSON validity: unchanged
+```
+
+If long-context retrieval is important, the candidate may fail despite excellent average benchmarks. Perhaps you then keep certain attention operations at higher precision. Throughput improvement falls from:
+
+$$
+60\%
+$$
+
+to:
+
+$$
+45\%.
+$$
+
+Long-context quality returns inside the allowed gate. That 45% candidate may be vastly superior to the nominally "faster" 60% candidate. A mature process looks roughly like this:
+
+$$
+\text{define product constraint}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{measure workload and bottleneck}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{construct one optimization candidate}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{verify functional/numerical behavior}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{evaluate model and product quality}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{benchmark representative workloads}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{shadow/canary}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{release or reject}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{profile again}.
+$$
+
+Why profile again? Because the bottleneck may have moved. When someone says:
+
+Candidate B is 30% faster.
+
+You need to know exactly what B is.
+
+For example:
+
+```text
+Baseline
+model checksum: X
+precision: BF16
+runtime: R1
+GPU: H1
+batch policy: B1
+driver: D1
+
+Candidate
+model checksum: X
+precision: INT8
+runtime: R2
+GPU: H1
+batch policy: B1
+driver: D1
+```
+
+Now the difference is understandable. If instead five things changed simultaneously, regression diagnosis becomes much harder. Optimization works best with disciplined experimental control. A performance report saying:
+
+$$
+1.8\times\text{ throughput}
+$$
+
+without quality evidence is incomplete. An accuracy report saying:
+
+$$
+\Delta Q=0
+$$
+
+without serving evidence is also incomplete. For every candidate, you ideally want a compact record such as:
+
+| Dimension       | Baseline | Candidate |
+| --------------- | -------: | --------: |
+| p99 latency     |   400 ms |    260 ms |
+| safe throughput |  100 RPS |   155 RPS |
+| cost/result     |   $0.004 |   $0.0027 |
+| accuracy        |    94.5% |     94.4% |
+| critical recall |    98.2% |     98.2% |
+| decision flips  |        — |     0.03% |
+| cold start      |     45 s |      60 s |
+
+Now the release decision can be made from evidence instead of benchmark excitement.
+
+## Why Are Accuracy Gates Inseparable from Inference Optimization?
+<!-- section-summary: Every optimization changes executable behaviour, so quality and performance evidence must stay together through an iterative, versioned release loop. -->
+
+The final principle is that optimization changes the model system and therefore cannot be separated from accuracy gates.
+
+Suppose the original serving system implements:
+
+$$
+F
+$$
+
+with resource requirement:
+
+$$
+R(F)
+$$
+
+and product quality:
+
+$$
+Q(F).
+$$
+
+Optimization constructs a candidate:
+
+$$
+\tilde F
+$$
+
+with:
+
+$$
+R(\tilde F)<R(F)
+$$
+
+or greater throughput / lower latency. But the candidate is valid only if:
+
+$$
+Q(\tilde F)\ge Q_{\min}.
+$$
+
+And production usefulness further requires:
+
+$$
+L(\tilde F)\le L_{\max},
+$$
+
+$$
+E(\tilde F)\le E_{\max}.
+$$
+
+So the problem is:
+
+$$
+\boxed{
+\text{find the cheapest executable approximation of the model that remains inside all required product constraints}
+}
+$$
+
+"Approximation" may be exact at the model-semantic level and merely differ in floating-point execution, or it may be deliberately approximate through quantization. Either way, it needs proof. Without optimization, you ask:
+
+Does this model work
+
+With optimization, you need an additional question:
+
+Does this transformed implementation still work enough
+
+Every aggressive optimization exchanges something. Kernel specialization exchanges flexibility for speed. Fusion exchanges implementation simplicity for fewer operations/transfers. Quantization exchanges numerical fidelity for efficiency. Static shapes exchange generality for specialization. GPU-specific compilation exchanges portability for performance. Larger batching exchanges latency for throughput. Therefore every optimization creates assumptions. An accuracy/performance gate verifies that those assumptions remain acceptable. For any proposed optimization, the essential questions are:
+
+1. **What bottleneck does this change attack?**
+2. **What resource should improve if the hypothesis is correct?**
+3. **What assumptions or numerical behavior does the optimization change?**
+4. **What representative workloads could expose failure?**
+5. **What model and product metrics are not allowed to regress?**
+6. **What happens near important decision thresholds or rare slices?**
+7. **Does the complete service improve, not merely a kernel?**
+8. **Can we shadow, canary, observe, and roll back the full serving stack?**
+
+If those questions have concrete answers, optimization becomes an engineering experiment rather than guesswork. Inference optimization is not:
+
+$$
+\boxed{\text{make the model faster}}
+$$
+
+in isolation. It is:
+
+$$
+\boxed{
+\text{replace the current serving computation with a more efficient executable candidate}
+}
+$$
+
+subject to the constraint:
+
+$$
+\boxed{
+\text{the candidate must remain good enough for the product}
+}
+$$
+
+The process begins by measuring the real bottleneck, because accelerating a non-bottleneck has limited system impact. The optimized export or engine should be treated as a new executable implementation, because graph rewriting, fused kernels, fallback operators, lower precision, and hardware-specific compilation can all change performance and sometimes outputs. Lower precision can dramatically reduce memory use, memory traffic, and compute cost, but calibration must represent production numerical behavior. Performance benchmarks must represent production request shapes and load patterns. Closed-loop tests help study throughput under controlled concurrency, while open-loop tests reveal whether an externally imposed arrival rate causes unstable queue growth. Most importantly, correctness should be checked at several levels:
+
+$$
+\text{numerical behavior}
+\rightarrow
+\text{model metrics}
+\rightarrow
+\text{product decisions}.
+$$
+
+Tiny numerical changes may be irrelevant for most predictions yet flip important decisions near thresholds. Aggregate accuracy may look unchanged while a critical slice regresses badly. Generative models may produce completely different text from tiny early-token perturbations while still preserving—or degrading—actual task quality. So an optimization only passes when:
+
+$$
+\boxed{
+\text{Performance gain is real}
+\land
+\text{quality gates pass}
+\land
+\text{production behavior is safe}
+}
+$$
+
+and the final proof comes progressively:
+
+$$
+\boxed{
+\text{offline benchmark}
+\rightarrow
+\text{quality gates}
+\rightarrow
+\text{shadow}
+\rightarrow
+\text{canary}
+\rightarrow
+\text{gradual rollout}
+}
+$$
+
+with a tested rollback path for the complete serving stack. That is the first-principles idea: **every inference optimization is a hypothesis that some resource can be used more efficiently, and every accuracy gate is evidence that the cheaper computation is still an acceptable substitute for the original one.**
 
 ![Production optimization workflow from a measurable constraint and full profile through a targeted immutable candidate, representative open and closed load tests, quality gates, shadow and canary release, expansion, or complete rollback.](/content-assets/articles/article-mlops-model-serving-inference-optimization-accuracy-gates/optimization-release-summary.png)
 
 *Optimization is released as one measured production change: representative performance and behaviour gates travel with the candidate, and a breached limit restores the complete baseline model, runtime, policy, batching, and cache combination.*
 
-## References
+## Check Your Answers
 
-- [PyTorch ONNX exporter](https://docs.pytorch.org/docs/stable/onnx.html)
-- [PyTorch export-based ONNX exporter](https://docs.pytorch.org/docs/main/onnx_export.html)
-- [ONNX Runtime execution providers](https://onnxruntime.ai/docs/execution-providers/)
-- [ONNX Runtime architecture and graph partitioning](https://onnxruntime.ai/docs/reference/high-level-design.html)
-- [ONNX Runtime TensorRT execution provider](https://onnxruntime.ai/docs/execution-providers/TensorRT-ExecutionProvider.html)
-- [ONNX Runtime quantization](https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html)
-- [TensorRT accuracy considerations](https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/accuracy-considerations.html)
-- [Triton Inference Server optimization](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/optimization.html)
-- [Triton Perf Analyzer load modes](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/perf_analyzer/docs/inference_load_modes.html)
-- [Triton Model Analyzer metrics](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/model_analyzer/docs/metrics.html)
-- [OpenVINO post-training quantization with NNCF](https://docs.openvino.ai/2026/openvino-workflow/model-optimization-guide/quantizing-models-post-training/basic-quantization-flow.html)
-- [OpenVINO Benchmark Tool](https://docs.openvino.ai/2026/get-started/learn-openvino/openvino-samples/benchmark-tool.html)
-- [vLLM optimization and tuning](https://docs.vllm.ai/en/latest/configuration/optimization.html)
-- [NVIDIA GenAI-Perf](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/perf_analyzer/genai-perf/README.html)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Product Constraint and Bottleneck Should an Inference Optimization Address?]{kind="recap"}
+Optimization is a constrained product problem, so profiling the full request and applying Amdahl's law identifies the limiting resource worth changing.
+:::
+
+:::expand[How Do Export, Operator Coverage, Fusion, Shapes, and Engine Caches Create a New Candidate?]{kind="recap"}
+Exported graphs, operator support, fallback, fusion, shape assumptions, and engine caches produce a distinct executable candidate with versioned build identity.
+:::
+
+:::expand[How Do Lower Precision and Model Type Change Accuracy Equivalence?]{kind="recap"}
+Precision and quantization approximate computation; calibration and model-specific numerical, decision, ranking, or generation tests define acceptable equivalence.
+:::
+
+:::expand[How Should Workload Distributions and Service Benchmarks Measure the Performance Envelope?]{kind="recap"}
+Representative micro and service benchmarks cover open and closed loop, cold and warm paths, steady state, tails, and the workload performance envelope.
+:::
+
+:::expand[How Do Accuracy Gates, Slices, Shadow Traffic, Canaries, Hardware, and Rollback Control Release?]{kind="recap"}
+Accuracy, uncertainty, slices, product quality, shadow and canary evidence, equivalent traffic and hardware, and complete rollback form release gates.
+:::
+
+:::expand[How Do Benchmark Ladders and Resource Counters Separate Real Gains from Noise?]{kind="recap"}
+A benchmark ladder, resource counters, repeated trials, and operational effect thresholds distinguish bottleneck improvements from measurement noise.
+:::
+
+:::expand[How Do Worked Examples and a Pareto Frontier Guide Iterative Optimization?]{kind="recap"}
+Classification and LLM examples expose quality-performance tradeoffs, and the Pareto frontier selects candidates that are not dominated on relevant objectives.
+:::
+
+:::expand[Why Are Accuracy Gates Inseparable from Inference Optimization?]{kind="recap"}
+Every optimization changes executable behaviour, so quality and performance evidence must stay together through an iterative, versioned release loop.
+:::

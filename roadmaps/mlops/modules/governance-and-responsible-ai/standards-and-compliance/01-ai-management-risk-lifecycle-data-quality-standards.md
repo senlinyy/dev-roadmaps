@@ -1,7 +1,7 @@
 ---
 title: "AI Management, Risk, Lifecycle, and Data Quality Standards"
-description: "Understand how ISO/IEC 42001, 23894, 5338, the 5259 family, and NIST AI RMF govern different layers of one production AI system."
-overview: "AI standards divide a large governance problem into management, risk, lifecycle, and data-quality responsibilities. This guide connects those responsibilities to shared controls, current MLOps evidence, accountable decisions, review, and improvement."
+description: "An AI system crosses management, risk, lifecycle, and data-quality concerns, so several standards form a control stack rather than competing descriptions of the same job."
+overview: "An AI system crosses management, risk, lifecycle, and data-quality concerns, so several standards form a control stack rather than competing descriptions of the same job. The operating model joins accountable management, risk-based controls, lifecycle evidence, fit-for-purpose data, monitored assumptions, and continuous improvement."
 tags: ["MLOps", "advanced", "governance", "standards"]
 order: 1
 id: "article-mlops-governance-and-responsible-ai-ai-management-risk-lifecycle-data-quality-standards"
@@ -9,924 +9,640 @@ id: "article-mlops-governance-and-responsible-ai-ai-management-risk-lifecycle-da
 
 ## Table of Contents
 
-1. [Why One ML System Meets Several Standards](#why-one-ml-system-meets-several-standards)
-2. [What Each AI Standard Controls](#what-each-ai-standard-controls)
-3. [How The Standards Work Together In One ML System](#how-the-standards-work-together-in-one-ml-system)
-4. [See the Layers in a Lending Decision](#see-the-layers-in-a-lending-decision)
-5. [How Production Tools Record The Required Evidence](#how-production-tools-record-the-required-evidence)
-6. [Choose the Right Data-Quality Implementation](#choose-the-right-data-quality-implementation)
-7. [Assign Ownership and Match Control Depth to Risk](#assign-ownership-and-match-control-depth-to-risk)
-8. [Run Releases, Reviews, and Exceptions](#run-releases-reviews-and-exceptions)
-9. [Understand What Certification Establishes](#understand-what-certification-establishes)
-10. [Review Evidence Again After The System Changes](#review-evidence-again-after-the-system-changes)
-11. [The Main Idea](#the-main-idea)
-12. [References](#references)
+1. [Why Does One AI System Need Several Connected Standards?](#why-does-one-ai-system-need-several-connected-standards)
+2. [What Do ISO/IEC 42001, 23894, 5338, and 5259 Each Control?](#what-do-isoiec-42001-23894-5338-and-5259-each-control)
+3. [How Do the Standards Work Together in a Real System and Its Evidence Stack?](#how-do-the-standards-work-together-in-a-real-system-and-its-evidence-stack)
+4. [How Should Ownership and Risk Determine Control Depth?](#how-should-ownership-and-risk-determine-control-depth)
+5. [How Do Release Gates, Exceptions, Change, and Monitoring Turn Standards into Engineering?](#how-do-release-gates-exceptions-change-and-monitoring-turn-standards-into-engineering)
+6. [What Do Certification and Impact Assessment Actually Establish?](#what-do-certification-and-impact-assessment-actually-establish)
+7. [How Do Standards Support Responsible AI and a Connected Control Architecture?](#how-do-standards-support-responsible-ai-and-a-connected-control-architecture)
+8. [What Is the Central Operating Model for Standards-Based AI Governance?](#what-is-the-central-operating-model-for-standards-based-ai-governance)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Why One ML System Meets Several Standards
+A lending system needs reliable data, a controlled model lifecycle, documented risk decisions, monitored production behaviour, and an organization that knows who can approve change. No single standard covers all of those responsibilities at the same level.
 
-<!-- section-summary: AI standards cover different layers of the same production system, from organizational direction to data measurements and operating evidence. -->
+The relevant AI standards form a **control stack**. One governs the management system, another structures risk, another organizes lifecycle work, and another focuses on data quality. Their value appears when those layers produce evidence for the same real system and release decision.
 
-A team preparing its first formal AI governance programme often encounters
-several documents with similar words: management, risk, lifecycle, quality,
-trustworthiness, and governance. The overlap can make the standards sound like
-competing versions of the same checklist. They actually address different layers
-of one production system.
+These questions connect the four standards to ownership, implementation depth, certification, impact assessment, release controls, and continuous monitoring:
 
-Consider a lender that uses a model to estimate the chance that an applicant
-will miss future repayments. A credit officer sees the score alongside verified
-income, affordability information, and the reason codes supplied by the decision
-system. The score influences a consequential decision, so a high validation
-score answers only one part of the governance problem.
+1. **Why Does One AI System Need Several Connected Standards?**
+2. **What Do ISO/IEC 42001, 23894, 5338, and 5259 Each Control?**
+3. **How Do the Standards Work Together in a Real System and Its Evidence Stack?**
+4. **How Should Ownership and Risk Determine Control Depth?**
+5. **How Do Release Gates, Exceptions, Change, and Monitoring Turn Standards into Engineering?**
+6. **What Do Certification and Impact Assessment Actually Establish?**
+7. **How Do Standards Support Responsible AI and a Connected Control Architecture?**
+8. **What Is the Central Operating Model for Standards-Based AI Governance?**
 
-The organization still has to approve the lending uses, assign the outcome
-owner, and set the management-review process. The risk team examines harm to
-applicants, the lender, and wider groups. Engineers follow a controlled process
-from problem definition through retirement. Data owners measure whether income,
-repayment, and demographic proxy data remain fit for this purpose. Operations
-teams prove that the released system follows those decisions in production.
+## Why Does One AI System Need Several Connected Standards?
+<!-- section-summary: An AI system crosses management, risk, lifecycle, and data-quality concerns, so several standards form a control stack rather than competing descriptions of the same job. -->
 
-These are separate responsibilities:
+An AI system crosses management, risk, lifecycle, and data-quality concerns, so several standards form a control stack rather than competing descriptions of the same job.
 
-- a **management system** directs how the organization governs AI across people,
-  policies, resources, review, and improvement;
-- **risk management** identifies uncertain events, their consequences, the
-  treatment, and the accepted residual risk;
-- **lifecycle processes** place required work and evidence around acquisition,
-  development, release, operation, change, and retirement;
-- **data-quality management** defines what fit-for-purpose data means, measures
-  it, and assigns responsibility for repair;
-- an implementation framework such as the **NIST AI Risk Management Framework**
-  supplies voluntary outcomes and practices that teams can tailor to their
-  context.
+The easiest way to understand AI standards is to stop thinking of them as separate compliance documents and start with the thing they are trying to control. An ML system turns **data into consequential behaviour**:
 
-A standard describes requirements or guidance. It does not install a control
-inside a data pipeline. The organization still has to translate its chosen
-requirements into owners, workflows, technical checks, decisions, and retained
-evidence. That translation is the MLOps work covered in this article.
+- **world → data → features/context → model → output → decision/action → real-world consequence → feedback data**
 
-```mermaid
-flowchart TD
-    A["AI System<br/>(one intended use in a real operating context)"] --> B["Organizational Direction<br/>(policy, objectives, authority, and review)"]
-    B --> C["Risk Decisions<br/>(context, impacts, treatment, and acceptance)"]
-    C --> D["Lifecycle Work<br/>(build, acquire, release, operate, and retire)"]
-    D --> E["Data Quality<br/>(define, measure, repair, and govern data)"]
-    E --> F["Operating Evidence<br/>(prove the approved controls are active)"]
+Every arrow creates uncertainty. The data may be wrong. The model may generalize badly. The decision rule may misuse a perfectly good prediction. People may use the system outside its intended purpose. The environment may change after deployment. Responsible AI governance therefore has to answer four fundamentally different questions:
 
-    class A system
-    class B,C,D,E layer
-    class F evidence
-```
+**Who is responsible and how is the organization governed?**
+**What could go wrong, how serious is it, and what will we do about it?**
+**What must happen while the system is designed, built, deployed, operated, changed, and retired?**
+**Can we trust the data on which those activities depend?**
 
-The layers depend on one another. A risk decision may require a maximum
-false-negative rate for a vulnerable applicant group. The lifecycle plan turns
-that requirement into an evaluation gate and a production monitor. The
-data-quality plan defines the coverage and label checks needed to trust the
-measurement. The management system assigns the owner, review cadence, and
-escalation authority. Production evidence shows whether the whole arrangement
-still operates.
+Those are roughly the roles of **ISO/IEC 42001, ISO/IEC 23894, ISO/IEC 5338, and the ISO/IEC 5259 series**. Think of Responsible AI as a stack rather than a checklist.
 
-## What Each AI Standard Controls
+| Layer                        | Fundamental question                                                                        | Main standard           |
+| ---------------------------- | ------------------------------------------------------------------------------------------- | ----------------------- |
+| **Governance / management**  | Who decides, owns, reviews, escalates, audits, and improves AI                             | **ISO/IEC 42001:2023**  |
+| **Risk**                     | What can go wrong, whom could it affect, and is the remaining risk acceptable              | **ISO/IEC 23894:2023**  |
+| **Lifecycle**                | At what point must requirements, testing, approval, monitoring, change control, etc. occur | **ISO/IEC 5338:2023**   |
+| **Data quality**             | Is the data fit for this particular analytical/ML purpose, and how is that demonstrated    | **ISO/IEC 5259 series** |
+| **Impact assessment**        | What effects could this particular AI system have on people, groups, or society            | **ISO/IEC 42005:2025**  |
+| **Governing-body oversight** | How should organizational leadership direct and oversee the use of AI                      | **ISO/IEC 38507:2022**  |
 
-<!-- section-summary: ISO/IEC 42001, 23894, 5338, the 5259 family, and NIST AI RMF contribute different structures to one governance programme. -->
+ISO describes 42001 as an organization-level AI management-system standard; 23894 as AI-specific risk-management guidance; 5338 as AI-system lifecycle processes; and 5259 as a family dealing with data quality for analytics and ML. ([iso.org][1]) The important point is that these standards have **different objects of control**. 42001 primarily controls the **organization**. 23894 controls the **risk-management problem**. 5338 controls the **work performed around an AI system**. 5259 controls the **quality and governance of data**. So asking which one an ML system should follow is a little like asking whether a building needs organizational safety management, engineering risk assessment, a construction process, or material-quality controls. It may need all of them.
 
-The standards cover different layers of the same AI system. Some contain
-requirements, others provide guidance, and NIST AI RMF is a voluntary framework.
-Their scopes overlap because organizational decisions, engineering processes,
-and data controls also overlap. The overlap supports alignment; it
-does not make the documents interchangeable.
+Suppose a bank develops a model predicting the probability that a borrower will default. Mathematically, perhaps:
 
-### ISO/IEC 42001 Covers The Organizational Management System
+$$
+P(\text{default within 12 months}\mid X)
+$$
 
-**ISO/IEC 42001:2023, Information technology — Artificial intelligence —
-Management system**, specifies requirements for establishing, implementing,
-maintaining, and continually improving an artificial intelligence management
-system. The common abbreviation is **AIMS**.
+where $$X$$ contains income, existing debt, repayment history, utilization, employment information, and other permitted variables. The model itself might be excellent. That still tells us almost nothing about whether the **system** is responsibly governed. We need to know:
 
-An AIMS is the connected way an organization directs its AI work. It includes
-the scope of the programme, leadership commitments, policy, objectives,
-responsibilities, resources, operational controls, performance evaluation,
-internal audit, management review, and improvement. The subject is wider than an
-individual model release. A model team may supply evidence, while organizational
-leaders decide the system's scope, risk appetite, resources, and improvement
-priorities.
+- **Purpose.** Why is the prediction being made—for loan approval, pricing, credit-limit management, or collections?
+- **Data.** Are income and repayment-history records sufficiently accurate, current, and representative?
+- **Model.** How was it trained and validated? How does performance differ across populations?
+- **Decision policy.** Does a score of 0.18 automatically cause rejection, trigger additional verification, or simply inform a human?
+- **Risk.** What happens when the model is wrong? Who bears the harm?
+- **Operations.** What happens when economic conditions shift?
+- **Accountability.** Who has authority to approve deployment, change the threshold, accept residual risk, or shut the model down?
 
-Suppose three business units use machine learning and only the lending unit has
-formal release gates. A single model review cannot resolve that organizational
-inconsistency. The AIMS defines its scope and common policy. It assigns
-accountable leadership and records why a business unit sits inside or outside
-that scope. Management review then examines performance against objectives and
-decides whether staffing, training, or controls must change.
+No single standard can answer all of those questions without becoming enormous and unusable. So the standards divide the problem.
 
-ISO/IEC 42001 is a requirements standard, so an organization can pursue
-third-party certification for a defined AIMS scope. Certification has a narrower
-meaning than a universal claim that every AI result is safe or lawful. The
-certification boundary is explained later in this article.
+## What Do ISO/IEC 42001, 23894, 5338, and 5259 Each Control?
+<!-- section-summary: ISO/IEC 42001 governs the management system, 23894 structures AI risk, 5338 places work across the lifecycle, and the 5259 series addresses data quality for analytics and ML. -->
 
-### ISO/IEC 23894 Guides AI Risk Management
+ISO/IEC 42001 governs the management system, 23894 structures AI risk, 5338 places work across the lifecycle, and the 5259 series addresses data quality for analytics and ML.
 
-**ISO/IEC 23894:2023, Information technology — Artificial intelligence —
-Guidance on risk management**, helps organizations integrate AI-related risk
-into their activities and functions. It applies to organizations that develop,
-produce, deploy, or use AI products, systems, and services. Its application can
-be tailored to organizational context.
+ISO/IEC 42001 is best understood as answering:
 
-Risk management asks what uncertain event could occur and who or what could be
-affected. It then evaluates the likelihood and severity of the consequences. A
-treatment changes that exposure, and an authorized owner decides whether the
-remaining risk fits the organization's criteria. Consequential systems often
-concentrate on safety, rights, security, privacy, reliability, and operational
-harm.
+**“Does this organization have a functioning system for governing AI?”**
 
-For the lending score, one risk scenario might be a regional income feed losing
-records for self-employed applicants. The missing values push more applications
-into a conservative fallback score, which increases manual reviews and delays
-decisions for that group. A risk record links that causal path to data coverage
-checks and fallback behaviour. It also names the service target, complaint
-monitor, and authority that can pause the score.
+It specifies requirements for establishing, implementing, maintaining and continually improving an **Artificial Intelligence Management System — AIMS**. ISO describes it as covering organizational leadership, planning, support, operation, performance evaluation and continual improvement. ([ISO][2]) Its first-principles concern is therefore not:
 
-ISO/IEC 23894 supplies guidance. It does not replace ISO/IEC 42001's
-management-system requirements, a sector-specific risk method, or applicable
-law. A team can use its risk approach inside an AIMS and map the resulting
-evidence to other frameworks.
+“Is model X accurate?”
 
-### NIST AI RMF Organizes Voluntary Risk Outcomes
+but:
 
-The **NIST Artificial Intelligence Risk Management Framework 1.0**, usually
-shortened to **NIST AI RMF 1.0**, is intended for voluntary use. Its Core
-organizes outcomes across four functions: **Govern, Map, Measure, and Manage**.
+“Does the organization have a reliable way to make sure questions about accuracy, risk, responsibility, monitoring and change are answered whenever they matter?”
 
-Govern establishes organizational policies, accountability, culture, and
-oversight. Map develops the context of use, affected parties, impacts, and risk
-assumptions. Measure evaluates the system and the evidence used to judge its
-trustworthiness. Manage prioritizes and treats risks, monitors the result, and
-directs a response. Govern applies across the other three functions rather than
-acting as the first stage of a linear project.
+That creates things such as an AI policy, AI inventory, defined roles, objectives, risk processes, documented operating procedures, competence requirements, assessments, internal reviews, corrective actions and management oversight.
 
-NIST describes the Playbook as a collection of suggested actions rather than a
-checklist that every organization must complete. Teams can use an AI RMF profile
-to describe the outcomes that matter for a particular sector, use case, or risk
-tier. A profile can also provide a practical crosswalk from an organization's
-existing controls to the RMF functions.
+### Governance versus management
 
-AI RMF 1.0 remains the published baseline while NIST works on its revision.
-**NIST AI 600-1, the Generative Artificial Intelligence Profile**, is a
-companion resource for risks specific to generative AI. It fits systems that
-generate content such as text, images, audio, or code. Those systems raise
-specific concerns around confabulation, dangerous content, data provenance, and
-model misuse. A conventional tabular lending model gains no special coverage
-merely by adding the GenAI Profile to its control register.
+This distinction matters.
 
-### ISO/IEC 5338 Covers AI Lifecycle Processes
+- **Governance** sets direction and accountability:
 
-**ISO/IEC 5338:2023, Information technology — Artificial intelligence — AI
-system life cycle processes**, covers systems based on machine learning and
-heuristic approaches. It defines processes and concepts for describing their
-lifecycle. Those processes support definition, control, management, execution,
-and improvement. Organizations can apply them while developing or acquiring AI
-systems.
+What is allowed Who has authority What outcomes matter What risk is acceptable
 
-The standard addresses a recurring engineering failure: important work falls
-between teams because each team sees only its own stage. Product defines the
-use, data engineering supplies tables, data science trains a model, a platform
-team deploys it, and operations monitors the endpoint. A lifecycle view connects
-the handoffs and keeps retirement inside the system boundary.
+- **Management** turns that direction into repeatable activity:
 
-A team maps the applicable lifecycle processes into its delivery method. For
-example, intended-purpose approval precedes access to production data. Data and
-model evaluation precede release. Operational monitoring follows the deployed
-system rather than only the model artifact. A material change reopens the
-affected analysis and tests. Retirement removes live routes, credentials,
-scheduled jobs, retained data, and supplier access under approved retention
-rules.
+What procedure is followed Who performs it What records are produced How do we detect failure
 
-ISO/IEC 5338 does not prescribe one CI pipeline or project-management method.
-Scrum, GitHub Actions, managed ML pipelines, and a regulated change process can
-all implement lifecycle work. The evidence must show that the required activity
-occurred for the actual system and version.
+ISO/IEC 38507 sits closer to the governing-body perspective, providing guidance for governing organizations' use of AI, while 42001 provides the management-system machinery needed to implement that direction. ([ISO][3]) Once an AI use exists, the next question is:
 
-### The ISO/IEC 5259 Family Covers Data Quality For ML And Analytics
+**“What could prevent this system from achieving its objectives responsibly?”**
 
-The **ISO/IEC 5259 family, Artificial intelligence — Data quality for analytics
-and machine learning**, separates data quality into several related concerns.
+That is the risk problem. ISO/IEC 23894 provides guidance for organizations developing, deploying, producing or using AI to integrate AI-specific risk management into their activities. Its application can be customized to the organization's context. ([ISO][4]) A simple mental model is:
 
-Part 1 provides the overview, terminology, and examples. Part 2 defines a
-data-quality model and measures. Part 3 covers data-quality management
-requirements and guidelines. Part 4 provides a data-quality process framework,
-including concerns around ML data and labelling. Part 5 adds a data-quality
-governance framework for organizational direction and oversight. The published
-Part 6 is a technical report on visualizing data-quality results. Its visual
-framework supports communication while the earlier parts supply the underlying
-measures and management processes.
+$$
+\text{Risk} \approx
+\text{possible consequence}
+\times
+\text{possibility/exposure}
+\times
+\text{uncertainty}
+$$
 
-The family treats quality as fitness for an intended analytics or ML purpose. A
-valid date and a non-null income field provide structural evidence. Timeliness
-asks whether the record arrived before the lending decision. Semantic
-consistency asks whether the field definition matches the approved policy.
-Coverage examines the relevant applicant groups, and join quality shows whether
-later repayment outcomes connect to the original prediction.
+That is a conceptual model, not an ISO-prescribed numerical formula. For the lending system, risks could include inaccurate denials, systematically different errors between populations, inappropriate use of sensitive proxies, data leakage, adversarial manipulation, model drift, over-reliance by loan officers, lack of explanation, privacy failures or a model being reused for a purpose for which it was never validated. Risk management then becomes a loop:
 
-A generic claim that a dataset is “clean” carries little assurance. The
-data-quality plan names each characteristic and its measure. It also assigns the
-threshold, owner, failure action, and retained result. Those decisions connect
-to the system risk assessment and lifecycle gates.
+- **identify → analyze → evaluate → treat → accept/escalate → monitor → reassess**
 
-```mermaid
-flowchart TD
-    A["Standards Family<br/>(different responsibilities around one AI system)"] --> B["ISO/IEC 42001<br/>(organizational management system requirements)"]
-    A --> C["ISO/IEC 23894<br/>(AI risk-management guidance)"]
-    A --> D["NIST AI RMF 1.0<br/>(voluntary risk outcomes and profiles)"]
-    A --> E["ISO/IEC 5338<br/>(AI system lifecycle processes)"]
-    A --> F["ISO/IEC 5259 Family<br/>(data-quality measures, management, process, and governance)"]
+The treatment might be technical, organizational, procedural or even a decision **not to deploy**.
 
-    class A family
-    class B,C,D,E,F standard
-```
+For example:
 
-Following one source never creates automatic conformity with another. ISO/IEC
-23894 risk records can support an ISO/IEC 42001 AIMS, and NIST AI RMF outcomes
-can help teams implement risk practices. Those mappings remain implementation
-choices. An auditor or reviewer still evaluates the requirements and scope of
-the source that matters to the decision.
+$$
+\text{Risk: false rejection of qualified applicants}
+$$
+
+could lead to controls involving model-performance thresholds, subgroup evaluation, human review for borderline cases, customer appeal mechanisms and production monitoring. Notice that risk management tells us **why the control is necessary**. It does not necessarily tell us every engineering step for implementing it. That is where lifecycle processes become important. An AI system is not created once. It passes through something like:
+
+- **concept → requirements → data → build/train → verify → validate → approve → deploy → operate → monitor → modify → retire**
+
+ISO/IEC 5338 defines processes for controlling, managing, executing and improving AI systems across their lifecycle. It builds on established systems/software lifecycle standards while adding AI-specific concerns. ([ISO][5]) The lifecycle perspective solves a common governance failure. An organization may say:
+
+“Models must be fair.”
+
+But when is fairness considered Only immediately before deployment That is often far too late. The lifecycle view forces the issue upstream. At **concept stage**, ask whether AI is appropriate. At **requirements stage**, define acceptable outcomes and constraints. During **data engineering**, assess relevant populations and data limitations. During **development**, compare alternatives. During **validation**, independently test assumptions. Before **release**, verify that required evidence exists. During **operation**, monitor actual behaviour. When **changing the system**, determine whether earlier evidence remains valid. At **retirement**, manage dependent systems, records and outstanding obligations. Lifecycle governance therefore answers the question:
+
+**“Where should each control live?”**
+
+Machine learning has an unusual characteristic:
+
+The program is partly created from **data**. If you alter the training population, labels or time period, you can substantially alter system behaviour without changing a line of training code. Therefore data must become a governed engineering object. The ISO/IEC 5259 family divides this problem further. ISO currently describes the family as follows:
+
+| Part            | Practical interpretation                                                 |
+| --------------- | ------------------------------------------------------------------------ |
+| **5259-1:2024** | Common concepts, terminology and overall framework                       |
+| **5259-2:2024** | Data-quality model and measures                                          |
+| **5259-3:2024** | Requirements/guidance for data-quality management                        |
+| **5259-4:2024** | Processes for implementing data quality, including ML/labelling concerns |
+| **5259-5:2025** | Organization-level governance of data quality                            |
+
+([ISO][6]) This distinction is extremely useful. Suppose someone says:
+
+“Our dataset must have good quality.”
+
+That is almost meaningless. Quality is **fitness for purpose**. Consider someone's annual income recorded as £80,000. The value may be syntactically valid. But perhaps it is two years old. For a historical analysis, that may be fine. For a real-time affordability decision, it might be unacceptable. So:
+
+$$
+\text{Data quality} \neq \text{data is clean}
+$$
+
+Instead:
+
+$$
+\text{Data quality}
+=
+\text{data is sufficiently fit for the intended decision}
+$$
+
+In actual ML operations that can involve measures around missingness, correctness, consistency, timeliness, duplication, label reliability, population coverage, distribution shifts and other characteristics appropriate to the particular use. And there is another important distinction:
+
+**High-quality data does not automatically mean fair data.**
+
+A dataset can be perfectly accurate about a historically discriminatory process. Data-quality controls therefore support Responsible AI risk controls, but they do not replace them.
 
 ![ISO IEC 42001, ISO IEC 23894, NIST AI RMF 1.0, ISO IEC 5338, and the ISO IEC 5259 family surround one production AI system with distinct management, risk, lifecycle, and data-quality responsibilities.](/content-assets/articles/article-mlops-governance-and-responsible-ai-ai-management-risk-lifecycle-data-quality-standards/standards-responsibility-map.png)
 
 *The five sources overlap around one system, but each contributes a different kind of requirement, guidance, process, outcome, or data-quality discipline.*
 
-## How The Standards Work Together In One ML System
+## How Do the Standards Work Together in a Real System and Its Evidence Stack?
+<!-- section-summary: The lending example and production-tool mapping show how one system creates evidence across all four layers and chooses an implementation depth proportionate to need. -->
 
-<!-- section-summary: A control crosswalk connects policy, risk decisions, lifecycle gates, data measures, and operating evidence without collapsing their different purposes. -->
+The lending example and production-tool mapping show how one system creates evidence across all four layers and chooses an implementation depth proportionate to need.
 
-Several standards may require evidence from the same policy, release gate, or
-data check. Teams connect those requirements through a shared **control**: a
-defined action or constraint with an owner, trigger, implementation, evidence,
-failure response, and review cadence.
+Now put everything together. Imagine:
 
-A **control crosswalk** maps that real control to the requirements or outcomes
-it supports. The crosswalk prevents duplicated work while preserving the meaning
-of each source. One data-coverage gate may support several mapped outcomes. It
-can contribute to an AIMS operational control, a risk treatment, a lifecycle
-verification activity, a 5259 data-quality objective, and a NIST Measure
-outcome. The same test result cannot prove leadership review, risk acceptance,
-or retirement planning because those are different responsibilities.
+$$
+\text{Application}
+\rightarrow
+\text{validated data}
+\rightarrow
+\text{features}
+\rightarrow
+\text{risk model}
+\rightarrow
+\text{score}
+\rightarrow
+\text{decision policy}
+\rightarrow
+\text{loan decision}
+$$
 
-### How Policy, Risk, Lifecycle, Data, And Operations Records Connect
+A single control chain might look like this:
 
-The evidence path starts with a policy decision. The organization may require
-enhanced review for AI systems that influence access to credit. The system's
-risk assessment turns that policy into concrete scenarios and treatments. The
-lifecycle plan places those treatments into development, release, operation,
-and change gates. Data-quality rules and evaluation tests execute the measurable
-parts, while release and operating systems retain the result.
+| Question                              | Control                       | Evidence                                 | Standard perspective |
+| ------------------------------------- | ----------------------------- | ---------------------------------------- | -------------------- |
+| Is this an approved use              | AI use-case approval          | inventory record + accountable owner     | 42001                |
+| Could applicants be harmed           | AI risk/impact assessment     | risk register / impact assessment        | 23894 / 42005        |
+| Is bureau data fit for this decision | DQ requirements and tests     | data-quality report                      | 5259                 |
+| Can the model meet requirements      | model verification/validation | evaluation report                        | 5338                 |
+| Are subgroup differences understood  | responsible-AI evaluation     | evaluation evidence + treatment decision | 23894                |
+| Can it go live                       | release gate                  | signed approval and deployment record    | 42001 + 5338         |
+| Does behaviour remain acceptable     | production monitoring         | metrics, alerts and review records       | all four             |
+| Has something important changed      | change assessment             | change ticket + reassessment decision    | 42001 + 5338 + 23894 |
 
-Every record carries stable identifiers. A system ID identifies the intended use
-and operating boundary. A control ID identifies the requirement being
-implemented. Dataset snapshot IDs, model versions, source revisions, pipeline
-run IDs, and deployment IDs identify the technical state. These identifiers
-allow a reviewer to move from a policy decision to the exact production version
-that followed it.
+The standards overlap because the **same control can serve several purposes**. A production data-drift alarm, for example, can simultaneously demonstrate that the organization is monitoring its AI controls, that an identified risk is being monitored, that the operational lifecycle is controlled, and that production-data quality is being assessed. This leads to one of the most important implementation principles:
 
-```mermaid
-flowchart TD
-    A["Policy Objective<br/>(the organization states the required outcome)"] --> B["Risk Decision<br/>(the team identifies scenarios and treatment)"]
-    B --> C["Lifecycle Control<br/>(the treatment enters a release or operating process)"]
-    C --> D["Technical Check<br/>(data, model, security, or service evidence is produced)"]
-    D --> E["Accountable Decision<br/>(an authorized owner approves, rejects, or limits use)"]
-    E --> F["Production Evidence<br/>(the deployed version and control result remain traceable)"]
-    F --> G["Review and Improvement<br/>(incidents, trends, and audits change the control)"]
-    G --> A
+> **Do not build one compliance process per standard. Build one real control system and map the evidence to several standards.**
 
-    class A,B direction
-    class C,D implementation
-    class E,F decision
-    class G direction
-```
+Governance does not require that everything live in a giant GRC application. Evidence naturally emerges from engineering systems. A mature production environment might create this evidence chain:
 
-The following control record shows the connection. It describes one production
-control rather than copying standards text. The mappings explain why the
-organization associates the control with each source. The implementation and
-evidence fields show what the pipeline actually produces.
+| Engineering object     | Typical system of record          | Evidence produced                       |
+| ---------------------- | --------------------------------- | --------------------------------------- |
+| Business purpose       | AI inventory / GRC                | use case, owner, intended use           |
+| Source data            | data catalog                      | owner, source, lineage, classifications |
+| Data version           | lake/warehouse/versioning         | reproducible training snapshot          |
+| DQ control             | DQ testing platform               | test results and thresholds             |
+| Feature transformation | source control / feature platform | transformation lineage                  |
+| Training               | experiment tracker                | parameters, metrics, environment        |
+| Model                  | model registry                    | version, artifact/hash, status          |
+| Validation             | evaluation pipeline               | performance and RAI results             |
+| Risks                  | risk/GRC system                   | risk, treatment, residual risk          |
+| Release                | CI/CD + workflow                  | approvals and deployment version        |
+| Production             | observability stack               | drift, performance and incidents        |
+| Changes                | ITSM/workflow                     | reason, impact, approver, rollback      |
+| Retirement             | inventory/workflow                | decommissioning evidence                |
 
-```yaml
-control_id: DQ-CREDIT-014
-system_id: ai-system-credit-review-007
-objective:
-  Detect loss of eligible-application coverage before training or release.
-owner: lending-data-owner
-risk_owner: consumer-credit-risk
+The central architecture is therefore not the individual tool. It is the **links between records**. For model release `M-184`, you want to reconstruct:
 
-standard_mappings:
-  - source: ISO/IEC 42001:2023
-    purpose: Operational control and performance evidence for the scoped AIMS.
-  - source: ISO/IEC 23894:2023
-    purpose:
-      Treatment for delayed or unequal decisions caused by missing records.
-  - source: ISO/IEC 5338:2023
-    purpose: Data verification at training and release lifecycle gates.
-  - source: ISO/IEC 5259-2:2024
-    purpose: Measured completeness and coverage characteristics.
-  - source: NIST AI RMF 1.0
-    purpose: Evidence for mapped, measured, and managed data risk.
+$$
+M184
+\rightarrow
+\text{code commit}
+\rightarrow
+\text{training-data snapshot}
+\rightarrow
+\text{DQ report}
+\rightarrow
+\text{experiment}
+\rightarrow
+\text{validation}
+\rightarrow
+\text{risk assessment}
+\rightarrow
+\text{approval}
+\rightarrow
+\text{production deployment}
+$$
 
-implementation:
-  dataset: prod_ml.training.credit_examples
-  contract_version: credit-training/v6
-  minimum_join_coverage: 0.995
-  required_segments: [region, application_channel]
+That gives you **traceability**. An auditor should be able to start with the production decision and walk backward through the evidence. An engineer investigating an incident should be able to do the same thing. That is why good compliance engineering and good MLOps architecture often converge. Not every organization needs to operationalize every piece of the 5259 family at maximum depth. If the immediate problem is **common terminology**, 5259-1 is the natural foundation. If the problem is:
 
-evidence:
-  test_run: dbt://credit-training-tests/${run_id}
-  dataset_snapshot: ${catalog_table_version}
-  release_record: ml-release://${release_id}
+“How do we know whether this dataset passes?”
 
-failure_action: Quarantine the snapshot and keep the current production model.
-review_cadence: Every training run and each material data-source change.
-```
+the measurement-oriented material in 5259-2 becomes particularly important. ([ISO][7]) If the organization needs a repeatable **data-quality management system**, responsibilities and continual management, 5259-3 becomes central. ISO describes it as supporting consistent and auditable data-quality management and a DQMS that can integrate with AI lifecycle approaches. ([ISO][8]) If the problem is operational workflow—especially dataset creation, evaluation or labelling—5259-4 provides the process perspective. ([ISO][9]) And where senior organizational oversight of ML data quality is needed, 5259-5 addresses governance and explicitly places responsibility above the purely technical level. ([ISO][10]) The principle is:
 
-The control owner maintains the rule and resolves failures. The risk owner
-decides whether the treatment reduces the risk enough for the intended use. CI
-can enforce the numeric threshold, while it cannot grant itself authority to
-accept the residual risk. That separation keeps automation fast and the
-consequential decision accountable.
+$$
+\text{control effort} \propto \text{consequence of failure}
+$$
+
+not:
+
+$$
+\text{control effort} = \text{same for every dataset}
+$$
+
+## How Should Ownership and Risk Determine Control Depth?
+<!-- section-summary: Named owners make controls executable, while system impact, uncertainty, scale, and reversibility determine how strong and independent those controls should be. -->
+
+Named owners make controls executable, while system impact, uncertainty, scale, and reversibility determine how strong and independent those controls should be.
+
+Governance fails when everyone is responsible in theory and nobody is accountable in practice. For a material ML system, responsibility usually needs to separate at least these perspectives:
+
+| Role                                       | Fundamental accountability                                           |
+| ------------------------------------------ | -------------------------------------------------------------------- |
+| **Business/use-case owner**                | Is the system needed and being used appropriately                   |
+| **Model/system owner**                     | Does the technical system work as intended                          |
+| **Data owner/steward**                     | Are relevant data assets appropriately governed and fit for purpose |
+| **Independent validation/risk**            | Is there sufficient independent challenge                           |
+| **Legal/privacy/security/RAI specialists** | Are specialized obligations and harms addressed                     |
+| **Operations/MLOps**                       | Is the deployed system controlled and observable                    |
+| **Senior management/governing body**       | Are risk appetite, policy, resources and oversight adequate         |
+| **Internal audit/assurance**               | Does the control environment actually operate as claimed            |
+
+The exact structure varies. What matters is avoiding a dangerous pattern:
+
+Developer builds model → developer evaluates model → developer decides risk is acceptable → developer authorizes deployment.
+
+Governance introduces appropriate **separation of decision rights**. Neither Responsible AI nor good ISO implementation means subjecting every AI system to a six-month review. A spell-checker and an automated credit-denial system should not receive identical governance. An organization can create an internal risk-classification model such as:
+
+| Illustrative tier | Consequence                                                    | Control depth                                                                                                                             |
+| ----------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Low               | Limited reversible operational impact                          | inventory, owner, baseline testing, basic monitoring                                                                                      |
+| Moderate          | Material customer/business impact                              | formal risk assessment, DQ evidence, validation, approval, monitoring                                                                     |
+| High              | Significant rights, safety, financial or societal consequences | deeper impact assessment, independent validation, stronger data controls, senior risk acceptance, enhanced monitoring and change controls |
+
+Those tiers are an implementation example, not ISO-prescribed categories. The first-principles rule is:
+
+**Increase assurance as the consequence, uncertainty, irreversibility and scale of the decision increase.**
+
+## How Do Release Gates, Exceptions, Change, and Monitoring Turn Standards into Engineering?
+<!-- section-summary: Standards become useful when release evidence, machine-enforced gates, expiring exceptions, change invalidation, and production monitoring operate as one loop. -->
+
+Standards become useful when release evidence, machine-enforced gates, expiring exceptions, change invalidation, and production monitoring operate as one loop.
+
+A production release is fundamentally a decision:
+
+$$
+\text{Is the evidence sufficient to expose this system to reality?}
+$$
+
+A strong release gate therefore checks whether the required evidence exists and whether the correct owners have accepted the resulting risk. For a high-impact model, the release package might connect its approved purpose, data-quality results, model validation, risk treatments, impact assessment where required, operational monitoring, fallback/rollback mechanism, human-oversight design, outstanding issues and formal approval. The release workflow should be **version-specific**. Approval of model `v17` does not automatically mean model `v18` is approved. That sounds obvious, yet it is one of the places where informal ML practices collide with serious governance. Perfect compliance with every internal control at every moment is unrealistic. Therefore mature governance needs an **exception mechanism**. An exception should not mean:
+
+“Skip the rule.”
+
+It means:
+
+$$
+\text{known deviation}
++
+\text{known owner}
++
+\text{explicit risk decision}
++
+\text{compensating controls}
++
+\text{expiry/review condition}
+$$
+
+For example, suppose an important data source suddenly stops supplying one field and a business-critical model must continue operating. The decision may be to run temporarily using a fallback variable. Responsible governance records who approved that deviation, its expected consequences, compensating monitoring, its allowed duration and the condition that terminates the exception. An undocumented workaround is control failure. A bounded, approved, monitored exception is governance. This is one of the deepest ideas in AI governance. Suppose a model passed every review six months ago. Then the team changes the population from UK customers to European customers.
+
+Is the original validation still valid?
+
+Obviously not necessarily. The same problem occurs when changing a data source, target definition, feature, model family, training window, threshold, vendor model, human-review process or intended use. Therefore evidence has a hidden parameter:
+
+$$
+\text{Evidence validity}
+=
+f(\text{system version},\text{context},\text{time})
+$$
+
+It is not permanent. ISO/IEC 42001 explicitly has continual-management and improvement characteristics; 5338 addresses lifecycle control; and ISO/IEC 42005 says impact assessments should be considered throughout the lifecycle and updated as needed. ([ISO][1]) So every significant change should ask:
+
+**“Which previous assumptions or approvals has this change invalidated?”**
+
+That question is considerably better than simply asking:
+
+“Did we retrain the model?”
+
+Before deployment you primarily have evidence about **expected behaviour**. After deployment you obtain evidence about **actual behaviour**. That is a profound transition. Pre-deployment:
+
+$$
+\text{What do we predict will happen?}
+$$
+
+Production:
+
+$$
+\text{What is actually happening?}
+$$
+
+Production monitoring therefore may need to cover different layers simultaneously:
+
+- **Technical behaviour:** latency, failures, malformed inputs.
+- **Data behaviour:** missingness, schema changes, distribution changes.
+- **Model behaviour:** drift, calibration, predictive performance when labels become available.
+- **Responsible-AI behaviour:** subgroup outcomes, complaints, overrides, appeals or other relevant signals.
+- **Business behaviour:** approval rates, losses, conversion.
+- **Risk behaviour:** incidents and emerging unintended consequences.
+
+An alert is not enough. There must also be a response path:
+
+$$
+\text{detect}
+\rightarrow
+\text{triage}
+\rightarrow
+\text{investigate}
+\rightarrow
+\text{act}
+\rightarrow
+\text{record}
+\rightarrow
+\text{learn}
+$$
+
+Otherwise monitoring merely creates dashboards.
 
 ![Lending control DQ-CREDIT-014 applies a 0.995 join-coverage threshold to one governed dataset and maps the resulting evidence to five distinct standards purposes while naming what the test cannot prove.](/content-assets/articles/article-mlops-governance-and-responsible-ai-ai-management-risk-lifecycle-data-quality-standards/lending-control-crosswalk.png)
 
 *A control crosswalk can reuse one concrete test result across several mappings without treating leadership review, residual-risk acceptance, or retirement planning as outputs of that test.*
 
-## See the Layers in a Lending Decision
+## What Do Certification and Impact Assessment Actually Establish?
+<!-- section-summary: Certification establishes confidence in a managed system rather than perfection in every model, and impact assessment examines consequences that narrow technical risk analysis may miss. -->
 
-<!-- section-summary: One bounded lending example shows the different questions, evidence, and failures addressed by each standards layer. -->
+Certification establishes confidence in a managed system rather than perfection in every model, and impact assessment examines consequences that narrow technical risk analysis may miss.
 
-Return to the lending system from the opening. At application time, the model
-estimates missed-payment risk from verified financial and account information. A
-trained credit officer uses the score as one input to a documented decision
-process. A false low score may contribute to unaffordable lending and financial
-loss. A false high score may delay or restrict access to credit through
-unnecessary review. Aggregate model accuracy can hide both outcomes for smaller
-applicant groups.
+ISO/IEC 42001 is a **management-system standard**. Organizations may implement management-system standards without certification, and ISO itself does not certify organizations; independent certification bodies perform certification. ([ISO][11]) This distinction is important. A 42001 certification can provide independent assurance that, within its stated scope, the organization's **AI management system conforms to the relevant requirements**. It does **not** logically prove that:
 
-This bounded example shows why the standards remain distinct.
+$$
+\text{every AI model is safe}
+$$
 
-### What The Management Standard Asks The Organization To Establish
+or
 
-ISO/IEC 42001 asks the organization to operate an AIMS around the use. The scope
-identifies the lending business, markets, suppliers, teams, and interfaces
-covered by the management system. Policy defines permitted uses and prohibited
-shortcuts. Objectives might cover current ownership, completed impact reviews,
-release evidence, complaint response, and timely corrective action.
+$$
+\text{every prediction is unbiased}
+$$
 
-The evidence includes the scoped AIMS, policy, inventory, assigned roles, and
-competence records. Internal-audit results, management-review decisions, and
-improvement actions show how the organization checks and changes the system.
-This layer catches a regional team using the score for an unapproved purpose. It
-also exposes a critical control that remains unfunded after repeated incidents.
+or
 
-### What Risk Guidance Asks The Team To Examine
+$$
+\text{every deployment is legally compliant everywhere}
+$$
 
-ISO/IEC 23894 and NIST AI RMF help the team describe the context, affected
-people, and risk scenarios. The risk analysis connects trustworthiness concerns
-to measures, treatments, and residual decisions. The team examines incorrect
-lending outcomes, unequal error rates, privacy exposure, manipulation, service
-outage, poor explanations, and reliance on a supplier signal.
+or
 
-Evidence includes the system context, affected-party analysis, risk register,
-evaluation plan, thresholds, treatment owner, fallback, human-oversight
-procedure, and accepted residual risk. This layer catches a risk hidden by a
-strong overall metric. For example, the default-risk model can perform well
-across all applications. A local income source may still cause more false high
-scores for applicants in one region.
+$$
+P(\text{future AI failure})=0
+$$
 
-### What Lifecycle Guidance Asks At Each Handoff
+A management-system certificate is evidence concerning the organization's **system of governance and control**. It is not a magical safety certificate attached to every algorithm. The certification scope, audit evidence and ongoing operation of the management system therefore matter enormously. There is an important gap between conventional technical risk and Responsible AI. Suppose a model is extremely accurate and operationally reliable. It could still create an unacceptable societal outcome. That is why impact assessment deserves separate attention. ISO/IEC 42005:2025 focuses on assessing how AI systems and foreseeable uses can affect individuals, groups and society, and explicitly complements 42001 and 23894. ([ISO][12]) The distinction is roughly:
 
-ISO/IEC 5338 gives the team a process view across the complete system life. It
-covers problem definition and requirements first. Acquisition, data work,
-development, verification, validation, deployment, operation, change, and
-retirement complete the process set. The organization maps the applicable
-processes into its product and MLOps delivery workflow.
+$$
+\text{Risk assessment: What uncertainty could hurt our objectives/stakeholders?}
+$$
 
-Approved requirements and supplier evaluations establish the intended system.
-Data and model specifications connect it to traceable test results and release
-records. Monitoring plans, change assessments, incident procedures, and the
-retirement plan carry control into operation. This layer catches a handoff
-failure. A model may pass offline evaluation and still enter production with a
-different preprocessing version. A release gate that compares the model
-signature, transformation revision, and serving image exposes that mismatch.
+versus
 
-### What Data-Quality Standards Ask The Team To Measure
+$$
+\text{Impact assessment: What effects could this system create for affected people?}
+$$
 
-The ISO/IEC 5259 family helps data owners define quality in relation to the
-lending purpose. Measures may cover identifier uniqueness, field validity,
-source completeness, event timeliness, label accuracy, join coverage, historical
-representativeness, and consistency between training and serving
-transformations.
+They overlap heavily, but the second forces the analysis to look outward from the organization. That is especially important for consequential AI.
 
-Evidence includes data contracts, governed table identities, exact snapshots,
-lineage, quality measures, test results, issue records, and approved repairs.
-This layer catches an apparently healthy pipeline that still produces unsuitable
-evidence. A repayment label may arrive correctly and pass schema validation
-while arriving too late for the evaluation window. A data-quality measure for
-label maturity exposes that the outcome sample is incomplete.
+## How Do Standards Support Responsible AI and a Connected Control Architecture?
+<!-- section-summary: Responsible AI describes the intended outcome, while the standards supply connected management machinery, risk reasoning, lifecycle timing, data-quality evidence, and architecture. -->
 
-```mermaid
-flowchart TD
-    A["Lending Decision<br/>(a score informs a trained credit officer)"] --> B["Management Layer<br/>(approve purpose, authority, objectives, and review)"]
-    B --> C["Risk Layer<br/>(analyze impact, treatment, and residual exposure)"]
-    C --> D["Lifecycle Layer<br/>(place required work at each system handoff)"]
-    D --> E["Data-Quality Layer<br/>(measure whether data fits the decision)"]
-    E --> F["Operating Layer<br/>(prove the released system follows those decisions)"]
+Responsible AI describes the intended outcome, while the standards supply connected management machinery, risk reasoning, lifecycle timing, data-quality evidence, and architecture.
 
-    class A decision
-    class B,C,D,E layer
-    class F operating
+Terms such as fairness, transparency, accountability, safety, privacy, explainability and reliability describe properties we may want. But saying:
+
+“Our principle is fairness”
+
+does not answer:
+
+Who defines acceptable fairness
+
+Which metric?
+
+For which population At which lifecycle stage Against what threshold Who reviews failures Who may accept the remaining risk
+
+What evidence is retained?
+
+What happens after deployment?
+
+That is what standards provide: **institutional machinery around principles**. The NIST AI Risk Management Framework expresses a closely related idea through its four functions:
+
+- **GOVERN → MAP → MEASURE → MANAGE**
+
+and emphasizes continuous risk management across the AI lifecycle. NIST's current site notes that AI RMF 1.0 is undergoing revision as of 2026. ([NIST AI Resource Center][13]) A mature organization should not end up with this:
+
+```text
+42001 spreadsheet
+23894 spreadsheet
+5338 spreadsheet
+5259 spreadsheet
+Responsible AI spreadsheet
+Model-risk spreadsheet
+Regulatory spreadsheet
 ```
 
-The example produces one connected evidence chain. It never turns the standards
-into identical questions. Leadership can approve an objective, risk owners can
-accept a bounded exposure, engineers can execute the lifecycle, and data owners
-can verify data fitness. The production release needs all four contributions for
-this consequential use.
+That produces duplicated controls and contradictory evidence. The better architecture is:
 
-## How Production Tools Record The Required Evidence
-
-<!-- section-summary: Catalogues, registries, CI/CD, lineage, and telemetry implement parts of the control system while accountable owners retain governance decisions. -->
-
-A spreadsheet can hold the initial mapping from standards to controls.
-Production evidence then spreads across source control, data platforms,
-registries, CI/CD, ticketing, and observability backends. Stable identifiers and
-links connect those systems. Buying one governance platform does not create the missing decisions or
-controls.
-
-### Use Catalogues To Record Data Identity, Ownership, And Lineage
-
-A governed catalogue gives data assets stable names, owners, classifications,
-access rules, and lineage. **Unity Catalog** fits Databricks estates because it
-governs data and AI assets within that platform and captures supported lineage.
-**Microsoft Purview Unified Catalog** fits organizations that already use
-Purview's data map, governance domains, and data products across a broader
-estate. Google Cloud's current managed catalogue is **Knowledge Catalog**,
-formerly Dataplex Universal Catalog; its lineage services connect supported
-Google Cloud data and AI assets.
-
-Choose the catalogue that covers the systems the organization actually uses and
-confirm its connector and lineage granularity. A catalogue may trace a table
-through supported Spark or SQL jobs while missing a custom Python extraction. It
-may record technical lineage without the business rule that justified the
-transformation. Custom lineage or **OpenLineage** can fill selected gaps across
-orchestration tools. OpenLineage represents pipeline activity through jobs,
-runs, input datasets, output datasets, and run-state events.
-
-The catalogue supplies asset evidence. It does not decide whether a dataset is
-legally permitted, representative enough for lending, or approved for a new
-intended use. Data owners and risk owners make those decisions and attach the
-resulting status to the governed asset.
-
-### Use Registries To Record Model And Evaluation Identity
-
-**MLflow Model Registry** and managed cloud registries record model names,
-immutable versions, source runs, signatures, tags, and deployment references.
-MLflow aliases provide mutable names such as `champion`. A release record also
-preserves the resolved version and artifact digest because the alias can later
-move.
-
-For each candidate, the registry evidence connects the trained artifact to its
-code revision, environment, input dataset references, evaluation results, and
-approval status. A model version tag can summarize validation state, while the
-signed release decision remains in the approval system. The registry organizes
-technical identity and lineage. It does not replace independent review or a risk
-owner's decision.
-
-### Use CI/CD To Enforce Gates And Record Decisions
-
-GitHub Actions, GitLab CI, Jenkins, and managed ML pipelines can execute data
-tests, model evaluation, security scans, policy checks, and deployment steps.
-The pipeline records the source revision, workflow version, runner identity,
-evidence locations, approver, artifact digest, and final result.
-
-A high-risk release normally separates evidence production from approval.
-Automated jobs calculate measures and fail mandatory thresholds. An authorized
-role reviews exceptions and residual risk. The deployment job accepts only an
-approved release record bound to the exact candidate digest. This arrangement
-prevents a retraining job from approving the artifact it produced.
-
-### Use Telemetry To Check That Controls Still Operate
-
-Release evidence proves that a candidate passed its gate. Operating evidence
-shows how the deployed system behaves with real traffic and real data.
-OpenTelemetry can collect vendor-neutral traces, metrics, and logs from the
-serving path. Stable attributes such as system ID, release ID, model version,
-policy version, and result class connect runtime signals to governance records.
-
-Telemetry needs a deliberate data policy. Full feature vectors, applicant
-identifiers, free-text reasons, credentials, and raw decisions rarely belong in
-general observability storage. The service should emit bounded categories and
-approved references. Restricted source systems retain sensitive evidence under
-the required access and retention policy.
-
-```mermaid
-flowchart TD
-    A["Governed Catalogue<br/>(data identity, ownership, access, and lineage)"] --> E["Release Record<br/>(one approved system and artifact version)"]
-    B["Model Registry<br/>(model version, source run, signature, and tags)"] --> E
-    C["CI/CD Evidence<br/>(tests, policy result, approver, and artifact digest)"] --> E
-    D["Risk Decision<br/>(treatment, limits, and accepted residual risk)"] --> E
-    E --> F["Production Deployment<br/>(pinned model, code, data, and policy references)"]
-    F --> G["Operating Evidence<br/>(service, data, model, and outcome signals)"]
-    G --> H["Review Decision<br/>(continue, limit, repair, roll back, or retire)"]
-
-    class A,B,C,D source
-    class E release
-    class F,G operation
-    class H decision
+```text
+                    GOVERNANCE
+                         │
+          policy ─ ownership ─ risk appetite
+                         │
+                         ▼
+                  AI / ML INVENTORY
+                         │
+            ┌────────────┼────────────┐
+            ▼            ▼            ▼
+          RISK       LIFECYCLE       DATA
+       assessment     controls      quality
+            │            │            │
+            └────────────┼────────────┘
+                         ▼
+                  EVIDENCE PACKAGE
+                         │
+                         ▼
+                    RELEASE GATE
+                         │
+                         ▼
+                     PRODUCTION
+                         │
+              monitoring / incidents
+                         │
+                         ▼
+                 CHANGE ASSESSMENT
+                         │
+               ┌─────────┴─────────┐
+               ▼                   ▼
+           re-approve            retire
 ```
 
-The smallest credible implementation uses the organization's existing source
-control, CI, catalogue, model registry, approval workflow, and observability
-platform. OpenLineage and OpenTelemetry fit work that crosses product
-boundaries. They also provide portable evidence across several backends. A
-single managed platform may cover most of the path for a smaller team.
+Then create a **control library** mapping those real controls to whatever frameworks apply.
 
-## Choose the Right Data-Quality Implementation
+For example:
 
-<!-- section-summary: Data-quality tools execute fit-for-purpose measures, while owners define the purpose, thresholds, failure response, and evidence policy. -->
+$$
+\text{Control DQ-17: production feature-drift monitoring}
+$$
 
-Data-quality standards describe a disciplined way to define and manage quality.
-The implementation depends on where the data lives and which rules need to run.
-Start from the decision consequence, then choose the smallest tool that can
-measure the required characteristic at the right point in the lifecycle.
+might support your internal AI policy, ISO/IEC 42001, ISO/IEC 23894, ISO/IEC 5338, the relevant ISO/IEC 5259 implementation, model-risk requirements and perhaps regulatory obligations.
 
-For a SQL warehouse transformation, **dbt data tests** are a strong starting
-point. They run assertions against sources and models and return the failing
-records. Built-in tests cover uniqueness, non-null values, accepted values, and
-relationships. Custom SQL tests can express a business rule such as a maturity
-cutoff or minimum join coverage.
+- **One control. One owner. One source of evidence. Many mappings.**
 
-**Great Expectations** fits teams that need reusable expectation suites and
-validation results across several data systems or Python workflows. **Deequ**
-fits large Spark datasets and expresses constraints that Spark jobs can evaluate
-at scale. Platform-native expectations and quality monitors can reduce
-integration work inside a managed lakehouse or warehouse. They should export
-stable results into the release and operating evidence chain.
+That is much more scalable than “compliance by spreadsheet.”
 
-The following dbt configuration checks structural assumptions for a lending
-training table. The `data_tests` entries attach assertions to named columns. A
-failed run blocks the snapshot before training and records which assertion
-failed.
+## What Is the Central Operating Model for Standards-Based AI Governance?
+<!-- section-summary: The operating model joins accountable management, risk-based controls, lifecycle evidence, fit-for-purpose data, monitored assumptions, and continuous improvement. -->
 
-```yaml
-models:
-  - name: lending_training_examples
-    columns:
-      - name: application_id
-        data_tests:
-          - not_null
-          - unique
-      - name: applicant_id
-        data_tests:
-          - not_null
-          - relationships:
-              arguments:
-                to: ref('eligible_applicants')
-                field: applicant_id
-      - name: repayment_outcome
-        data_tests:
-          - accepted_values:
-              arguments:
-                values: [repaid, missed_payment, still_open]
-```
+The operating model joins accountable management, risk-based controls, lifecycle evidence, fit-for-purpose data, monitored assumptions, and continuous improvement.
 
-These tests catch duplicate applications, missing identifiers, broken joins, and
-unexpected label categories. They leave several important questions open. They
-cannot prove outcome-label maturity or adequate coverage for every relevant
-applicant group. They also cannot prove that historical data represents the
-future population. Additional measures and risk decisions address those
-requirements.
+The four core standards can ultimately be remembered with four sentences:
 
-A production data-quality result preserves the snapshot, contract version, test
-revision, measured value, and threshold. It also records the segment, run time,
-owner, and failure action. Stored failing rows may contain sensitive
-identifiers. Teams therefore keep detailed failures in a restricted schema and
-export bounded counts, segment names, and evidence references to CI.
+- **ISO/IEC 42001:** *Make AI governance an organizational system rather than an ad-hoc project.*
+- **ISO/IEC 23894:** *Understand what can go wrong, decide what to do about it, and keep reassessing.*
+- **ISO/IEC 5338:** *Put the necessary controls at the correct points from conception through retirement.*
+- **ISO/IEC 5259:** *Treat data quality as an engineered, measurable and governed prerequisite for trustworthy ML.*
 
-Repair follows a controlled path. A failed completeness test quarantines the new
-snapshot and keeps the last approved production model. The data owner
-investigates the upstream source and creates a corrected version. The same
-checks run again, including comparison across affected segments. Training
-resumes from the corrected immutable snapshot. The release record identifies
-that version as the candidate's input.
+Together they produce a closed loop:
 
-## Assign Ownership and Match Control Depth to Risk
+$$
+\boxed{
+\text{Govern}
+\rightarrow
+\text{Understand}
+\rightarrow
+\text{Assess Risk}
+\rightarrow
+\text{Control Data}
+\rightarrow
+\text{Build}
+\rightarrow
+\text{Validate}
+\rightarrow
+\text{Approve}
+\rightarrow
+\text{Deploy}
+\rightarrow
+\text{Observe}
+\rightarrow
+\text{Learn}
+\rightarrow
+\text{Change or Retire}
+}
+$$
 
-<!-- section-summary: Governance assigns distinct decision rights and scales review independence, evidence, and monitoring to the consequence of the AI use. -->
+And running underneath that entire loop is the most important governance principle:
 
-Standards operate through decision rights. A named owner must have authority to
-change the system. The same authority may include funding a repair or stopping
-an unsafe use. “The AI team” is too broad. Data, model, product, risk, and
-platform decisions belong to different roles.
+$$
+\boxed{\text{Claim} \rightarrow \text{Control} \rightarrow \text{Evidence} \rightarrow \text{Accountable decision}}
+$$
 
-Top management directs the scoped AIMS, approves policy and objectives, provides
-resources, and reviews performance. The business or system owner is accountable
-for the intended use and real-world outcome. A risk owner evaluates treatment
-and accepts residual risk within delegated authority. The data owner defines
-permitted sources and quality controls. The model owner maintains training and
-evaluation. The platform owner operates identity, pipelines, registries,
-deployment, and telemetry. Legal, privacy, security, compliance, and domain
-specialists contribute decisions within their remit. Internal audit or another
-independent assurance function tests whether the management system and controls
-operate as claimed.
-
-These roles can sit with fewer people in a small organization, although
-conflicting decisions still require separation. The person who develops a
-high-impact control should not provide its only independent assurance.
-Lower-risk internal forecasting may use peer review and automated gates. A
-lending or clinical prioritization system may require independent validation and
-domain approval. It may also require legal review, stronger change control, and
-more frequent outcome analysis.
-
-### Apply Deeper Controls To Higher-Risk Systems
-
-Proportionality sets control depth from the consequence, uncertainty, scale,
-reversibility, affected population, and degree of human reliance. Low-risk
-systems still receive a governance baseline. Every in-scope system has an owner,
-intended purpose, inventory record, minimum security, data controls, and
-retirement path.
-
-A higher risk tier increases the independence of evaluation and the required
-approval authority. It can also expand segment testing, evidence retention,
-supplier review, human oversight, monitoring, rollback exercises, and management
-escalation. The tiering method and exception authority belong to the AIMS so
-different teams do not silently invent their own thresholds.
-
-```mermaid
-flowchart TD
-    A["System Context<br/>(decision, people, scale, uncertainty, and reversibility)"] --> B["Risk Classification<br/>(organizational method and accountable owner)"]
-    B --> C["Baseline Controls<br/>(inventory, ownership, security, data, release, and retirement)"]
-    B --> D["Enhanced Controls<br/>(independent review, deeper testing, and tighter approval)"]
-    C --> E["Operating Cadence<br/>(monitor and review at the assigned depth)"]
-    D --> E
-    E --> F["Reclassification Trigger<br/>(material change, incident, or new evidence)"]
-    F --> B
-
-    class A,B context
-    class C,D control
-    class E,F review
-```
-
-The assessment should record why the chosen depth fits the use. A broad label
-such as “medium risk” cannot explain a control decision on its own. The record
-describes the intended use, affected people, consequence, and exposure. It then
-names the safeguards, assumptions, owner, and review trigger.
-
-## Run Releases, Reviews, and Exceptions
-
-<!-- section-summary: Different evidence cadences support release decisions, live operation, periodic assurance, management direction, and temporary exceptions. -->
-
-Governance evidence changes at several speeds. Release evidence belongs to one
-candidate. Operational evidence arrives continuously or in scheduled monitoring
-jobs. Internal audit samples the control system independently. Management review
-examines trends, objectives, resources, incidents, complaints, supplier changes,
-audit findings, and improvement actions across the AIMS.
-
-### Check One Exact Model And Evidence Set At Release
-
-A release packet identifies the system, intended purpose, candidate model,
-source code, and environment. It links the training snapshots and evaluation
-datasets to the risk decision and required control results. It also records the
-approvers, deployment plan, rollback, and monitoring readiness. The approval
-binds to immutable versions and digests. A later retraining run receives its own
-evidence rather than inheriting an old approval through a mutable alias.
-
-The CI pipeline should fail on missing mandatory evidence and failed hard
-thresholds. A human review adds judgment where policy requires it, such as
-evaluating a changed error tradeoff or confirming that an exception fits
-delegated authority. The final release record states the approved operating
-limits and the conditions that require rollback or renewed assessment.
-
-### Operational and Management Reviews Ask Different Questions
-
-An operational review examines current service health, data quality, drift,
-prediction quality, overrides, complaints, incidents, and control failures. Its
-participants can repair a pipeline, limit a route, or roll back a release. The
-review cadence follows label delay, system risk, traffic, and how quickly harm
-can accumulate.
-
-Management review examines the AIMS itself. Leaders consider whether policy,
-objectives, roles, resources, competence, suppliers, assurance, and improvement
-work remain adequate. A repeated data incident may reveal a missing platform
-investment rather than a single team's mistake. The recorded output assigns a
-decision, owner, resources, and due date.
-
-### Exceptions Need an Expiry and a Safe Boundary
-
-A control exception identifies the affected system and version, unavailable
-control, reason, and risk change. It names the compensating controls and
-accountable approver. The record also includes its start time, expiry,
-monitoring, rollback, and repair owner. The expiry prevents a temporary
-workaround from turning into an undocumented production design.
-
-Suppose one external income source cannot supply a required freshness field
-during a provider migration. The exception may restrict the model to unaffected
-application channels and route other cases to manual review. It also increases
-coverage monitoring and expires after a short migration window. CI checks for an
-active approved exception linked to the exact control and system version. Expiry
-blocks the next release or route update until the control returns or a new
-decision is approved.
-
-Emergency authority follows the same principle. An incident commander may
-disable a model route immediately to contain harm. The record identifies the
-action, operator, reason, affected versions, and fallback. A retrospective
-review confirms the safe state and investigates the cause. It restores the
-control and updates policy or tests if the incident exposed a systemic weakness.
-
-```mermaid
-flowchart TD
-    A["Release Review<br/>(candidate evidence and operating limits)"] --> B["Production Operation<br/>(approved version serves within scope)"]
-    B --> C["Operational Review<br/>(service, data, model, outcome, and incident signals)"]
-    C --> D["Management Review<br/>(objectives, resources, audit, suppliers, and improvement)"]
-    D --> E["Improvement Action<br/>(change policy, control, ownership, or platform)"]
-    E --> A
-    C --> F["Time-Bounded Exception<br/>(compensating control, owner, expiry, and repair)"]
-    F --> B
-
-    class A release
-    class B,C operation
-    class D,E decision
-    class F exception
-```
-
-## Understand What Certification Establishes
-
-<!-- section-summary: Certification can provide independent assurance about a defined management-system scope, while product safety, legal compliance, and every model result require separate evidence. -->
-
-ISO/IEC 42001 is a management-system requirements standard. An organization can
-implement it without pursuing certification. If certification is chosen, an
-external certification body audits the defined AIMS scope. It can issue written
-assurance that the management system conforms to the specified requirements. ISO
-develops the standard and does not perform certification or issue certificates.
-
-Read the certificate together with its scope. Coverage for one business unit,
-location, or class of AI use says nothing about an excluded system. The
-certificate gives assurance about the management system evaluated by the
-certification body. Model accuracy and decision fairness still need their own
-evidence. Incident prevention and jurisdiction-specific legal duties also follow
-separate criteria.
-
-ISO/IEC 23894 supplies risk-management guidance, ISO/IEC 5338 supplies lifecycle
-processes, and much of the ISO/IEC 5259 family supplies specialized data-quality
-structure. NIST AI RMF is voluntary. These sources can strengthen an AIMS and
-its evidence. Their use grants no automatic certification to ISO/IEC 42001 or
-conformity with another source.
-
-Certification, internal audit, regulatory assessment, customer assurance, and
-legal compliance are different activities. An organization may use the same
-evidence across them, provided each reviewer evaluates the correct scope and
-criteria. Qualified certification, legal, compliance, privacy, security, and
-domain specialists should interpret the authoritative requirements that apply to
-a particular organization and use.
-
-The engineering team preserves accurate system boundaries, implements approved
-controls, retains trustworthy evidence, exposes failures, and repairs them.
-During assurance, reviewers test the release path directly. The deployment job
-must reject any model that lacks a linked approval, regardless of how complete
-the evidence portal appears.
-
-## Review Evidence Again After The System Changes
-
-<!-- section-summary: Material changes, incidents, and review findings reopen the affected decisions so the control system stays aligned with the production system. -->
-
-Changes to data, models, suppliers, policies, or product use can invalidate an
-earlier review. The risk assessment may describe one dataset while the pipeline
-reads another. A model alias may point to a newer version than the release
-record. A supplier may change an API or underlying model. A business team may
-use the score for a broader decision than the approved purpose.
-
-The control system defines material-change triggers. Changes to the intended
-purpose, affected population, data source, model, supplier, operating region, or
-human-review procedure can reopen parts of the assessment. A new decision
-threshold or deployment environment can also change the risk. Incidents,
-complaints, audit findings, control failures, and new external requirements
-trigger the same review path.
-
-### Trace From A Production Decision Back To Its Evidence
-
-A reviewer starts from a production decision route and identifies its system
-record, current release, model and code versions, and training snapshots. The
-path continues through evaluation, risk treatment, approval, and policy. The
-reverse investigation starts from a failed data source or control. It finds
-every training run, model version, deployment, and decision route that depended
-on the failure.
-
-Catalogues and OpenLineage support the data path. MLflow or a managed registry
-supports model identity. CI/CD records support the release path. OpenTelemetry
-and monitoring stores support operating behaviour. The governance register
-connects those technical records to accountable decisions. Each platform covers
-part of the chain, so teams test the links rather than assuming integration
-produced complete evidence.
-
-An evidence exercise selects one production release and rebuilds its training
-dataset from recorded snapshots. It retrieves the exact model artifact, reruns
-the required evaluation, confirms the deployment digest, and locates the
-approval. Another exercise selects a control exception and confirms its
-compensating monitor, expiry, and repair. Missing or inaccessible evidence
-creates a corrective action with an owner and due date.
-
-### Fix The Process That Allowed The Failure
-
-A broken data test needs repair at the source or transformation. A repeated
-class of failures may require a stronger contract, a new owner, a platform
-feature, different supplier terms, or a changed management objective. Internal
-audit and management review provide the path from individual evidence to
-system-level improvement.
-
-This feedback loop is central to a management system. The organization observes
-performance, compares it with objectives and risk decisions, corrects the
-immediate issue, and changes the process that allowed it. The next release then
-produces stronger evidence through the normal delivery path.
-
-```mermaid
-flowchart TD
-    A["Production State<br/>(current data, model, policy, and decision route)"] --> B["Evidence Sampling<br/>(trace versions, approvals, controls, and outcomes)"]
-    B --> C{"Evidence Result<br/>(does the record match the live system?)"}
-    C -->|Matches| D["Continue and Monitor<br/>(retain evidence at the assigned cadence)"]
-    C -->|Gap Found| E["Contain and Correct<br/>(limit exposure and repair the immediate issue)"]
-    E --> F["System Improvement<br/>(change policy, process, owner, tool, or objective)"]
-    F --> G["Revalidate and Release<br/>(produce new evidence for the corrected state)"]
-    G --> A
-
-    class A state
-    class B,D review
-    class C decision
-    class E,F,G failure
-```
-
-## The Main Idea
-
-<!-- section-summary: Standards work together through distinct responsibilities, shared controls, stable identities, and evidence that follows the live AI system. -->
-
-AI management, risk, lifecycle, and data quality describe different layers of
-one production system. ISO/IEC 42001 directs the organizational management
-system. ISO/IEC 23894 guides AI risk management. NIST AI RMF supplies voluntary
-outcomes and profiles. ISO/IEC 5338 organizes lifecycle processes. The ISO/IEC
-5259 family defines data-quality concepts, measures, management, processes,
-governance, and supporting visualization.
-
-The implementation connects those layers through real controls. Policy sets the
-objective. Risk work defines the scenario and treatment. Lifecycle gates place
-the work at the right handoff. Data and model checks produce measurable
-evidence. Catalogues, registries, CI/CD, lineage, and telemetry preserve the
-technical record. Accountable owners approve, limit, repair, or stop the use.
-
-This structure prevents two common errors. The first is treating standards as
-interchangeable checklists. The second is assuming a tool or certificate proves
-every property of an AI system. A credible programme keeps each source's purpose
-intact and traces its decisions to the exact system operating in production.
+If an organization claims its AI is fair, safe, reliable, transparent or well governed, there should be **controls** supporting that claim. Those controls should produce **evidence**. Someone with explicit authority should review that evidence and make an **accountable decision**. And when the system or its environment changes, the organization should determine whether that evidence is still valid. That is the connection between **AI governance, Responsible AI, ISO management systems, risk management, lifecycle engineering and data-quality management**.
 
 ![Policy objectives, risk decisions, lifecycle controls, technical checks, accountable outcomes, production evidence, and review form one traceable governance loop, with approved and limited scope entering production while rejected decisions terminate.](/content-assets/articles/article-mlops-governance-and-responsible-ai-ai-management-risk-lifecycle-data-quality-standards/standards-evidence-chain-summary.png)
 
 *Standards become operational when their distinct responsibilities connect through stable identifiers to an accountable release decision, live evidence, and a feedback loop that changes the control system.*
 
+## Check Your Answers
+
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Why Does One AI System Need Several Connected Standards?]{kind="recap"}
+An AI system crosses management, risk, lifecycle, and data-quality concerns, so several standards form a control stack rather than competing descriptions of the same job.
+:::
+
+:::expand[What Do ISO/IEC 42001, 23894, 5338, and 5259 Each Control?]{kind="recap"}
+ISO/IEC 42001 governs the management system, 23894 structures AI risk, 5338 places work across the lifecycle, and the 5259 series addresses data quality for analytics and ML.
+:::
+
+:::expand[How Do the Standards Work Together in a Real System and Its Evidence Stack?]{kind="recap"}
+The lending example and production-tool mapping show how one system creates evidence across all four layers and chooses an implementation depth proportionate to need.
+:::
+
+:::expand[How Should Ownership and Risk Determine Control Depth?]{kind="recap"}
+Named owners make controls executable, while system impact, uncertainty, scale, and reversibility determine how strong and independent those controls should be.
+:::
+
+:::expand[How Do Release Gates, Exceptions, Change, and Monitoring Turn Standards into Engineering?]{kind="recap"}
+Standards become useful when release evidence, machine-enforced gates, expiring exceptions, change invalidation, and production monitoring operate as one loop.
+:::
+
+:::expand[What Do Certification and Impact Assessment Actually Establish?]{kind="recap"}
+Certification establishes confidence in a managed system rather than perfection in every model, and impact assessment examines consequences that narrow technical risk analysis may miss.
+:::
+
+:::expand[How Do Standards Support Responsible AI and a Connected Control Architecture?]{kind="recap"}
+Responsible AI describes the intended outcome, while the standards supply connected management machinery, risk reasoning, lifecycle timing, data-quality evidence, and architecture.
+:::
+
+:::expand[What Is the Central Operating Model for Standards-Based AI Governance?]{kind="recap"}
+The operating model joins accountable management, risk-based controls, lifecycle evidence, fit-for-purpose data, monitored assumptions, and continuous improvement.
+:::
+
 ## References
 
-- [ISO/IEC 42001:2023 — Artificial intelligence management system](https://www.iso.org/standard/42001) -
-  Official ISO overview, title, status, and management-system scope.
-- [ISO/IEC 23894:2023 — Guidance on AI risk management](https://www.iso.org/standard/77304.html) -
-  Official ISO overview of AI-specific risk-management guidance.
-- [ISO/IEC 5338:2023 — AI system life cycle processes](https://www.iso.org/standard/81118.html) -
-  Official ISO description of lifecycle processes for AI systems.
-- [ISO/IEC 5259-1:2024 — Overview, terminology, and examples](https://www.iso.org/standard/81088.html) -
-  Official foundation for the ISO/IEC 5259 data-quality family.
-- [ISO/IEC 5259-2:2024 — Data quality measures](https://www.iso.org/standard/81860.html) -
-  Official data-quality model and measures.
-- [ISO/IEC 5259-3:2024 — Data quality management requirements and guidelines](https://www.iso.org/standard/81092.html) -
-  Official management requirements and guidance.
-- [ISO/IEC 5259-4:2024 — Data quality process framework](https://www.iso.org/standard/81093.html) -
-  Official process framework for analytics and ML data quality.
-- [ISO/IEC 5259-5:2025 — Data quality governance framework](https://www.iso.org/standard/84150.html) -
-  Official governance framework for directing and overseeing data quality.
-- [ISO/IEC TR 5259-6:2026 — Visualization framework for data quality](https://www.iso.org/standard/86532.html) -
-  Official technical report for visualizing data-quality results.
-- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework) -
-  Official AI RMF 1.0, Playbook, profiles, and revision status.
-- [NIST AI RMF Playbook](https://airc.nist.gov/airmf-resources/playbook/) -
-  Official suggested actions across Govern, Map, Measure, and Manage.
-- [NIST AI 600-1 — Generative Artificial Intelligence Profile](https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence) -
-  Official companion profile for generative-AI risk.
-- [ISO management system standards](https://www.iso.org/management-system-standards.html) -
-  Official explanation of implementation, audit, and optional certification.
-- [ISO certification](https://committee.iso.org/certification.html) - Official
-  explanation of certification bodies and ISO's role.
-- [Databricks Unity Catalog lineage](https://docs.databricks.com/aws/en/data-governance/unity-catalog/data-lineage) -
-  Official lineage capabilities and boundaries for governed Databricks assets.
-- [Microsoft Purview data governance](https://learn.microsoft.com/en-us/purview/data-governance-purview-portal) -
-  Official overview of the current Microsoft Purview governance experience.
-- [Google Cloud Knowledge Catalog](https://docs.cloud.google.com/dataplex/docs/catalog-overview) -
-  Official metadata catalogue and current product naming.
-- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/) -
-  Official model-version, alias, tag, and promotion guidance.
-- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests) - Official
-  syntax and behaviour for assertions against sources and models.
-- [Great Expectations: Define Expectations](https://docs.greatexpectations.io/docs/core/define_expectations/) -
-  Official explanation of expectations and expectation suites.
-- [Deequ](https://github.com/awslabs/deequ) - Official Spark data-quality
-  constraint and verification project.
-- [OpenLineage run cycle](https://openlineage.io/docs/spec/run-cycle/) -
-  Official event model for jobs, runs, and input and output datasets.
-- [OpenTelemetry signals](https://opentelemetry.io/docs/concepts/signals/) -
-  Official overview of traces, metrics, logs, and other telemetry signals.
+[1]: https://www.iso.org/standard/42001 "ISO/IEC 42001:2023 - AI management systems"
+[2]: https://www.iso.org/publication/PUB200420.html "ISO - Responsible AI governance and impact standards package"
+[3]: https://www.iso.org/standard/56641.html "ISO/IEC 38507:2022 - Information technology — Governance of IT — Governance implications of the use of artificial intelligence by organizations"
+[4]: https://www.iso.org/standard/77304.html "ISO/IEC 23894:2023 - AI — Guidance on risk management"
+[5]: https://www.iso.org/standard/81118.html "ISO/IEC 5338:2023 - Information technology — Artificial intelligence — AI system life cycle processes"
+[6]: https://www.iso.org/standard/81088.html "ISO/IEC 5259-1:2024 - Artificial intelligence — Data quality for analytics and machine learning (ML) — Part 1: Overview, terminology, and examples"
+[7]: https://www.iso.org/standard/81860.html "ISO/IEC 5259-2:2024 - Artificial intelligence — Data quality for analytics and machine learning (ML) — Part 2: Data quality measures"
+[8]: https://www.iso.org/standard/81092.html "ISO/IEC 5259-3:2024 - Artificial intelligence — Data quality for analytics and machine learning (ML) — Part 3: Data quality management requirements and guidelines"
+[9]: https://www.iso.org/standard/81093.html "ISO/IEC 5259-4:2024 - Artificial intelligence — Data quality for analytics and machine learning (ML) — Part 4: Data quality process framework"
+[10]: https://www.iso.org/standard/84150.html "ISO/IEC 5259-5:2025 - Artificial intelligence — Data quality for analytics and machine learning (ML) — Part 5: Data quality governance framework"
+[11]: https://www.iso.org/management-system-standards.html "ISO - Management system standards"
+[12]: https://www.iso.org/standard/42005 "ISO/IEC 42005:2025 - Information technology — Artificial intelligence (AI) — AI system impact assessment"
+[13]: https://airc.nist.gov/airmf-resources/airmf/5-sec-core/ "AI RMF Core - AIRC"

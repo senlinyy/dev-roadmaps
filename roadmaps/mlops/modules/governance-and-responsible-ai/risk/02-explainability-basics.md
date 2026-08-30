@@ -1,14 +1,7 @@
 ---
 title: "Explainability Basics"
-description:
-  "Choose explanations from the audience and question, understand method limits,
-  validate their behaviour, and operate them safely in production."
-overview:
-  "Explainability produces evidence about model behaviour for a particular
-  audience and decision. This article distinguishes explanation questions first,
-  then develops global and local scope, intrinsic and post-hoc methods,
-  attribution, counterfactuals, examples, uncertainty, validation, and
-  production controls."
+description: "Explainability starts with a named audience and decision need, distinguishing readable models from post-hoc methods and system-wide patterns from one local case."
+overview: "Explainability starts with a named audience and decision need, distinguishing readable models from post-hoc methods and system-wide patterns from one local case. A useful explanation answers the right person's real question faithfully, at the right level, while exposing uncertainty and the wider system that produced the consequence."
 tags: ["MLOps", "advanced", "risk"]
 order: 2
 id: "article-mlops-governance-and-responsible-ai-explainability-basics"
@@ -16,648 +9,1950 @@ id: "article-mlops-governance-and-responsible-ai-explainability-basics"
 
 ## Table of Contents
 
-1. [Start With The Person Who Needs The Explanation](#start-with-the-person-who-needs-the-explanation)
-2. [Compare Global And Local Explanations](#compare-global-and-local-explanations)
-3. [Compare Readable Models With Explanations Added After Training](#compare-readable-models-with-explanations-added-after-training)
-4. [How Feature Attribution Connects Inputs To A Prediction](#how-feature-attribution-connects-inputs-to-a-prediction)
-5. [Correlated Features Complicate Attribution](#correlated-features-complicate-attribution)
-6. [Use Counterfactual Explanations Only For Realistic Changes](#use-counterfactual-explanations-only-for-realistic-changes)
-7. [Explain A Prediction Through Similar Past Cases](#explain-a-prediction-through-similar-past-cases)
-8. [Show Confidence And Uncertainty With The Explanation](#show-confidence-and-uncertainty-with-the-explanation)
-9. [Explain Features In Language People Understand](#explain-features-in-language-people-understand)
-10. [Check Whether An Explanation Matches The Model And Remains Stable](#check-whether-an-explanation-matches-the-model-and-remains-stable)
-11. [Choose An Explanation Tool For The Model And Question](#choose-an-explanation-tool-for-the-model-and-question)
-12. [Record Which Model And Method Produced Each Explanation](#record-which-model-and-method-produced-each-explanation)
-13. [Help People Understand, Challenge, And Act On An Explanation](#help-people-understand-challenge-and-act-on-an-explanation)
-14. [Release And Monitor The Explanation System](#release-and-monitor-the-explanation-system)
-15. [The Main Idea](#the-main-idea)
-16. [References](#references)
+1. [Who Needs an Explanation, and How Do Interpretability, Global, and Local Views Differ?](#who-needs-an-explanation-and-how-do-interpretability-global-and-local-views-differ)
+2. [What Can Attribution, SHAP, Counterfactuals, Examples, and LIME Explain?](#what-can-attribution-shap-counterfactuals-examples-and-lime-explain)
+3. [How Do Fidelity, Stability, Reproducibility, Confidence, Uncertainty, and Human Language Affect Trust?](#how-do-fidelity-stability-reproducibility-confidence-uncertainty-and-human-language-affect-trust)
+4. [How Do Explanations Relate to the Full Decision System, Accountability, Fairness, Security, Challenge, and Action?](#how-do-explanations-relate-to-the-full-decision-system-accountability-fairness-security-challenge-and-action)
+5. [How Should Explanation Systems Be Validated, Versioned, Monitored, and Escalated?](#how-should-explanation-systems-be-validated-versioned-monitored-and-escalated)
+6. [What Are the Limits of Explainability for Generative AI and Agents?](#what-are-the-limits-of-explainability-for-generative-ai-and-agents)
+7. [What Architecture and Worked Example Turn an Explanation Requirement into a Service?](#what-architecture-and-worked-example-turn-an-explanation-requirement-into-a-service)
+8. [What Is the Central Principle of Useful Explainability?](#what-is-the-central-principle-of-useful-explainability)
+9. [Check Your Answers](#check-your-answers)
 
-## Start With The Person Who Needs The Explanation
+A customer asks why a loan was declined. A chart of global feature importance describes the model across thousands of cases, but it may say little about this customer. A local feature attribution may describe this prediction, yet it still cannot prove that changing one correlated feature would cause approval.
 
-<!-- section-summary: An explanation names its audience, answers their defined question, and supports a concrete action or decision. -->
+**Explainability** provides evidence that helps a particular person understand model or system behaviour for a particular purpose. The method must match the question: global and local views, attributions, counterfactuals, examples, uncertainty, and the surrounding decision process all explain different things.
 
-The intended reader and decision determine which explanation the system should
-produce. **Explainability** means producing understandable evidence about how a
-model behaves or how it reached a particular output. A developer, affected
-person, operator, and auditor ask different versions of “why?”
+These questions move from the audience and method to fidelity, human usefulness, governance, production monitoring, limits, and a complete explanation service:
 
-A developer debugging a model may ask, “Did it learn an accidental shortcut?” A
-model validator may ask, “Does the model rely on stable and acceptable factors
-across important groups?” An operator investigating an incident may ask, “Which
-input or model path changed after the release?”
+1. **Who Needs an Explanation, and How Do Interpretability, Global, and Local Views Differ?**
+2. **What Can Attribution, SHAP, Counterfactuals, Examples, and LIME Explain?**
+3. **How Do Fidelity, Stability, Reproducibility, Confidence, Uncertainty, and Human Language Affect Trust?**
+4. **How Do Explanations Relate to the Full Decision System, Accountability, Fairness, Security, Challenge, and Action?**
+5. **How Should Explanation Systems Be Validated, Versioned, Monitored, and Escalated?**
+6. **What Are the Limits of Explainability for Generative AI and Agents?**
+7. **What Architecture and Worked Example Turn an Explanation Requirement into a Service?**
+8. **What Is the Central Principle of Useful Explainability?**
 
-An affected person has a different need: “What were the principal reasons for
-this result, and how can I correct wrong information or challenge the decision?”
-An auditor or regulatory reviewer may ask whether the organization used a
-suitable explanation method, validated it, controlled access, and connected it
-to the actual decision process.
+## Who Needs an Explanation, and How Do Interpretability, Global, and Local Views Differ?
+<!-- section-summary: Explainability starts with a named audience and decision need, distinguishing readable models from post-hoc methods and system-wide patterns from one local case. -->
 
-One chart cannot satisfy all of these audiences. A global feature ranking may
-help a developer find leakage and provide little information about one person’s
-case. A local attribution can describe one prediction and provide no proof that
-changing the highlighted feature would improve a real-world outcome.
+Explainability starts with a named audience and decision need, distinguishing readable models from post-hoc methods and system-wide patterns from one local case.
 
-The first design step is therefore to write an explanation question:
+Explainability is easiest to understand by starting with a disagreement. Imagine an ML system recommends rejecting someone's loan application. The customer asks:
 
-- Who will receive the explanation?
-- Which decision will they make with it?
-- Does the question concern the model as a whole or one result?
-- What harm could a misleading answer cause?
-- Which action, correction, appeal, or investigation follows?
+“Why?”
 
-```mermaid
-flowchart TD
-    A["Explanation Need<br/>(a person has a decision to make)"] --> B{"Audience Question<br/>(what must they understand?)"}
-    B --> C["Developer Debugging<br/>(patterns, leakage, and failure modes)"]
-    B --> D["Validation Review<br/>(dependence, stability, and limitations)"]
-    B --> E["Operator Investigation<br/>(production change and affected cases)"]
-    B --> F["Affected Person<br/>(principal reasons and challenge route)"]
-    B --> G["Audit Review<br/>(method, evidence, and controls)"]
+The data scientist answers:
 
-    class A need;
-    class B question;
-    class C,D,E,F,G audience;
+“Because the model output was 0.82.”
+
+That is technically true, but it is not an explanation. The customer asks again:
+
+“Why did it produce 0.82?”
+
+The engineer responds:
+
+“Because a gradient-boosted ensemble of 500 trees processed 87 features.”
+
+Still not useful. The risk reviewer asks a different question:
+
+“Does this model generally rely on sensible factors?”
+
+The regulator may ask:
+
+“Can the organization demonstrate that prohibited characteristics are not driving decisions?”
+
+The developer may ask:
+
+“Why did the new release behave differently from the previous one?”
+
+These people are all asking for an **explanation**, but they are asking different questions. That gives us the first principle:
+
+> **There is no useful explanation without first specifying who needs to understand what, and for what purpose.**
+
+Explainability is not a single mathematical property of a model. It is a relationship between:
+
+$$
+\text{Model}
++
+\text{Decision}
++
+\text{Audience}
++
+\text{Question}
+$$
+
+A predictive model can be represented as:
+
+$$
+f(x)=y
+$$
+
+where:
+
+* $$x$$ = input,
+* $$f$$ = model,
+* $$y$$ = output.
+
+For example:
+
+$$
+f(
+income,
+debt,
+payment\ history,
+age\ of\ accounts,
+\dots
+)
+=
+0.82
+$$
+
+The model says:
+
+estimated default probability = 82%.
+
+The basic explainability problem is:
+
+$$
+\boxed{
+\text{How do we move from knowing } y
+\text{ to understanding why } f(x)=y
+}
+$$
+
+But “why” can mean several things. Someone could mean:
+
+Which input variables mattered
+
+Or:
+
+What would need to change for the result to change
+
+Or:
+
+Does the model generally behave sensibly
+
+Or:
+
+Which past examples resemble this case
+
+Or even:
+
+Why was a model used for this decision at all
+
+Those are different questions and may require different explanations. Suppose a bank tells a customer:
+
+“Your debt-to-income ratio contributed +0.19 to the model score.”
+
+That may accurately describe part of the model. But the customer may really need:
+
+“Your current debt relative to your reported income was one of the main reasons the application was assessed as higher risk.”
+
+The mathematical explanation and the human explanation are related but different. A useful explanation often has three layers:
+
+$$
+\text{Technical truth}
+\rightarrow
+\text{meaning}
+\rightarrow
+\text{actionable understanding}
+$$
+
+For example:
+
+- **Technical**
+
+Feature $$x_7$$ contributed +0.19.
+
+- **Meaning**
+
+$$x_7$$ represents debt relative to income.
+
+- **Human explanation**
+
+Your current debt relative to income increased the estimated risk.
+
+Governance must care about the final layer, not merely whether an explainability library produced a chart. Different audiences require different information. Consider a loan model.
+
+### Customer
+
+Wants to know:
+
+Why did this happen to me
+
+and perhaps:
+
+Is there anything I can correct or challenge
+
+### Model developer
+
+Wants to know:
+
+What is the model actually learning
+
+### Model validator
+
+Wants to know:
+
+Is the model relying on plausible, permitted relationships
+
+### Business owner
+
+Wants to know:
+
+What generally drives model decisions
+
+### Compliance or legal reviewer
+
+May ask:
+
+Could prohibited or inappropriate variables influence outcomes
+
+### Operations team
+
+May ask:
+
+Why are rejection rates suddenly increasing
+
+So:
+
+$$
+E = Explain(f,x,a,q)
+$$
+
+where:
+
+* $$f$$ = model,
+* $$x$$ = case if applicable,
+* $$a$$ = audience,
+* $$q$$ = question.
+
+There is no single universally optimal $$E$$. These words are often used inconsistently, but a useful distinction is:
+
+### Interpretability
+
+How easily can a human understand how the model itself works?
+
+### Explainability
+
+How can we provide useful reasons or evidence about model behavior?
+
+A simple linear model:
+
+$$
+y =
+2x_1 - 3x_2 + 0.5x_3
+$$
+
+may be intrinsically interpretable. You can inspect the coefficients directly. A neural network with billions of parameters is not interpretable in that same way. We may therefore add explanation methods after training. This creates two broad approaches:
+
+$$
+\boxed{\text{Understandable by design}}
+$$
+
+versus:
+
+$$
+\boxed{\text{Explained after the fact}}
+$$
+
+Consider a small decision tree:
+
+```text
+Is debt-to-income > 45%
+        │
+     ┌──┴──┐
+    Yes    No
+     │      │
+High risk  Continue
 ```
 
-The question determines the scope, method, validation, language, and access
-controls that follow.
+A human can follow its reasoning. Likewise, a sparse linear model might say:
+
+$$
+Risk =
+0.4(DebtRatio)
+-
+0.3(PaymentHistory)
++
+0.1(Utilization)
+$$
+
+The mechanism is relatively visible. Advantages include:
+
+* direct inspection,
+* easier validation,
+* easier communication,
+* fewer layers between model and explanation.
+
+But interpretability can disappear as complexity grows. A decision tree with 50,000 nodes is technically a tree but practically incomprehensible. So interpretability is not merely determined by model family. It depends on whether a human can realistically understand the relevant behavior. For complex models, we often train the model first:
+
+$$
+f(x)
+$$
+
+and then use another method:
+
+$$
+g(f,x)
+$$
+
+to produce an explanation. Examples include:
+
+* feature attribution,
+* local surrogate models,
+* counterfactual explanations,
+* example-based explanations,
+* partial-dependence analyses.
+
+These are called **post-hoc explanations**. They are useful, but they introduce a fundamental governance problem:
+
+$$
+\boxed{
+\text{The explanation is now another model or approximation that can itself be wrong}
+}
+$$
+
+The output of an explanation tool should therefore not automatically be treated as the ground truth about the model. This distinction is fundamental.
+
+### Global explanation
+
+Asks:
+
+**How does this model generally behave?**
+
+For example:
+
+Across the population, debt-to-income, missed payments, and credit utilization are the strongest drivers of predictions.
+
+Global explanations help with:
+
+* model validation,
+* policy review,
+* debugging,
+* understanding general behavior.
+
+### Local explanation
+
+Asks:
+
+**Why did the model make this particular prediction?**
+
+For application $$i$$:
+
+$$
+f(x_i)=0.82
+$$
+
+A local explanation might say:
+
+```text
+Starting risk:                         0.30
+
+High debt-to-income:                 +0.24
+Recent missed payments:              +0.18
+Long account history:                -0.07
+Low credit utilization:              -0.03
+
+Final prediction:                     0.82
+```
+
+This helps explain one case. The distinction is:
+
+$$
+\boxed{
+\text{Global}: Why does the model behave this way generally
+}
+$$
+
+$$
+\boxed{
+\text{Local}: Why did it behave this way here
+}
+$$
+
+Neither substitutes for the other. Suppose income is extremely important across the whole model population. That does not mean income was important for every particular prediction. Conversely, a rare feature may have little average importance but dominate one unusual case. So:
+
+$$
+GlobalImportance(j)
+\neq
+LocalContribution(i,j)
+$$
+
+This matters because explanations are frequently miscommunicated. Saying:
+
+“Income is the model's most important feature”
+
+does **not** mean:
+
+“Income was the main reason your application was declined.”
+
+Governance should preserve that distinction.
+
+## What Can Attribution, SHAP, Counterfactuals, Examples, and LIME Explain?
+<!-- section-summary: Attribution, SHAP, counterfactuals, similar examples, and LIME answer different questions and carry limits involving correlation, causality, feasibility, similarity, privacy, and local approximation. -->
+
+Attribution, SHAP, counterfactuals, similar examples, and LIME answer different questions and carry limits involving correlation, causality, feasibility, similarity, privacy, and local approximation.
+
+One common explanation approach decomposes a prediction into contributions. Suppose:
+
+$$
+f(x)=0.82
+$$
+
+We begin from some baseline:
+
+$$
+E[f(X)] = 0.40
+$$
+
+and explain the difference:
+
+$$
+0.82-0.40=0.42
+$$
+
+through feature contributions:
+
+$$
+\phi_1+\phi_2+\dots+\phi_n=0.42
+$$
+
+For example:
+
+$$
+\phi_{debt}=+0.20
+$$
+
+$$
+\phi_{missed\ payments}=+0.16
+$$
+
+$$
+\phi_{account\ age}=-0.05
+$$
+
+$$
+\phi_{other}=+0.11
+$$
+
+So:
+
+$$
+0.40+0.20+0.16-0.05+0.11=0.82
+$$
+
+This is the general idea behind feature-attribution methods. They answer:
+
+Which inputs pushed this prediction higher or lower relative to some reference
+
+A widely used method is SHAP, based on ideas from Shapley values in cooperative game theory. Imagine the features are players in a game. The “game” produces the model prediction. We ask:
+
+How much should each feature be credited for the difference between the prediction and some baseline
+
+Conceptually:
+
+$$
+f(x)
+=
+\phi_0
++
+\sum_{j=1}^{p}\phi_j
+$$
+
+where:
+
+* $$\phi_0$$ = baseline,
+* $$\phi_j$$ = contribution assigned to feature $$j$$.
+
+SHAP can be useful because it gives a systematic attribution framework. But:
+
+$$
+\boxed{
+\text{SHAP value}
+\neq
+\text{causal effect}
+}
+$$
+
+That distinction is extremely important. Suppose the model uses:
+
+number of umbrellas sold
+
+to predict:
+
+traffic accidents.
+
+An attribution method might correctly report:
+
+Umbrella sales strongly contributed to this prediction.
+
+That does not mean:
+
+$$
+\text{buying umbrellas}
+\rightarrow
+\text{causes accidents}
+$$
+
+Rain could influence both:
+
+$$
+\text{Rain}
+\rightarrow
+\text{Umbrella sales}
+$$
+
+and:
+
+$$
+\text{Rain}
+\rightarrow
+\text{Accidents}
+$$
+
+Explainability methods frequently describe:
+
+$$
+\text{what the model used}
+$$
+
+not:
+
+$$
+\text{what causes reality}
+$$
+
+A responsible explanation should not silently turn predictive relationships into causal claims. Suppose a credit model includes:
+
+$$
+x_1 = \text{annual income}
+$$
+
+and:
+
+$$
+x_2 = \text{monthly income}
+$$
+
+Clearly:
+
+$$
+x_2 \approx \frac{x_1}{12}
+$$
+
+They contain nearly the same information. If the model uses both, which one deserves credit There may be no unique intuitive answer. Likewise:
+
+```text
+age
+years of work experience
+years since graduation
+```
+
+may be strongly correlated. Attribution methods have to decide how to distribute explanatory credit. Different assumptions can produce different answers. So:
+
+$$
+\boxed{
+\text{Feature attribution is partly dependent on how feature dependence is treated}
+}
+$$
+
+This matters greatly in real-world datasets. Suppose postcode receives high attribution.
+
+What does that mean?
+
+Possibilities include:
+
+postcode itself has predictive information;
+postcode represents regional economics;
+postcode acts as a proxy for another variable;
+postcode is correlated with protected characteristics;
+postcode captures differences in data collection.
+
+The explanation identifies something worth investigating. It does not by itself explain the social mechanism. That is why explainability often begins an investigation rather than ends one. Instead of asking:
+
+Which features contributed
+
+we can ask:
+
+What would have needed to be different for the outcome to change
+
+Suppose:
+
+$$
+f(x)=Reject
+$$
+
+A counterfactual searches for $$x'$$ such that:
+
+$$
+f(x')=Approve
+$$
+
+while:
+
+$$
+x' \approx x
+$$
+
+A possible explanation might be:
+
+If the debt-to-income ratio had been below 38%, with everything else unchanged, the model would have recommended approval.
+
+This can be more intuitive than attribution. It answers:
+
+$$
+\boxed{
+\text{What nearby change would alter the result?}
+}
+$$
+
+Suppose a model says:
+
+If your age were 12 years greater, the prediction would change.
+
+Mathematically, that might be a valid counterfactual. Practically, it is useless. Or:
+
+If your ethnicity were different, the prediction would change.
+
+That can reveal an important problem, but it is certainly not an actionable recommendation. Therefore:
+
+$$
+\text{Valid counterfactual}
+\neq
+\text{appropriate advice}
+$$
+
+A responsible explanation system should distinguish between:
+
+* model sensitivity,
+* feasible changes,
+* controllable changes,
+* ethical recommendations.
+
+Suppose a person has:
+
+$$
+age=25
+$$
+
+$$
+years\_employed=10
+$$
+
+A counterfactual algorithm proposes:
+
+$$
+age=22
+$$
+
+$$
+years\_employed=15
+$$
+
+Impossible. Or suppose it changes:
+
+university education = yes
+
+while leaving:
+
+years since education = 0
+
+even though those variables are constrained. A useful counterfactual should remain in a realistic region:
+
+$$
+x'\in\mathcal{F}
+$$
+
+where $$\mathcal{F}$$ represents feasible states. So the optimization is not merely:
+
+$$
+\min d(x,x')
+$$
+
+subject to:
+
+$$
+f(x')\neq f(x)
+$$
+
+It should also include:
+
+$$
+x'\in\text{realistic and permissible states}
+$$
+
+Humans often reason by analogy:
+
+“This case looks similar to those cases.”
+
+An explanation can therefore show similar historical examples. For input $$x$$, find:
+
+$$
+x_1,x_2,\dots,x_k
+$$
+
+such that:
+
+$$
+distance(x,x_i)
+$$
+
+is small.
+
+For example:
+
+This application resembles previous applications with similar income, debt burden, and payment history. Most received a similar risk score.
+
+This can help users understand what region of the data the model thinks the case belongs to.
+
+What does "similar" mean?
+
+Suppose we define:
+
+$$
+distance(x_i,x_j)
+$$
+
+using all features equally. Then a £5,000 income difference may be treated as comparable to a 5-year age difference. That may make little sense. Or similarity may be determined in an embedding space whose meaning is itself opaque. Therefore example-based explanation shifts the problem:
+
+Why are these examples considered similar
+
+A governance review should understand the similarity function, especially for consequential uses. Suppose we explain a medical prediction by showing:
+
+“Three similar patients were Alice, Bob, and Charlie.”
+
+Now explainability has exposed private medical information. So:
+
+$$
+\text{Explainability}
+$$
+
+can conflict with:
+
+$$
+\text{Privacy}
+$$
+
+Examples may need:
+
+* anonymization,
+* synthetic representatives,
+* aggregation,
+* restricted access.
+
+Responsible AI principles must be designed together, not optimized independently. Another common idea is to approximate a complicated model near one prediction. Suppose $$f$$ is highly complex. Around point $$x$$, we fit a simpler model:
+
+$$
+g_x(z)
+$$
+
+such that:
+
+$$
+g_x(z)\approx f(z)
+$$
+
+for points $$z$$ near $$x$$. Then we explain $$g_x$$ rather than the entire $$f$$. This is the intuition behind methods such as LIME. The advantage is simplicity. The limitation is fundamental:
+
+$$
+g_x
+\neq
+f
+$$
+
+It is an approximation. Therefore we need to ask:
+
+How well does the local surrogate actually match the original model near this case
+
+That property is part of explanation **fidelity**.
 
 ![Five explanation audiences showing the different questions developers, validators, operators, affected people, and auditors need answered before they can act](/content-assets/articles/article-mlops-governance-and-responsible-ai-explainability-basics/audience-question-action.png)
 
 *Explanation design starts with the audience's question and the action that follows, because one chart cannot serve every decision.*
 
-## Compare Global And Local Explanations
+## How Do Fidelity, Stability, Reproducibility, Confidence, Uncertainty, and Human Language Affect Trust?
+<!-- section-summary: An explanation needs fidelity to the model, stability, reproducibility, honest uncertainty, caution for unfamiliar inputs, and concepts a human can understand without false precision. -->
 
-<!-- section-summary: Global explanations summarize behaviour across a population, while local explanations examine one prediction or case. -->
+An explanation needs fidelity to the model, stability, reproducibility, honest uncertainty, caution for unfamiliar inputs, and concepts a human can understand without false precision.
 
-A **global explanation** describes model behaviour across a dataset or
-population. It can show which features the model relies on most, how predicted
-output varies across feature ranges, which interactions matter, and whether
-important segments exhibit different patterns.
+Suppose an explanation says:
 
-Suppose a delivery-delay model uses route length, weather, depot load, and
-package type. A global explanation may show that depot load has become the
-dominant factor across recent traffic. That finding helps developers investigate
-a changed source or an emerging operational bottleneck. It does not explain why
-one package received a 45-minute estimate.
+“Income was the main reason for this prediction.”
 
-A **local explanation** examines one prediction. It may show feature
-contributions, a decision-tree path, a nearby counterfactual, a similar
-historical example, or the deterministic policy rule that converted a score into
-an action. The package-level explanation might show that severe weather and
-current depot load moved this estimate above the model’s usual baseline.
+But when we perturb income while holding appropriate conditions constant, the model barely changes. Then the explanation is questionable. An explanation should correspond to actual model behavior.
 
-Global and local evidence should be read together. A factor with modest average
-importance can dominate a small high-risk segment. A factor that is globally
-important may have almost no influence on a particular case. Reports should
-identify the model version, preprocessing, explanation configuration, dataset,
-time window, and segments used for each scope.
+Conceptually:
 
-```mermaid
-flowchart TD
-    A["Model Behaviour<br/>(the system being examined)"] --> B["Global Scope<br/>(patterns across many cases)"]
-    A --> C["Local Scope<br/>(one prediction or decision)"]
-    B --> D["Population Questions<br/>(drivers, shapes, interactions, segments)"]
-    C --> E["Case Questions<br/>(contributions, rules, examples, alternatives)"]
-    D --> F["Combined Review<br/>(broad pattern plus important cases)"]
-    E --> F
+$$
+Fidelity(E,f)
+$$
 
-    class A model;
-    class B,C,D,E scope;
-    class F review;
+measures how accurately explanation $$E$$ represents $$f$$. A beautiful, understandable explanation with low fidelity is dangerous because it produces false confidence. Therefore:
+
+$$
+\boxed{
+\text{Understandability without fidelity can become misinformation}
+}
+$$
+
+Suppose two almost identical inputs:
+
+$$
+x
+$$
+
+and:
+
+$$
+x+\epsilon
+$$
+
+produce almost the same prediction:
+
+$$
+f(x)\approx f(x+\epsilon)
+$$
+
+but explanations are completely different:
+
+$$
+E(x)\not\approx E(x+\epsilon)
+$$
+
+That may make the explanation system difficult to trust. We therefore care about **stability**:
+
+$$
+x\approx x'
+\land
+f(x)\approx f(x')
+\Rightarrow
+E(x)\approx E(x')
+$$
+
+Not every model allows perfect stability, but large unexplained variation should be investigated. Suppose you run the explanation today and obtain:
+
+```text
+Debt:       +0.21
+Income:     +0.10
+Utilization:+0.07
 ```
 
-## Compare Readable Models With Explanations Added After Training
+Tomorrow, for the identical prediction:
 
-<!-- section-summary: Intrinsic explanation comes from the model's own readable structure, while post-hoc methods analyze a fitted model after training. -->
+```text
+Income:     +0.23
+Debt:       +0.08
+Region:     +0.06
+```
 
-Some models expose readable logic directly, while others need a separate method
-to analyse their behaviour after training. An **intrinsically interpretable
-model** belongs to the first group. A short decision tree shows its paths, a
-sparse linear model shows weighted terms, and a scorecard shows points.
+If the method contains randomness or changed background data, explanations can move. That may be legitimate. But governance needs to know why. Therefore explanations themselves should have configuration and version identity. Suppose a model predicts:
 
-InterpretML’s Explainable Boosting Machine is one current example. It is a
-boosted generalized additive model that can provide exact global and local
-decompositions of its own prediction. “Exact” here refers to the decomposition
-of that EBM. It does not guarantee that the features are causal, the training
-data is fair, or the product decision is appropriate.
+$$
+P(default)=0.51
+$$
 
-A **post-hoc explanation** analyzes a model after it has been fitted. SHAP,
-permutation importance, Integrated Gradients, surrogate models, and many
-example-based methods belong here. They let teams examine complex tree ensembles
-or neural networks without replacing them.
+with substantial uncertainty. And another predicts:
 
-Post-hoc methods make assumptions and often approximate a narrow property. A
-local surrogate approximates the original model near one input. Integrated
-Gradients attributes a neural-network output relative to a chosen baseline. SHAP
-allocates output difference under a chosen explainer and feature-dependence
-assumption.
+$$
+P(default)=0.99
+$$
 
-Model choice is part of explainability design. If clear, stable explanations are
-central to a high-impact use and an interpretable model meets the performance
-requirement, its direct structure may reduce explanation risk. Complex post-hoc
-analysis can still support debugging, but it should not be treated as a
-universal substitute for readable decision logic.
+An explanation presenting both with equal certainty can mislead users. So useful communication often needs:
 
-## How Feature Attribution Connects Inputs To A Prediction
+$$
+\text{Prediction}
++
+\text{Explanation}
++
+\text{Uncertainty}
+$$
 
-<!-- section-summary: Feature attribution allocates model behaviour among inputs under a method's baseline and assumptions. -->
+For example:
 
-Many explanation tools divide a model output among its input features. This
-method is called **feature attribution**. Global attribution aggregates
-information across many cases, while local attribution describes one
-prediction.
+The model estimates moderately elevated risk, primarily because of recent missed payments and high utilization. The estimate is uncertain because the application falls in a region with relatively few comparable training examples.
 
-Permutation importance is a global method. It shuffles one feature in evaluation
-data and measures how much a chosen performance metric degrades. A large drop
-indicates that the model depends on that feature for that metric and dataset.
-The result changes with the metric and data slice. Shuffling can also create
-unrealistic combinations.
+That is much more responsible than simply:
 
-SHAP is a family of methods based on Shapley values. A local SHAP explanation
-compares an output with an expected or baseline output and allocates the
-difference among features. TreeExplainer provides efficient calculations for
-supported tree models. Its current documentation makes the feature-dependence
-choice explicit through options such as interventional and tree-path-dependent
-behaviour.
+“Rejected because of missed payments.”
 
-```python
-import shap
+A classifier may output:
 
-background = X_reference.sample(300, random_state=42)
-explainer = shap.TreeExplainer(
-    model,
-    data=background,
-    feature_perturbation="interventional",
-    model_output="probability",
+$$
+0.95
+$$
+
+but that does not automatically mean:
+
+“There is a 95% chance the prediction is correct.”
+
+That interpretation requires calibration. A calibrated model approximately satisfies:
+
+$$
+P(Y=1 \mid \hat p=0.8)\approx0.8
+$$
+
+In other words, among cases assigned probability 0.8, roughly 80% should actually be positive. Many models are not naturally calibrated. So explanation interfaces should avoid presenting scores as certainty unless that interpretation has been validated. A useful distinction is:
+
+### Aleatoric uncertainty
+
+Uncertainty inherent in the phenomenon.
+
+For example:
+
+Two very similar borrowers can genuinely have different future outcomes.
+
+### Epistemic uncertainty
+
+Uncertainty because the model lacks sufficient knowledge.
+
+For example:
+
+The model has almost no training examples for a particular population. This matters because:
+
+$$
+\text{uncertain because world is unpredictable}
+$$
+
+is different from:
+
+$$
+\text{uncertain because model does not know}
+$$
+
+The appropriate governance response may differ. Suppose the model was trained on:
+
+$$
+X_{train}
+$$
+
+but receives a new case $$x$$ far outside that distribution. An explanation might still confidently say:
+
+Feature A contributed +0.4.
+
+But the underlying prediction may itself be unreliable. Explainability should therefore not distract from applicability. Before asking:
+
+Why did the model make this prediction
+
+we may need to ask:
+
+Was the model competent to make this prediction at all
+
+This yields an important principle:
+
+$$
+\boxed{
+\text{An explanation of an unreliable prediction does not make the prediction reliable}
+}
+$$
+
+Production feature names often look like:
+
+```text
+avg_bal_90d_adj_v4
+txn_dq_flag_6m
+dti_norm_bucket_7
+```
+
+A customer-facing explanation using these names is useless. The explanation layer needs a semantic mapping:
+
+$$
+\text{Technical Feature}
+\rightarrow
+\text{Human Concept}
+$$
+
+For example:
+
+```text
+dti_norm_bucket_7
+        ↓
+Debt relative to income
+```
+
+But translation itself must be governed. If a feature actually contains several signals, simplifying it too aggressively can make the explanation inaccurate. Suppose an attribution method outputs:
+
+$$
+\phi=0.183746
+$$
+
+Displaying:
+
+“Debt contributed 18.3746% to the decision”
+
+may suggest a level of precision that the explanation methodology does not justify. Often the more responsible communication is:
+
+“High debt relative to income was one of the strongest factors increasing the model's risk estimate.”
+
+Explainability should optimize for **faithful understanding**, not numerical decoration.
+
+## How Do Explanations Relate to the Full Decision System, Accountability, Fairness, Security, Challenge, and Action?
+<!-- section-summary: The explanation must cover the decision path beyond the model and remain distinct from accountability, transparency, fairness, security, contestability, and actionable advice. -->
+
+The explanation must cover the decision path beyond the model and remain distinct from accountability, transparency, fairness, security, contestability, and actionable advice.
+
+Imagine:
+
+$$
+ModelScore=0.72
+$$
+
+The business policy says:
+
+$$
+score > 0.70
+\Rightarrow
+manual\ review
+$$
+
+The human reviewer then rejects the application.
+
+What caused the final result?
+
+Not simply:
+
+“The model rejected you.”
+
+The model did not. The chain was:
+
+```text
+Applicant data
+      ↓
+Model score = 0.72
+      ↓
+Policy threshold
+      ↓
+Manual review
+      ↓
+Human decision
+      ↓
+Rejected
+```
+
+A truthful explanation should distinguish:
+
+$$
+\text{Model prediction}
+$$
+
+from:
+
+$$
+\text{business rule}
+$$
+
+from:
+
+$$
+\text{human decision}
+$$
+
+This is essential for accountability. An explanation might tell us:
+
+High debt ratio and recent missed payments drove the score.
+
+That does not tell us:
+
+Who decided to deploy the model
+Who selected the threshold
+Who approved its use
+Who is responsible for correcting an error
+
+Therefore:
+
+$$
+\text{Explainability}
+\neq
+\text{Accountability}
+$$
+
+Responsible AI needs both. A technically explainable model with nobody accountable for its consequences is still poorly governed. Transparency might tell users:
+
+An ML system is used in this process.
+
+Explainability goes further:
+
+Here is how relevant factors contributed to this result.
+
+And governance transparency might go further still:
+
+Here is the system's purpose, owner, review process, and appeal mechanism.
+
+So these concepts overlap:
+
+$$
+\text{Transparency}
+$$
+
+$$
+\text{Explainability}
+$$
+
+$$
+\text{Auditability}
+$$
+
+but none completely replaces the others. Suppose global explanations reveal:
+
+```text
+postcode          very high importance
+income            high importance
+credit history    moderate importance
+```
+
+A fairness reviewer may ask:
+
+Why is postcode so influential
+
+Perhaps it is legitimate. Perhaps it acts as a proxy for socioeconomic or demographic characteristics. Explainability can expose relationships worth investigating. But it cannot prove fairness. A model might not visibly use a protected attribute and still discriminate through correlated variables. Thus:
+
+$$
+\boxed{
+\text{Explainability can diagnose fairness risk, but does not establish fairness}
+}
+$$
+
+Suppose customers receive counterfactual advice:
+
+Increase income by £3,000 and you may qualify.
+
+This sounds neutral. But some groups may face systematically harder recommended changes. Therefore governance can ask:
+
+Are explanations equally actionable across populations
+
+For example:
+
+$$
+Cost(counterfactual \mid group=A)
+$$
+
+versus:
+
+$$
+Cost(counterfactual \mid group=B)
+$$
+
+Explanation quality can have distributional consequences too. A detailed explanation can reveal enough information to reverse-engineer a model.
+
+For example:
+
+You missed approval because your score was 0.697 and the threshold is exactly 0.700.
+
+If users can repeatedly query the system and discover decision boundaries, they may game it. So:
+
+$$
+\text{Explainability} \uparrow
+$$
+
+can sometimes increase:
+
+$$
+\text{Gaming Risk}
+$$
+
+or:
+
+$$
+\text{Security Risk}
+$$
+
+Responsible design needs the right level of disclosure for the audience and threat model. Imagine the explanation says:
+
+“A recent missed payment increased your risk estimate.”
+
+The customer knows they have never missed a payment. A good system should allow:
+
+$$
+\text{Explanation}
+\rightarrow
+\text{Challenge}
+\rightarrow
+\text{Correction}
+$$
+
+For example:
+
+“If this information is incorrect, you can request a review.”
+
+This transforms explainability from passive information into a mechanism for procedural fairness. An explanation is particularly valuable when it helps identify:
+
+* incorrect data,
+* inappropriate assumptions,
+* model errors,
+* process errors.
+
+Suppose the truthful explanation is:
+
+The model relied heavily on your age.
+
+That may explain the prediction. But age is not actionable. Conversely, an organization might want to tell someone:
+
+Increase your savings.
+
+But perhaps savings barely affected the model. That would be actionable but not truthful. So:
+
+$$
+\text{Explainability}
+\neq
+\text{Actionability}
+$$
+
+A responsible system should not distort its explanation merely to make it actionable. Instead it can distinguish:
+
+These factors influenced the result.
+
+from:
+
+These are legitimate steps you may be able to take.
+
+There is no universally best explainability tool. A useful mapping is:
+
+| Question                                                  | Possible method                         |
+| --------------------------------------------------------- | --------------------------------------- |
+| What does the model generally rely on                    | Global importance / dependence analysis |
+| Why this prediction                                      | Local attribution                       |
+| What could change the result                             | Counterfactual                          |
+| What cases resemble this one                             | Example-based explanation               |
+| How does prediction vary with a feature                  | Partial dependence / response curves    |
+| Is this neural network looking at sensible image regions | Saliency/activation methods             |
+| Can humans directly inspect the rule                     | Interpretable model                     |
+
+The mistake is starting with:
+
+“We use SHAP.”
+
+The stronger approach starts with:
+
+“What governance or user question must we answer?”
+
+Then choose the method. Suppose two systems perform almost equally:
+
+$$
+Accuracy(M_{complex})=92.1\%
+$$
+
+$$
+Accuracy(M_{simple})=91.9\%
+$$
+
+But $$M_{simple}$$ can be directly understood and audited while $$M_{complex}$$ requires fragile post-hoc approximations. For a high-impact decision, the tiny performance improvement might not justify the loss of interpretability. So model selection can include:
+
+$$
+Utility =
+Performance
++
+Interpretability
+-
+Risk
+$$
+
+not merely:
+
+$$
+Utility=Accuracy
+$$
+
+This is an important governance decision. Explainability should sometimes influence model architecture itself rather than being added at the end.
+
+## How Should Explanation Systems Be Validated, Versioned, Monitored, and Escalated?
+<!-- section-summary: Validation includes technical fidelity and human usefulness, provenance, baseline identity, method and release versions, production monitoring, availability, and escalation for disputed cases. -->
+
+Validation includes technical fidelity and human usefulness, provenance, baseline identity, method and release versions, production monitoring, availability, and escalation for disputed cases.
+
+Suppose the organization validates the predictive model carefully but deploys whatever explanation library happens to be convenient. That creates an asymmetry. If explanations influence:
+
+* customers,
+* clinicians,
+* loan officers,
+* investigators,
+* regulators,
+
+then they are part of the product. They should be tested. Relevant tests may include:
+
+### Fidelity
+
+Does the explanation accurately reflect model behavior?
+
+### Stability
+
+Do similar cases receive reasonably consistent explanations
+
+### Comprehensibility
+
+Can intended users understand it?
+
+### Usefulness
+
+Does it answer the actual question?
+
+### Robustness
+
+Can explanations be manipulated?
+
+### Privacy
+
+Does the explanation expose sensitive information?
+
+### Fairness
+
+Are explanations systematically poorer for some populations?
+
+That turns explainability from a visualization feature into an evaluated system component. An explanation can score well mathematically and still confuse users. Imagine a clinician receives:
+
+```text
+Feature attribution:
+creatinine +0.18
+age +0.07
+eGFR -0.12
+interaction 0.04
+```
+
+Maybe that is useful. Maybe not. The only way to know whether it supports the intended human decision is partly to test it with actual users.
+
+For example:
+
+Do users understand what the explanation says
+Can they detect incorrect model outputs better
+Do they become overly confident because an explanation exists
+
+This last point is important. An explanation can create **automation bias**:
+
+$$
+\text{plausible explanation}
+\rightarrow
+\text{increased trust}
+$$
+
+even when the underlying prediction is wrong. Humans naturally prefer coherent stories. Suppose the true model behavior is messy. A generated explanation says:
+
+“The application was rejected because high debt suggests financial stress.”
+
+That sounds sensible. But perhaps the actual model mostly relied on postcode and device type. Then the explanation is persuasive but false. We need to distinguish:
+
+$$
+\text{Plausibility}
+=
+\text{Does this sound reasonable?}
+$$
+
+from:
+
+$$
+\text{Fidelity}
+=
+\text{Does this reflect the actual model?}
+$$
+
+A dangerous explanation maximizes the first while failing the second. Suppose a predictive system produces:
+
+$$
+score=0.82
+$$
+
+and an LLM is asked:
+
+“Explain this decision to the customer.”
+
+If the LLM receives insufficient structured evidence, it may invent a plausible explanation. That creates:
+
+$$
+\text{Prediction}
++
+\text{Hallucinated rationale}
+$$
+
+which is worse than no explanation. A safer architecture is:
+
+```text
+Model
+  ↓
+Verified explanation data
+  ↓
+Controlled explanation template
+  ↓
+Optional language-generation layer
+  ↓
+User
+```
+
+The language model may improve phrasing. It should not invent causal reasons absent from the evidence. Suppose a customer challenges a decision six months later. The organization should be able to determine:
+
+Which model produced the prediction
+Which explanation method produced the explanation
+Which background/reference dataset was used
+Which explanation-library version
+Which feature definitions
+Which text template or generation model
+
+So an explanation might have an identity:
+
+$$
+E =
+(
+M,
+V_M,
+X,
+A,
+V_A,
+B,
+T
 )
-explanation = explainer(X_cases)
+$$
+
+where:
+
+* $$M$$ = model,
+* $$V_M$$ = model version,
+* $$X$$ = relevant input/reference,
+* $$A$$ = explanation algorithm,
+* $$V_A$$ = algorithm version,
+* $$B$$ = baseline/background data,
+* $$T$$ = timestamp.
+
+This is explainability meeting auditability. Suppose we tell someone:
+
+“Your income increased your approval probability by 10 percentage points.”
+
+Relative to what Perhaps:
+
+the average customer.
+
+Or:
+
+a synthetic baseline.
+
+Or:
+
+the average rejected customer.
+
+Different baselines can produce different explanation values. Therefore:
+
+$$
+\boxed{
+\text{An attribution is incomplete without understanding its reference point}
+}
+$$
+
+Governance should not hide this methodological choice. Suppose:
+
+$$
+Model_{v1}
+$$
+
+uses one set of features. Later:
+
+$$
+Model_{v2}
+$$
+
+changes preprocessing and interactions. Even if the explanation method remains identical, explanation behavior may change. Conversely, changing:
+
+$$
+SHAP_{v1}
+\rightarrow
+SHAP_{v2}
+$$
+
+or changing the background dataset can alter explanations even if the model is unchanged. Therefore the explanation system has its own lifecycle:
+
+$$
+\text{Design}
+\rightarrow
+\text{Validate}
+\rightarrow
+\text{Approve}
+\rightarrow
+\text{Release}
+\rightarrow
+\text{Monitor}
+$$
+
+not merely the underlying model. Suppose global feature importance suddenly changes:
+
+```text
+Before:
+payment history      30%
+debt ratio           25%
+income               15%
+
+After:
+device type          38%
+postcode             26%
+payment history      10%
 ```
 
-The background data represents the reference population used to interpret
-“higher or lower than expected.” It should be reviewed, versioned, and
-appropriate for the question. Changing it can change the values.
+Even if model accuracy remains stable, that may indicate:
 
-For a neural network, Captum provides PyTorch attribution methods such as
-Integrated Gradients. Integrated Gradients accumulates gradients along a path
-from a baseline input to the actual input. Captum can report a convergence delta
-linked to the method’s completeness property. That diagnostic checks the
-attribution calculation; it does not establish a causal explanation or product
-validity.
+* data drift,
+* pipeline errors,
+* proxy reliance,
+* behavior changes.
 
-Attribution says something about the fitted model under the method’s
-assumptions. It cannot prove that a feature caused the real-world outcome, that
-using the feature is acceptable, or that changing the feature alone will create
-a desired result.
+Explanation monitoring can therefore provide a diagnostic signal. You might monitor:
 
-## Correlated Features Complicate Attribution
+$$
+Distribution(\phi_j,t)
+$$
 
-<!-- section-summary: Related features can share or exchange attribution because several inputs carry overlapping information. -->
+over time. Large changes can trigger investigation. Suppose governance requires explanations for high-impact decisions. But production occasionally fails to generate them.
 
-Real features rarely vary independently. Monthly income and annual income carry
-similar information. Distance and travel time are related. Several image pixels
-describe the same object. This correlation creates ambiguity about how credit
-should be divided.
+Then:
 
-Suppose a model uses both debt-to-income ratio and monthly debt. A local method
-may rank the ratio first under one background sample and monthly debt first
-under another. The prediction can remain stable while the reported principal
-reason changes. Removing one feature may cause the model to rely more heavily on
-the other.
+$$
+\text{decision produced}
+$$
 
-Different attribution methods handle feature dependence differently. SHAP
-TreeExplainer exposes alternative assumptions. Permutation importance can
-understate the value of one correlated feature because its partner still carries
-similar information. A simple coefficient can also mislead if scale and
-correlation are ignored.
+without:
 
-Practical responses include grouping related features into a governed concept,
-comparing several reasonable dependence assumptions, reporting uncertainty, and
-testing the stability of top reasons. If the distinction matters to a
-customer-facing explanation, redesigning the feature set or decision component
-may be safer than claiming that one correlated input uniquely drove the result.
+$$
+\text{required explanation}
+$$
+
+is itself a control failure. A mature platform may verify:
+
+```text
+Prediction produced                 ✓
+Explanation produced                ✓
+Explanation linked to model         ✓
+Explanation retained appropriately  ✓
+```
+
+If required explanation evidence is absent, the workflow could:
+
+* route to human review,
+* restrict automated action,
+* generate an alert.
+
+Sometimes the explanation will not resolve the user's concern. Suppose a person says:
+
+“The explanation says missed payments affected me, but the data is wrong.”
+
+A good governance design should support:
+
+```text
+Explanation
+      ↓
+Question
+      ↓
+Challenge
+      ↓
+Human review
+      ↓
+Correction if necessary
+```
+
+Without a challenge mechanism, explanation can become merely decorative transparency. Responsible AI should ask:
+
+What can someone actually do after receiving the explanation
 
 ![The same model prediction explained with two background samples, where debt-to-income ratio and monthly debt swap rank because they carry overlapping information](/content-assets/articles/article-mlops-governance-and-responsible-ai-explainability-basics/correlated-feature-attribution.png)
 
 *Correlated inputs can leave the prediction stable while changing the principal reason, so teams group related features, compare assumptions, and test explanation stability.*
 
-```mermaid
-flowchart TD
-    A["Related Inputs<br/>(features carry overlapping information)"] --> B["Stable Prediction<br/>(model output changes little)"]
-    A --> C["Variable Attribution<br/>(credit moves between features)"]
-    C --> D["Stability Test<br/>(backgrounds, seeds, and nearby cases)"]
-    D --> E{"Explanation Reliable?<br/>(principal meaning stays consistent)"}
-    E -->|Yes| F["Governed Explanation<br/>(record assumptions and uncertainty)"]
-    E -->|No| G["Repair Presentation Or Model<br/>(group, constrain, review, or redesign)"]
+## What Are the Limits of Explainability for Generative AI and Agents?
+<!-- section-summary: Explainability cannot eliminate model limits; generative systems and agents require layered evidence about sources, reasoning-relevant context, tool choices, actions, controls, and outcomes proportionate to impact. -->
 
-    class A input;
-    class B,C,D,F work;
-    class E gate;
-    class G risk;
+Explainability cannot eliminate model limits; generative systems and agents require layered evidence about sources, reasoning-relevant context, tool choices, actions, controls, and outcomes proportionate to impact.
+
+Some AI systems are fundamentally difficult to explain precisely. For a large generative model, asking:
+
+“Which exact training examples and internal neural mechanisms caused sentence 17?”
+
+may not have a reliable, complete answer. We should not pretend otherwise. Responsible explanation sometimes means clearly distinguishing:
+
+$$
+\text{What we know}
+$$
+
+from:
+
+$$
+\text{What we estimate}
+$$
+
+from:
+
+$$
+\text{What we cannot currently explain}
+$$
+
+False certainty is worse than acknowledging limits. Suppose an AI assistant gives incorrect legal information. “What caused the answer?” may involve:
+
+```text
+User prompt
+    ↓
+System instructions
+    ↓
+Retrieved documents
+    ↓
+Conversation history
+    ↓
+Foundation model
+    ↓
+Tool outputs
+    ↓
+Sampling
+    ↓
+Final answer
 ```
 
-## Use Counterfactual Explanations Only For Realistic Changes
+A useful explanation may therefore focus on the **system chain**, not neural internals.
 
-<!-- section-summary: Counterfactual explanations describe model alternatives, while feasibility and causal knowledge determine whether those alternatives make sense. -->
+For example:
 
-A person may ask what could change the model's result. A **counterfactual
-explanation** searches for a nearby input that would receive a different output.
-For an internal review queue, it might show that a smaller requested amount
-would move a case below the manual-review threshold.
+The response was generated using policy document version 7 and information retrieved from document A. Document A contained outdated guidance.
 
-This describes the model’s response to a hypothetical input. It does not prove
-that changing the real-world factor will cause a better outcome. The model may
-rely on correlation. Other related variables may change at the same time. The
-suggested change may be impossible, unlawful, unsafe, or outside the person’s
-control.
+That may be much more useful operationally than trying to explain billions of model weights. Suppose an agent sends a payment. The important question is not only:
 
-The counterfactual generator must enforce feasibility constraints. Immutable
-attributes stay fixed. Numeric values remain inside realistic ranges. Related
-features follow domain rules. The search includes the full model-plus-policy
-decision, because changing a score may have no effect if a deterministic rule
-still blocks the action.
+Why did it generate this text
 
-Several diverse feasible alternatives often communicate uncertainty better than
-one precise prescription. A domain reviewer should assess actionability and
-possible harm before counterfactuals support recourse.
+It is:
 
-**Recourse** means an available path a person can take to seek a different
-outcome. It may involve correcting inaccurate data, supplying missing evidence,
-requesting human reconsideration, or taking an actionable step. Counterfactual
-generation can inform recourse research, while the organization must design and
-validate the actual recourse process.
+Why did the system take this action
 
-## Explain A Prediction Through Similar Past Cases
+The explanation chain may be:
 
-<!-- section-summary: Example-based explanations show representative or similar cases, and their value depends on meaningful similarity and privacy protection. -->
-
-Some audiences understand a prediction more readily by comparing it with
-carefully selected past cases. An **example-based explanation** provides that
-comparison. A prototype represents a common pattern, a criticism represents a
-poorly covered or unusual pattern, and a nearest-neighbour explanation shows
-cases close to the current input under a defined distance measure.
-
-For an image-quality model, prototypes can show typical images for each learned
-region. A reviewer can see that one failure resembles low-light images absent
-from training. For a tabular decision, a similar case can reveal how the model
-treats nearby inputs.
-
-Similarity needs a domain meaning. Standard Euclidean distance can let a
-large-scale numeric feature dominate and treat unrelated categories as close.
-Embedding distance can capture learned similarity and inherit the embedding
-model’s errors. Document the representation, scaling, distance function,
-candidate pool, and exclusion rules.
-
-Privacy is central because a “similar example” may expose another person’s
-record. Prefer reviewed synthetic or anonymized prototypes for broad
-communication. Restrict case-level retrieval to authorized reviewers, minimize
-displayed fields, log access, and respect retention and deletion requirements.
-
-Example-based evidence can reveal coverage and data problems. It cannot prove
-causal influence, justify the use of sensitive data, or replace task and segment
-evaluation.
-
-## Show Confidence And Uncertainty With The Explanation
-
-<!-- section-summary: Calibration and uncertainty tell readers how much confidence to place in a prediction and its explanation. -->
-
-A detailed explanation can still accompany an uncertain prediction. The system
-therefore needs to show how much confidence people should place in both the
-prediction and its explanation. A classifier may output 0.81, although that
-number has a stable probability meaning only if the model is calibrated for the
-relevant population.
-
-**Probability calibration** asks whether cases assigned a probability near 0.8
-experience the outcome about 80% of the time. Reliability diagrams, Brier score,
-and expected calibration error help evaluate this relationship. Check important
-segments because overall calibration can hide group differences.
-
-**Predictive uncertainty** describes uncertainty in the model output.
-**Explanation uncertainty** describes how much the explanation changes across
-plausible background samples, seeds, model fits, methods, or nearby inputs. They
-are related and distinct. A confident prediction can have unstable attribution
-among correlated features.
-
-Interfaces should communicate the kind of uncertainty they measured. A range
-across an ensemble, variation across bootstrap samples, and disagreement among
-explainers have different meanings. Avoid one generic confidence badge.
-
-For human decision support, show enough context to prevent false precision:
-predicted probability if it is calibrated, relevant uncertainty, input-quality
-warnings, explanation limitations, and the route for escalation. A long ranked
-list with exact decimal contributions can imply more certainty than the evidence
-supports.
-
-## Explain Features In Language People Understand
-
-<!-- section-summary: Explanation systems translate transformed model inputs into governed concepts that preserve their true data and decision meaning. -->
-
-Model inputs often use technical representations that people never see:
-standardized values, one-hot columns, hashes, embeddings, rolling aggregates,
-missing-value indicators, and target-encoded categories. An attribution to
-`feature_1847` has no useful meaning outside the pipeline, so the explanation
-must translate it back into the governed concept a person recognizes.
-
-The explanation layer needs a **feature semantic contract**. For each
-explainable concept, record its human meaning, source, observation time,
-transformation, units, freshness, missing-value behaviour, sensitive
-classification, and allowed audience. Link the concept to the exact
-preprocessing version.
-
-Suppose `recent_activity_30d` counts events available before the prediction
-cutoff. The explanation should say “recent activity in the previous 30 days,”
-not expose the warehouse column name. If a preprocessing bug accidentally
-includes future events, a polished label cannot repair the leakage. Data lineage
-and feature-time validation remain necessary.
-
-Group transformed columns back into understandable concepts carefully. One-hot
-categories can be grouped under their source field. Token or pixel attributions
-may need regions, phrases, or domain concepts. Aggregation can hide opposing
-contributions, so validate that the grouped value remains faithful to the
-underlying model output.
-
-Sensitive and proprietary features require access controls. Internal validators
-may see more detail than customer-service staff or affected people. Redaction
-should preserve the principal reason instead of replacing it with meaningless
-wording.
-
-## Check Whether An Explanation Matches The Model And Remains Stable
-
-<!-- section-summary: Explanation validation tests whether evidence reflects the model, remains sufficiently stable, and supports its intended audience and action. -->
-
-An explanation needs tests that show whether it reflects the model and behaves
-consistently under reasonable variation. A visually plausible result can still
-describe the model poorly, change after a harmless perturbation, or lead a
-person toward the wrong action.
-
-### Test Whether The Explanation Reflects The Model's Behaviour
-
-**Faithfulness** asks whether the explanation accurately reflects the model
-behaviour it claims to describe. For an additive explanation, the contributions
-should reconstruct the explained output within tolerance. For a local surrogate,
-predictions from the surrogate should match the original model in the
-neighbourhood being described. For a feature ranking, removing or perturbing
-highly ranked inputs should affect the model in the expected direction under a
-valid perturbation design.
-
-### Test Whether Small Changes Produce Similar Explanations
-
-**Stability** asks whether small reasonable changes cause unreasonable
-explanation changes. Repeat explanations across approved background samples,
-random seeds, retrained model replicas, and nearby cases. Define the metric from
-the use: top-reason agreement, rank correlation, attribution-distance, sign
-agreement, or reason-code consistency.
-
-```python
-def top_reason_agreement(explanations):
-    top_reasons = [item.top_feature for item in explanations]
-    reference = top_reasons[0]
-    return sum(reason == reference for reason in top_reasons) / len(top_reasons)
-
-
-explanations = [
-    explain(case, model=model, background=background)
-    for background in approved_background_samples
-]
-
-assert top_reason_agreement(explanations) >= 0.80
+```text
+User request
+     ↓
+Model interpreted intent
+     ↓
+Payment tool proposed
+     ↓
+Policy check
+     ↓
+User confirmation
+     ↓
+Tool executed
 ```
 
-This focused gate checks one property. A production test runs it across
-representative cases and protected segments. The threshold comes from the
-explanation’s purpose and risk. Internal debugging may tolerate more variation
-than an external principal-reason system.
+For agentic systems:
 
-Also test sensitivity, completeness, segment behaviour, feature-semantic
-mapping, and policy alignment. A reason-code test should verify that every
-displayed reason comes from a factor or rule used in the final decision.
-Deliberately insert stale mappings, missing features, correlated inputs, and
-near-threshold cases to prove that unsafe explanations fail closed or route to
-review.
+$$
+\boxed{
+\text{Action explainability}
 
-Human evaluation remains important. Ask representative users whether they
-understand the explanation, draw the intended conclusion, and know the next
-action. Plausible wording can still create a false causal impression.
+\text{text explanation alone}
+}
+$$
 
-```mermaid
-flowchart TD
-    A["Explanation Candidate<br/>(method, data, and presentation)"] --> B["Faithfulness Test<br/>(does it reflect the model?)"]
-    B --> C["Stability Test<br/>(does it survive reasonable variation?)"]
-    C --> D["Semantic Test<br/>(are concepts and decision paths correct?)"]
-    D --> E["Human Evaluation<br/>(is it understood and actionable?)"]
-    E --> F{"Release Gate<br/>(appropriate for this audience?)"}
-    F -->|Pass| G["Approved Explanation Use<br/>(declared scope and limitations)"]
-    F -->|Fail| H["Repair Or Restrict<br/>(method, model, wording, or audience)"]
+Governance should preserve which model suggestion, rule, authorization, and human confirmation led to the external action. A movie recommendation does not need the same explanation infrastructure as an insurance decision. So:
 
-    class A candidate;
-    class B,C,D,E,G work;
-    class F gate;
-    class H fail;
+$$
+\text{Explanation Requirement}
+\propto
+\text{Decision Impact}
+$$
+
+A low-impact system might provide:
+
+“Recommended because you watched similar films.”
+
+A high-impact system may require:
+
+* local reasons,
+* uncertainty,
+* source-data correction,
+* human review,
+* appeal procedures,
+* preserved audit evidence.
+
+Responsible governance concentrates explainability where misunderstanding or inability to challenge decisions can cause meaningful harm. Before choosing a tool, write the actual requirement. Bad requirement:
+
+“The model must use SHAP.”
+
+Better:
+
+“For every adverse automated recommendation, the affected individual must receive the three principal understandable factors materially influencing the decision, together with a way to challenge incorrect input data.”
+
+Now engineering can determine whether SHAP, a rule-based explanation, a counterfactual, or another method best satisfies it. This progression is important:
+
+$$
+\boxed{
+\text{Human Need}
+\rightarrow
+\text{Explanation Requirement}
+\rightarrow
+\text{Method}
+\rightarrow
+\text{Validation}
+}
+$$
+
+not:
+
+$$
+\text{Tool}
+\rightarrow
+\text{Find somewhere to use it}
+$$
+
+## What Architecture and Worked Example Turn an Explanation Requirement into a Service?
+<!-- section-summary: A useful architecture turns a stakeholder requirement into governed model, method, data, provenance, presentation, validation, monitoring, and challenge components illustrated by one complete example. -->
+
+A useful architecture turns a stakeholder requirement into governed model, method, data, provenance, presentation, validation, monitoring, and challenge components illustrated by one complete example.
+
+For a high-impact ML system:
+
+```text
+                  GOVERNANCE QUESTION
+                         │
+              Who needs to know what
+                         │
+                         ▼
+                  MODEL PREDICTION
+                         │
+                         ▼
+               EXPLANATION METHOD
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+          ▼              ▼              ▼
+     Attribution    Counterfactual   Examples
+          │              │              │
+          └──────────────┼──────────────┘
+                         ▼
+                VALIDATION LAYER
+             fidelity / stability /
+             realism / privacy
+                         │
+                         ▼
+                COMMUNICATION LAYER
+             understandable language
+                         │
+                         ▼
+                 HUMAN RECIPIENT
+                         │
+                         ▼
+            understand / challenge /
+                   take action
 ```
 
-## Choose An Explanation Tool For The Model And Question
+That is far stronger than simply calling an explainability library after prediction. Suppose an insurer uses an ML system to estimate claim fraud risk. A particular claim receives:
 
-<!-- section-summary: Tool selection follows the model family, explanation question, deployment environment, and evidence required from the method. -->
+$$
+RiskScore=0.87
+$$
 
-Explainability tools package particular methods for particular model families.
-The choice follows the question and validation requirement, because a familiar
-library name does not tell reviewers which algorithm, baseline, assumptions, or
-output the team used.
+and is sent for investigation.
 
-### SHAP Supports Model-Aware Attribution
+### Global explanation
 
-SHAP supports several explainers for local and global feature attribution.
-TreeExplainer targets supported tree ensembles and exposes feature-dependence
-and background-data choices. Generic explainers can cover more model types with
-different computational costs and assumptions. Record the explainer class and
-configuration instead of saying only “we used SHAP.”
+Reviewers learn that the model generally relies on:
 
-### Captum Targets PyTorch Networks
+1. unusual transaction pattern,
+2. inconsistencies in claim history,
+3. timing relative to policy changes,
+4. claim amount.
 
-Captum targets PyTorch models and includes Integrated Gradients, saliency, layer
-attribution, neuron attribution, and other methods. It is useful for
-differentiable neural networks. Baseline choice, target output, input
-representation, and convergence diagnostics still require domain decisions.
+This helps governance understand general behavior.
 
-### InterpretML Includes Glass-Box Models
+### Local attribution
 
-InterpretML includes glass-box models such as Explainable Boosting Machines and
-a framework for global and local explanations. An EBM can be a strong candidate
-if direct feature-shape inspection matters. Its interpretable form does not
-remove the need for quality, fairness, calibration, and data review.
+For this claim:
 
-### Use Platform Tools For Several Explanation Views
+```text
+Baseline fraud risk:                  0.18
 
-Platform-native tools can reduce integration work. Azure Machine Learning’s
-Responsible AI dashboard currently brings together model overview, error
-analysis, feature importance, counterfactual analysis, and causal analysis for
-supported scenarios. A shared interface does not merge the evidential meaning of
-those methods. Feature attribution still describes model behaviour,
-counterfactual analysis still needs feasibility, and causal analysis needs
-causal assumptions and appropriate data.
+Unusual transaction pattern:         +0.31
+Claim-history inconsistency:         +0.25
+Long-standing customer history:      -0.08
+Other factors:                       +0.21
 
-Other cloud platforms expose explanation capabilities for supported model types.
-Verify supported frameworks, deployment modes, quotas, regional availability,
-generated artifact format, and feature maturity in current official
-documentation. Keep a portable evaluation artifact if the explanation is part of
-a release gate or audit record.
-
-No library proves that a model is fair, lawful, safe, or causally correct. Tools
-calculate evidence. Governance determines which question that evidence can
-support.
-
-## Record Which Model And Method Produced Each Explanation
-
-<!-- section-summary: Production explanations bind the model, preprocessing, reference data, method, and presentation into a controlled versioned artifact. -->
-
-A production explanation must identify the model, preprocessing, reference data,
-method, and presentation that produced it. The same model can give different
-explanations after feature names, background data, or a library default changes.
-
-Create an explanation identity that records:
-
-- model artifact and runtime version;
-- preprocessing and feature-semantic contract;
-- explainer library, method, target output, and configuration;
-- background or reference dataset identity and sampling rule;
-- reason-code or presentation mapping;
-- validation results, approved audiences, limitations, and owner.
-
-Access control follows the data. Raw inputs, attribution values, retrieved
-examples, and logs may expose personal or commercially sensitive information.
-Compute only what the use requires, redact governed fields, limit access by
-audience, encrypt stored artifacts, apply retention rules, and audit case-level
-access.
-
-Latency also matters. A model-agnostic explainer may need many model calls.
-Synchronous explanations can violate the service objective. Common designs
-precompute global reports, calculate local explanations asynchronously for
-review, or use a fast model-specific method for a narrow online need.
-
-Caching can reduce cost if the key includes the complete explanation identity
-and input identity. A cached explanation from an earlier model, preprocessing
-version, policy, or background set is stale even if the user-facing case ID is
-unchanged.
-
-```mermaid
-flowchart TD
-    A["Prediction Input<br/>(governed case and feature values)"] --> B["Released Model Path<br/>(model plus preprocessing and policy)"]
-    B --> C["Explanation Service<br/>(method plus background data)"]
-    C --> D["Audience Mapping<br/>(internal detail or reviewed reason)"]
-    D --> E["Controlled Delivery<br/>(access, retention, and audit)"]
-    B --> F["Version Identity<br/>(artifact, method, data, and mapping)"]
-    F --> C
-
-    class A input;
-    class B,C,D,E work;
-    class F control;
+Final estimate:                       0.87
 ```
 
-## Help People Understand, Challenge, And Act On An Explanation
+This explains the model's particular score.
 
-<!-- section-summary: People need explanations connected to correction, review, appeal, and feasible recourse instead of isolated technical scores. -->
+### Counterfactual
 
-People need more than a technically correct chart. They need to understand the
-reason, correct bad data, challenge the decision, and learn which actions are
-actually available. An explanation can also influence a reviewer who may anchor
-on the first reason or treat contribution magnitude as causal strength.
+The system finds:
 
-Train reviewers on the method’s meaning and limits. Show data-quality warnings,
-policy rules, uncertainty, and model identity beside the explanation. Give the
-reviewer a way to inspect source values, record disagreement, override through
-an authorized path, and escalate unusual cases.
+If the transaction pattern had been consistent with the claimant's previous activity, with the remaining factors unchanged, the score would have fallen below the investigation threshold.
 
-**Contestability** means a person can question a result and receive meaningful
-review. The process needs a correction path for inaccurate data, a channel for
-additional context, an identified human decision-maker, response timing, and a
-durable record. The explanation should help locate the contested factor or rule.
+This describes model sensitivity. It should not automatically be communicated as:
 
-Recourse should describe actions that are feasible, safe, and genuinely
-connected to the decision process. “Reduce age by five years” is impossible.
-“Provide the missing verified document” may be actionable. “Lower debt” may take
-years and may not cause approval because other policy rules still apply.
+“Change your transaction pattern.”
 
-Affected-person language needs product, domain, accessibility, privacy, and
-qualified legal review according to the use. Internal SHAP feature names should
-not automatically become external reasons. The final explanation must reflect
-the model-plus-policy component that actually produced the outcome.
+### Human interpretation
 
-## Release And Monitor The Explanation System
+The investigator sees:
 
-<!-- section-summary: Release gates prove explanation quality for the intended audience, and production monitoring detects drift, failures, and unsafe use. -->
+“The strongest driver is an unusual transaction pattern.”
 
-Treat the explanation system as part of the release. A candidate gate verifies
-explanation identity, supported input shapes, faithfulness, stability, segment
-behaviour, semantic mappings, latency, access policy, and fallback behaviour.
+They then inspect the source records. They discover that an upstream data system duplicated two transactions. The input was wrong.
 
-Use representative local cases: common cases, important segments, missing-data
-patterns, near-threshold decisions, unusual shapes, and known failure modes. If
-a local explanation is unavailable or unstable, the product should follow a
-declared fallback such as qualified human review. It should not invent a generic
-reason.
+### Challenge and correction
 
-Production monitoring can track explanation generation errors, latency, cache
-hit rate, missing mappings, top-reason distribution, attribution magnitude,
-stability on a recurring sample, access failures, human overrides, appeals, and
-reason-code outcomes.
+The data is corrected. The model is rerun:
 
-Explanation drift is a diagnostic signal. A new dominant reason may come from
-input drift, a feature pipeline change, a model release, a policy change, or a
-different background sample. Investigate those sources before choosing a
-response.
+$$
+RiskScore=0.41
+$$
 
-```mermaid
-flowchart TD
-    A["Released Explanation<br/>(approved audience and configuration)"] --> B["Production Signals<br/>(errors, latency, reasons, stability, appeals)"]
-    B --> C{"Unexpected Change?<br/>(behaviour outside reviewed limits)"}
-    C -->|No| D["Continue Monitoring<br/>(current approval remains active)"]
-    C -->|Yes| E["Evidence Check<br/>(model, data, policy, method, or access)"]
-    E --> F["Controlled Response<br/>(repair, restrict, review, or rollback)"]
-    F --> G["Renewed Validation<br/>(prove explanation behaviour again)"]
+The claim no longer requires investigation. This illustrates why explainability matters. It did not merely make the model intellectually understandable. It created a pathway:
 
-    class A release;
-    class B,D,E,F,G work;
-    class C gate;
-```
+$$
+\text{Prediction}
+\rightarrow
+\text{Explanation}
+\rightarrow
+\text{Investigation}
+\rightarrow
+\text{Error discovery}
+\rightarrow
+\text{Correction}
+$$
 
-Monitoring should also watch use. An explanation approved for developer
-debugging may be inappropriate for customer communication. Access logs and
-presentation-layer controls help keep each method inside its reviewed purpose.
+That is Responsible AI in practice.
 
-## The Main Idea
+## What Is the Central Principle of Useful Explainability?
+<!-- section-summary: A useful explanation answers the right person's real question faithfully, at the right level, while exposing uncertainty and the wider system that produced the consequence. -->
 
-<!-- section-summary: Reliable explainability connects a named audience and question to validated evidence, explicit limits, and a responsible next action. -->
+A useful explanation answers the right person's real question faithfully, at the right level, while exposing uncertainty and the wider system that produced the consequence.
 
-Reliable explainability connects the person, question, and decision. Global and
-local scope answer different needs. Intrinsic and post-hoc methods expose
-different evidence. Attribution, counterfactuals, examples, calibration, and
-uncertainty each have specific meanings and limits.
+An ML model compresses relationships from data into a function:
 
-The explanation earns trust through faithfulness, stability, semantic accuracy,
-human evaluation, version control, privacy protection, and production
-monitoring. SHAP, Captum, InterpretML, and platform dashboards can calculate and
-present useful evidence. They cannot establish causality, fairness, legality, or
-safe recourse by themselves.
+$$
+f:X\rightarrow Y
+$$
 
-The intended person can use the explanation to understand the actual
-model-plus-policy process, recognize uncertainty, and choose the appropriate
-next step.
+As model complexity increases, the mapping becomes harder for humans to inspect directly. Yet humans still need to:
+
+* decide whether to trust it,
+* understand individual outcomes,
+* detect mistakes,
+* discover inappropriate behavior,
+* challenge decisions,
+* assign accountability.
+
+Explainability exists to bridge:
+
+$$
+\boxed{
+\text{Machine computation}
+\longrightarrow
+\text{human understanding}
+}
+$$
+
+But every bridge necessarily selects and simplifies information. Therefore a good explanation must balance at least four properties:
+
+$$
+\text{Fidelity}
+$$
+
+Does it accurately represent the model?
+
+$$
+\text{Comprehensibility}
+$$
+
+Can the intended person understand it?
+
+$$
+\text{Relevance}
+$$
+
+Does it answer the person's actual question?
+
+$$
+\text{Safety}
+$$
+
+Does it avoid creating privacy, fairness, security, or misleading-certainty problems?
+
+An explanation that fails any one of these can be harmful. Explainability is sometimes treated as:
+
+“Run SHAP and produce a feature-importance chart.”
+
+That is far too narrow. The real problem is that a model produces:
+
+$$
+x \rightarrow f(x)\rightarrow y
+$$
+
+while people need to understand:
+
+What influenced the result
+How does this model generally behave
+What would have changed the result
+How uncertain is it
+Can I challenge incorrect information
+Was the model or business rule responsible for the outcome
+
+So a clear definition is:
+
+> **Explainability is the disciplined process of turning relevant evidence about a model or model-powered decision into a faithful form that a particular person can understand and use for a particular purpose.**
+
+The essential chain is:
+
+$$
+\boxed{
+\text{Start with the audience and question}
+\rightarrow
+\text{choose the right explanation type}
+\rightarrow
+\text{preserve fidelity to the model}
+\rightarrow
+\text{communicate uncertainty and limitations}
+\rightarrow
+\text{make the explanation understandable}
+\rightarrow
+\text{allow challenge or action where appropriate}
+\rightarrow
+\text{validate and monitor the explanation system itself}
+}
+$$
+
+And perhaps the most useful question to remember is:
+
+$$
+\boxed{
+\text{What does this person need to understand about this model decision—and what evidence can truthfully support that understanding?}
+}
+$$
+
+That is the first-principles foundation of **Explainability in Governance and Responsible AI**.
 
 ![An explainability release path connecting audience, scope, method, explanation identity, and four validation gates to a controlled release and production feedback loop](/content-assets/articles/article-mlops-governance-and-responsible-ai-explainability-basics/explainability-release-summary.png)
 
 *A controlled explanation release binds the approved audience to a versioned method, validates faithfulness and stability, and reopens review when production behaviour changes.*
 
-## References
+## Check Your Answers
 
-- [SHAP Explainer documentation](https://shap.readthedocs.io/en/stable/generated/shap.Explainer.html)
-- [SHAP TreeExplainer documentation](https://shap.readthedocs.io/en/stable/generated/shap.TreeExplainer.html)
-- [Captum Integrated Gradients](https://captum.ai/docs/extension/integrated_gradients)
-- [Captum attribution algorithms](https://captum.ai/docs/attribution_algorithms)
-- [InterpretML documentation](https://interpret.ml/docs/)
-- [InterpretML Explainable Boosting Machine](https://interpret.ml/docs/ebm.html)
-- [scikit-learn permutation feature importance](https://scikit-learn.org/stable/modules/permutation_importance.html)
-- [scikit-learn probability calibration](https://scikit-learn.org/stable/modules/calibration.html)
-- [Azure Machine Learning model interpretability](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-machine-learning-interpretability?view=azureml-api-2)
-- [Azure Machine Learning Responsible AI dashboard](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-responsible-ai-dashboard?view=azureml-api-2)
-- [NIST Four Principles of Explainable Artificial Intelligence](https://www.nist.gov/publications/four-principles-explainable-artificial-intelligence)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Who Needs an Explanation, and How Do Interpretability, Global, and Local Views Differ?]{kind="recap"}
+Explainability starts with a named audience and decision need, distinguishing readable models from post-hoc methods and system-wide patterns from one local case.
+:::
+
+:::expand[What Can Attribution, SHAP, Counterfactuals, Examples, and LIME Explain?]{kind="recap"}
+Attribution, SHAP, counterfactuals, similar examples, and LIME answer different questions and carry limits involving correlation, causality, feasibility, similarity, privacy, and local approximation.
+:::
+
+:::expand[How Do Fidelity, Stability, Reproducibility, Confidence, Uncertainty, and Human Language Affect Trust?]{kind="recap"}
+An explanation needs fidelity to the model, stability, reproducibility, honest uncertainty, caution for unfamiliar inputs, and concepts a human can understand without false precision.
+:::
+
+:::expand[How Do Explanations Relate to the Full Decision System, Accountability, Fairness, Security, Challenge, and Action?]{kind="recap"}
+The explanation must cover the decision path beyond the model and remain distinct from accountability, transparency, fairness, security, contestability, and actionable advice.
+:::
+
+:::expand[How Should Explanation Systems Be Validated, Versioned, Monitored, and Escalated?]{kind="recap"}
+Validation includes technical fidelity and human usefulness, provenance, baseline identity, method and release versions, production monitoring, availability, and escalation for disputed cases.
+:::
+
+:::expand[What Are the Limits of Explainability for Generative AI and Agents?]{kind="recap"}
+Explainability cannot eliminate model limits; generative systems and agents require layered evidence about sources, reasoning-relevant context, tool choices, actions, controls, and outcomes proportionate to impact.
+:::
+
+:::expand[What Architecture and Worked Example Turn an Explanation Requirement into a Service?]{kind="recap"}
+A useful architecture turns a stakeholder requirement into governed model, method, data, provenance, presentation, validation, monitoring, and challenge components illustrated by one complete example.
+:::
+
+:::expand[What Is the Central Principle of Useful Explainability?]{kind="recap"}
+A useful explanation answers the right person's real question faithfully, at the right level, while exposing uncertainty and the wider system that produced the consequence.
+:::

@@ -9,487 +9,2318 @@ id: "article-mlops-data-for-ml-systems-online-vs-offline-features"
 
 ## Table of Contents
 
-1. [Why Historical Training And Live Prediction Need Different Feature Paths](#why-historical-training-and-live-prediction-need-different-feature-paths)
-2. [Why Training And Live Predictions Need The Same Feature Meaning](#why-training-and-live-predictions-need-the-same-feature-meaning)
-3. [How Training Retrieves Historical Feature Values](#how-training-retrieves-historical-feature-values)
-4. [How Live Predictions Retrieve Current Feature Values](#how-live-predictions-retrieve-current-feature-values)
-5. [Use Only Feature Values Available At Each Historical Cutoff](#use-only-feature-values-available-at-each-historical-cutoff)
-6. [Publish Calculated Features From Offline Storage To Online Storage](#publish-calculated-features-from-offline-storage-to-online-storage)
-7. [Record How Old Each Feature Value Is](#record-how-old-each-feature-value-is)
-8. [Keep Historical And Live Calculations Consistent](#keep-historical-and-live-calculations-consistent)
-9. [Combine Stored Features With Values Calculated During The Request](#combine-stored-features-with-values-calculated-during-the-request)
-10. [Respond Safely To Stale, Missing, Or Mismatched Features](#respond-safely-to-stale-missing-or-mismatched-features)
-11. [Test Historical And Live Retrieval With The Same Cases](#test-historical-and-live-retrieval-with-the-same-cases)
-12. [Choose A Feature Platform Only When The Workload Needs It](#choose-a-feature-platform-only-when-the-workload-needs-it)
-13. [Decide Who Owns Definitions, Storage, And Incidents](#decide-who-owns-definitions-storage-and-incidents)
-14. [The Main Idea](#the-main-idea)
-15. [References](#references)
+1. [Why Do Historical Training and Live Prediction Need Different Feature Paths?](#why-do-historical-training-and-live-prediction-need-different-feature-paths)
+2. [How Does the Offline Path Reconstruct Historical World State?](#how-does-the-offline-path-reconstruct-historical-world-state)
+3. [How Does the Online Path Deliver Current State Within a Latency Budget?](#how-does-the-online-path-deliver-current-state-within-a-latency-budget)
+4. [How Do Materialization and Streaming Trade Freshness for Serving Cost?](#how-do-materialization-and-streaming-trade-freshness-for-serving-cost)
+5. [How Should Requests Handle Missing, Stale, or Mismatched Values?](#how-should-requests-handle-missing-stale-or-mismatched-values)
+6. [How Do Time Boundaries Keep Features and Later Labels Separate?](#how-do-time-boundaries-keep-features-and-later-labels-separate)
+7. [How Do Golden Cases and Parity Tests Compare Both Paths?](#how-do-golden-cases-and-parity-tests-compare-both-paths)
+8. [When Does a Feature Platform Earn Its Operational Cost?](#when-does-a-feature-platform-earn-its-operational-cost)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Why Historical Training And Live Prediction Need Different Feature Paths
-<!-- section-summary: Offline and online feature paths give the same model input two delivery methods suited to historical learning and live decisions. -->
+A payment-risk model uses `failed_attempts_10m`, the number of failed attempts for one account during the previous ten minutes.
 
-Suppose a payment-risk model uses `failed_attempts_10m`, the number of failed payment attempts for one account during the previous ten minutes.
+For training, the team needs that count at millions of old payment times. Using today's count would give old rows future information. For a live payment, the service needs the newest count in a few milliseconds. Running a large historical query for every request would make checkout slow and unreliable.
 
-During training, the team has millions of old payment decisions. For each decision, it needs the count that was available at that historical moment. Reading today's count would give every old row future information.
+The model therefore needs one feature meaning through two paths. The **offline path** reconstructs historical values for training, evaluation, and backfills. The **online path** retrieves or calculates a recent value within the live decision's latency budget. Materialization moves work toward the online path, but it also introduces staleness and synchronization rules.
 
-During production, the service receives one payment request and needs the newest count in a few milliseconds. Running a large warehouse query for each request would make checkout slow and fragile.
+Compare the two paths through these questions:
 
-This is the actual online-versus-offline decision. The model needs one feature meaning through two retrieval paths:
+1. **Why Do Historical Training and Live Prediction Need Different Feature Paths?**
+2. **How Does the Offline Path Reconstruct Historical World State?**
+3. **How Does the Online Path Deliver Current State Within a Latency Budget?**
+4. **How Do Materialization and Streaming Trade Freshness for Serving Cost?**
+5. **How Should Requests Handle Missing, Stale, or Mismatched Values?**
+6. **How Do Time Boundaries Keep Features and Later Labels Separate?**
+7. **How Do Golden Cases and Parity Tests Compare Both Paths?**
+8. **When Does a Feature Platform Earn Its Operational Cost?**
 
-- The **offline path** reconstructs historical feature values for training, evaluation, batch inference, backfills, and investigations.
-- The **online path** retrieves recent feature values for synchronous prediction under a strict latency budget.
+## Why Do Historical Training and Live Prediction Need Different Feature Paths?
 
-An offline store usually keeps history and supports large scans. An online store usually keeps the latest value, or a small recent window, under each entity key. The online path may use Redis, DynamoDB, Cassandra, Bigtable, a managed feature store, or another low-latency database.
+<!-- section-summary: Training retrieves features for very many entities at many historical cutoffs, favouring cheap history, analytical scans, and throughput. -->
 
-Many ML systems need only the offline path. Batch forecasts, periodic customer scores, and models whose inputs arrive entirely inside the request may never need a separate online store. The second path earns its cost when live predictions depend on shared features that are too expensive or too slow to calculate during the request.
+Suppose an ML model must answer:
 
-## Why Training And Live Predictions Need The Same Feature Meaning
-<!-- section-summary: A shared contract fixes feature meaning while each delivery path receives its own time, latency, freshness, and fallback policy. -->
+“Given what was known at time $$t$$, what should I predict?”
 
-Training looks backward at past decisions, while live prediction needs a current value. Both paths still need the feature to describe the same fact. A shared **feature contract** records that meaning independently of the storage product used to deliver it.
+Offline and online stores, point-in-time joins, materialization, and freshness metadata all support that same promise during **training** and **production inference**.
 
-For `failed_attempts_10m`, the contract identifies the account as the entity and payment attempts as the source. It also defines the ten-minute window and the rules for event time and availability time. Data type, default behaviour, owner, and version complete the shared meaning. The online delivery policy adds maximum age, read latency, and fallback.
+### The primitive: what is a feature?
 
-```yaml
-feature:
-  name: failed_attempts_10m
-  version: v3
-  entity_key: account_id
-  data_type: int64
-  definition: "Failed payment attempts in the ten minutes before decision_time."
-  source: payment_attempt_events
-  event_time: attempted_at
-  available_time: ingested_at
-  owner: payments-risk-data
+A feature is not fundamentally a database column. A feature is a **function of information**. Consider in a fraud model:
 
-offline:
-  point_in_time_key: decision_time
-  maximum_lookback: 10m
+$$
+\text{transactions\_last\_24h}(u,t)
+$$
 
-online:
-  maximum_age: 90s
-  read_budget_p95: 8ms
-  missing_policy: route_to_rules
-  stale_policy: route_to_rules
+means:
+
+Number of transactions made by user $$u$$ during the 24 hours before time $$t$$.
+
+More formally:
+
+$$
+x = f(u, t, H_t)
+$$
+
+where:
+
+* $$u$$ = entity, such as user/card/account
+* $$t$$ = prediction time
+* $$H_t$$ = information available up to time $$t$$
+* $$f$$ = feature definition
+* $$x$$ = resulting feature value
+
+The important part is **$$t$$**. The same user can have different feature values at different times:
+
+| Prediction time | transactions_last_24h |
+| --------------- | --------------------: |
+| Monday 10:00    |                     2 |
+| Monday 18:00    |                     7 |
+| Tuesday 10:00   |                    11 |
+
+So a feature is better thought of as:
+
+$$
+\boxed{\text{Feature} = \text{definition} + \text{entity} + \text{time}}
+$$
+
+This time dimension is the reason ML feature infrastructure becomes tricky.
+
+### Why do we need two feature paths?
+
+Training and prediction ask related questions under very different constraints. Suppose we are building a card-fraud model. During **training**, we might have:
+
+```text
+200 million historical transactions
+covering the previous 12 months
 ```
 
-`maximum_lookback` describes which events contribute to the calculation. `maximum_age` describes how old the materialized result may be during a live decision. They solve different timing questions.
+For every historical transaction, we need to reconstruct:
 
-```mermaid
-flowchart TD
-    A["Shared feature contract<br/>entity, logic, time, schema, owner"] --> B["Offline computation<br/>historical feature values"]
-    A --> C["Batch or streaming computation<br/>recent feature values"]
-    B --> D["Point-in-time retrieval<br/>for training and batch scoring"]
-    C --> E["Materialization or direct push<br/>to an online store"]
-    E --> F["Low-latency lookup<br/>for live prediction"]
-    D --> G["Training dataset and<br/>offline verification"]
-    F --> H["Prediction log with value,<br/>age, version, and fallback"]
-    G --> I["Compare matching entities<br/>and decision times"]
-    H --> I
+“What did the customer's state look like immediately before this transaction happened?”
 
-    class A contract
-    class B,D,G offline
-    class C,E,F,H online
-    class I evidence
+That is a huge historical query. During **live prediction**, we instead receive one transaction:
+
+```text
+user_id = 18391
+amount = £950
+merchant = electronics_shop
+time = now
 ```
 
-The contract keeps meaning stable. Delivery configuration lets the offline path favor historical correctness and the online path favor bounded latency and recent data.
+and need an answer perhaps within 20 ms. So the workloads are fundamentally different.
+
+#### Offline workload
+
+Training asks:
+
+$$
+\text{features for millions/billions of entities at millions/billions of historical times}
+$$
+
+Characteristics:
+
+* enormous data volume
+* historical queries
+* batch processing is acceptable
+* seconds/minutes/hours can be acceptable
+* columnar scans and distributed computation are useful
+
+Typical technologies include data warehouses, lakes and analytical engines.
+
+#### Online workload
+
+Prediction asks:
+
+$$
+\text{features for one/few entities at approximately now}
+$$
+
+Characteristics:
+
+* tiny query size
+* extremely high request rate
+* very low latency
+* high availability
+* commonly key-value access
+
+Typical technologies include Redis-like stores, DynamoDB-like systems, Cassandra-like systems, or custom serving databases. So we arrive at the first principle:
+
+$$
+\boxed{\text{Same logical features, different physical access patterns}}
+$$
+
+That is what **offline vs. online** really means.
+
+### Offline and online do NOT mean two different feature definitions
+
+This distinction is crucial. You commonly want:
+
+```text
+OFFLINE PATH
+historical raw data
+      ↓
+feature calculation
+      ↓
+training dataset
+
+ONLINE PATH
+recent/live raw data
+      ↓
+feature calculation
+      ↓
+prediction
+```
+
+But both should represent the same logical quantity. If the model was trained on:
+
+```text
+transactions_last_24h
+```
+
+then production must not accidentally give it:
+
+```text
+transactions_since_midnight
+```
+
+even though both are transaction counts. The model learned relationships such as:
+
+$$
+P(\text{fraud}\mid \text{transactions\_last\_24h}=15)
+$$
+
+If production changes the meaning of that variable, that learned relationship is no longer valid. This problem is called **training-serving skew**. A useful principle is:
+
+$$
+\boxed{
+P_{\text{train}}(X)
+\approx
+P_{\text{serve}}(X)
+}
+$$
+
+The **feature computation itself should preserve the same semantics** even as reality changes.
+
+## How Does the Offline Path Reconstruct Historical World State?
+
+<!-- section-summary: Both paths preserve the entity, source meaning, filters, units, window boundaries, timestamps, deduplication, null states, version, and transformation semantics. -->
+
+### Reconstructing historical feature values
+
+Imagine we have a training event:
+
+```text
+transaction_id: 991
+user: Alice
+event_time: March 5, 10:00
+label: fraudulent
+```
+
+We want the feature:
+
+```text
+transactions_last_24h
+```
+
+What value should Alice get? Only transactions before:
+
+```text
+March 5, 10:00
+```
+
+may be considered. Suppose Alice's history is:
+
+```text
+Mar 4 12:00     transaction
+Mar 5 08:00     transaction
+Mar 5 09:30     transaction
+Mar 5 10:00     prediction event
+Mar 5 10:05     transaction
+Mar 5 11:00     transaction
+```
+
+The training feature must be calculated from:
+
+```text
+Mar 4 10:00 → Mar 5 10:00
+```
+
+The transactions at 10:05 and 11:00 are in the future from the model's perspective. Using them would leak future information. This leads to the most important rule in offline feature computation:
+
+$$
+\boxed{\text{For an example at time }t,\text{ use only information available by }t}
+$$
+
+This is commonly called **point-in-time correctness**.
+
+### Why a normal database join can silently destroy your model
+
+Suppose we have:
+
+#### Training events
+
+| user  | prediction_time |
+| ----- | --------------- |
+| Alice | March 5         |
+| Bob   | March 8         |
+
+And a current user table:
+
+| user  | transaction_count_30d |
+| ----- | --------------------: |
+| Alice |                    93 |
+| Bob   |                    12 |
+
+A naive SQL join:
+
+```sql
+SELECT *
+FROM training_events
+JOIN user_features USING (user_id)
+```
+
+might give Alice the value `93`. But perhaps on March 5 Alice's count was only `17`. `93` is today's value.
+
+It contains events that happened after the prediction. The correct query is conceptually:
+
+$$
+\text{value}(u,t)
+=
+\text{most recent feature value for }u\text{ with timestamp}\le t
+$$
+
+For example:
+
+```text
+Alice:
+Feb 28 → 11
+Mar 03 → 15
+Mar 05 09:50 → 17
+Mar 07 → 44
+Mar 20 → 93
+```
+
+For a March 5 10:00 training example, retrieve:
+
+```text
+17
+```
+
+not:
+
+```text
+93
+```
+
+This is frequently implemented using an **as-of join** or **point-in-time join**. Conceptually:
+
+```text
+training event
+    entity = Alice
+    time   = Mar 5 10:00
+             │
+             ▼
+find newest feature version
+where:
+    entity = Alice
+    feature_timestamp <= Mar 5 10:00
+```
+
+### Event time and processing time are different
+
+Distributed systems introduce another complication. Suppose a purchase happened at:
+
+```text
+10:00
+```
+
+but due to a delayed message, your pipeline received it at:
+
+```text
+10:07
+```
+
+There are now two clocks:
+
+$$
+t_{\text{event}} = 10{:}00
+$$
+
+$$
+t_{\text{processing}} = 10{:}07
+$$
+
+For ML features, the distinction matters enormously. Consider:
+
+```text
+transactions_last_hour
+```
+
+Should that transaction count starting at 10:00 or 10:07? Semantically, commonly 10:00. But whether a prediction at 10:04 **could have known about it** is a different question.
+
+This produces two important timestamps:
+
+```text
+event timestamp
+    When the real-world event happened
+
+available timestamp
+    When the ML system could actually observe it
+```
+
+For strict historical realism, the strongest definition is:
+
+$$
+\boxed{\text{training may use only data actually available to production at that moment}}
+$$
+
+Some teams use event time as an approximation. Systems that need stricter reconstruction record event time separately from ingestion or availability time.
+
+### What offline features actually look like
+
+An offline feature table might conceptually contain:
+
+| user_id | feature_time | tx_24h | avg_amount_7d |
+| ------- | ------------ | -----: | ------------: |
+| Alice   | 10:00        |      3 |            84 |
+| Alice   | 11:00        |      5 |            91 |
+| Alice   | 12:00        |      6 |            96 |
+| Bob     | 10:00        |      1 |            32 |
+
+Notice that it doesn't merely say:
+
+```text
+Alice → tx_24h = 6
+```
+
+It preserves history:
+
+```text
+Alice at time t1 → 3
+Alice at time t2 → 5
+Alice at time t3 → 6
+```
+
+This is why offline storage can be large. We need history because training needs to travel backward through time.
 
 ![One versioned feature definition feeding an offline historical path and an online low-latency path](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/offline-online-paths.png)
 
 *Offline and online systems optimize for different workloads, while both must preserve the feature's meaning at the relevant time.*
 
-## How Training Retrieves Historical Feature Values
-<!-- section-summary: Offline retrieval builds historically correct feature values from durable event history for training, evaluation, batch work, and audits. -->
+## How Does the Online Path Deliver Current State Within a Latency Budget?
 
-Training needs the feature value that belonged to each past decision, rather than the value stored today. The **offline path** answers that historical question. It rebuilds the information available for every old decision instead of returning today's state.
+<!-- section-summary: The offline path preserves feature history and performs point-in-time retrieval for every entity and prediction timestamp. -->
 
-It commonly runs in a warehouse, lakehouse, or distributed batch engine. Typical foundations include BigQuery, Snowflake, and Databricks. Spark and object storage with Delta Lake or Apache Iceberg support another common design. These systems can scan long histories, join many entities, recompute feature windows, and write versioned training datasets.
+### What online features look like
 
-Offline feature data usually keeps several records per entity. One account can have a new feature value every minute. History is essential because a training row from last month needs the value from that moment, while a row from yesterday needs a later value.
+At inference time, we generally don't need Alice's entire historical feature timeline. We commonly need:
 
-The offline path supports more than model training:
+Alice's latest usable feature state.
 
-- Evaluation needs the same historically correct inputs as training.
-- Batch scoring retrieves current or as-of features for many entities at once.
-- Backfills rebuild older windows after source or logic repairs.
-- Investigations reconstruct the vector used around a bad decision.
-
-### A Historical Lookup At One Prediction Time
-
-Imagine a churn model with `support_tickets_30d`. A customer opened two tickets before a renewal decision and three more after it. The training row should contain `2`. A query that joins the latest aggregate gives the row `5` and leaks future behaviour into training.
-
-The offline store therefore needs event timestamps and durable history. It may also need an **available time**, sometimes called created or ingestion time, to show whether the feature system had received the event by the decision.
-
-### What Historical Retrieval Must Guarantee
-
-A trustworthy offline retrieval records the feature version, source snapshot, entity key, decision time, feature event time, and availability time. It should reproduce the same logical values during a rerun and keep late-arriving data under an explicit policy.
-
-Verification starts with tiny time-boundary fixtures. Place one event before the decision, one exactly at the boundary, one after it, and one that happened earlier but arrived later. The contract decides which records qualify, and the test asserts the resulting feature value.
-
-## How Live Predictions Retrieve Current Feature Values
-<!-- section-summary: Online retrieval returns recent feature values by entity key within the latency and availability budget of a live prediction. -->
-
-A live prediction needs an approved feature value for the current request. The **online path** retrieves that value under a latency, freshness, and failure policy.
-
-An online store organizes values around fast entity-key lookup. A risk service sends an `account_id`; the store returns the latest approved values for that account. The database may retain only one record per key or a short time window, depending on the product and retrieval pattern.
-
-Low latency matters because feature retrieval shares the request budget with the rest of the service. Authentication, input validation, request-time computation, model inference, policy logic, and network overhead all consume part of that budget. A model endpoint with a 100-millisecond objective cannot spend 90 milliseconds waiting for features.
-
-Teams therefore monitor percentiles such as p50, p95, and p99. An average can hide a small group of requests suffering severe delay. They also bound the number of network round trips. Fetching a feature vector in one batched request is usually safer than making a separate call for every feature.
-
-### The Latest Stored Value May Still Be Too Old
-
-The online result should contain more than the number:
+So the online representation might look like:
 
 ```text
-entity_key
-feature_name
-feature_value
-feature_version
-event_time
-materialized_at
-source_watermark
+key: user:alice
+
+{
+  tx_24h: 6,
+  avg_amount_7d: 96,
+  feature_timestamp: 11:59:42
+}
 ```
 
-These fields let the serving service calculate age and confirm the expected version. A successful key-value read proves availability. It gives no assurance that the value is fresh or that materialization reached the latest source data.
+Retrieval becomes:
 
-### Define What Happens After A Lookup Fails
-
-Every online feature needs a response for four outcomes. A fresh value continues to inference. A stale or missing value may use a governed default, a recent cached value, or a backup source. A failed read may choose a simpler model, route to deterministic rules, or decline the decision.
-
-The response depends on consequence. A recommendation model may tolerate a default popularity score. A fraud or safety decision may need a conservative rules path after a critical feature expires.
-
-## Use Only Feature Values Available At Each Historical Cutoff
-<!-- section-summary: Point-in-time joins select feature values known by each historical decision and block future or late-arriving information. -->
-
-**Point-in-time correctness** means every training row receives feature values that the production system could have used at that row's decision time.
-
-This requires two boundaries:
-
-- **Event time** records when the real-world fact happened.
-- **Available time** records when the feature system could use that fact.
-
-Suppose a bank account changed address before a payment, but the change reached the feature pipeline several hours after the decision. The event time is early enough; the available time is too late. Historical training should exclude that update because production lacked it.
-
-```mermaid
-flowchart TD
-    A["Historical decision at T"] --> B["Candidate feature records<br/>for the same entity"]
-    B --> C{"Event time<br/>at or before T?"}
-    C -->|"No"| D["Future event<br/>exclude"]
-    C -->|"Yes"| E{"Available to the<br/>system by T?"}
-    E -->|"No"| F["Late-arriving event<br/>exclude"]
-    E -->|"Yes"| G["Keep newest eligible<br/>feature record"]
-    G --> H["Apply lookback and<br/>freshness policy"]
-    H --> I["Attach value and<br/>provenance to training row"]
-
-    class A,C,E decision
-    class B candidate
-    class D,F excluded
-    class G,H,I accepted
+```text
+GET user:alice
 ```
 
-A focused SQL pattern ranks only eligible values:
+which might take a few milliseconds. That gives us the second major architectural distinction:
 
-```sql
-WITH eligible_features AS (
-  SELECT
-    d.decision_id,
-    d.account_id,
-    d.decision_time,
-    f.failed_attempts_10m,
-    f.feature_event_time,
-    f.feature_available_at,
-    ROW_NUMBER() OVER (
-      PARTITION BY d.decision_id
-      ORDER BY
-        f.feature_event_time DESC,
-        f.feature_available_at DESC,
-        f.feature_record_id DESC
-    ) AS feature_rank
-  FROM historical_decisions d
-  LEFT JOIN account_risk_features f
-    ON f.account_id = d.account_id
-   AND f.feature_event_time <= d.decision_time
-   AND f.feature_available_at <= d.decision_time
+```text
+OFFLINE STORE
+Alice:
+  t1 → ...
+  t2 → ...
+  t3 → ...
+  t4 → ...
+  ...
+```
+
+versus:
+
+```text
+ONLINE STORE
+Alice → latest state
+```
+
+Offline optimizes for:
+
+$$
+\text{historical analytical access}
+$$
+
+Online optimizes for:
+
+$$
+\text{low-latency current-state lookup}
+$$
+
+## How Do Materialization and Streaming Trade Freshness for Serving Cost?
+
+<!-- section-summary: The online path commonly retrieves latest usable state by entity key and combines it with request fields and lightweight derived values. -->
+
+### How features move from offline to online
+
+Consider a feature:
+
+```text
+customer_average_spend_30d
+```
+
+Suppose it is expensive to calculate. You don't want every API request to scan 30 days of transactions. Instead:
+
+```text
+Raw transactions
+       ↓
+batch/stream computation
+       ↓
+avg_spend_30d = 73.42
+       ↓
+online store
+       ↓
+prediction request
+```
+
+This process is commonly called **materialization**. You are taking the result of a computation and storing it so it can be retrieved cheaply later. Mathematically:
+
+$$
+f(H_t)
+$$
+
+is expensive. So calculate:
+
+$$
+v_t=f(H_t)
+$$
+
+ahead of time and store:
+
+```text
+user_id → v_t
+```
+
+Inference now needs roughly:
+
+$$
+O(1)
+$$
+
+lookup rather than scanning the history.
+
+### Batch materialization vs streaming materialization
+
+How frequently should the online value be updated? That depends on how rapidly the feature changes and how much freshness matters.
+
+#### Batch
+
+Perhaps every hour:
+
+```text
+00:00 calculate features
+01:00 calculate features
+02:00 calculate features
+...
+```
+
+For:
+
+```text
+average_purchase_amount_last_365_days
+```
+
+hourly freshness might be perfectly adequate.
+
+#### Streaming
+
+Some features must react to events almost immediately. For example:
+
+```text
+failed_logins_last_10_minutes
+```
+
+A pipeline might behave like:
+
+```text
+failed login event
+       ↓
+Kafka/event stream
+       ↓
+stream processor
+       ↓
+increment rolling count
+       ↓
+online feature store
+```
+
+Now the value may be only seconds behind reality. The architectural principle is:
+
+$$
+\boxed{\text{Feature freshness should match the decision's time sensitivity}}
+$$
+
+Not every feature needs streaming. Streaming everything creates enormous complexity for little benefit.
+
+### Feature freshness is part of the feature
+
+Suppose production retrieves:
+
+```text
+account_balance = £1,230
+```
+
+That sounds useful. But which of these is it?
+
+```text
+updated 200 ms ago
+updated 5 minutes ago
+updated 2 days ago
+```
+
+Those are very different facts. A useful feature representation therefore includes:
+
+$$
+(value,\ timestamp)
+$$
+
+and sometimes:
+
+$$
+(value,\ event\_time,\ computed\_time,\ written\_time)
+$$
+
+Then inference can calculate:
+
+$$
+\text{age} = t_{\text{request}} - t_{\text{feature}}
+$$
+
+For example:
+
+```text
+account_balance:
+    value = 1230
+    timestamp = 10:14:58
+
+prediction request:
+    timestamp = 10:15:03
+
+feature_age = 5 seconds
+```
+
+You can then define:
+
+```text
+acceptable_age(account_balance) ≤ 30 seconds
+```
+
+or:
+
+```text
+acceptable_age(customer_age) ≤ 30 days
+```
+
+Freshness requirements differ by feature.
+
+### A feature is really a contract
+
+A robust feature should have more than a name. Consider:
+
+```text
+transactions_last_24h
+```
+
+Its contract might specify:
+
+```text
+Entity:
+    customer_id
+
+Value:
+    integer
+
+Meaning:
+    Number of approved purchases during the previous 24 hours
+
+Window:
+    [prediction_time - 24h, prediction_time)
+
+Event timestamp:
+    transaction_authorized_at
+
+Update method:
+    streaming
+
+Expected freshness:
+    < 60 seconds
+
+Missing behavior:
+    0 for known customers with no transactions
+    null for unknown customers
+```
+
+Notice the difference between:
+
+```text
+0
+```
+
+and:
+
+```text
+unknown
+```
+
+That distinction can matter greatly to a model. Thinking of features as **contracts** is much safer than thinking of them as database columns.
+
+### Training-serving skew has several forms
+
+People frequently imagine skew merely as different code. There are actually several ways it happens.
+
+#### Definition skew
+
+Training:
+
+```python
+sum(transactions[-24_hours:])
+```
+
+Production:
+
+```python
+sum(transactions_since_midnight)
+```
+
+#### Data-source skew
+
+Training reads warehouse transactions. Production reads a separate operational service. Perhaps cancellation handling differs.
+
+#### Timestamp skew
+
+Training uses:
+
+```text
+created_at
+```
+
+Production uses:
+
+```text
+authorized_at
+```
+
+#### Null-handling skew
+
+Training:
+
+```text
+missing → 0
+```
+
+Production:
+
+```text
+missing → -1
+```
+
+#### Update skew
+
+Training feature is exact. Production version may lag 15 minutes.
+
+#### Type skew
+
+Training:
+
+```text
+country = "GB"
+```
+
+Production:
+
+```text
+country = "UK"
+```
+
+All can alter the model input distribution. So the real invariant is:
+
+$$
+\boxed{\text{same feature contract, not merely same feature name}}
+$$
+
+### One calculation, two execution environments
+
+An ideal mental model is:
+
+```text
+                    Feature definition
+                          │
+               ┌──────────┴──────────┐
+               ▼                     ▼
+       historical execution    live execution
+               │                     │
+               ▼                     ▼
+       training dataset        prediction input
+```
+
+Consider one conceptual definition:
+
+$$
+f(u,t)=\text{count purchases by }u\text{ during }[t-24h,t)
+$$
+
+can be evaluated:
+
+#### Offline
+
+Using warehouse SQL over historical events.
+
+#### Online
+
+Using streaming state or a precomputed counter. The implementations can differ while the semantics remain identical. This is an important distinction:
+
+$$
+\boxed{\text{semantic equivalence} \neq \text{identical implementation}}
+$$
+
+Trying to execute literally identical code offline and online is frequently impractical. Instead, ensure they produce equivalent values under equivalent data.
+
+### Some features should be computed during the request
+
+Not every feature belongs in an online store. Suppose we're predicting fraud for this transaction:
+
+```text
+user = Alice
+amount = £900
+merchant_country = France
+```
+
+Some features come directly from the request:
+
+```text
+transaction_amount = 900
+merchant_country = France
+```
+
+Some may require light computation:
+
+```text
+is_foreign_transaction
+amount / user_avg_transaction_amount
+distance_from_home
+```
+
+Some come from stored state:
+
+```text
+transactions_last_24h
+avg_transaction_amount_30d
+usual_country
+```
+
+Inference frequently combines all three:
+
+```text
+                    Request
+                       │
+         ┌─────────────┼─────────────┐
+         ▼             ▼             ▼
+ raw request      online store    request-time
+   values            values       calculations
+         └─────────────┼─────────────┘
+                       ▼
+                  feature vector
+                       ▼
+                     model
+```
+
+For example:
+
+$$
+\text{amount\_ratio}
+=
+\frac{\text{current transaction amount}}
+{\text{stored 30d average amount}}
+$$
+
+This is a **hybrid feature**.
+
+### Why not calculate everything during the request?
+
+Suppose we need:
+
+```text
+number_of_transactions_last_90_days
+```
+
+At request time we could theoretically do:
+
+```text
+query transaction database
+scan 90 days
+count rows
+```
+
+But imagine:
+
+```text
+10,000 predictions/sec
+```
+
+Each prediction now launches an expensive historical query. Latency rises. Databases get overloaded.
+
+Availability of the prediction service becomes dependent on many downstream systems. Precomputation converts expensive work:
+
+$$
+\text{scan history → aggregate}
+$$
+
+into cheap work:
+
+$$
+\text{key lookup}
+$$
+
+This trades:
+
+```text
+compute/storage ahead of time
+```
+
+for:
+
+```text
+low latency at prediction time
+```
+
+This follows the familiar reason systems build caches, indexes, and materialized views: prepare expensive results before the time-sensitive request arrives.
+
+### Why not store everything online?
+
+Because low-latency infrastructure is expensive and commonly poorly suited for large historical scans. Imagine:
+
+```text
+1 billion users
+×
+10,000 features
+×
+many historical versions
+```
+
+Putting all versions in Redis-like infrastructure would be enormously expensive and unnecessary. Training doesn't need 2 ms latency. It prefers:
+
+```text
+high throughput
+compression
+columnar scans
+distributed execution
+cheap storage
+```
+
+So there is a natural separation:
+
+$$
+\boxed{
+\begin{aligned}
+\text{offline} &\rightarrow \text{cheap history + analytical throughput}\\
+\text{online} &\rightarrow \text{small current state + low latency}
+\end{aligned}}
+$$
+
+## How Should Requests Handle Missing, Stale, or Mismatched Values?
+
+<!-- section-summary: Materialization computes expensive values ahead of requests and publishes them to low-latency storage. -->
+
+### Missing features are not exceptional—they are normal
+
+Imagine a new user. The model requests:
+
+```text
+purchase_count_30d
+```
+
+but no record exists. What should happen? Possibilities include:
+
+```text
+null
+0
+global average
+special "unknown" value
+fallback model
+reject prediction
+```
+
+The correct choice depends on feature semantics. Consider:
+
+```text
+purchase_count_30d
+```
+
+For a known customer with no purchases:
+
+$$
+0
+$$
+
+may be correct. For a user whose history failed to load:
+
+$$
+\text{unknown}
+$$
+
+is different. Collapsing the two can hide infrastructure failures from the model. Good systems distinguish:
+
+```text
+legitimately zero
+legitimately missing
+not yet computed
+lookup failed
+value too stale
+schema/version mismatch
+```
+
+### Stale values require explicit policy
+
+Suppose a feature normally updates every minute. Production retrieves:
+
+```text
+failed_logins_10m = 8
+last_updated = 47 minutes ago
+```
+
+Using it silently is dangerous. Possible policies:
+
+```text
+Use stale value
+Use fallback/default
+Calculate synchronously
+Use degraded model
+Reject prediction
+```
+
+Which policy is appropriate depends on the application. For movie recommendations:
+
+```text
+slightly stale → probably fine
+```
+
+For fraud authorization:
+
+```text
+critical security feature 47 minutes stale → potentially unacceptable
+```
+
+This produces an operational concept:
+
+$$
+\text{feature validity} =
+g(\text{value},\text{age},\text{source health},\text{version})
+$$
+
+Not merely:
+
+```text
+Did the database return something?
+```
+
+### Feature availability has a hidden effect on model quality
+
+Suppose an offline experiment shows:
+
+```text
+Feature A
+AUC improvement: +0.018
+```
+
+That looks excellent. But production behavior is:
+
+```text
+available: 92%
+fresh:     80%
+```
+
+Then its theoretical offline value may overstate its practical value. A production-oriented evaluation asks:
+
+$$
+\text{feature usefulness}
+=
+f(
+\text{predictive power},
+\text{availability},
+\text{freshness},
+\text{latency},
+\text{cost}
 )
-SELECT *
-FROM eligible_features
-WHERE feature_rank = 1;
-```
+$$
 
-The final record ID makes selection deterministic where timestamps tie. A bounded feature can add a lookback predicate so very old values produce an explicit missing state.
-
-Feast historical retrieval and Databricks time-series feature tables support point-in-time joins. A warehouse team can implement the same rule in reviewed SQL. The important evidence is the time boundary and selected source record, not the library name.
+A modest feature supplied reliably may create more production value than a theoretically stronger feature whose dependency often fails or arrives late.
 
 ![A point-in-time join selecting the latest balance available before a prediction and excluding a later future value](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/point-in-time-cutoff.png)
 
 *For a prediction made at 10:00, the 09:40 value is eligible and the 10:05 value belongs to the future.*
 
-## Publish Calculated Features From Offline Storage To Online Storage
-<!-- section-summary: Materialization publishes computed feature values into low-latency storage while preserving entity, version, and event-time identity. -->
+## How Do Time Boundaries Keep Features and Later Labels Separate?
 
-Live requests need recent values in storage that can answer quickly. **Materialization** moves approved feature values from the durable historical source into that online storage before requests arrive.
+<!-- section-summary: The contract distinguishes true zero, no history, unknown entity, not yet computed, stale value, failed lookup, and schema or version mismatch. -->
 
-There are two common patterns.
+### Point-in-time correctness must include feature pipelines themselves
 
-In a **batch materialization**, a scheduled job reads new or changed feature rows from the offline source and upserts them into the online store. Daily aggregates may run every day. Rapidly changing features may run every few minutes.
+Here's a subtle failure mode. Suppose:
 
-In a **streaming publication**, a stream processor computes feature updates and writes them to the online path as events arrive. It should also preserve a historical copy for training and replay. Feast push sources can send values to online and offline destinations. SageMaker Feature Store can ingest records into online and offline storage through batch or streaming APIs.
-
-```mermaid
-flowchart TD
-    A["Raw events"] --> B["Feature computation<br/>with event time and version"]
-    B --> C["Durable historical feature log<br/>or offline table"]
-    C --> D["Batch materialization<br/>from source watermark"]
-    B --> E["Streaming publication<br/>for low-latency freshness"]
-    D --> F["Online store<br/>latest approved value by key"]
-    E --> F
-    F --> G["Serving lookup"]
-    C --> H["Historical retrieval"]
-    G --> I["Reconciliation by entity,<br/>version, and event time"]
-    H --> I
-
-    class A,B,C,H source
-    class D,E bridge
-    class F,G online
-    class I evidence
+```text
+Prediction: January 10
 ```
 
-### Publish Updates Without Mixing Old And New Values
+and a user's age is derived from a profile table. Today the profile says:
 
-The logical feature identity binds the entity to an approved feature definition and version. The physical lookup key often remains the entity key inside a versioned feature table, feature group, or namespace. Some stores encode more information in the physical key, so the exact layout depends on the implementation. Each record also needs an event timestamp. The writer should reject or ignore an older update arriving after a newer one. Amazon SageMaker Feature Store keeps the record with the latest event time in its online store. Historical records remain available offline.
-
-Retries must be idempotent. Publishing the same record twice should leave one visible latest value. A materialization run records its source watermark, successful end time, written-row count, rejected-old-row count, and destination identity.
-
-Backfills need special care. Rebuilding historical values should update the offline history without replacing a newer online value. If a corrected historical record also changes the current feature, publish that current correction through a reviewed path with a new source watermark.
-
-## Record How Old Each Feature Value Is
-<!-- section-summary: Freshness combines source delay, computation delay, publication delay, and serving age into one decision policy. -->
-
-A feature value can have the correct type and meaning yet still be too old for the current decision. That is the role of **freshness**: it tells the serving system whether a value is recent enough to trust for a specific use. Freshness belongs to the feature contract because different decisions tolerate different delays.
-
-For a slowly changing customer tier, yesterday's value may be acceptable. For available inventory or failed payment attempts, a value several minutes old may misrepresent the current situation.
-
-Freshness has several contributing delays:
-
-- **Source delay** measures how late raw events reach the platform.
-- **Computation delay** measures how long feature logic takes to produce a value.
-- **Materialization delay** measures how long the value waits before reaching the online store.
-- **Read age** measures the gap between the request time and the feature's event or availability time.
-
-```mermaid
-flowchart TD
-    A["Real-world event"] --> B["Source receives event"]
-    B --> C["Feature computation finishes"]
-    C --> D["Online publication commits"]
-    D --> E["Prediction request reads value"]
-    A --> F["Source delay"]
-    B --> G["Computation delay"]
-    C --> H["Materialization delay"]
-    D --> I["Time waiting in online store"]
-    E --> J["Serving policy compares<br/>feature age with maximum age"]
-
-    class A,B,C,D,E event
-    class F,G,H,I delay
-    class J decision
+```text
+country = Canada
 ```
 
-The feature contract turns those delays into an operational objective. If `failed_attempts_10m` has a maximum age of 90 seconds, the serving service compares request time with the approved timestamp and invokes the stale-value policy after that limit.
+But in January it said:
 
-Record TTL and feature freshness are separate controls. TTL tells a store when it may remove a record. Freshness tells the application whether the value is still suitable for a decision. A record can remain physically present after its business usefulness has expired.
-
-The request log should capture feature age, source watermark, and fallback outcome. Dashboards then show p50, p95, and p99 age by feature, model route, region, and materialization version.
-
-## Keep Historical And Live Calculations Consistent
-<!-- section-summary: Offline and online paths stay synchronized through shared logic, versions, keys, timestamps, defaults, and evidence. -->
-
-Two columns with the same name can still carry different values for valid operational reasons or because one path has drifted.
-
-The paths need agreement across several dimensions:
-
-- entity keys and key normalization;
-- feature definition and version;
-- source events and filters;
-- aggregation windows and boundary inclusion;
-- event-time and available-time rules;
-- types, units, null semantics, and defaults;
-- publication watermark and freshness policy.
-
-Suppose offline SQL defines a ten-minute window as `(T - 10m, T]`, while a stream processor uses `[T - 10m, T)`. Events exactly on a boundary create different values. A shared feature name cannot reveal that difference.
-
-### Choose How The Two Paths Share Logic
-
-The strongest pattern uses one computation to produce versioned values for both durable history and online serving. This works well for streaming features because both paths receive the same result.
-
-Batch features often use the offline table as the source of truth and materialize from it. The online record carries the source row's event time and feature version, which allows reconciliation.
-
-Some systems maintain separate SQL and streaming implementations. Those teams need a golden fixture suite that runs against both engines, plus replay tests over representative event windows.
-
-### Compare Historical And Live Values For The Same Entities
-
-The serving path logs the actual vector or a governed reference to it, including version and timestamps. A comparison job takes sampled prediction requests, reconstructs offline features as of each request time, and compares values under feature-specific tolerances.
-
-Exact categorical values should match. Floating-point aggregates may need a small tolerance if approved execution engines produce minor numerical differences. The report groups mismatches by cause. Freshness and missing-entity groups point to delivery problems. Version, boundary-rule, and default groups point to contract differences. A tolerance group isolates approved numerical variation.
-
-This comparison detects path divergence. It also exposes the operational reason, which gives the owning team a concrete repair.
-
-## Combine Stored Features With Values Calculated During The Request
-<!-- section-summary: Request-time features come directly from the live request or a synchronous dependency and join stored features before inference. -->
-
-Some information exists only for the current decision. A route distance depends on the proposed origin and destination. A cart total depends on the items in the current checkout. A query embedding depends on the text the user just submitted.
-
-These are **request-time features**. They usually arrive in the request payload or come from a synchronous service. They join online-store values before model inference.
-
-```mermaid
-flowchart TD
-    A["Prediction request"] --> B["Validate request-time inputs"]
-    A --> C["Extract entity keys"]
-    C --> D["Fetch stored online features"]
-    D --> E["Check version, age,<br/>missing values, and read status"]
-    B --> F["Apply shared request-time<br/>transformations"]
-    E --> G["Assemble model vector"]
-    F --> G
-    G --> H["Validate final schema"]
-    H --> I["Run inference and log<br/>values, ages, and fallbacks"]
-
-    class A request
-    class B,C,D,E,F,G,H work
-    class I serve
+```text
+country = France
 ```
 
-The transformation from raw request field to model input needs the same versioned logic in offline replay. If production calculates `cart_value_log = log1p(cart_total)` but training used the raw total, the stored features can be perfectly synchronized while the final vectors still differ.
+If you build historical training data using today's profile row, you have rewritten history. This problem occurs with:
 
-Request-time dependencies also consume latency and need fallbacks. A route service timeout may trigger a cached estimate, a simpler model, or a deterministic response. The prediction log records which path produced each value.
-
-## Respond Safely To Stale, Missing, Or Mismatched Features
-<!-- section-summary: Feature-path incidents need containment based on freshness, key correctness, publication state, online availability, and model consequence. -->
-
-Online and offline feature paths cross several systems, so failure can enter at different boundaries. Diagnosis begins by finding the first boundary where the expected value stopped moving correctly. The serving team should contain unsafe decisions first. Investigators then trace the entity key and feature version back through the path. Timestamps and watermarks reveal the point where data stopped advancing.
-
-A **stalled materialization job** leaves the online store readable but stale. The service checks feature age and follows the stale policy while the data owner restores the job.
-
-A **stream consumer lag** affects rapidly changing features. Containment may route high-risk requests to rules or a simpler model. Restarting the consumer alone is insufficient; the owner verifies offsets, watermarks, and online age after catch-up.
-
-An **entity-key mismatch** produces missing values for valid entities. Investigation compares request keys, offline keys, normalization rules, and lookup miss rate by client version or region.
-
-An **out-of-order update** can replace a recent value with an older one if the writer ignores event time. Repair restores the latest valid record and hardens the write condition.
-
-A **partial feature-group update** can mix values from different publication moments. Critical vectors may require a shared snapshot or publication version so the serving service accepts only a coherent group.
-
-An **online-store latency spike or outage** threatens the request objective. The service uses its pre-approved fallback and the platform owner checks hot keys, throttling, capacity, network health, and recent schema changes.
-
-An **offline backfill collision** may replay old values into the online store. Materialization policy should prevent historical corrections from overwriting a newer event-time record.
-
-```mermaid
-flowchart TD
-    A["Feature alert or bad decision"] --> B{"Can the online store<br/>return the expected key?"}
-    B -->|"No"| C["Check entity mapping,<br/>availability, and latency"]
-    B -->|"Yes"| D{"Is the feature version<br/>and publication coherent?"}
-    D -->|"No"| E["Contain with fallback;<br/>restore approved version"]
-    D -->|"Yes"| F{"Is the value fresh<br/>for this decision?"}
-    F -->|"No"| G["Inspect source lag,<br/>compute, and materialization"]
-    F -->|"Yes"| H{"Does offline replay<br/>match the logged value?"}
-    H -->|"No"| I["Compare time rules,<br/>defaults, and transformations"]
-    H -->|"Yes"| J["Continue with model,<br/>policy, or outcome review"]
-
-    class A alert
-    class B,D,F,H gate
-    class C,E,G,I action
-    class J healthy
+```text
+customer segment
+account status
+subscription tier
+address
+credit limit
+merchant classification
+product category
 ```
 
-Containment policy belongs in the feature contract and serving configuration. The incident is a poor time to invent a default for a safety-critical value.
+Historical ML datasets frequently need **versioned dimensions**, not merely versioned events. The general rule is:
 
-## Test Historical And Live Retrieval With The Same Cases
-<!-- section-summary: End-to-end verification proves historical correctness, online freshness, synchronization, fallback, and recovery before feature release. -->
+$$
+\boxed{
+X_i =
+\text{state that would have been observable when prediction }i\text{ happened}
+}
+$$
 
-Feature verification covers the definition, both delivery paths, and the bridge between them. Use an end-to-end rehearsal of the whole feature journey. Construct a known historical value, publish it, read it through serving, and prove the final model vector. This catches problems that an isolated SQL test or online-store health check cannot see.
+### Labels live in the future; features must not
 
-Start with a versioned fixture of events and historical decisions. Assert the offline value for time boundaries, late-arriving data, missing history, duplicate timestamps, and lookback expiry.
+This distinction clarifies a lot of ML data engineering. For a fraud transaction at time $$t$$:
 
-Run materialization into an isolated online namespace. Check the written entity keys, feature version, event time, source watermark, row counts, and rejection of older updates. Retry the same materialization and confirm that the visible values remain unchanged.
+#### Features
 
-Read online features through the same client used by serving. Measure p50, p95, and p99 latency. Verify fresh, missing, stale, wrong-version, and read-error outcomes against the serving policy.
+Must come from:
 
-Replay several historical requests through the final vector assembly path. Reconstruct stored features offline, inject the original request-time data, and compare the full vector field by field.
+$$
+(-\infty,t]
+$$
 
-Finally, exercise recovery. Pause materialization or route the client to an unavailable online namespace. Confirm the approved fallback, alert, logs, and restoration checks.
+#### Label
 
-```mermaid
-flowchart TD
-    A["Versioned event and<br/>decision fixtures"] --> B["Verify point-in-time<br/>offline retrieval"]
-    B --> C["Materialize into isolated<br/>online namespace"]
-    C --> D["Verify keys, versions,<br/>watermarks, and idempotency"]
-    D --> E["Run serving reads and<br/>freshness policies"]
-    E --> F["Replay complete vectors<br/>with request-time inputs"]
-    F --> G["Inject stale, missing,<br/>and unavailable states"]
-    G --> H["Verify fallback, alert,<br/>repair, and restoration"]
+Might only become known afterward:
 
-    class A fixture
-    class B,C,D,E,F,G verify
-    class H recovery
+$$
+(t,t+\Delta]
+$$
+
+For example:
+
+```text
+March 1
+transaction occurs
+↓
+model predicts fraud
+
+March 20
+customer disputes transaction
+↓
+fraud label becomes known
 ```
 
-A feature is ready after this path proves the expected values and the expected failure response. A successful online read by itself covers only one small part of the system.
+So supervised learning intentionally combines:
 
-## Choose A Feature Platform Only When The Workload Needs It
-<!-- section-summary: Industrial feature stacks combine historical storage, transformation, low-latency serving, orchestration, and optional feature-management platforms. -->
+```text
+past information → X
+future outcome   → y
+```
 
-The architecture can begin with ordinary data infrastructure. A feature platform packages recurring responsibilities, but the underlying jobs remain familiar: preserve history, calculate features, publish recent values, retrieve them quickly, and record evidence. The right stack depends on how many models share features and how much platform work the team can operate.
+The leakage rule applies primarily to constructing $$X$$. That gives the dataset:
 
-A common baseline uses a warehouse or lakehouse for historical feature values. dbt or Spark performs batch transformations. Kafka with Flink or Spark Structured Streaming handles fast updates, while Redis or DynamoDB provides low-latency lookup. Airflow, Dagster, or a managed workflow service schedules materialization and backfills. This design works well where a small number of models can share clear contracts without a dedicated feature platform.
+$$
+(X_t,\ y_{t+\Delta})
+$$
 
-**Feast** adds an open-source feature registry and retrieval layer over chosen offline and online stores. Its historical retrieval supports point-in-time joins. Materialization loads feature values into the online store, which normally keeps the latest value for each entity key. Push sources can publish fresh values to online and offline destinations. The team still owns feature computation pipelines, storage, orchestration, and operations.
+which asks the meaningful causal question:
 
-**Amazon SageMaker Feature Store** provides managed feature groups with online, offline, or combined storage. The online store keeps the latest record for low-latency inference, while the offline store preserves historical records in Amazon S3 for training and batch work. Records can enter through streaming or batch ingestion.
+Using what was knowable then, could we predict what happened later?
 
-**Databricks Feature Engineering in Unity Catalog** provides governed feature tables, lineage, discovery, and point-in-time joins. Its recommended managed serving path is Databricks Online Feature Store, powered by Lakebase Autoscaling. A Unity Catalog feature table remains the durable offline source, and `publish_table` synchronizes its values into the low-latency store.
+### A complete historical training row
 
-Databricks supports three synchronization modes. `TRIGGERED`, the default, runs incremental updates through an API call or schedule. `CONTINUOUS` keeps a streaming pipeline running for fast updates. `SNAPSHOT` performs a full point-in-time copy and suits bulk replacement. Teams that need a separately operated store can still publish to a supported third-party destination such as DynamoDB.
+Imagine the production request on March 5 looked conceptually like:
 
-The current Online Feature Store and legacy Databricks online tables are different products. Legacy online tables are no longer supported. New feature-serving designs should use the Lakebase-backed Online Feature Store, or a supported third-party store where its operational tradeoffs are intentional.
+```text
+Prediction request:
+    user_id = Alice
+    amount = £500
+    merchant = ElectronicsCo
+    time = 10:00
 
-Cloud-managed and commercial feature platforms can reduce platform engineering. They still need a contract for identity and time so both paths select the same logical value. Freshness and materialization rules control how that value reaches production. Fallback and ownership rules govern failures. A product selection cannot decide how old an inventory count may be or whether a missing risk feature should block a transaction.
+Online state:
+    tx_24h = 4
+    avg_amount_30d = £72
+    account_age_days = 435
 
-## Decide Who Owns Definitions, Storage, And Incidents
-<!-- section-summary: Clear owners connect source health, feature meaning, materialization, online reliability, serving fallback, and model use. -->
+Computed now:
+    amount_ratio = 500 / 72 = 6.94
+```
 
-The two-path design crosses team boundaries. Clear ownership answers two practical questions during an incident: who can repair the broken boundary, and who can decide whether predictions remain safe? Ownership should match the failure boundary.
+A correct training system should reconstruct essentially the same feature vector:
 
-The source owner maintains event schema, availability, and correction policy. The feature owner maintains the definition, entity keys, time rules, tests, version, and freshness target. The platform owner maintains offline storage, materialization, online capacity, access, and observability. The serving owner maintains lookup integration, request-time transformations, latency budget, fallback, and prediction logging. The model owner confirms that training and serving reference the approved feature version.
+```text
+Historical event:
+    user_id = Alice
+    amount = £500
+    merchant = ElectronicsCo
+    historical_cutoff = Mar 5 10:00
 
-Operational objectives follow those responsibilities. Useful signals include source watermark delay, materialization success and lag, online read latency, missing-key rate, feature age, version mismatch, fallback rate, and offline-online comparison results.
+Historical feature lookup:
+    tx_24h at cutoff = 4
+    avg_amount_30d at cutoff = £72
+    account_age_days at cutoff = 435
 
-An alert should identify the feature, model route, affected segment, latest source watermark, current age, fallback status, and owning team. That context lets the first responder contain the decision path before tracing the deeper cause.
+Recomputed:
+    amount_ratio = 6.94
+```
 
-## The Main Idea
-<!-- section-summary: One feature meaning needs a historically correct path for learning and a fresh low-latency path for live decisions. -->
+Training should not instead see:
 
-Offline and online features are two delivery paths for the same model input. The separation exists because learning from history and serving a live request place very different demands on storage and computation.
+```text
+today's tx_24h
+today's average amount
+today's account state
+```
 
-The offline path preserves history and reconstructs what was knowable for each past decision. The online path delivers recent values under the live request's latency and availability budget. Materialization or streaming publication connects them.
+That correspondence is the core of offline/online feature design.
 
-Reliable operation depends on shared semantics and observable delivery. Entity keys, feature versions, event and availability time, window boundaries, defaults, freshness, request-time transformations, and fallbacks must agree. Point-in-time tests prove historical reconstruction. Online probes prove latency and freshness. Vector replay compares the actual serving input with the value reconstructed from history. Failure injection confirms that stale, missing, or unavailable features follow the approved safety path.
+### The best test: time-travel production inference
 
-Start with an offline path for every model that learns from historical data. Add an online path only for live decisions that need shared, precomputed features under a tight latency budget. That choice keeps the design proportional to the production problem.
+A powerful way to reason about correctness is this: Suppose you could travel back to:
+
+```text
+March 5 at 10:00
+```
+
+and send the actual production request. You would get feature vector:
+
+$$
+X_{\text{prod},t}
+$$
+
+Now reconstruct the same event today using your offline training pipeline:
+
+$$
+X_{\text{offline},t}
+$$
+
+Ideally:
+
+$$
+\boxed{
+X_{\text{offline},t}
+\approx
+X_{\text{prod},t}
+}
+$$
+
+Any difference deserves explanation. This is stronger than merely unit-testing SQL.
+
+## How Do Golden Cases and Parity Tests Compare Both Paths?
+
+<!-- section-summary: Golden event histories specify exact values at window boundaries and run through offline and online implementations. -->
+
+### Test feature values with golden cases
+
+For important features, construct known event histories. For example:
+
+```text
+User Alice:
+
+09:00 transaction
+09:30 transaction
+10:01 transaction
+
+feature:
+transactions_last_hour
+
+prediction cutoff:
+10:00
+```
+
+Expected result:
+
+```text
+2
+```
+
+Then run the same logical test against:
+
+```text
+offline implementation
+online implementation
+```
+
+Both should return:
+
+```text
+2
+```
+
+This catches:
+
+```text
+window-boundary differences
+timezone bugs
+inclusive/exclusive mistakes
+null differences
+incorrect event timestamps
+different filtering rules
+```
+
+A mature feature system frequently treats these as **contract tests**.
+
+### Window boundaries matter more than they look
+
+Consider:
+
+$$
+[t-24h,t)
+$$
+
+versus:
+
+$$
+[t-24h,t]
+$$
+
+The second includes the current event. Suppose the feature is:
+
+```text
+transactions_last_24h
+```
+
+and we're currently predicting whether the transaction occurring at $$t$$ is fraud. Should that transaction itself count? Usually not if the intended feature means **previous transactions**.
+
+Then the correct window is:
+
+$$
+[t-24h,t)
+$$
+
+One bracket can create leakage. This is why feature definitions should precisely document boundaries.
+
+### Online/offline consistency does not mean zero difference
+
+In real systems, exact equality can be impossible. Imagine streaming events:
+
+```text
+transaction happens 10:00:00
+prediction requested 10:00:01
+stream updates feature 10:00:03
+```
+
+The production model at 10:00:01 sees the old value. A historical batch computation months later knows the transaction occurred at 10:00:00 and might include it. That creates a subtle discrepancy.
+
+There are two approaches.
+
+#### Ideal historical replay
+
+Model the actual ingestion delay and reproduce what production could know. Very accurate, more complicated.
+
+#### Semantic event-time reconstruction
+
+Use event timestamps and assume events were immediately available. Simpler, potentially optimistic. Neither choice is universally right.
+
+What matters is understanding the assumption.
+
+## When Does a Feature Platform Earn Its Operational Cost?
+
+<!-- section-summary: A warehouse or request-only design is frequently enough for one team, batch predictions, and few shared features. -->
+
+### Online feature stores are not mandatory
+
+At this point people frequently conclude:
+
+“We need a feature store.”
+
+Not necessarily. Suppose your system has:
+
+```text
+20 features
+one model
+one ML team
+hourly batch predictions
+no real-time inference
+```
+
+Then a warehouse may be entirely sufficient. Or perhaps online predictions only use information already in the request:
+
+```text
+text
+image
+transaction details
+sensor measurement
+```
+
+Again, no online feature store may be needed. Infrastructure should follow the workload.
+
+### When a feature platform starts becoming valuable
+
+A feature platform earns its cost after the organization repeatedly faces problems such as:
+
+```text
+many models reuse customer_30d_spend
+
+historical point-in-time joins are repeatedly rebuilt
+
+teams implement the same feature differently
+
+production needs sub-10-ms lookup
+
+hundreds of features need freshness monitoring
+
+batch and streaming features coexist
+
+feature ownership becomes unclear
+
+schema evolution is breaking models
+
+offline/online skew becomes frequent
+```
+
+Then central infrastructure can provide:
+
+```text
+feature definitions
+offline retrieval
+online retrieval
+materialization
+metadata
+lineage
+validation
+monitoring
+ownership
+access control
+```
+
+The point of a feature store is not primarily:
+
+“a database for features.”
+
+It is closer to:
+
+**a system that manages the lifecycle and contract of ML inputs across training and serving.**
+
+### A feature store usually has several conceptual pieces
+
+Don't let product terminology obscure the architecture. A feature platform frequently looks roughly like:
+
+```text
+                  Feature definitions
+                         │
+          ┌──────────────┼───────────────┐
+          │              │               │
+          ▼              ▼               ▼
+      computation     metadata        validation
+          │
+    ┌─────┴──────┐
+    ▼            ▼
+offline        online
+store          store
+    │            │
+    ▼            ▼
+training       serving
+datasets       requests
+```
+
+Some products implement all of this. Others provide only part of it. The important thing is the capability, not the product label.
+
+### Feature ownership matters because features are production dependencies
+
+Suppose:
+
+```text
+user_avg_spend_30d
+```
+
+suddenly becomes null for 70% of users. Who responds? Possibilities:
+
+```text
+model team
+data engineering team
+feature platform team
+source-system team
+```
+
+If nobody knows, model reliability suffers. A production feature therefore needs operational ownership similar to a service:
+
+```text
+owner
+source
+definition
+SLA
+freshness expectation
+schema
+dependencies
+consumers
+incident policy
+```
+
+Across many teams, those governance details can be just as important as the SQL transformation.
+
+### Versioning features
+
+Suppose we change:
+
+```text
+average_spend_30d
+```
+
+from:
+
+```text
+includes refunds
+```
+
+to:
+
+```text
+excludes refunds
+```
+
+This is not merely an implementation optimization. The feature's meaning changed. Treating the new values as if they were the same feature can silently alter model behavior.
+
+Often the safer approach is conceptually:
+
+```text
+average_spend_30d_v1
+average_spend_30d_v2
+```
+
+or an equivalent versioned definition. General rule:
+
+$$
+\boxed{\text{semantic change} \Rightarrow \text{new feature version}}
+$$
+
+Changing an implementation does not always require a new logical feature version when the meaning and output contract remain identical.
+
+### Offline and online features are fundamentally a cache-consistency problem
+
+There is an interesting systems perspective here. Suppose the true feature function is:
+
+$$
+F(u,t)
+$$
+
+An offline engine can recompute $$F$$ from historical data. The online system frequently stores an approximation:
+
+$$
+\hat F(u,t')
+$$
+
+where:
+
+$$
+t' \le t
+$$
+
+because it was last updated slightly earlier. So the online store behaves partly like a cache of derived state. Its correctness depends on:
+
+```text
+how it is populated
+how quickly it updates
+how failures are handled
+how staleness is measured
+```
+
+From this viewpoint, feature stores overlap with classic distributed-systems ideas:
+
+```text
+materialized views
+caches
+eventual consistency
+stream processing
+versioning
+SLAs
+data lineage
+```
+
+ML did not invent most of these problems. It assembled them around model inputs.
+
+### Features are snapshots of world state
+
+A prediction happens at a particular moment:
+
+$$
+t
+$$
+
+At prediction time, the model consumes a compact description of the world as it exists at that moment:
+
+$$
+X_t =
+[
+x_1(t),
+x_2(t),
+...,
+x_n(t)
+]
+$$
+
+For example:
+
+```text
+customer spending state
+account risk state
+merchant state
+current transaction state
+```
+
+Training requires many snapshots:
+
+$$
+X_{t_1}, X_{t_2}, ..., X_{t_N}
+$$
+
+Serving needs one snapshot:
+
+$$
+X_{\text{now}}
+$$
+
+Therefore:
+
+```text
+Offline feature infrastructure
+≈ historical world-state reconstruction
+
+Online feature infrastructure
+≈ current world-state retrieval
+```
+
+The distinction is easiest to understand as historical reconstruction for training and current-state lookup for serving.
+
+### Why historical reconstruction is often harder than online serving
+
+At first you might think online systems are harder because they require low latency. But historical features frequently have the nastier correctness problem. Suppose:
+
+```text
+10 million training examples
+500 features
+12 months
+```
+
+For every training row you need:
+
+```text
+correct entity
+correct historical version
+correct event cutoff
+correct window
+correct source version
+no future information
+```
+
+The training dataset may effectively perform billions of temporal joins. One subtle leakage bug can make:
+
+```text
+offline AUC = 0.96
+```
+
+while production achieves:
+
+```text
+AUC = 0.74
+```
+
+because the training path unintentionally exposed information that belonged to the future.
+
+### Think about latency as a budget
+
+Suppose the prediction API has:
+
+$$
+100\text{ ms}
+$$
+
+total latency budget. Perhaps:
+
+```text
+network             10 ms
+feature retrieval   20 ms
+request features     5 ms
+model inference     15 ms
+business rules      10 ms
+safety margin       40 ms
+```
+
+Now imagine retrieving 100 features from 15 independent databases. The slowest dependency controls latency. So online features are frequently grouped and materialized precisely to avoid huge dependency graphs.
+
+Rather than:
+
+```text
+prediction service
+  ├── transaction DB
+  ├── customer DB
+  ├── merchant service
+  ├── analytics DB
+  ├── payments service
+  └── identity service
+```
+
+you might want:
+
+```text
+prediction service
+        │
+        ▼
+online feature store
+```
+
+The feature pipeline absorbs complexity ahead of inference time.
+
+### But centralization introduces a new failure domain
+
+There is a tradeoff. Before:
+
+```text
+many downstream dependencies
+```
+
+After:
+
+```text
+one critical feature-serving dependency
+```
+
+The online feature layer therefore frequently needs:
+
+```text
+high availability
+replication
+timeouts
+local caching
+fallback values
+staleness monitoring
+load shedding
+capacity planning
+```
+
+A feature platform does not remove distributed-systems problems. It concentrates them into an infrastructure layer that can hopefully solve them once.
+
+### You should monitor features, not just models
+
+Suppose the model service is healthy:
+
+```text
+HTTP 200
+latency 14 ms
+CPU fine
+```
+
+But upstream data broke. Now:
+
+```text
+customer_age_days:
+    normally mean = 840
+    today mean = 0
+```
+
+The model technically works. Its inputs are nonsense. Feature monitoring can examine:
+
+```text
+missing rate
+freshness
+distribution
+range
+cardinality
+schema
+update frequency
+lookup latency
+offline/online consistency
+```
+
+For example:
+
+$$
+P(X=\text{NULL})
+$$
+
+might jump:
+
+$$
+0.2\% \rightarrow 45\%
+$$
+
+That stale input is an infrastructure incident even when the prediction endpoint continues returning successful responses.
+
+### Online/offline skew and natural data drift are different
+
+This distinction matters.
+
+#### Training-serving skew
+
+Your pipelines compute different things. Example:
+
+```text
+training count uses approved transactions
+serving count uses all transactions
+```
+
+This is a software/data-system bug.
+
+#### Data drift
+
+Reality changed. Example:
+
+```text
+average purchase amount increased
+during Christmas season
+```
+
+The feature computation is correct, but:
+
+$$
+P_{\text{today}}(X)
+\neq
+P_{\text{training}}(X)
+$$
+
+This is not necessarily a pipeline bug. Good monitoring tries to tell these apart.
+
+### The full lifecycle of one feature
+
+Take:
+
+```text
+failed_payments_7d
+```
+
+#### Step 1 — Define it
+
+$$
+f(u,t)
+=
+\#\{\text{failed payments by }u\text{ in }[t-7d,t)\}
+$$
+
+#### Step 2 — Historical computation
+
+Calculate it for every training cutoff.
+
+```text
+user A, Jan 5 → 2
+user A, Jan 9 → 4
+user B, Jan 7 → 0
+```
+
+#### Step 3 — Train model
+
+Model learns relationships involving that historical feature.
+
+#### Step 4 — Production computation
+
+Update that same logical seven-day count whenever a new payment event arrives.
+
+#### Step 5 — Materialize
+
+Write latest values:
+
+```text
+A → 4
+B → 0
+```
+
+to an online store.
+
+#### Step 6 — Serve
+
+Prediction request:
+
+```text
+GET user:A
+```
+
+returns:
+
+```text
+failed_payments_7d = 4
+```
+
+#### Step 7 — Validate
+
+Compare offline and online implementations on known cases.
+
+#### Step 8 — Monitor
+
+Check:
+
+```text
+freshness
+missingness
+distribution
+latency
+```
+
+That is essentially the entire online/offline feature lifecycle.
+
+### The architecture in one picture
+
+A fairly common architecture is:
+
+```text
+                       RAW EVENTS
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+             ▼                           ▼
+      Data lake / warehouse          Event stream
+             │                           │
+             ▼                           ▼
+       Batch feature jobs          Stream feature jobs
+             │                           │
+             │                           │
+             ▼                           ▼
+      OFFLINE FEATURE STATE ──────► ONLINE FEATURE STATE
+             │                     materialization
+             │                           │
+             ▼                           ▼
+      point-in-time joins           key lookup
+             │                           │
+             ▼                           ▼
+       training dataset            request features
+             │                           │
+             ▼                           │
+          training                       │
+             │                           │
+             ▼                           │
+            model ───────────────────────┘
+                           │
+                           ▼
+                       prediction
+```
+
+Real architectures may connect the components differently, while the historical-versus-current retrieval reasoning remains unchanged.
+
+### Three clocks you should keep in your head
+
+A useful extension is to distinguish three times.
+
+### Event time
+
+When the real-world thing happened.
+
+```text
+transaction: 10:00
+```
+
+### Feature time
+
+The time represented by a feature calculation.
+
+```text
+tx_count_24h as of 10:00
+```
+
+### Prediction time
+
+When the model decision is made.
+
+```text
+10:00:02
+```
+
+Sometimes you also need:
+
+```text
+ingestion time
+computation time
+materialization time
+```
+
+Most ugly feature bugs ultimately involve misunderstanding one of these timestamps.
+
+### A useful correctness hierarchy
+
+Design the feature system by answering the following questions in order.
+
+1. **Semantic correctness**
+
+What exactly does the feature mean?
+
+2. **Temporal correctness**
+
+Was only information available at the cutoff used?
+
+3. **Training-serving consistency**
+
+Do historical and production paths implement the same meaning?
+
+4. **Freshness**
+
+Is the value recent enough?
+
+5. **Availability**
+
+What happens when the value can't be retrieved?
+
+6. **Latency**
+
+Can prediction obtain it within the serving budget?
+
+7. **Cost**
+
+Is the infrastructure justified? Teams sometimes optimize #6 before establishing #1–3. That's how you get very fast delivery of the wrong numbers.
+
+### The simplest architecture that works is often best
+
+You can think of feature infrastructure as a ladder.
+
+#### Level 0
+
+Model receives everything directly in request.
+
+```text
+request → model
+```
+
+Use when sufficient.
+
+#### Level 1
+
+Warehouse-based batch features.
+
+```text
+warehouse → features → batch predictions
+```
+
+Enough for many use cases.
+
+#### Level 2
+
+Precomputed online features.
+
+```text
+warehouse/jobs → online DB → real-time model
+```
+
+Useful for moderate real-time systems.
+
+#### Level 3
+
+Batch + streaming feature pipelines. Useful when some state must update continuously.
+
+#### Level 4
+
+Dedicated feature platform. Useful when many teams/models/features need shared governance and serving infrastructure. You shouldn't jump to Level 4 merely because sophisticated companies use it.
+
+Complexity has a carrying cost.
+
+### What must be owned centrally, and what need not be
+
+At scale, a useful split is:
+
+#### ML/domain teams own
+
+```text
+what the feature means
+whether it is useful
+acceptable freshness
+missing-value semantics
+```
+
+#### Platform/data infrastructure owns
+
+```text
+storage
+computation primitives
+historical retrieval
+online serving
+monitoring infrastructure
+materialization
+```
+
+#### Source-system teams own
+
+```text
+upstream event correctness
+schema guarantees
+availability
+```
+
+The exact division varies. What matters is that every failure has an identifiable owner.
+
+### The hardest bugs are often semantically plausible
+
+A broken feature doesn't necessarily look absurd. Suppose:
+
+```text
+transactions_last_7d
+```
+
+should equal:
+
+```text
+6
+```
+
+but production calculates:
+
+```text
+7
+```
+
+Everything still looks plausible. The model produces a prediction. No exception occurs.
+
+That's why feature bugs can survive for months. They are frequently **silent correctness failures**, rather than application crashes. Testing therefore needs exact examples and temporal invariants, not merely service uptime.
+
+### The two key invariants
+
+Most of the subject can be reduced to two invariants.
+
+#### Invariant 1: No future knowledge
+
+For prediction at $$t$$:
+
+$$
+\boxed{X_t\text{ must be derived only from information knowable at }t}
+$$
+
+This protects the validity of training evaluation.
+
+#### Invariant 2: Same meaning everywhere
+
+$$
+\boxed{
+f_{\text{offline}}
+\equiv
+f_{\text{online}}
+}
+$$
+
+where equivalence means **same semantic contract**, even if implemented differently. This protects training-serving consistency. Nearly every best practice you listed follows from one of these two invariants.
+
+### A concrete end-to-end example
+
+Suppose Netflix-like recommendations want to predict:
+
+Will user 42 watch movie X?
+
+At:
+
+```text
+Friday 20:00
+```
+
+The model uses:
+
+```text
+user_watch_count_7d
+user_avg_session_minutes_30d
+genre_watch_fraction_90d
+movie_popularity_1h
+current_device
+current_hour
+```
+
+Some features are slowly changing:
+
+```text
+user_avg_session_minutes_30d
+genre_watch_fraction_90d
+```
+
+Maybe batch them hourly. One changes rapidly:
+
+```text
+movie_popularity_1h
+```
+
+Maybe stream it. Two are already known in the request:
+
+```text
+current_device
+current_hour
+```
+
+So production might do:
+
+```text
+Request
+  user=42
+  movie=X
+  device=TV
+     │
+     ├── lookup user features
+     │
+     ├── lookup movie features
+     │
+     ├── derive current_hour
+     │
+     ▼
+  feature vector
+     │
+     ▼
+   ranking model
+```
+
+For training, suppose the historical impression happened:
+
+```text
+March 17 20:00
+```
+
+Training must retrieve:
+
+```text
+user_watch_count_7d as of March 17 20:00
+user_avg_session_minutes_30d as of March 17 20:00
+genre_watch_fraction_90d as of March 17 20:00
+movie_popularity_1h as of March 17 20:00
+device from that historical request
+hour = 20
+```
+
+not their values today. That is offline/online feature engineering in one example.
+
+### What to remember
+
+You can compress the whole subject into this:
+
+> **Training needs to reconstruct what the model would have known in the past. Serving needs to retrieve what the model knows now.**
+
+Because those are different workloads, we commonly use different physical systems:
+
+$$
+\boxed{
+\text{Offline}
+=
+\text{historical, high-throughput, point-in-time retrieval}
+}
+$$
+
+$$
+\boxed{
+\text{Online}
+=
+\text{current, low-latency, high-availability retrieval}
+}
+$$
+
+But they must implement the same logical feature contract:
+
+$$
+\boxed{
+\text{same meaning}
++
+\text{correct time}
++
+\text{acceptable freshness}
+}
+$$
+
+A useful mental model is therefore:
+
+```text
+                     REAL WORLD
+                         │
+                         ▼
+                 historical events
+                         │
+                    FEATURE LOGIC
+                         │
+                ┌────────┴────────┐
+                │                 │
+                ▼                 ▼
+         reconstruct past    maintain present
+                │                 │
+                ▼                 ▼
+             OFFLINE            ONLINE
+                │                 │
+                ▼                 ▼
+             training          inference
+```
+
+**Offline features let the model learn from faithfully reconstructed past states. Online features let the same model act on a sufficiently fresh version of the present state.** Everything else—feature stores, materialization, as-of joins, streaming pipelines, freshness SLAs, versioning, skew tests and feature ownership—is engineering machinery for preserving that invariant.
 
 ![Parity tests, a freshness service-level objective, safe fallbacks, and a repair loop for aligned offline and online features](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/offline-online-alignment-summary.png)
 
 *Alignment combines value parity, bounded staleness, explicit fallback behavior, and a tested path to repair and rematerialize broken features.*
 
-## References
+## Check Your Answers
 
-- [Feast documentation: Online store](https://docs.feast.dev/getting-started/components/online-store)
-- [Feast documentation: Point-in-time joins](https://docs.feast.dev/getting-started/concepts/point-in-time-joins)
-- [Feast documentation: Quickstart workflow and materialization](https://docs.feast.dev/getting-started)
-- [Feast documentation: Push sources](https://docs.feast.dev/reference/data-sources/push)
-- [Amazon SageMaker AI documentation: Feature Store](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store.html)
-- [Amazon SageMaker AI documentation: Feature Store concepts](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-concepts.html)
-- [Amazon SageMaker AI documentation: Online store](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-storage-configurations-online-store.html)
-- [Amazon SageMaker AI documentation: Record TTL](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-time-to-live.html)
-- [Databricks documentation: Feature Store](https://docs.databricks.com/aws/en/machine-learning/feature-store/)
-- [Databricks documentation: Point-in-time feature joins](https://docs.databricks.com/aws/en/machine-learning/feature-store/time-series)
-- [Databricks documentation: Online Feature Stores](https://docs.databricks.com/aws/en/machine-learning/feature-store/online-feature-store)
-- [Databricks documentation: Migrate from legacy and third-party online tables](https://docs.databricks.com/aws/en/machine-learning/feature-store/migrate-from-online-tables)
-- [Databricks documentation: Publish features to a third-party online store](https://docs.databricks.com/aws/en/machine-learning/feature-store/publish-features)
+Use these answers to revisit the evidence, boundaries, and operating decisions behind each question.
+
+:::expand[Why Do Historical Training and Live Prediction Need Different Feature Paths?]{kind="recap"}
+Training retrieves features for very many entities at many historical cutoffs, favouring cheap history, analytical scans, and throughput.
+
+Live prediction retrieves a small current vector under high request volume, low latency, and high availability. Different physical systems serve those workloads while one logical feature definition connects them.
+:::
+
+:::expand[How Does the Offline Path Reconstruct Historical World State?]{kind="recap"}
+Both paths preserve the entity, source meaning, filters, units, window boundaries, timestamps, deduplication, null states, version, and transformation semantics.
+
+Their implementations can differ. Semantic equivalence under equivalent information matters more than running identical code against sources that describe different facts.
+:::
+
+:::expand[How Does the Online Path Deliver Current State Within a Latency Budget?]{kind="recap"}
+The offline path preserves feature history and performs point-in-time retrieval for every entity and prediction timestamp.
+
+It uses event and availability times, historical dimensions, explicit windows, and label separation to reconstruct what the model could know then. A current-state join would rewrite history and can leak future information.
+:::
+
+:::expand[How Do Materialization and Streaming Trade Freshness for Serving Cost?]{kind="recap"}
+The online path commonly retrieves latest usable state by entity key and combines it with request fields and lightweight derived values.
+
+Precomputed aggregates avoid repeated historical scans and many synchronous dependencies. Feature retrieval, request transformation, model, policy, and network all share one end-to-end latency and availability budget.
+:::
+
+:::expand[How Should Requests Handle Missing, Stale, or Mismatched Values?]{kind="recap"}
+Materialization computes expensive values ahead of requests and publishes them to low-latency storage.
+
+Batch schedules suit slowly changing features, while streaming updates suit decisions sensitive to recent events. Faster updates reduce staleness but add state, ordering, retry, capacity, and operational complexity. Each feature sets freshness from product need.
+:::
+
+:::expand[How Do Time Boundaries Keep Features and Later Labels Separate?]{kind="recap"}
+The contract distinguishes true zero, no history, unknown entity, not yet computed, stale value, failed lookup, and schema or version mismatch.
+
+A request may use a documented default, degraded model, synchronous calculation, rejection, or manual path according to risk. Value timestamps and contract validation prevent silent fallback.
+:::
+
+:::expand[How Do Golden Cases and Parity Tests Compare Both Paths?]{kind="recap"}
+Golden event histories specify exact values at window boundaries and run through offline and online implementations.
+
+Production parity records live values and later reconstructs matched cases offline. Exact equality suits deterministic features; freshness-aware tolerances explain expected lag. Feature-level comparison diagnoses errors earlier than prediction parity alone.
+:::
+
+:::expand[When Does a Feature Platform Earn Its Operational Cost?]{kind="recap"}
+A warehouse or request-only design is frequently enough for one team, batch predictions, and few shared features.
+
+A platform earns its cost after many teams repeatedly need reusable definitions, point-in-time joins, materialization, low-latency state, freshness monitoring, governance, and ownership. Complexity should follow the observed workload rather than precede it.
+:::
+
+## References

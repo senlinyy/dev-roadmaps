@@ -9,389 +9,1948 @@ id: "article-mlops-training-pipelines-logging-training-outputs-artifacts"
 
 ## Table of Contents
 
-1. [A Successful Job Can Still Leave No Usable Model](#a-successful-job-can-still-leave-no-usable-model)
-2. [Understand The Outputs A Training Job Must Produce](#understand-the-outputs-a-training-job-must-produce)
-3. [Put Each Output In The Right Store](#put-each-output-in-the-right-store)
-4. [Define The Files Every Successful Training Run Must Produce](#define-the-files-every-successful-training-run-must-produce)
-5. [Publish The Model Bundle Safely](#publish-the-model-bundle-safely)
-6. [Give The Training Run And Each Retry Separate IDs](#give-the-training-run-and-each-retry-separate-ids)
-7. [Record Where The Model And Its Data Came From](#record-where-the-model-and-its-data-came-from)
-8. [Implement The Output Structure With MLflow 3](#implement-the-output-structure-with-mlflow-3)
-9. [Implement The Output Structure With W&B Artifacts](#implement-the-output-structure-with-wb-artifacts)
-10. [Protect, Retain, And Delete Training Outputs](#protect-retain-and-delete-training-outputs)
-11. [Select One Trained Model For Release Review](#select-one-trained-model-for-release-review)
-12. [Recover After A Model Bundle Fails To Publish](#recover-after-a-model-bundle-fails-to-publish)
-13. [The Main Idea](#the-main-idea)
-14. [References](#references)
+1. [What Must Survive After a Training Machine Disappears?](#what-must-survive-after-a-training-machine-disappears)
+2. [How Are Training Outputs Stored and Published Safely?](#how-are-training-outputs-stored-and-published-safely)
+3. [How Do Immutable Artifacts, Attempts, and Checkpoints Get Their Identities?](#how-do-immutable-artifacts-attempts-and-checkpoints-get-their-identities)
+4. [What Lineage and Model-Bundle Information Makes an Artifact Usable?](#what-lineage-and-model-bundle-information-makes-an-artifact-usable)
+5. [How Are Candidate Creation, Evaluation, and Registry Promotion Separated?](#how-are-candidate-creation-evaluation-and-registry-promotion-separated)
+6. [How Do Retry-Safe Publishing and Artifact Tools Preserve History?](#how-do-retry-safe-publishing-and-artifact-tools-preserve-history)
+7. [How Should Retention and Deletion Follow Artifact Meaning?](#how-should-retention-and-deletion-follow-artifact-meaning)
+8. [What Does the Complete Training Artifact Workflow Produce?](#what-does-the-complete-training-artifact-workflow-produce)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## A Successful Job Can Still Leave No Usable Model
-<!-- section-summary: Training success and evidence publication are separate outcomes, so release waits for a complete verified artifact bundle. -->
+A cloud GPU finishes a six-hour training job and shuts down. If the only copy of the result was `/home/ubuntu/model.pt`, the model disappears with the machine. Even if the file was uploaded, the team may still lack the tokenizer, label mapping, validation metrics, configuration, dataset identity, or evidence that every file arrived intact.
 
-An overnight training job exits successfully. The experiment page contains a final accuracy score and two files named `model.pkl`. One file came from the last epoch and the other came from the best validation checkpoint, yet neither filename says which is which. The resolved configuration is missing. The dataset field says `latest`. No input schema or sample prediction proves that either model can load and score data.
+A **training artifact** is a durable input or output that remains useful after the computation ends. Model bundles support inference. Checkpoints support resuming training. Metrics describe behavior. Manifests, lineage, and environment records explain what was produced and how. Logs and diagnostics help investigate the execution.
 
-The release reviewer now faces a concrete decision: select one file for shadow testing or hold the candidate. Choosing would mean guessing which model produced the reported metric. The reviewer holds the release, even though the training calculation finished and the compute platform reported success.
+Artifact engineering turns a temporary training process into a result that another system can identify, verify, evaluate, register, retain, and eventually delete safely. Training is complete only after the required output contract exists in durable storage and cannot be mistaken for a partial upload.
 
-This situation exposes two outcomes that need separate states. **Training success** means the algorithm completed its computation. **Publication success** means the required evidence was staged, validated, and committed as one identifiable bundle. A production pipeline needs both outcomes before it can create a model candidate.
+The following questions trace a result from temporary files on a training machine to durable evidence that another system can safely consume:
 
-```mermaid
-flowchart TD
-    A["Training Completes<br/>(the computation produced outputs)"] --> B["Stage Evidence<br/>(one attempt-specific workspace)"]
-    B --> C["Verify Contract<br/>(files, digests, schema, and test vector)"]
-    C --> D{"Contract Passes?"}
-    D -->|Yes| E["Commit Bundle<br/>(one immutable visible manifest)"]
-    E --> F["Create Candidate<br/>(eligible for release review)"]
-    D -->|No| G["Quarantine Attempt<br/>(release remains blocked)"]
+1. **What Must Survive After a Training Machine Disappears?**
+2. **How Are Training Outputs Stored and Published Safely?**
+3. **How Do Immutable Artifacts, Attempts, and Checkpoints Get Their Identities?**
+4. **What Lineage and Model-Bundle Information Makes an Artifact Usable?**
+5. **How Are Candidate Creation, Evaluation, and Registry Promotion Separated?**
+6. **How Do Retry-Safe Publishing and Artifact Tools Preserve History?**
+7. **How Should Retention and Deletion Follow Artifact Meaning?**
+8. **What Does the Complete Training Artifact Workflow Produce?**
+
+## What Must Survive After a Training Machine Disappears?
+<!-- section-summary: Training artifacts preserve the model bundle, checkpoints, metrics, provenance, and diagnostics needed after temporary compute is gone. -->
+
+Training compute is temporary, so completion has meaning only when the evidence needed by later systems has crossed a durable boundary.
+
+To understand training artifacts, start with a deceptively simple question:
+
+**When a training process finishes, what evidence must remain after the machine disappears?**
+
+The answer is much more than `model.pt`. A training machine may exist for only a few hours:
+
+```text
+GPU machine starts
+      ↓
+loads data
+      ↓
+trains model
+      ↓
+writes outputs
+      ↓
+machine disappears
 ```
 
-A model file is one result of training. A committed artifact bundle supplies the evidence needed to evaluate, reproduce, and release that result safely.
+Anything left only on that machine is effectively gone. So the purpose of training artifacts is to turn a temporary computation into **durable, identifiable, reproducible outputs that other systems can consume**. The fundamental transformation is:
 
-## Understand The Outputs A Training Job Must Produce
-<!-- section-summary: An evidence system preserves the model, its meaning, its origin, and the checks that make it usable after the training process ends. -->
-
-A **training artifact** is a durable output that another person or system needs after the training process ends. Model weights and the evaluation report belong in this category.
-
-The input-output signature, resolved configuration, dependency record, and bundle manifest are artifacts too. Together they explain what the model is, how it was produced, and whether it passed the expected checks.
-
-The word “output” is broader than “artifact.” A job also emits log events, metric points, parameters, tags, and references to governed data. Those signals belong to the evidence system, while each has a different storage job. Treating every output as a file creates a large bundle that is difficult to search. Treating every output as a tracking metric strips away structure and context.
-
-### Follow Training Outputs From Computation To Review
-
-The lifecycle starts inside the training process and ends at a control boundary. The process reports progress while it runs. It writes durable files for review and reuse. The publisher verifies those files and commits a manifest. A registry can then point to one immutable model package and its evidence. Deployment remains a separate decision.
-
-This design gives each consumer a stable entry point. An on-call engineer searches events. A data scientist compares metrics. A reviewer opens reports and test samples. A serving system reads the model signature and package. A governance process follows dataset, code, and dependency identities from the manifest.
-
-## Put Each Output In The Right Store
-<!-- section-summary: Events, metrics, metadata, artifacts, governed data references, and registry candidates differ in volume, mutability, access, and query patterns. -->
-
-The storage boundary should match the question a consumer asks. An operator searching for the cause of an upload failure has a different need from a release process fetching an immutable model package.
-
-During one attempt, the training process emits several output types at the same time. Events and metrics describe execution and results. Parameters and tags make those records searchable. Artifacts and governed data references preserve evidence across process boundaries. The registry later points to one reviewed model identity without absorbing every source object.
-
-```mermaid
-flowchart TD
-    A["Training Process<br/>(one running attempt)"] --> B["Log Events<br/>(what happened and when)"]
-    A --> C["Metrics<br/>(numeric values across steps and datasets)"]
-    A --> D["Parameters And Tags<br/>(searchable run identity and choices)"]
-    A --> E["Durable Artifacts<br/>(files required after the process exits)"]
-    A --> F["Governed Data References<br/>(immutable data kept in its source system)"]
-    E --> G["Registry Candidate<br/>(one reviewed model-package identity)"]
-    F --> G
+```text
+code + data + configuration
+             ↓
+       training process
+             ↓
+        durable evidence
 ```
 
-### Use Log Events To Explain Execution
+That durable evidence is the artifact system. An artifact is a durable output or input associated with a computation. For training, examples include:
 
-A **log event** records a discrete fact such as `checkpoint_saved`, `evaluation_started`, or `artifact_upload_failed`. Useful events carry a timestamp, severity, event name, `run_id`, `attempt_id`, and relevant fields. Structured JSON works well because a log backend can filter by state or failure class without parsing free-form sentences.
+```text
+model weights
+checkpoints
+resolved configuration
+tokenizer
+preprocessing state
+metrics report
+dataset manifest
+environment description
+model signature
+plots
+evaluation files
+```
 
-Events serve diagnosis and audit of the execution path. They can be numerous, and many organizations retain verbose events for a shorter period than model evidence. A final metric should still exist as a metric and report artifact; finding it inside thousands of log lines would make comparisons fragile.
+For example:
+
+```text
+run-8472/
+├── resolved_config.yaml
+├── metrics.json
+├── lineage.json
+├── environment.json
+├── model/
+│   ├── weights.safetensors
+│   ├── tokenizer.json
+│   └── model_config.json
+└── checkpoints/
+    ├── step-10000/
+    └── step-20000/
+```
+
+But there is an important distinction. An artifact is usually something you want to **keep and refer to later**. Temporary files are not necessarily artifacts:
+
+```text
+/tmp/shuffled_batch_319.bin
+temporary CUDA cache
+downloaded package cache
+intermediate scratch files
+```
+
+Those exist only to help the process execute. A useful mental model is:
+
+```text
+temporary state
+    ↓
+needed while computation runs
+
+artifact
+    ↓
+needed after computation ends
+```
+
+Suppose training leaves you only this:
+
+```text
+model.pt
+```
+
+Three months later someone asks:
+
+What dataset trained this
+
+Unknown.
+
+What learning rate
+
+Unknown.
+
+Which source-code version
+
+Unknown.
+
+Which tokenizer does it require
+
+Unknown.
+
+Which version of PyTorch
+
+Unknown.
+
+What validation score did it achieve
+
+Unknown.
+
+Was this even the final successful model, or a checkpoint from a failed run
+
+Unknown. The file contains parameters, but almost none of the **meaning surrounding those parameters**. So a useful trained model is really:
+
+$$
+\text{Usable Model}
+=
+\text{Weights}
++
+\text{Interpretation}
++
+\text{Provenance}
+$$
+
+The first is obvious. The latter two are what artifact engineering provides. Instead of saying:
+
+"Training creates some files."
+
+say:
+
+"A successful training run promises to produce these outputs."
+
+For example:
+
+```text
+TRAINING RUN OUTPUT CONTRACT
+
+required:
+    model bundle
+    resolved configuration
+    final metrics
+    lineage metadata
+    artifact manifest
+
+optional:
+    checkpoints
+    plots
+    profiler traces
+    sample predictions
+```
+
+Now pipeline code can depend on the contract.
+
+For example:
+
+```text
+Train
+  ↓
+verify artifact contract
+  ↓
+Evaluate
+  ↓
+Register
+```
+
+If `model/` doesn't exist:
+
+```text
+training output is invalid
+```
+
+If `manifest.json` doesn't exist:
+
+```text
+publishing didn't finish
+```
+
+If metrics are missing:
+
+```text
+candidate cannot enter release review
+```
+
+The important shift is from:
+
+```text
+"training happened"
+```
+
+to:
+
+```text
+"a verified output contract was produced"
+```
+
+Training usually creates at least five categories.
+
+### Model artifacts
+
+These are required to reconstruct inference:
+
+```text
+weights
+architecture metadata
+tokenizer
+vocabulary
+feature transformer
+normalization statistics
+label mapping
+```
+
+For a simple sklearn model:
+
+```text
+model.pkl
+```
+
+may genuinely be enough. For an LLM it might be:
+
+```text
+model/
+├── config.json
+├── model.safetensors
+├── tokenizer.json
+├── tokenizer_config.json
+└── special_tokens_map.json
+```
+
+Call this collection the **model bundle**.
+
+### Checkpoints
+
+A checkpoint exists primarily so training can resume:
+
+```text
+checkpoint/
+├── model weights
+├── optimizer state
+├── scheduler state
+├── RNG state
+└── training progress
+```
+
+This is different from an inference model. For example, inference doesn't normally need:
+
+```text
+Adam optimizer moments
+current gradient-scaler state
+global training step
+```
+
+but resuming training does. So:
+
+```text
+checkpoint ≠ release model
+```
+
+although a checkpoint may later be converted into one.
+
+### Metrics
+
+Examples:
+
+```text
+training_loss
+validation_loss
+accuracy
+F1
+AUC
+BLEU
+perplexity
+```
+
+There are usually two forms. Time-series metrics:
+
+```text
+step 100 → loss 2.7
+step 200 → loss 2.3
+step 300 → loss 2.1
+```
+
+and final summary metrics:
 
 ```json
-{"event":"artifact_verified","run_id":"fraud-ranker-1842","attempt_id":"a2","path":"model/model.skops","sha256":"7b3a...","severity":"INFO"}
+{
+  "validation_loss": 1.82,
+  "validation_accuracy": 0.931
+}
 ```
 
-### Use Metrics For Comparable Numbers
+The time series is useful for debugging and visualization. The final summary is useful for pipeline decisions.
 
-A **metric** is a named numeric measurement associated with a step, dataset, model, or evaluation slice. Training loss over epochs belongs in a metric series. Final average precision on validation snapshot `184` also belongs as a metric. Metric stores support plots, comparisons, filtering, and alerting across runs.
+### Provenance metadata
 
-The metric name and context must travel together. `average_precision=0.43` is ambiguous until the record identifies the validation dataset, evaluation code version, model identity, and any segment. Detailed confusion matrices, calibration curves, and per-segment rows usually belong in a report artifact, with selected headline values copied into the metric store for search.
+This answers:
 
-### Use Parameters And Tags To Find Runs
+Where did this thing come from
 
-A **parameter** records a choice used by the run, such as `learning_rate=0.03`. A **tag** records descriptive identity or lifecycle metadata, such as an owner, source commit, purpose, or config digest. Tracking systems index these small values so teams can filter and compare runs.
+For example:
 
-The full resolved config still belongs as a durable artifact. Flattening a nested config into hundreds of tracking parameters loses types, structure, and migration information. Mutable tags also make poor release identities. Use them as an index, then follow immutable IDs and digests for decisions.
+```json
+{
+  "git_commit": "17a92ef",
+  "dataset_version": "transactions-2026-08-22",
+  "config_hash": "sha256:...",
+  "container_digest": "sha256:...",
+  "seed": 42
+}
+```
 
-### Store Reusable Files As Durable Artifacts
+Without provenance, artifacts become archaeological objects.
 
-A **durable artifact** is a versioned file or bundle that must survive the training process. Model packages, signatures, evaluation reports, resolved configs, dependency locks, and manifests belong here. Artifact storage optimizes for byte integrity, versioning, access control, and longer retention.
+### Logs and diagnostics
 
-Artifact files can be large and may require restricted access. A report containing misclassified customer records deserves a different policy from a public aggregate metric. The manifest can point to each object and record its digest without granting every tracker user access to the content.
+Examples:
 
-### Reference Large Datasets In Their Governed Store
+```text
+stdout/stderr
+GPU-memory logs
+profiling traces
+loss plots
+confusion matrices
+sample predictions
+```
 
-Training datasets and full prediction tables are often too large or sensitive for an experiment tracker. Keep them in the lake, warehouse, feature platform, or governed object store. The run records an immutable table version, snapshot ID, object version, schema identity, and digest or manifest reference.
+These primarily answer:
 
-For example, a Delta table version or Iceberg snapshot ID identifies a fixed dataset state. A mutable table name alone identifies a moving collection. Reproducibility also depends on retention: the table platform must preserve that version for at least as long as the model evidence requires it.
+What happened while this computation executed
 
-### Use A Registry Record To Identify A Model For Review
+They're important, but they're not generally the model itself.
 
-A **registry candidate** points to one immutable deployable model package and its review evidence. It adds ownership, intended use, approval state, and lifecycle history. The registry is a control plane for selecting versions. It should avoid serving as a duplicate home for training datasets or verbose logs.
+## How Are Training Outputs Stored and Published Safely?
+<!-- section-summary: Large immutable bytes, searchable metadata, and logs use suitable stores, while a staged and verified commit prevents partial bundles from appearing complete. -->
 
-Candidate status means the model is eligible for downstream release checks. It carries no authority to receive production traffic. A deployment workflow still needs environment-specific validation, approval, rollout, and rollback controls.
+Different outputs have different access patterns, and publishing several files safely requires more than copying them into a shared folder.
+
+Different outputs have different access patterns. Consider a 20 GB model. You rarely want this inside a relational database row.
+
+Instead:
+
+```text
+                    TRAINING JOB
+                         │
+       ┌─────────────────┼─────────────────┐
+       │                 │                 │
+       ▼                 ▼                 ▼
+ Object storage      Metadata DB       Log system
+       │                 │                 │
+ model weights        run status       stdout
+ checkpoints          parameters       stderr
+ reports              metric summaries traces
+ large files          artifact URIs
+```
+
+A reasonable division is:
+
+| Information                   | Natural home                    |
+| ----------------------------- | ------------------------------- |
+| 20 GB checkpoint              | Object/artifact storage         |
+| Final model                   | Object/artifact storage         |
+| Run ID                        | Tracking database               |
+| Learning rate                 | Tracking database               |
+| Final accuracy                | Tracking database               |
+| Training-loss series          | Metrics/tracking store          |
+| stdout                        | Log store                       |
+| Model approved for production | Registry/control-plane metadata |
+
+MLflow follows this general separation: metadata such as parameters, metrics, and tags belongs to its backend store, while large files such as model weights and other artifacts are stored in an artifact store such as object storage. ([MLflow AI Platform][1]) The principle is more important than the particular product:
+
+**Put bytes where large immutable bytes belong; put searchable facts where searchable metadata belongs.**
+
+Suppose training produces:
+
+```text
+/home/ubuntu/output/model.pt
+```
+
+and exits successfully. Then your cloud GPU VM is terminated. Your artifact is gone. The local disk should generally be treated as:
+
+```text
+scratch space
+```
+
+The durable path should be something like:
+
+```text
+object-store://ml-artifacts/runs/8472/model/...
+```
+
+Conceptually:
+
+```text
+temporary GPU machine
+        │
+        │ upload
+        ▼
+durable artifact store
+        │
+        ├── evaluation job
+        ├── registry
+        └── future deployment
+```
+
+The pipeline should regard training as complete only after required durable outputs have been published. One of the simplest improvements you can make is to standardize where training outputs go.
+
+For example:
+
+```text
+runs/
+└── train-8472/
+    ├── manifest.json
+    ├── resolved_config.yaml
+    ├── metrics.json
+    ├── lineage.json
+    ├── environment.json
+    │
+    ├── model/
+    │   ├── weights.safetensors
+    │   ├── config.json
+    │   └── tokenizer.json
+    │
+    └── checkpoints/
+        ├── step-10000/
+        ├── step-20000/
+        └── step-30000/
+```
+
+Now every downstream program knows where to look.
+
+For example:
+
+```python
+model_uri = run_output / "model"
+metrics_uri = run_output / "metrics.json"
+```
+
+rather than:
+
+```python
+search_for_whatever_the_training_script_happened_to_create()
+```
+
+Standard layouts reduce coupling between teams and pipeline stages. Suppose a model bundle has five files:
+
+```text
+model/
+├── weights.safetensors
+├── config.json
+├── tokenizer.json
+├── vocab.json
+└── preprocessing.json
+```
+
+How does a downstream system know whether all five arrived successfully? A manifest can describe the complete bundle:
+
+```json
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "path": "model/weights.safetensors",
+      "sha256": "..."
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "..."
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "..."
+    }
+  ]
+}
+```
+
+The consumer can verify:
+
+```text
+expected file exists
+       ↓
+correct size
+       ↓
+correct checksum
+       ↓
+bundle valid
+```
+
+This makes corruption and partial uploads detectable. Suppose you upload a bundle in this order:
+
+```text
+weights.safetensors      ✓
+config.json              ✓
+tokenizer.json           uploading...
+```
+
+Then the process crashes. A downstream system sees:
+
+```text
+model/
+├── weights.safetensors
+├── config.json
+└── tokenizer.json.partial
+```
+
+Is this a valid model? No. But if downstream code merely checks:
+
+```text
+does model/ exist
+```
+
+it may mistakenly consume the incomplete bundle. A safer publishing protocol is:
+
+```text
+1. Create private/staging destination
+2. Upload every required file
+3. Verify files/checksums
+4. Write final manifest
+5. Mark bundle READY
+```
+
+For example:
+
+```text
+runs/8472/staging/model/
+```
+
+then, only when verified:
+
+```text
+runs/8472/model/
+runs/8472/manifest.json
+runs/8472/_SUCCESS
+```
+
+The key property is:
+
+> **A consumer should never mistake a partially written model for a published model.**
+
+Imagine:
+
+```text
+file A
+file B
+file C
+manifest
+_SUCCESS
+```
+
+If `_SUCCESS` is written last, consumers can use:
+
+```text
+if _SUCCESS exists:
+    bundle may be consumed
+else:
+    bundle is incomplete
+```
+
+A richer variant is to use a manifest whose state changes from:
+
+```json
+{
+  "status": "PENDING"
+}
+```
+
+to:
+
+```json
+{
+  "status": "READY"
+}
+```
+
+The exact mechanism depends on your storage system. The underlying pattern is the same:
+
+```text
+produce
+  ↓
+verify
+  ↓
+commit
+  ↓
+publish
+```
+
+It's the artifact equivalent of a database transaction.
 
 ![A training attempt sending events, metrics, metadata, artifacts, and governed data references to their proper stores, with only artifacts and data references forming a registry candidate.](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/training-output-stores.png)
 
 *Each output uses a store suited to its query and retention needs; the registry identifies the reviewed model package rather than duplicating every record.*
 
-## Define The Files Every Successful Training Run Must Produce
-<!-- section-summary: The artifact contract names required objects, their responsibilities, validation rules, and the evidence that marks a bundle complete. -->
+## How Do Immutable Artifacts, Attempts, and Checkpoints Get Their Identities?
+<!-- section-summary: Logical run IDs, attempt IDs, model IDs, immutable destinations, and checkpoint policies distinguish requested work from executions and durable results. -->
 
-An **artifact contract** states which outputs a successful publication must contain. It also defines the format, validation rule, and ownership of each output. You can think of it as the return type of the training job: callers can rely on the contract instead of learning the private details of each trainer.
+Once publication is safe, identities must distinguish the requested experiment, each physical attempt, every checkpoint, and the selected model object.
 
-### Keep Training State And Serving Packages Separate
+Suppose every training job writes:
 
-The raw model or checkpoint preserves framework-native training state. A deep-learning checkpoint may include weights, optimizer state, scheduler state, and training step so a compatible trainer can resume. This object is valuable for recovery and investigation. Framework-native serialization can also execute code during loading, so access and provenance checks matter.
-
-The **deployable model package** targets inference. It combines the selected model with the files and metadata needed by a specific serving contract. Common forms include an MLflow Model, an OCI image, or a serving repository accepted by Triton or another model server. The package should identify its format and loader, while the raw checkpoint remains available only when the recovery policy requires it.
-
-### Define Model Inputs, Outputs, And A Test Example
-
-An **input-output signature** describes required fields, types, shapes, optional values, and prediction structure. A sample input helps humans understand the contract. A **test vector** adds an expected output or bounded tolerance, so publication validation can load the package and prove that inference still works after serialization.
-
-Use synthetic or de-identified examples whenever real records would expose personal or restricted data. For a probabilistic classifier, the test vector can include three representative inputs and expected probability ranges. The test vector validates package behavior. Full evaluation remains a separate requirement.
-
-### Save The Information Needed To Reproduce And Evaluate The Model
-
-The bundle should carry the resolved config and its digest, source commit, dependency lock, runtime or container digest, random seeds, and immutable dataset references. The evaluation report should identify the model package, dataset snapshots, metric implementation, segment definitions, thresholds, and observed results. Selected predictions or a governed error-sample reference support human review.
-
-For containerized training or serving, attach a software bill of materials in SPDX or CycloneDX format when the platform requires supply-chain review. Build provenance can connect the package digest to its source and builder through an attestation such as SLSA provenance. A package lock and container digest answer different questions: the lock describes intended dependencies, while the built image digest identifies the actual runtime artifact.
-
-### Use A Manifest To Index The Bundle
-
-The **manifest** lists every committed object with its role, media type, size, and cryptographic digest. It also holds external references and lineage identities. Large reports stay in their own objects; the manifest remains a small machine-readable index.
-
-```yaml
-contract_version: 1
-run_id: fraud-ranker-1842
-attempt_id: a2
-objects:
-  - path: model/model.skops
-    role: deployable_model
-    media_type: application/octet-stream
-    size_bytes: 4812032
-    sha256: 7b3a8f...
-  - path: reports/evaluation.json
-    role: evaluation_report
-    media_type: application/json
-    size_bytes: 18422
-    sha256: f12cd9...
-external_inputs:
-  - catalog: main.risk.features
-    role: training_dataset
-    table_format: delta
-    table_version: 184
-lineage:
-  source_commit: 34d7a1f...
-  config_digest: c91e40...
-  container_digest: sha256:4ae72c...
+```text
+models/latest/model.pt
 ```
 
-Contract validation must reject a missing required role, duplicate path, unsupported contract version, or digest mismatch. Optional checkpoints and debug plots need explicit optional status. Otherwise a consumer cannot distinguish an intentional omission from a failed upload.
+Run A finishes:
 
-## Publish The Model Bundle Safely
-<!-- section-summary: Attempt-specific staging keeps partial uploads invisible until verification succeeds and one manifest commits the complete bundle. -->
+```text
+models/latest/model.pt → model A
+```
 
-Publishing several files creates a consistency problem. Object stores upload each object independently, and they offer no atomic rename for a directory-sized bundle. A reader could see the model before the signature or see an evaluation report from another retry if the publisher writes directly to a shared final prefix.
+Run B starts overwriting it. Halfway through, deployment reads it. Now you can get an invalid or ambiguous model. Instead, use immutable identities:
 
-Solve this with three states. **Staging** contains attempt-specific files that consumers ignore. **Verified** means every required object passes the contract. **Committed** means a small manifest or commit pointer makes exactly one verified attempt visible.
+```text
+models/candidate-017/model.pt
+models/candidate-018/model.pt
+models/candidate-019/model.pt
+```
 
-### Write Each Attempt To A Separate Temporary Location
+Then maintain a small pointer:
 
-The training process writes to local scratch space or a mounted attempt directory first. The publisher uploads those bytes under a path such as `runs/fraud-ranker-1842/attempts/a2/`. Another attempt uses a separate prefix. Files from concurrent retries never overwrite each other.
+```text
+production → candidate-018
+```
 
-### Verify Files And Model Behavior
+So:
 
-Existence is the first check. The publisher then verifies file size and SHA-256 digest, parses JSON or YAML schemas, checks the resolved-config digest, and confirms that required dataset references resolve. Model validation should load the deployable package in an isolated environment, inspect its signature, and run the test vector.
+```text
+immutable data
++
+mutable reference
+```
 
-Evaluation evidence needs semantic checks as well. The report must name the same model digest and dataset identities as the manifest. Required segments must be present, sample counts must meet policy, and metric values must be finite. Secret scanning should run before reports, configs, and environment records leave the job boundary.
+is preferable to:
 
-### Publish The Manifest Last
+```text
+mutable model contents
+```
 
-Readers treat the committed manifest as the visibility gate. The publisher uploads all content first, verifies the remote bytes, then creates the manifest or a small `committed.json` pointer with an object-store precondition. Amazon S3 can use `If-None-Match: *`; Google Cloud Storage can use a generation-match precondition of zero; Azure Blob Storage supports conditional headers.
+This pattern appears everywhere in reliable artifact management. Suppose training run:
 
-This operation makes the decision atomic from the consumer's perspective. The object store still holds several independent objects. Consumers gain a simple rule: bundles without a committed manifest remain invisible.
+```text
+train-run-8472
+```
+
+produces:
+
+```text
+model-candidate-991
+```
+
+Those are related but conceptually different things. A run is a computation:
+
+```text
+"the execution that occurred"
+```
+
+A model artifact is an output:
+
+```text
+"the durable object produced"
+```
+
+One run could theoretically produce several model checkpoints or model candidates:
+
+```text
+training run 8472
+       │
+       ├── model checkpoint A
+       ├── model checkpoint B
+       └── final model C
+```
+
+Modern MLflow 3 makes this distinction explicit: logged models have their own model IDs and can represent multiple model checkpoints associated with one training run. ([MLflow AI Platform][2]) This separation becomes particularly useful for deep learning. Now suppose:
+
+```text
+training run = 8472
+```
+
+fails because the cloud machine disappears. The orchestrator retries. Did you perform a completely new experiment? Usually no. You attempted the same requested training computation again. So distinguish:
+
+```text
+training_run_id = 8472
+attempt_id = 1
+```
+
+then:
+
+```text
+training_run_id = 8472
+attempt_id = 2
+```
+
+For example:
+
+```text
+runs/
+└── 8472/
+    ├── attempts/
+    │   ├── attempt-1/
+    │   └── attempt-2/
+    │
+    └── final/
+```
+
+Why? Because otherwise retries can destroy forensic information. Suppose attempt 1 fails after six hours:
+
+```text
+attempt-1/
+    checkpoint-step-92000
+    logs
+```
+
+Attempt 2 resumes and succeeds:
+
+```text
+attempt-2/
+    logs
+    final-model
+```
+
+You want to know both happened. Distributed infrastructure can behave strangely. Imagine the scheduler believes attempt 1 is dead and starts attempt 2. But attempt 1 was merely disconnected and resumes. Now both processes write:
+
+```text
+runs/8472/output/
+```
+
+Danger. Separate destinations:
+
+```text
+runs/8472/attempts/1/
+runs/8472/attempts/2/
+```
+
+prevent most accidental interference. Only one successful attempt is later selected as the authoritative output:
+
+```text
+runs/8472/final
+       ↓
+points to attempt 2
+```
+
+This is an important distributed-systems principle:
+
+**Separate generation from selection.**
+
+Let attempts independently create immutable things. Then select which thing counts. A long training run might produce:
+
+```text
+step-10k
+step-20k
+step-30k
+step-40k
+step-50k
+...
+step-500k
+```
+
+If every checkpoint is 40 GB:
+
+$$
+50 \times 40\text{ GB} = 2\text{ TB}
+$$
+
+per run. So "save everything forever" quickly becomes expensive. Checkpoint policy might be:
+
+```text
+keep newest 3
++
+keep best validation checkpoint
++
+keep every 100k-step milestone
++
+keep final checkpoint
+```
+
+For example:
+
+```text
+step-430k   delete
+step-440k   delete
+step-450k   keep milestone
+step-480k   keep
+step-490k   keep
+step-500k   keep final
+```
+
+This is fundamentally different from retention for deployed models. A production model may need to remain indefinitely for audit or rollback.
+
+## What Lineage and Model-Bundle Information Makes an Artifact Usable?
+<!-- section-summary: Versioned data, code, resolved configuration, environment, signatures, label mappings, and secret-safe metadata preserve ancestry and interpretation. -->
+
+An immutable file still has little value if nobody can determine what it means or where it came from, which makes lineage and the complete model bundle essential.
+
+A model is derived from other things.
+
+Conceptually:
+
+```text
+source code ───────┐
+                   │
+training dataset ──┤
+                   │
+config ────────────┼──▶ training run ───▶ model
+                   │
+base checkpoint ───┤
+                   │
+environment ───────┘
+```
+
+This is **lineage**.
+
+For example:
+
+```json
+{
+  "model_id": "model-991",
+  "training_run_id": "run-8472",
+  "source_commit": "71cd802",
+  "training_dataset": "dataset:transactions:v31",
+  "base_model": "model:encoder:v14",
+  "resolved_config_hash": "sha256:...",
+  "container_digest": "sha256:..."
+}
+```
+
+Then you can walk backward:
+
+```text
+deployed model
+    ↓
+candidate model
+    ↓
+training run
+    ↓
+training dataset
+    ↓
+data-generation pipeline
+    ↓
+raw dataset
+```
+
+This is one of the most important capabilities in mature ML infrastructure. This is weak:
+
+```json
+{
+  "training_data": "s3://datasets/train/"
+}
+```
+
+What files existed there on the training date? Maybe today's contents differ. A stronger reference is:
+
+```json
+{
+  "training_dataset_id": "transactions:v42",
+  "manifest_hash": "sha256:46ae..."
+}
+```
+
+or an immutable storage path:
+
+```text
+datasets/transactions/2026-08-22/manifest.json
+```
+
+Now the relationship is:
+
+```text
+model X
+was trained from
+dataset version Y
+```
+
+not merely:
+
+```text
+model X probably read something from this directory
+```
+
+A configuration cannot reproduce behavior if the implementation changed. Consider:
+
+```yaml
+optimizer:
+  name: adamw
+  learning_rate: 0.001
+```
+
+Commit A might implement:
+
+```python
+AdamW(..., eps=1e-8)
+```
+
+Commit B might implement:
+
+```python
+AdamW(..., eps=1e-6)
+```
+
+Same configuration. Different behavior. So record something such as:
+
+```text
+git_commit = 79acf21
+```
+
+and preferably the exact container/image digest:
+
+```text
+sha256:35df...
+```
+
+Then the complete provenance becomes closer to:
+
+$$
+\text{Model}
+=
+f(
+\text{code},
+\text{data},
+\text{config},
+\text{environment},
+\text{randomness}
+)
+$$
+
+Your artifacts should help identify each term. Suppose the run was launched with:
+
+```text
+config = baseline.yaml
+```
+
+but:
+
+```text
+baseline.yaml
+      +
+defaults
+      +
+CLI overrides
+      ↓
+actual settings
+```
+
+were:
+
+```yaml
+optimizer:
+  learning_rate: 0.0003
+
+training:
+  batch_size: 128
+  epochs: 40
+```
+
+Artifact storage should contain:
+
+```text
+resolved_config.yaml
+```
+
+representing what the trainer actually used. This is an important connection between training configuration and training artifacts:
+
+```text
+configuration system
+       ↓
+resolve configuration
+       ↓
+training begins
+       ↓
+resolved configuration becomes artifact
+```
+
+That lets the training recipe survive independently of the configuration machinery. A useful test is:
+
+**What would another process need to correctly load and interpret this model?**
+
+Depending on the system:
+
+```text
+model/
+├── weights
+├── architecture/config
+├── tokenizer
+├── vocabulary
+├── feature definitions
+├── preprocessing parameters
+├── label mapping
+├── model signature
+├── dependency/environment metadata
+└── README/model card metadata
+```
+
+For example, classification weights alone may output:
+
+```text
+class index = 2
+```
+
+Without:
+
+```json
+{
+  "0": "cat",
+  "1": "dog",
+  "2": "horse"
+}
+```
+
+the output has lost its semantic meaning. Artifacts must preserve not only computation but **interpretation**. Suppose one pipeline expects:
+
+```text
+age: float
+income: float
+country: string
+```
+
+but the model expects:
+
+```text
+128-dimensional normalized float vector
+```
+
+A model signature can describe the expected interface:
+
+```text
+INPUT
+    amount: float
+    merchant_category: string
+    account_age_days: int
+
+OUTPUT
+    fraud_probability: float
+```
+
+Now evaluation and deployment systems can validate whether they are feeding the model correctly. Without an interface contract, model artifacts are easy to misuse. Artifacts tend to be:
+
+```text
+replicated
+downloaded
+cached
+shared
+backed up
+retained
+```
+
+Therefore never casually place:
+
+```text
+database_password
+AWS secret key
+private API token
+service-account credential
+```
+
+inside:
+
+```text
+resolved_config.yaml
+environment.json
+model bundle
+logs
+```
+
+If your configuration contained secret references, artifact capture should preferably record something like:
+
+```text
+credential_source = "training-data-reader"
+```
+
+rather than the credential value. Artifacts have long lifetimes. Secrets should have controlled, short lifetimes and separate access policy.
+
+## How Are Candidate Creation, Evaluation, and Registry Promotion Separated?
+<!-- section-summary: Training creates candidate evidence; separate evaluation and release authority decide whether an immutable candidate receives a lifecycle role. -->
+
+A usable candidate is still only evidence from training. Promotion requires a separate decision with its own authority and criteria.
+
+Suppose training succeeds and produces:
+
+```text
+candidate-model-991
+```
+
+Does that mean production should immediately use it? Usually not. There are two separate actions:
+
+```text
+CREATE
+──────
+training produces candidate artifact
+
+SELECT / PROMOTE
+────────────────
+system decides candidate is suitable for release
+```
+
+The pipeline might look like:
+
+```text
+Train
+  ↓
+candidate artifact
+  ↓
+Evaluate
+  ↓
+quality/security checks
+  ↓
+release review
+  ↓
+registry
+  ↓
+deployment
+```
+
+This keeps training from having authority to deploy itself. Conceptually, an artifact store answers:
+
+Where are the model bytes
+
+A registry answers:
+
+Which models exist, what do they mean, and which one has been selected for some lifecycle role
+
+For example:
+
+```text
+fraud-detector
+│
+├── candidate-87
+├── candidate-88
+└── candidate-89
+       ↑
+     approved
+```
+
+You might then maintain:
+
+```text
+production → candidate-88
+staging    → candidate-89
+```
+
+The underlying artifact can stay immutable. Only lifecycle metadata changes. Suppose training saves five checkpoints:
+
+```text
+epoch-10  accuracy=.917
+epoch-11  accuracy=.921
+epoch-12  accuracy=.920
+epoch-13  accuracy=.924
+epoch-14  accuracy=.922
+```
+
+Which one should downstream evaluation inspect? Don't make every downstream stage rediscover that decision. Training can explicitly select:
+
+```json
+{
+  "selected_checkpoint": "epoch-13",
+  "selection_metric": "validation_accuracy",
+  "selection_mode": "max",
+  "selection_value": 0.924
+}
+```
+
+Then publish a candidate bundle created from that checkpoint:
+
+```text
+checkpoints/
+   ...
+   epoch-13/
+
+candidate-model/
+   ↓
+derived from epoch-13
+```
+
+This distinguishes:
+
+```text
+checkpoint selection
+```
+
+from:
+
+```text
+release approval
+```
+
+Training may select the best checkpoint. A later process decides whether the candidate is good enough to release. Suppose:
+
+```text
+candidate A
+accuracy = 94.2%
+latency = 400 ms
+
+candidate B
+accuracy = 94.0%
+latency = 30 ms
+```
+
+Which is better? It depends on requirements. Production selection may include:
+
+```text
+accuracy
+latency
+memory
+fairness
+stability
+cost
+security
+business constraints
+```
+
+Therefore training should generally output **candidate artifacts and measurements**. Release policy should make the deployment decision. That keeps responsibilities clean.
 
 ![Three-state artifact publication flow from attempt-specific staging through contract verification to a manifest-gated committed bundle, with failure quarantined.](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/safe-artifact-publication.png)
 
 *The manifest is published last, so readers discover only a complete, verified attempt.*
 
-## Give The Training Run And Each Retry Separate IDs
-<!-- section-summary: A logical run groups one intended computation while attempt identities separate retries, publication workspaces, and failure evidence. -->
+## How Do Retry-Safe Publishing and Artifact Tools Preserve History?
+<!-- section-summary: Idempotent publication, content hashes, run trackers, artifact graphs, immutable versions, and mutable aliases preserve one trustworthy history across retries. -->
 
-A **run ID** identifies the intended training computation: one config digest, input set, code revision, and requested output. An **attempt ID** identifies one physical execution or publication try. A retry keeps the run ID and receives a new attempt ID.
+Publication can fail after expensive training succeeds, so retries and product tooling must preserve one verified result without erasing history.
 
-This distinction prevents retries from mixing files. Suppose the first worker trains successfully and loses network access during publication. A second worker can reconcile the first attempt or start `a2` without writing over `a1`. Logs and publication events include both identities, so an operator can reconstruct the sequence.
+Consider:
 
-### Make Repeated Uploads Safe
+```text
+training finishes
+      ↓
+model exists locally
+      ↓
+upload begins
+      ↓
+network failure
+      ↓
+job crashes
+```
 
-An idempotent upload produces the same stored state after one call or several calls. Use immutable object keys and content digests. If a retry finds the same key with the expected digest, it can skip the transfer. If the bytes differ, the retry stops and quarantines the attempt. Silent overwrite would hide a determinism or identity failure.
+The expensive computation may have succeeded even though publication did not. A poor design retrains everything. A better system can distinguish:
 
-The commit step also needs idempotency. Repeating a conditional create with the same manifest digest can return the already committed result. A different digest for the same logical run requires policy: keep the existing commit, or record a superseding candidate through an explicit new run. Arrival order should never select the winner silently.
+```text
+TRAINING FAILURE
+model computation itself failed
 
-### Record Resumed Training Explicitly
+from
 
-A training retry may resume from a checkpoint produced by an earlier attempt. The final manifest should name that checkpoint digest and parent attempt. This lineage distinguishes a clean rerun from a resumed computation and helps reviewers interpret runtime, randomness, and optimizer state.
+PUBLISHING FAILURE
+model exists, durable publication failed
+```
 
-## Record Where The Model And Its Data Came From
-<!-- section-summary: Lineage links immutable code, configuration, data, environment, and parent-model identities while governed source systems retain large or sensitive content. -->
+If a recoverable local/durable checkpoint exists, retry publication:
 
-**Lineage** is the chain of identities that explains where an artifact came from. For a model candidate, that chain connects source code, effective config, training and validation data, feature definitions, runtime environment, parent model or checkpoint, evaluation, and the final package digest.
+```text
+training complete
+      ↓
+bundle generated
+      ↓
+publication attempt 1 ✗
+      ↓
+publication attempt 2
+      ↓
+verify
+      ↓
+READY
+```
 
-The manifest should store identifiers that remain resolvable. A Git commit is stronger than a branch name. A container digest is stronger than an image tag. A Delta version, Iceberg snapshot ID, or versioned warehouse table is stronger than `latest`. If a source exposes its own manifest or digest, record that identity as well.
+This is another reason publishing should be an explicit phase. Imagine upload retry 2 blindly appends data to an existing object. Bad. Publishing should preferably behave like:
 
-### Reference Large Tables At Their Governed Source
+```text
+same artifact bytes
++
+same destination identity
++
+retry
+=
+same final artifact
+```
 
-Copying a multi-terabyte training table into an experiment tracker wastes storage and weakens catalog controls. Keep the table in the platform that owns its access policies, schema, lineage, deletion procedures, and retention. The training bundle records its catalog name, immutable version, query or split definition, schema digest, and row-count evidence.
+Content hashes help.
 
-References need retention agreements. Delta time travel, Iceberg snapshots, warehouse clones, and versioned objects can disappear after vacuum or lifecycle cleanup. The model owner and data owner should align retention before a candidate depends on the version. A manifest pointing to expired data preserves history, yet it cannot support reproduction or audit.
+For example:
 
-### Keep Sensitive Review Rows Behind A Narrower Boundary
+```text
+sha256(model bundle) = f4028a...
+```
 
-Per-record predictions and error examples can contain personal data, protected attributes, text, images, or labels with limited access. Store these rows in a governed table or restricted object prefix and place only an immutable reference in the general artifact bundle. Aggregate evaluation reports can remain available to a broader review group.
+A publisher can determine:
 
-## Implement The Output Structure With MLflow 3
-<!-- section-summary: MLflow 3 can represent runs, first-class Logged Models, dataset-linked metrics, signatures, and supporting evidence after the artifact contract is defined. -->
+```text
+artifact with same hash already present
+        ↓
+reuse / verify
+```
 
-MLflow Tracking organizes execution evidence around runs. MLflow 3 also treats logged models as first-class entities with model IDs. One run can produce several checkpoints, each with its own model identity, metrics, and dataset context. This fits the distinction between a training execution and the model outputs it creates.
+rather than generate accidental duplicates or corruption. This is **idempotent publishing**. Names can lie:
 
-The training publisher should still validate its local or staged contract first. MLflow records and indexes the verified result. `name` is the current model-logging argument; `artifact_path` is deprecated in the current Python API. An input example can generate a signature automatically, while an explicit signature gives the team tighter control.
+```text
+model-final.pt
+model-final-v2.pt
+model-final-REALLY-final.pt
+```
+
+Hashes describe content:
+
+```text
+SHA256(model) = 84c2...
+```
+
+If two files have the same strong content hash:
+
+```text
+same bytes
+```
+
+with overwhelmingly high confidence. Hashes help with:
+
+```text
+integrity
+deduplication
+cache validation
+lineage
+bundle verification
+```
+
+For example:
+
+```json
+{
+  "artifact_id": "model-991",
+  "sha256": "84c2..."
+}
+```
+
+This gives the artifact both:
+
+```text
+semantic identity → model-991
+content identity  → sha256:84c2...
+```
+
+The important thing is the conceptual mapping:
+
+```text
+our concept              MLflow concept
+────────────────────────────────────────
+training execution   →   Run
+parameters/config    →   params / artifacts
+metric history       →   metrics
+large files          →   artifacts
+trained model        →   Logged Model
+model identity       →   model ID / model URI
+```
+
+MLflow 3 specifically treats logged models as first-class objects separate from ordinary run artifacts. Logged models receive model IDs; multiple checkpoints can be logged within a run, and current documentation recommends using the model URI returned by `log_model()` when referring back to the model. ([MLflow AI Platform][2])
+
+Conceptually:
 
 ```python
-import mlflow
-import mlflow.sklearn
-from mlflow.models import infer_signature
+with mlflow.start_run() as run:
+    mlflow.log_params(...)
 
-signature = infer_signature(validation_X, validation_predictions)
-with mlflow.start_run(tags={"config_digest": config_digest}) as run:
-    model_info = mlflow.sklearn.log_model(
+    train(...)
+
+    mlflow.log_metrics(...)
+
+    model_info = mlflow.pytorch.log_model(
         model,
-        name="fraud-ranker-candidate",
-        signature=signature,
-        input_example=validation_X.head(3),
-    )
-    mlflow.log_artifact(manifest_path, artifact_path="evidence")
-    mlflow.log_metric(
-        "average_precision",
-        average_precision,
-        model_id=model_info.model_id,
-        dataset=validation_dataset,
+        name="candidate_model",
     )
 ```
 
-The `validation_dataset` object carries the validation source and digest into MLflow. Supplying it with the metric connects the score to the evaluated dataset instead of leaving that relationship in a tag or naming convention.
+You could additionally log:
 
-The returned model ID supports an immutable `models:/<model_id>` URI. Record that ID in the candidate handoff together with the external bundle manifest digest. If several checkpoints are logged, choose the candidate through the evaluation policy and record the selected model ID. The most recently logged checkpoint has no automatic claim to candidate status.
+```text
+resolved_config.yaml
+lineage.json
+evaluation plots
+```
 
-MLflow can log parameters, tags, metrics, reports, and model packages. It should keep large governed datasets by reference through dataset metadata and source identity. Sensitive row-level reports may also remain in restricted storage, with a reference artifact or manifest entry available to reviewers.
+as run artifacts. The resulting relationship is approximately:
 
-## Implement The Output Structure With W&B Artifacts
-<!-- section-summary: W&B Artifacts can version a verified model bundle, reference external data, preserve manifests, and link an immutable version into a registry collection. -->
+```text
+MLflow Run
+├── parameters
+├── metrics
+├── ordinary artifacts
+└── Logged Model
+       ├── model ID
+       ├── model artifacts
+       └── model metadata
+```
 
-W&B Artifacts represent versioned collections of files and references. Each logged artifact has a manifest and logical digest. Logging finalizes that artifact version, so later changes create another version. This maps well to a verified artifact bundle.
+MLflow's model format can also record environment/dependency metadata and input examples/signatures, which makes the model bundle more useful for later loading and serving. ([MLflow AI Platform][3]) The broader lesson isn't "use MLflow." It is:
+
+Give model artifacts identities and lineage separate from the processes that happened to create them.
+
+W&B uses an especially direct input/output artifact model.
+
+Conceptually:
+
+```text
+dataset artifact
+       │
+       ▼
+   training run
+       │
+       ▼
+model artifact
+```
+
+W&B Artifacts are designed to version datasets, models, and other files and associate them as run inputs or outputs. That allows W&B to derive lineage between artifact versions and runs. ([Weights  Biases Documentation][4]) A simplified pattern is:
 
 ```python
-import wandb
+with wandb.init(project="fraud-model") as run:
+    training_data = run.use_artifact("training-data:v17")
 
-with wandb.init(project="risk-models", job_type="train") as run:
+    # train...
+
     artifact = wandb.Artifact(
-        name="fraud-ranker",
+        "fraud-model",
         type="model",
-        metadata={"run_id": run_id, "config_digest": config_digest},
     )
-    artifact.add_dir(bundle_dir)
-    artifact.add_reference(
-        "s3://governed-ml-data/fraud/train/manifest.json",
-        name="inputs/training-data",
-        checksum=True,
-    )
-    logged = run.log_artifact(artifact)
-    logged.wait()
+
+    artifact.add_dir("./model_bundle")
+
+    run.log_artifact(artifact)
 ```
 
-`add_reference` keeps the external object at its governed URI and adds its metadata to the artifact manifest. Versioned object storage strengthens this pattern because the reference can retain an object version and checksum. A broad bucket prefix with mutable contents gives weaker lineage than a versioned manifest object.
+The relationship becomes:
 
-After review, the exact artifact version can be linked into a W&B Registry collection and assigned a candidate alias. Aliases are mutable pointers, so release automation should resolve the alias to an immutable version and record that version before acting. Linking makes the artifact available through the registry without copying its bytes into another artifact.
-
-## Protect, Retain, And Delete Training Outputs
-<!-- section-summary: Artifact governance applies data minimization, access boundaries, retention classes, deletion workflows, and supply-chain evidence according to each output's risk. -->
-
-Artifact bundles can contain more sensitive information than model binaries suggest. Resolved configs may expose internal paths. Reports may contain small segments or example records. Pickled models may execute code during deserialization. Dependency files reveal the software supply chain. Governance should classify each object by sensitivity and purpose before publication.
-
-### Minimize And Separate Sensitive Content
-
-Use aggregate metrics for broad comparison. Keep row-level predictions, error samples, and restricted labels in a narrower governed store. Synthetic test vectors usually provide enough evidence for package validation. Secret values, access tokens, connection strings, and private keys should fail a pre-publication scan.
-
-### Apply Role-Based Access To Each Stored Object
-
-The experiment-tracking group may need metrics and aggregate reports. A model-review group may need restricted error examples. The serving platform needs the deployable package and signature. Separate objects and prefixes let the platform grant each role the smallest useful scope. Access to a manifest should never imply access to every referenced object.
-
-### Define Retention For Each Kind Of Output
-
-Verbose logs and intermediate checkpoints often have short retention. Failed-attempt evidence may remain long enough for incident review. Committed candidate bundles, evaluation reports, configuration, lineage, and approval records usually follow the model's supported lifetime plus the required audit period. Legal holds, regulated decisions, and retraining obligations can extend that period.
-
-Dataset retention must match the claim of reproducibility. If policy allows the source snapshot to expire earlier, describe the remaining evidence accurately: the team can inspect the manifest and evaluation, while a complete retrain from identical rows is unavailable.
-
-### Record And Control Deletion
-
-Deletion may come from retention expiry, privacy requests, license changes, security response, or model retirement. The workflow should identify affected candidates and descendants before removing bytes. Preserve a non-sensitive tombstone containing the deleted object identity, reason class, authority, and deletion event when policy permits. A registry must prevent future promotion of a candidate whose required artifact or dataset was deleted.
-
-## Select One Trained Model For Release Review
-<!-- section-summary: Candidate handoff selects one immutable model package and connects its evidence, limitations, owner, and requested next state without serving traffic. -->
-
-Training may produce many checkpoints and experimental packages. The handoff should select exactly one candidate for the next release boundary. That decision compares the required evaluation report, guardrails, package validation, and review policy. It never relies on a filename such as `best.pkl` or a mutable `latest` tag alone.
-
-A useful candidate record contains the logical run ID, committed manifest URI and digest, deployable package digest, MLflow model ID or W&B artifact version, signature identity, evaluation report identity, owner, intended use, known limitations, and requested next state. It also identifies the decision policy and reviewer or automated gate that selected the candidate.
-
-Registration and deployment remain separate actions. Registration makes the candidate discoverable and governed. Release validation can then test the package in a target environment, check infrastructure and policy constraints, and choose a rollout strategy. Release controls continue to govern every registry event, even after training metrics pass.
-
-## Recover After A Model Bundle Fails To Publish
-<!-- section-summary: A reconciler inspects attempt state, verifies surviving bytes, completes safe uploads, and commits or quarantines the bundle without retraining blindly. -->
-
-Publication can fail after expensive training has finished. The worker may upload the model and lose connectivity before the report. A process may crash after every object arrives and before the commit pointer is written. The tracking server may accept metrics while the object store rejects the model package.
-
-The absence of a committed manifest keeps all three cases out of candidate selection. A reconciler can then inspect the attempt without guessing what downstream consumers have already seen.
-
-```mermaid
-flowchart TD
-    A["Find Uncommitted Attempt<br/>(staging exists and commit is absent)"] --> B["Recalculate Evidence<br/>(local and remote sizes plus digests)"]
-    B --> C{"Required Bytes Survive?"}
-    C -->|Yes| D["Upload Missing Objects<br/>(idempotent immutable keys)"]
-    D --> E["Repeat Contract Checks<br/>(package, report, references, and secrets)"]
-    E --> F["Commit Manifest<br/>(conditional create)"]
-    C -->|No| G["Quarantine Attempt<br/>(record the missing evidence)"]
-    G --> H["Resume Or Retrain<br/>(policy chooses from trusted checkpoints)"]
+```text
+training-data:v17
+        ↓
+    run abc123
+        ↓
+ fraud-model:v8
 ```
 
-### Complete Publication From Surviving Files
+That graph is arguably more important than the individual naming convention:
 
-If the attempt workspace or durable staging prefix still contains every required object, the reconciler recalculates digests and compares them with the attempt records. Matching remote objects remain in place. Missing objects upload to immutable keys. The full validation suite runs again before the conditional commit.
+```text
+artifact → computation → artifact
+```
 
-### Quarantine Conflicting Or Incomplete Files
+because it describes how information flowed through the ML system. Suppose you have:
 
-A digest mismatch means the same identity refers to different bytes. The reconciler should preserve the conflict for investigation, block the candidate, and avoid overwriting either object. If a required file disappeared, the attempt remains incomplete. A trusted checkpoint may support a resumed attempt; otherwise the pipeline retrains under a new attempt identity.
+```text
+model:v17
+model:v18
+model:v19
+```
 
-### Show The Current Publication Status
+These versions should mean immutable historical objects. You might then have aliases:
 
-The job state should distinguish `TRAINING_SUCCEEDED`, `PUBLICATION_PENDING`, `COMMITTED`, and `QUARANTINED`. Structured events record every transition with run and attempt IDs. Operators can alert on attempts stuck in publication, while release systems query only committed manifests.
+```text
+candidate → v19
+staging   → v18
+production → v17
+```
 
-This recovery path saves expensive recomputation when the verified bytes survived. It also preserves the stronger rule: a partial collection of plausible files never turns into a candidate through operator intuition.
+W&B Registry supports linking artifact versions into registry collections, and aliases can act as mutable references to particular versions. ([Weights  Biases Documentation][5]) Again, the general architectural pattern is:
 
-## The Main Idea
-<!-- section-summary: A training result earns candidate status after its evidence is classified, verified, committed, linked, governed, and handed to a separate release boundary. -->
+```text
+immutable versions
+       +
+mutable human-friendly pointers
+```
 
-A reliable training job leaves more than a model file. It emits operational events, comparable metrics, searchable metadata, durable artifacts, and immutable references to governed inputs. An artifact contract turns those pieces into one expected result.
+That pattern works regardless of which registry technology you use.
 
-The publisher writes into an attempt-specific staging area, verifies bytes and behavior, and exposes the bundle by committing its manifest last. Run and attempt identities keep retries separate. Content digests make uploads idempotent. Lineage connects code, configuration, data, environment, evaluation, and parent models without copying large governed datasets.
+## How Should Retention and Deletion Follow Artifact Meaning?
+<!-- section-summary: Retention follows lifecycle value and lineage reachability, so released evidence outlives temporary logs and ordinary checkpoints. -->
 
-MLflow 3 Logged Models and W&B Artifacts can implement this evidence model. The final handoff selects one immutable candidate and sends it to a separate release process. Training success supplies a result; committed evidence makes that result safe to evaluate and govern.
+Artifacts accumulate quickly. Retention and deletion therefore need the lifecycle state and dependency graph, rather than age alone.
+
+Not every artifact deserves equal protection. You might define:
+
+```text
+scratch
+   ↓
+candidate
+   ↓
+validated
+   ↓
+released
+   ↓
+retired
+```
+
+Then retention policy becomes stricter as artifacts move upward.
+
+For example:
+
+| Artifact                  | Example retention |
+| ------------------------- | ----------------- |
+| Failed attempt logs       | 30 days           |
+| Ordinary checkpoints      | 14 days           |
+| Candidate models          | 90 days           |
+| Approved release models   | Several years     |
+| Models required for audit | Policy-dependent  |
+| Raw temporary scratch     | Hours             |
+
+The exact numbers depend on your organization. The important idea is:
+
+**Retention should follow artifact meaning, not merely file age.**
+
+Suppose:
+
+```text
+model-v17
+    ↓ trained from
+dataset-v31
+```
+
+Can you delete `dataset-v31`? Maybe. But perhaps your reproducibility policy requires retaining it. Similarly:
+
+```text
+production
+   ↓
+model-v17
+```
+
+means you probably shouldn't delete `model-v17`. So garbage collection can use reachability:
+
+```text
+protected releases
+      ↓
+referenced artifacts
+      ↓
+their required ancestors
+```
+
+Artifacts outside protected lineage can be candidates for expiration. This resembles garbage collection in programming languages and Git. Suppose a production model must remain available for five years. Does every per-step GPU-utilization sample need five-year retention? Probably not. You might keep:
+
+```text
+model bundle              5 years
+resolved config           5 years
+lineage                    5 years
+final evaluation           5 years
+
+full metric time series    1 year
+stdout logs                90 days
+GPU profiler traces        14 days
+```
+
+Again, the principle is:
+
+```text
+retain according to future utility
+```
+
+rather than treating every training output identically. Imagine logical run:
+
+```text
+train-8472
+```
+
+which required two attempts. You could represent it conceptually as:
+
+```text
+training-runs/
+└── train-8472/
+    │
+    ├── run-metadata.json
+    │
+    ├── attempts/
+    │   ├── attempt-1/
+    │   │   ├── logs/
+    │   │   └── checkpoints/
+    │   │
+    │   └── attempt-2/
+    │       ├── logs/
+    │       └── checkpoints/
+    │
+    └── result/
+        ├── manifest.json
+        ├── resolved_config.yaml
+        ├── lineage.json
+        ├── metrics.json
+        ├── environment.json
+        └── model/
+            ├── weights.safetensors
+            ├── config.json
+            └── tokenizer.json
+```
+
+The corresponding metadata might say:
+
+```json
+{
+  "training_run_id": "train-8472",
+  "successful_attempt_id": "attempt-2",
+  "model_id": "model-991",
+  "dataset_id": "dataset-442",
+  "status": "SUCCEEDED"
+}
+```
+
+This tells you:
+
+```text
+what was requested
+which attempt succeeded
+what model was produced
+what data it used
+whether publication completed
+```
+
+This distinction is especially useful:
+
+```text
+TRAINING RUN ID
+"What logical experiment did we request?"
+
+ATTEMPT ID
+"Which execution attempt was this?"
+
+MODEL ARTIFACT ID
+"Which immutable model object resulted?"
+```
+
+For example:
+
+```text
+training_run_id = train-8472
+
+attempts:
+    attempt-1  FAILED
+    attempt-2  SUCCEEDED
+
+produced:
+    model-991
+```
+
+This prevents a great deal of confusion in production systems.
+
+## What Does the Complete Training Artifact Workflow Produce?
+<!-- section-summary: A successful run ends after its required bundle is built, verified, durably published, identified, and made safe for downstream evaluation. -->
+
+The complete workflow joins these storage, identity, publication, lineage, and lifecycle rules into one output contract for the training run.
+
+Putting everything together:
+
+```text
+training request
+      │
+      ▼
+assign training_run_id
+      │
+      ▼
+resolve configuration
+      │
+      ▼
+record input lineage
+      │
+      ▼
+create attempt_id
+      │
+      ▼
+start training
+      │
+      ├──── metrics
+      ├──── logs
+      └──── checkpoints
+      │
+      ▼
+select final checkpoint
+      │
+      ▼
+construct model bundle
+      │
+      ▼
+write manifest + provenance
+      │
+      ▼
+upload to staging
+      │
+      ▼
+verify hashes/completeness
+      │
+      ▼
+publish atomically in spirit
+      │
+      ▼
+assign immutable model identity
+      │
+      ▼
+mark training run successful
+      │
+      ▼
+downstream evaluation
+      │
+      ▼
+release review
+      │
+      ▼
+registry / approval
+      │
+      ▼
+deployment
+```
+
+Notice when training becomes successful:
+
+Not merely after:
+
+```text
+optimizer finished its final step
+```
+
+but after:
+
+```text
+the required durable output contract exists
+and can be consumed safely
+```
+
+That is a much stronger definition. The previous concepts now fit together elegantly.
+
+### Training script
+
+Defines the computation:
+
+```text
+HOW do we train
+```
+
+### Training configuration
+
+Defines the recipe:
+
+```text
+WHICH training behavior do we want
+```
+
+### Training artifacts
+
+Preserve the results:
+
+```text
+WHAT did that computation produce
+```
+
+So:
+
+```text
+          TRAINING SCRIPT
+          "how it works"
+                 │
+                 ▼
+Data ───────▶ TRAINING ◀────── Config
+                 │
+                 ▼
+             Artifacts
+          "what survived"
+```
+
+And the pipeline surrounds all of it:
+
+```text
+               PIPELINE
+                  │
+                  ▼
+       choose data + config
+                  │
+                  ▼
+         launch train script
+                  │
+                  ▼
+          verify artifacts
+                  │
+                  ▼
+        evaluate / register
+```
+
+A machine-learning model isn't really just a file. It is the result of a historical computation:
+
+$$
+M =
+T(C,D,K,E,R)
+$$
+
+where:
+
+```text
+M = model
+T = training program
+C = code
+D = data
+K = configuration
+E = environment
+R = randomness
+```
+
+Training artifacts attempt to preserve enough information about that computation that another system—or another human months later—can answer:
+
+```text
+What was produced
+Who produced it
+From what
+With which settings
+Using which implementation
+Did the production finish successfully
+Is the output intact
+Which retry generated it
+Can training resume
+Can this model be evaluated
+Can this model be deployed
+Can we reproduce or audit it
+```
+
+If your artifact system can reliably answer those questions, it is doing its job. The most useful mental model is:
+
+```text
+TRAINING IS TEMPORARY
+
+        code
+         +
+        data
+         +
+       config
+         │
+         ▼
+   ephemeral compute
+         │
+         ▼
+────────────────────────
+      ARTIFACT BOUNDARY
+────────────────────────
+         │
+         ▼
+    durable outputs
+```
+
+Those durable outputs should normally include:
+
+```text
+MODEL BUNDLE
+The object we may eventually serve.
+
+CHECKPOINTS
+The state needed to recover training.
+
+METRICS
+Evidence of how the model performed.
+
+RESOLVED CONFIG
+The recipe actually used.
+
+LINEAGE
+Where code, data, and parent models came from.
+
+MANIFEST
+What files constitute the complete result.
+
+IDENTITIES
+Run ID, retry/attempt ID, model artifact ID.
+
+COMPLETION STATE
+A trustworthy indication that publication succeeded.
+```
+
+And the deepest principle is:
+
+> **Training artifacts are the durable boundary between an ephemeral training computation and the rest of the ML system.**
+
+The training job may disappear. The GPU may disappear. The container may disappear. The notebook session may disappear. But the **model, its meaning, its provenance, and the evidence needed to trust it must survive**.
 
 ![Six evidence types joining a verified committed bundle, which becomes a selected candidate for a separate release workflow.](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/release-ready-evidence-summary.png)
 
 *The committed bundle gives a reviewer one trusted identity for the model and the evidence used to select it.*
 
+## Check Your Answers
+
+Use these short answers to revisit the reasoning behind each section.
+
+:::expand[What Must Survive After a Training Machine Disappears?]{kind="recap"}
+Training artifacts preserve the model bundle, checkpoints, metrics, provenance, and diagnostics needed after temporary compute is gone.
+:::
+
+:::expand[How Are Training Outputs Stored and Published Safely?]{kind="recap"}
+Large immutable bytes, searchable metadata, and logs use suitable stores, while a staged and verified commit prevents partial bundles from appearing complete.
+:::
+
+:::expand[How Do Immutable Artifacts, Attempts, and Checkpoints Get Their Identities?]{kind="recap"}
+Logical run IDs, attempt IDs, model IDs, immutable destinations, and checkpoint policies distinguish requested work from executions and durable results.
+:::
+
+:::expand[What Lineage and Model-Bundle Information Makes an Artifact Usable?]{kind="recap"}
+Versioned data, code, resolved configuration, environment, signatures, label mappings, and secret-safe metadata preserve ancestry and interpretation.
+:::
+
+:::expand[How Are Candidate Creation, Evaluation, and Registry Promotion Separated?]{kind="recap"}
+Training creates candidate evidence; separate evaluation and release authority decide whether an immutable candidate receives a lifecycle role.
+:::
+
+:::expand[How Do Retry-Safe Publishing and Artifact Tools Preserve History?]{kind="recap"}
+Idempotent publication, content hashes, run trackers, artifact graphs, immutable versions, and mutable aliases preserve one trustworthy history across retries.
+:::
+
+:::expand[How Should Retention and Deletion Follow Artifact Meaning?]{kind="recap"}
+Retention follows lifecycle value and lineage reachability, so released evidence outlives temporary logs and ordinary checkpoints.
+:::
+
+:::expand[What Does the Complete Training Artifact Workflow Produce?]{kind="recap"}
+A successful run ends after its required bundle is built, verified, durably published, identified, and made safe for downstream evaluation.
+:::
+
 ## References
 
-- [OpenTelemetry Specification: Logs Data Model](https://opentelemetry.io/docs/specs/otel/logs/data-model/)
-- [OpenTelemetry Specification: Metrics Data Model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/)
-- [MLflow Documentation: Tracking And Logged Models](https://mlflow.org/docs/latest/ml/tracking/)
-- [MLflow Documentation: Model Signatures And Input Examples](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [MLflow Python API: `mlflow.sklearn.log_model`](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.sklearn.html#mlflow.sklearn.log_model)
-- [Weights & Biases Python API: Artifact](https://docs.wandb.ai/models/ref/python/experiments/artifact)
-- [Weights & Biases Documentation: Link An Artifact Version To A Registry Collection](https://docs.wandb.ai/models/registry/link_version)
-- [Delta Lake Documentation: Time Travel](https://docs.delta.io/delta-batch/#query-an-older-snapshot-of-a-table-time-travel)
-- [Apache Iceberg Documentation: Snapshot Maintenance](https://iceberg.apache.org/docs/latest/maintenance/)
-- [Amazon S3 Documentation: Conditional Writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)
-- [Google Cloud Storage Documentation: Request Preconditions](https://cloud.google.com/storage/docs/request-preconditions)
-- [Microsoft Azure Storage Documentation: Conditional Headers For Blob Operations](https://learn.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations)
-- [SLSA Specification: Provenance](https://slsa.dev/spec/v1.2/provenance)
-- [SPDX Specification](https://spdx.github.io/spdx-spec/)
-- [CycloneDX Specification](https://cyclonedx.org/specification/overview/)
+[1]: https://mlflow.org/docs/latest/self-hosting/architecture/artifact-store/ "Artifact Stores | MLflow AI Platform"
+[2]: https://www.mlflow.org/docs/latest/ml/tracking "ML Experiment Tracking | MLflow AI Platform"
+[3]: https://mlflow.org/docs/latest/model "ML Models | MLflow AI Platform"
+[4]: https://docs.wandb.ai/models/artifacts "Artifacts overview - Weights  Biases Documentation"
+[5]: https://docs.wandb.ai/models/registry "Registry overview - Weights  Biases Documentation"

@@ -9,415 +9,1886 @@ id: "article-mlops-training-pipelines-cpu-vs-gpu-training"
 
 ## Table of Contents
 
-1. [Choose Hardware for a Training Objective](#choose-hardware-for-a-training-objective)
-2. [Understand How Data And Computation Reach The Processor](#understand-how-data-and-computation-reach-the-processor)
-3. [Match The Training Workload To The Hardware](#match-the-training-workload-to-the-hardware)
-4. [Use CPU Training for the Work CPUs Handle Well](#use-cpu-training-for-the-work-cpus-handle-well)
-5. [Use GPUs for Parallel Tensor Work](#use-gpus-for-parallel-tensor-work)
-6. [Check Whether Training Fits In Accelerator Memory](#check-whether-training-fits-in-accelerator-memory)
-7. [Choose Numeric Precision As Part Of The Experiment](#choose-numeric-precision-as-part-of-the-experiment)
-8. [Benchmark the Complete Training Path](#benchmark-the-complete-training-path)
-9. [Prevent Data Loading From Leaving The Accelerator Idle](#prevent-data-loading-from-leaving-the-accelerator-idle)
-10. [Read Accelerator Utilization Together With Training Throughput](#read-accelerator-utilization-together-with-training-throughput)
-11. [Place the Job on Managed Compute](#place-the-job-on-managed-compute)
-12. [Schedule Accelerators on Kubernetes](#schedule-accelerators-on-kubernetes)
-13. [Compare The Cost Of A Successful Training Run](#compare-the-cost-of-a-successful-training-run)
-14. [Preserve Reproducibility Across Hardware](#preserve-reproducibility-across-hardware)
-15. [Use Measurements To Decide Whether To Scale Up Or Out](#use-measurements-to-decide-whether-to-scale-up-or-out)
-16. [The Main Idea](#the-main-idea)
-17. [References](#references)
+1. [What Training Objective and Workload Should Drive the Hardware Choice?](#what-training-objective-and-workload-should-drive-the-hardware-choice)
+2. [Which Workloads Fit CPUs and GPUs Well?](#which-workloads-fit-cpus-and-gpus-well)
+3. [How Do Memory, Batch Size, Precision, and Data Movement Affect GPU Training?](#how-do-memory-batch-size-precision-and-data-movement-affect-gpu-training)
+4. [Which Measurements Compare the Complete Training Path?](#which-measurements-compare-the-complete-training-path)
+5. [How Do CPU and GPU Work Combine in Managed Training?](#how-do-cpu-and-gpu-work-combine-in-managed-training)
+6. [When Should One GPU Scale Up or Scale Out?](#when-should-one-gpu-scale-up-or-scale-out)
+7. [How Do Representative Benchmarks Reveal the Real Bottleneck?](#how-do-representative-benchmarks-reveal-the-real-bottleneck)
+8. [How Should a Training Pipeline Select and Record Compute Resources?](#how-should-a-training-pipeline-select-and-record-compute-resources)
+9. [Check Your Answers](#check-your-answers)
 
-## Choose Hardware for a Training Objective
-<!-- section-summary: The hardware decision is successful if a training job reaches its required model-quality evidence within its time, reliability, and cost limits. -->
+A team moves image-model training to a more expensive GPU and expects a large speedup. The GPU stays idle most of the time because two CPU workers decode and augment only 650 images per second. The accelerator could process thousands, but the next batch is never ready. Buying a faster GPU would increase the bill without fixing the run.
 
-At 08:30, an ML engineer receives the final label snapshot for an image classifier that detects damaged parts. A review meeting starts at 17:00. The engineer must choose among an available CPU pool, a single-GPU queue, and a scarce larger-memory GPU pool.
+CPU or GPU selection starts with the complete training objective: required model quality, completion deadline, and acceptable total cost. A training step includes reading data, parsing and preprocessing it, moving batches, running forward and backward passes, updating parameters, synchronizing workers, validating, and writing checkpoints. The slowest important part limits the result.
 
-The wrong choice has practical consequences. A CPU run may miss the review window. A GPU with too little memory may fail after initialization. A large GPU may finish the tensor math quickly and spend most of its billed time waiting for image decoding. An unrecorded precision change could also produce a model that is faster to train yet unsuitable for comparison with the approved baseline.
+CPUs provide powerful general-purpose cores for irregular and control-heavy work. GPUs provide many execution units for large, regular tensor operations. The right choice depends on workload size, arithmetic intensity, memory, precision, data movement, queue time, and the cost to reach the required quality.
 
-Success has observable evidence. The job reaches the agreed validation objective and writes a usable checkpoint before the meeting. It stays within budget and produces a profile that explains where time and memory went. That evidence supports future scheduling decisions instead of leaving the team with “GPU was faster” as the only conclusion.
+Use the questions below to make the hardware choice from measured work, memory, data movement, completion time, and cost instead of the CPU or GPU label alone:
 
-A slow training job does not automatically need a GPU. The input pipeline may be waiting on storage, preprocessing may use unsupported operations, or the model may be too small to keep an accelerator busy. CPU-versus-GPU selection is therefore a **bottleneck decision**. A bottleneck is the stage that limits the rate of the whole job, and faster hardware helps only if it accelerates that stage.
+1. **What Training Objective and Workload Should Drive the Hardware Choice?**
+2. **Which Workloads Fit CPUs and GPUs Well?**
+3. **How Do Memory, Batch Size, Precision, and Data Movement Affect GPU Training?**
+4. **Which Measurements Compare the Complete Training Path?**
+5. **How Do CPU and GPU Work Combine in Managed Training?**
+6. **When Should One GPU Scale Up or Scale Out?**
+7. **How Do Representative Benchmarks Reveal the Real Bottleneck?**
+8. **How Should a Training Pipeline Select and Record Compute Resources?**
 
-```mermaid
-flowchart TD
-    A["Training Objective<br/>(quality target, deadline, and budget)"] --> B["Workload Shape<br/>(operations, batches, data, and framework)"]
-    B --> C["Memory Fit<br/>(model state, activations, and workspace)"]
-    C --> D["Measured Run<br/>(end-to-end time and profiler evidence)"]
-    D --> E{"Limiting Stage<br/>(compute, memory, input, or capacity)"}
-    E -- "CPU work" --> F["CPU Configuration<br/>(cores, memory, and data locality)"]
-    E -- "Tensor work" --> G["Accelerator Configuration<br/>(device class, memory, and precision)"]
-    E -- "Input work" --> H["Pipeline Repair<br/>(read, decode, transform, and transfer)"]
-    F --> I["Verified Candidate<br/>(quality, cost, and completion evidence)"]
-    G --> I
-    H --> D
+## What Training Objective and Workload Should Drive the Hardware Choice?
+<!-- section-summary: Hardware selection starts with required quality, deadline, and cost, then profiles data preparation, movement, computation, synchronization, and overhead. -->
+
+The label machine learning does not identify the right processor. The choice follows from the result the run must produce and the physical work required to produce it.
+
+Suppose you have a training algorithm:
+
+$$
+\theta^* = \text{Train}(D,\; A,\; H)
+$$
+
+where:
+
+* $$D$$ = training data
+* $$A$$ = algorithm/model
+* $$H$$ = hyperparameters
+* $$\theta^*$$ = trained parameters
+
+You now have to decide where `Train()` should run. At first glance, the choice seems simple:
+
+```text
+CPU = general-purpose
+GPU = faster
 ```
 
-The training objective anchors the decision. Hardware is a means to produce the required model evidence, not the objective itself.
+That mental model is misleading. A GPU can be dramatically faster than a CPU for one training workload and slower or much more expensive for another. The useful question is:
 
-## Understand How Data And Computation Reach The Processor
-<!-- section-summary: CPUs prepare and coordinate the job, accelerators execute supported parallel operations, and data crosses a host-to-device boundary before accelerator compute can begin. -->
+> **What work must physically happen to complete this training run, and which machine architecture performs that work most efficiently?**
 
-A **central processing unit (CPU)** is a general-purpose processor. Its cores handle varied instructions, branching logic, operating-system work, file parsing, decompression, data joins, and the Python or C++ code that coordinates training. Modern CPUs also contain vector instructions and can train many models efficiently.
+That leads to a better model:
 
-A **graphics processing unit (GPU)** is a type of accelerator. It contains many execution units designed to apply similar operations across large groups of values. Matrix multiplication, convolution, and attention contain the repeated numerical work that GPUs handle well.
+$$
+\boxed{
+\text{Training time}
+=
+\text{data preparation}
++
+\text{data movement}
++
+\text{computation}
++
+\text{synchronization}
++
+\text{other overhead}
+}
+$$
 
-The broader term **accelerator** includes GPUs, TPUs, AWS Trainium, and other purpose-built devices. Each accelerator depends on a supported framework and operator set. Its compiler and runtime must also match the hardware. Moving PyTorch code from CPU to an NVIDIA GPU commonly uses CUDA. A TPU follows a different execution path. Hardware capability and software support must agree.
+Choosing CPU or GPU means understanding which term dominates. Before choosing hardware, define what you are optimizing.
 
-Training also uses two memory domains. **Host memory** is the server’s ordinary RAM, directly accessible to the CPU. **Device memory** is memory attached to an accelerator, such as GPU high-bandwidth memory. Model parameters and batches must reside in device memory before GPU kernels can operate on them. Copying data across the host-to-device link takes time and bandwidth.
+For example:
 
-Three performance terms describe this path:
-
-- **Parallelism** is the amount of work executed at the same time. A large matrix operation exposes far more parallel work than a row-by-row parser with many branches.
-- **Throughput** is completed work per unit of time, such as training examples per second or tokens per second.
-- **Utilization** measures activity in a hardware component over an interval. It needs throughput and profiler context because an active GPU may still be waiting on device memory.
-
-```mermaid
-flowchart TD
-    A["Stored Examples<br/>(object storage, files, or tables)"] --> B["CPU Input Work<br/>(read, decode, transform, and batch)"]
-    B --> C["Host Memory<br/>(prepared tensors in server RAM)"]
-    C --> D["Device Transfer<br/>(PCIe or another host-device link)"]
-    D --> E["Device Memory<br/>(batch and training state)"]
-    E --> F["Accelerator Compute<br/>(forward and backward operations)"]
-    F --> G["CPU Coordination<br/>(logging, evaluation, and checkpoints)"]
+```text
+Train model M
+on dataset D
+to validation quality Q
+within 2 hours
+for less than £20
 ```
 
-A training job can use both processors heavily. Calling it “GPU training” means the main supported model operations execute on the GPU; CPU work still feeds and coordinates those operations.
+Those constraints matter because there are several possible objectives. You might want to minimize:
+
+$$
+\text{wall-clock training time}
+$$
+
+or:
+
+$$
+\text{compute cost}
+$$
+
+or:
+
+$$
+\text{time to acceptable validation quality}
+$$
+
+or:
+
+$$
+\text{cost per successful experiment}
+$$
+
+These are not equivalent.
+
+For example:
+
+```text
+CPU:
+4 hours × £0.50/hour = £2
+
+GPU:
+15 minutes × £3/hour = £0.75
+```
+
+The GPU is both faster and cheaper. But another workload might look like:
+
+```text
+CPU:
+3 minutes × £0.50/hour
+
+GPU:
+1 minute × £3/hour
+```
+
+The GPU is faster, but you may not care about saving two minutes. So the real objective might be:
+
+$$
+\boxed{
+\text{Choose hardware that satisfies the training requirement at acceptable total cost}
+}
+$$
+
+not:
+
+$$
+\text{Choose the processor with the largest FLOPS number}
+$$
+
+A training iteration is not simply:
+
+```text
+processor → calculate gradients
+```
+
+The complete path often looks like:
+
+```text
+Object storage / database
+          │
+          ▼
+       disk/network
+          │
+          ▼
+       CPU memory
+          │
+    decode / parse
+    augment / tokenize
+          │
+          ▼
+      training batch
+          │
+    CPU → GPU transfer
+          │
+          ▼
+        GPU memory
+          │
+     forward pass
+          │
+     backward pass
+          │
+   optimizer update
+          │
+          ▼
+       next batch
+```
+
+This matters enormously. Imagine that the GPU can process a batch in:
+
+```text
+40 ms
+```
+
+but creating the next batch takes:
+
+```text
+120 ms
+```
+
+Then the GPU repeatedly does this:
+
+```text
+compute ████ 40 ms
+wait    ░░░░░░░░░░░░ 120 ms
+
+compute ████
+wait    ░░░░░░░░░░░░
+```
+
+Buying a GPU twice as fast barely helps. The bottleneck wasn't GPU computation. It was feeding the GPU. A CPU is designed to perform many different kinds of computation efficiently.
+
+Conceptually:
+
+```text
+CPU
+
+few powerful cores
+
+Core ───────── complex control
+Core ───────── large cache
+Core ───────── branch prediction
+Core ───────── sophisticated execution
+Core ───────── low-latency tasks
+```
+
+A GPU is designed around massive parallelism:
+
+```text
+GPU
+
+many smaller execution units
+
+■■■■■■■■■■■■■■■■
+■■■■■■■■■■■■■■■■
+■■■■■■■■■■■■■■■■
+■■■■■■■■■■■■■■■■
+```
+
+The GPU's advantage emerges when a large number of similar calculations can be performed simultaneously. For example, matrix multiplication:
+
+$$
+C = AB
+$$
+
+contains enormous numbers of independent multiply-and-add operations. If:
+
+$$
+A \in \mathbb{R}^{4096\times4096}
+$$
+
+and:
+
+$$
+B \in \mathbb{R}^{4096\times4096}
+$$
+
+then computing $$C$$ requires roughly:
+
+$$
+2 \times 4096^3
+$$
+
+floating-point operations. That's about:
+
+$$
+137 \text{ billion operations}
+$$
+
+and much of that work is highly parallel. This is exactly the sort of computation GPUs are designed to perform. Consider a simple vector operation:
+
+$$
+y_i = 3x_i + 7
+$$
+
+for ten million independent values. The calculation for:
+
+$$
+x_1
+$$
+
+doesn't depend on:
+
+$$
+x_2
+$$
+
+or $$x_3$$, $$x_4$$, and so forth. So thousands of calculations can run at once.
+
+Conceptually:
+
+```text
+CPU
+
+core 1 → x1
+core 2 → x2
+core 3 → x3
+...
+```
+
+versus:
+
+```text
+GPU
+
+unit 1    → x1
+unit 2    → x2
+unit 3    → x3
+...
+unit 5000 → x5000
+```
+
+The exact hardware is considerably more complicated, but this is the useful intuition. Deep learning contains enormous quantities of this kind of work:
+
+```text
+matrix multiplication
+convolution
+attention
+embedding operations
+activation functions
+gradient calculations
+```
+
+Therefore:
+
+$$
+\boxed{
+\text{large dense tensor operations}
+\Rightarrow
+\text{GPU-friendly}
+}
+$$
+
+## Which Workloads Fit CPUs and GPUs Well?
+<!-- section-summary: CPUs favor small, irregular, branch-heavy, preprocessing-dominated work; GPUs favor sufficiently large regular tensor operations with optimized kernels. -->
+
+Processor architecture matters only after the workload is large and regular enough to use it efficiently.
+
+Suppose you need to add two numbers:
+
+$$
+3 + 5
+$$
+
+A GPU technically can do it. But getting the operation onto the GPU may cost vastly more than doing the addition.
+
+Conceptually:
+
+```text
+CPU:
+calculate → done
+
+GPU:
+prepare kernel
+send command
+possibly transfer data
+launch kernel
+calculate
+synchronize
+return result
+```
+
+For very small workloads:
+
+$$
+\text{GPU overhead} > \text{GPU compute advantage}
+$$
+
+So workload **size** matters. A model with:
+
+```text
+4,000 rows
+20 features
+```
+
+may train more efficiently on a CPU even if its algorithm has a GPU implementation. The GPU needs enough work to amortize the overhead of using it. A useful concept is **arithmetic intensity**:
+
+$$
+\text{Arithmetic intensity}
+=
+\frac{\text{amount of computation}}
+{\text{amount of data moved}}
+$$
+
+Suppose an operation loads huge amounts of data but performs almost no calculations on each byte. It may be limited by memory bandwidth rather than processor arithmetic. Another operation might repeatedly calculate with the same data. That can have high arithmetic intensity. Roughly:
+
+```text
+low arithmetic intensity
+        ↓
+data movement often dominates
+
+high arithmetic intensity
+        ↓
+compute performance matters more
+```
+
+Large neural-network matrix multiplications tend to have favorable characteristics for accelerators because huge quantities of mathematical work can be extracted from large blocks of data. This is one reason:
+
+```text
+large Transformer
+```
+
+and:
+
+```text
+CSV parsing
+```
+
+have completely different hardware preferences. Both may be part of the same training pipeline. CPU does **not** mean "slow version of GPU." CPUs are optimized for different kinds of work. CPU training is often appropriate when:
+
+* the dataset is small
+* the model is small
+* operations aren't massively parallel
+* there is significant branching or irregular control flow
+* data preprocessing dominates
+* GPU startup/transfer overhead would dominate
+* a GPU implementation isn't well optimized
+* training latency isn't particularly important
+* CPU instances are substantially cheaper
+
+Consider a small logistic regression problem:
+
+```text
+50,000 examples
+30 features
+```
+
+The entire problem might fit comfortably in cache or RAM and finish quickly on a CPU. Launching an expensive accelerator may accomplish almost nothing useful. Likewise, many classical ML workflows work very well on CPUs:
+
+```text
+linear models
+many scikit-learn algorithms
+small gradient-boosting jobs
+small random forests
+small tabular experiments
+feature preprocessing
+data validation
+```
+
+Although some of these algorithms also have excellent GPU implementations at larger scales. The model family alone therefore doesn't determine the answer. Size and implementation matter. Consider training a neural network. A layer might calculate:
+
+$$
+Y = XW + b
+$$
+
+where $$X$$ contains a whole batch. Then backpropagation requires more large matrix operations. A modern network performs variations of these calculations over and over:
+
+```text
+forward
+
+matrix multiply
+activation
+matrix multiply
+normalization
+attention
+...
+
+backward
+
+gradient
+gradient
+gradient
+...
+
+optimizer
+
+parameter updates
+```
+
+Hundreds, thousands, or millions of large tensor operations occur during training. This gives GPUs enough parallel work to remain busy. So a useful heuristic is:
+
+> **Large batches of regular numerical computation usually favor GPUs. Small, irregular or control-heavy workloads often favor CPUs.**
+
+People sometimes say:
+
+"My dataset is huge, therefore I need a GPU."
+
+Not necessarily. Suppose you have:
+
+```text
+2 TB of data
+```
+
+but the algorithm mostly performs:
+
+```text
+parsing
+hashing
+sorting
+grouping
+branch-heavy logic
+```
+
+The workload might remain CPU-heavy. Conversely, suppose you have a modest dataset but train a computationally expensive neural network over it for hundreds of epochs. The dataset may be small enough to fit in RAM, while the model's mathematical workload strongly favors GPUs. So distinguish:
+
+$$
+\text{data volume}
+$$
+
+from:
+
+$$
+\text{compute volume}
+$$
+
+and:
+
+$$
+\text{model memory footprint}
+$$
+
+They are separate constraints.
 
 ![A training step moves stored examples through CPU reading, decoding, batching, host memory, device transfer, GPU memory, parallel tensor computation, and CPU-coordinated logging, evaluation, and checkpointing.](/content-assets/articles/article-mlops-training-pipelines-cpu-vs-gpu-training/cpu-gpu-training-step.png)
 
 *CPU and GPU are parts of one training path. The slowest read, transform, transfer, compute, or coordination stage sets end-to-end throughput.*
 
-## Match The Training Workload To The Hardware
-<!-- section-summary: Model operations, batchability, input work, memory footprint, precision, and framework coverage determine whether acceleration can improve the full job. -->
+## How Do Memory, Batch Size, Precision, and Data Movement Affect GPU Training?
+<!-- section-summary: Training-state memory, activation memory, batch size, numeric precision, preprocessing, transfer, and prefetching determine whether the accelerator can stay productive. -->
 
-Hardware selection starts with the shape of the work. The model’s parameter count alone gives an incomplete answer. **Workload shape** is the pattern of computation and data movement produced by one representative training step. Equal parameter counts can hide different behavior: one model may perform dense matrix operations while another spends most of its time in sparse lookups or host-side preprocessing. The following questions locate that difference before hardware is requested.
+Even a GPU-friendly model can fail to fit or remain idle because training state, batches, preprocessing, and transfers consume memory and time.
 
-### Examine the Model Operations
+A GPU has its own memory, usually called accelerator memory or VRAM. Training needs more memory than just storing the model. A rough decomposition is:
 
-Dense matrix multiplications, convolutions, attention layers, and large embedding operations expose parallel tensor work. Deep neural networks usually contain many such operations. Tree traversal, irregular sparse operations, string processing, and branch-heavy feature logic may spend more time on CPU or gain less from a GPU.
+$$
+M_{\text{training}}
+=
+M_{\text{parameters}}
++
+M_{\text{gradients}}
++
+M_{\text{optimizer}}
++
+M_{\text{activations}}
++
+M_{\text{batch}}
++
+M_{\text{workspace}}
+$$
 
-Operator support matters too. A framework may place most of a model on the accelerator and fall back to the CPU for an unsupported custom operation. Repeated device transfers around that fallback can erase the expected gain. PyTorch Profiler or TensorFlow Profiler reveals actual device placement and operation time.
+That distinction is important. Suppose model parameters consume:
 
-### Check Whether The Model Can Process Large Batches
-
-**Batchability** describes whether many examples can share the same operation at once. Larger, regular batches usually expose more parallel work. Tiny models, highly variable shapes, and one-example-at-a-time processing can leave an accelerator underfilled.
-
-The dataset path may dominate the job. Image decoding, text tokenization, data-frame joins, compression, remote reads, and Python augmentation all consume host resources. A GPU can shorten the model step enough to expose one of these stages as the new bottleneck.
-
-### Confirm Memory, Precision, and Framework Support
-
-Estimate the memory used by parameters, gradients, optimizer state, activations, temporary workspaces, and the batch. Then identify the supported precision modes. Finally, verify that the selected framework build, container, driver, and accelerator runtime support every important operation.
-
-```mermaid
-flowchart TD
-    A["Candidate Workload<br/>(one representative training configuration)"] --> B{"Dense Parallel Tensor Work?<br/>(matmul, convolution, or attention)"}
-    B -- "Limited" --> C["Benchmark CPU First<br/>(classical, sparse, branchy, or small work)"]
-    B -- "Substantial" --> D{"Enough Batchable Work?<br/>(regular shapes and useful batch size)"}
-    D -- "Limited" --> C
-    D -- "Yes" --> E{"Training State Fits?<br/>(device memory plus headroom)"}
-    E -- "No" --> F["Change Memory Strategy<br/>(batch, precision, checkpointing, or larger device)"]
-    E -- "Yes" --> G["Benchmark Accelerator<br/>(complete run with input and evaluation)"]
-    F --> G
+```text
+8 GB
 ```
 
-This framework produces candidates for measurement. The benchmark makes the decision.
+It does **not** follow that an 8 GB GPU can train the model. You might need:
+
+```text
+Parameters          8 GB
+Gradients           8 GB
+Optimizer state    16 GB
+Activations        12 GB
+Temporary buffers   3 GB
+--------------------------------
+Total              47 GB
+```
+
+The precise numbers depend heavily on framework, optimizer, precision, architecture and batch size. But the principle remains:
+
+**Training memory is much larger than model-file size.**
+
+Suppose one training example requires $$m$$ bytes of activation memory. With batch size $$B$$:
+
+$$
+M_{\text{activations}} \approx Bm
+$$
+
+Increasing batch size therefore tends to increase memory use. But larger batches can also give the GPU more parallel work:
+
+```text
+batch = 1
+
+GPU:
+■■□□□□□□□□□□□□□□
+
+batch = 256
+
+GPU:
+■■■■■■■■■■■■■■■■
+```
+
+So you often face a tradeoff:
+
+```text
+larger batch
+    ↓
+more GPU parallelism
+    ↓
+better throughput
+
+but
+
+larger batch
+    ↓
+more memory
+```
+
+The largest batch that physically fits is not automatically the statistically best batch, either. Batch size also changes optimization dynamics. Hardware decisions and ML experiment decisions therefore interact. Suppose a parameter is stored using 32 bits. A billion parameters alone require approximately:
+
+$$
+10^9 \times 4 \text{ bytes} = 4\text{ GB}
+$$
+
+If some computation/storage can safely use 16-bit values:
+
+$$
+10^9 \times 2 \text{ bytes} = 2\text{ GB}
+$$
+
+So numeric precision affects:
+
+```text
+memory
+memory bandwidth
+compute throughput
+numerical stability
+final model behavior
+```
+
+Training might involve:
+
+```text
+FP32
+FP16
+BF16
+FP8 in selected operations
+mixed precision
+```
+
+depending on the model and hardware. Modern accelerators often have specialized hardware that performs lower-precision tensor operations much faster. Consequently:
+
+$$
+\text{hardware choice}
+\leftrightarrow
+\text{precision choice}
+$$
+
+They're not completely separate decisions. But lowering precision is not merely an infrastructure optimization. It can alter numerical behavior. Therefore record precision in the experiment metadata just like:
+
+```text
+learning rate
+batch size
+optimizer
+model architecture
+```
+
+Suppose the GPU can perform the actual training calculation for each batch in:
+
+$$
+20\text{ ms}
+$$
+
+But getting the batch ready takes:
+
+```text
+read from storage    50 ms
+decode               40 ms
+augmentation         30 ms
+CPU→GPU transfer     10 ms
+GPU compute          20 ms
+```
+
+Naively:
+
+$$
+T_{\text{batch}} = 150\text{ ms}
+$$
+
+Only:
+
+$$
+\frac{20}{150} \approx 13\%
+$$
+
+of the time is spent doing GPU computation. Even an infinitely fast GPU could only eliminate those 20 ms. The maximum possible improvement would therefore be limited. This is an instance of a broader principle similar to Amdahl's law:
+
+Improving a component doesn't substantially improve the whole system when that component isn't the dominant cost.
+
+A poorly designed loop does this:
+
+```text
+load batch 1
+process batch 1
+send batch 1
+train batch 1
+
+load batch 2
+process batch 2
+send batch 2
+train batch 2
+```
+
+The GPU sits idle during loading. Instead overlap operations:
+
+```text
+CPU:
+prepare batch 2 ────────────────┐
+                                │
+GPU:
+              train batch 1 ────┤
+                                │
+CPU:
+                    prepare 3 ──┤
+                                │
+GPU:
+                           train 2
+```
+
+Common techniques include:
+
+* multiple data-loader workers
+* asynchronous prefetching
+* pinned host memory where appropriate
+* efficient batch formats
+* caching
+* moving expensive transformations offline
+* overlapping transfer and compute
+
+The goal is:
+
+```text
+GPU completes batch N
+        ↓
+batch N+1 is already available
+```
+
+not:
+
+```text
+GPU completes batch N
+        ↓
+everyone now starts looking for the next batch
+```
+
+## Which Measurements Compare the Complete Training Path?
+<!-- section-summary: Utilization is diagnostic; representative end-to-end benchmarks compare throughput, time and cost to target quality, queue time, failures, and total pipeline work. -->
+
+Those bottlenecks make isolated FLOPS or utilization numbers insufficient; the benchmark has to follow the complete path to an acceptable model.
+
+Suppose monitoring shows:
+
+```text
+GPU utilization = 35%
+```
+
+That might mean the GPU is underfed. But now imagine:
+
+```text
+GPU utilization = 98%
+```
+
+Is everything optimal? Not necessarily. The GPU might be working constantly but inefficiently.
+
+For example:
+
+```text
+Configuration A:
+GPU utilization 98%
+1,000 examples/sec
+
+Configuration B:
+GPU utilization 92%
+1,800 examples/sec
+```
+
+Configuration B is clearly better for training throughput. Therefore look at utilization alongside meaningful application metrics:
+
+$$
+\text{examples/sec}
+$$
+
+$$
+\text{tokens/sec}
+$$
+
+$$
+\text{steps/sec}
+$$
+
+$$
+\text{seconds/epoch}
+$$
+
+$$
+\text{time-to-target-quality}
+$$
+
+and ultimately:
+
+$$
+\text{cost-to-target-quality}
+$$
+
+Hardware utilization is a diagnostic metric. Training throughput is an outcome metric. A common hardware benchmark measures something like:
+
+```text
+matrix multiplication throughput
+```
+
+But your system isn't being paid to multiply matrices. It's being paid to produce a model. So benchmark:
+
+```text
+dataset retrieval
+        ↓
+preprocessing
+        ↓
+training
+        ↓
+validation
+        ↓
+checkpointing
+        ↓
+final model
+```
+
+For example:
+
+| Configuration | Epoch time | Total training |  Cost | Target quality |
+| ------------- | ---------: | -------------: | ----: | -------------- |
+| 16 CPU cores  |     18 min |         3h 00m | £5.40 | reached        |
+| 1 GPU         |      4 min |         40 min | £2.80 | reached        |
+| 4 GPUs        |      2 min |         25 min | £8.50 | reached        |
+
+Four GPUs are fastest. But one GPU may have the best cost/performance. Your choice depends on whether:
+
+```text
+25 minutes vs 40 minutes
+```
+
+is worth:
+
+```text
+£8.50 vs £2.80
+```
+
+Suppose:
+
+```text
+CPU machine:
+£1/hour
+
+GPU machine:
+£5/hour
+```
+
+It's tempting to conclude:
+
+```text
+CPU is five times cheaper.
+```
+
+But if:
+
+```text
+CPU takes 10 hours
+GPU takes 1 hour
+```
+
+then:
+
+$$
+C_{\text{CPU}} = 10 \times £1 = £10
+$$
+
+while:
+
+$$
+C_{\text{GPU}} = 1 \times £5 = £5
+$$
+
+The GPU is cheaper. A better metric is:
+
+$$
+\boxed{
+\text{Run cost}
+=
+\text{resource price}
+\times
+\text{resource duration}
++
+\text{associated infrastructure cost}
+}
+$$
+
+Even better:
+
+$$
+\boxed{
+\text{Cost per successful model}
+}
+$$
+
+because failures matter too. Suppose unstable 8-GPU training succeeds only 70% of the time while 2-GPU training succeeds 99% of the time. The theoretical throughput advantage of eight GPUs may disappear once retries are counted. Imagine:
+
+```text
+GPU A reaches validation accuracy 90% in 40 min.
+
+GPU B reaches validation accuracy 90% in 55 min.
+```
+
+GPU A seems better. But perhaps B costs one-third as much. Or perhaps you are comparing different batch sizes and optimization behavior:
+
+```text
+Hardware A:
+2,000 samples/sec
+needs 50 epochs
+
+Hardware B:
+1,500 samples/sec
+needs 35 epochs
+```
+
+The proper objective is often:
+
+$$
+\text{time to target metric}
+$$
+
+rather than:
+
+$$
+\text{time per epoch}
+$$
+
+because the purpose of training is not to complete epochs. It is to obtain an acceptable model.
+
+## How Do CPU and GPU Work Combine in Managed Training?
+<!-- section-summary: CPU workers feed and coordinate accelerators, while managed services and Kubernetes place requested resources without deciding whether the workload benefits from them. -->
+
+Real accelerator jobs also rely on CPUs and a scheduling platform, so placement and the data path remain part of the design.
+
+A GPU training machine still has CPUs. A healthy architecture might look like:
+
+```text
+               TRAINING NODE
+
+storage
+   │
+   ▼
+CPU cores
+ ├── read data
+ ├── decode
+ ├── tokenize
+ ├── augment
+ └── construct batches
+          │
+          ▼
+       GPU memory
+          │
+          ▼
+         GPU
+ ├── matrix multiplication
+ ├── attention
+ ├── forward pass
+ └── backward pass
+```
+
+So the practical question is frequently:
+
+How much CPU capacity should accompany each GPU
+
+If your accelerator is starving because two CPU cores can't preprocess data quickly enough, upgrading the GPU is the wrong intervention. A rough starting map is useful.
+
+| Workload                                    | Likely starting point       |
+| ------------------------------------------- | --------------------------- |
+| Tiny tabular experiment                     | CPU                         |
+| Logistic regression on modest data          | CPU                         |
+| Small decision tree                         | CPU                         |
+| Data preprocessing                          | CPU                         |
+| Large gradient boosting workload            | Benchmark CPU and GPU       |
+| CNN training                                | GPU                         |
+| Transformer training                        | GPU                         |
+| Large language-model fine-tuning            | GPU/accelerator             |
+| Large embedding computation                 | Often GPU                   |
+| Hyperparameter search over many tiny models | Many CPUs may be excellent  |
+| One huge neural model                       | GPU, possibly multiple GPUs |
+
+These aren't laws. They are hypotheses to benchmark. Suppose you have 100 independent training configurations:
+
+```text
+learning_rate = ...
+depth = ...
+regularization = ...
+```
+
+Each model itself may be small. You have two kinds of parallelism available:
+
+### Within one model
+
+```text
+one training run
+        ↓
+use a GPU to accelerate its math
+```
+
+### Across models
+
+```text
+experiment 1 → CPU
+experiment 2 → CPU
+experiment 3 → CPU
+...
+experiment 100 → CPU
+```
+
+If each individual model takes two minutes on a CPU, distributing experiments across many cheap CPU workers can outperform putting them sequentially on one GPU. So always ask:
+
+Where does the parallelism exist
+
+It might exist inside one training job. Or across many training jobs. Cloud training services can provision machines, attach storage, stream logs, checkpoint models and tear machines down afterward.
+
+Conceptually:
+
+```text
+Training Request
+      │
+      ▼
+Orchestrator
+      │
+      ▼
+request:
+CPU = 16
+RAM = 64 GB
+GPU = 1
+GPU type = ...
+      │
+      ▼
+Managed compute platform
+      │
+      ▼
+training container
+```
+
+The managed platform solves lifecycle problems. It doesn't solve hardware selection automatically. You still need to know whether:
+
+```text
+1 GPU
+```
+
+beats:
+
+```text
+32 CPU cores
+```
+
+for your workload. In Kubernetes-like systems, a training workload can conceptually request:
+
+```text
+CPU: 8
+RAM: 32 GiB
+GPU: 1
+```
+
+The scheduler then needs a node capable of satisfying those resources. So:
+
+```text
+Pod requests GPU
+        │
+        ▼
+scheduler finds GPU node
+        │
+        ▼
+device allocated
+        │
+        ▼
+container starts
+```
+
+Two important concerns appear here. First is **placement**:
+
+```text
+Where can this job run
+```
+
+Second is **training performance**:
+
+```text
+Is that hardware actually appropriate
+```
+
+Those are different problems. Kubernetes successfully placing your job onto a GPU doesn't mean using a GPU was a good decision. Suppose CPUs are readily available:
+
+```text
+CPU queue = 10 seconds
+```
+
+but GPUs are heavily contested:
+
+```text
+GPU queue = 45 minutes
+```
+
+Training itself might take:
+
+```text
+CPU training = 35 minutes
+
+GPU training = 5 minutes
+```
+
+If you're optimizing end-to-end completion:
+
+```text
+CPU:
+10 sec queue + 35 min training ≈ 35 min
+
+GPU:
+45 min queue + 5 min training = 50 min
+```
+
+The CPU produces the model sooner. Thus:
+
+$$
+\text{job completion latency}
+=
+\text{queue latency}
++
+\text{startup}
++
+\text{training latency}
+$$
+
+Infrastructure availability belongs in your hardware decision.
 
 ![CPU candidates suit irregular work, small models, feature preparation, and short runs, while GPU candidates suit dense tensor operations, regular batches, supported operators, and device-memory fit; both feed the same matched benchmark.](/content-assets/articles/article-mlops-training-pipelines-cpu-vs-gpu-training/match-workload-to-hardware.png)
 
 *Workload shape suggests CPU or GPU candidates. A matched benchmark compares time to required quality, peak memory, queue-to-artifact time, and full cost before the team selects the operating default.*
 
-## Use CPU Training for the Work CPUs Handle Well
-<!-- section-summary: CPU training fits classical models, small experiments, feature-heavy pipelines, irregular operations, and baseline runs that finish within the required window. -->
+## When Should One GPU Scale Up or Scale Out?
+<!-- section-summary: Multiple GPUs add memory and compute along with communication, synchronization, failure, cost, and reproducibility concerns; scaling efficiency measures the trade. -->
 
-CPU training is often the production default for linear models, many tree-based models, small neural networks, and experiments dominated by feature preparation. Libraries such as scikit-learn, XGBoost, LightGBM, Spark ML, and PyTorch provide optimized CPU implementations for many of these workloads.
+If one accelerator cannot satisfy memory or deadline requirements, the team can compare a larger device with several cooperating devices.
 
-Consider a churn model trained from a few million tabular rows. The pipeline performs categorical encoding, joins account history, builds sparse features, and trains gradient-boosted trees. A large share of elapsed time may sit in data preparation and tree construction. A well-sized CPU machine can finish sooner and cost less. The competing GPU job may wait in a queue and accelerate only part of the workflow.
+Suppose one GPU trains the model in:
 
-A CPU run also provides a valuable baseline for deep learning. It confirms that data loading, loss calculation, checkpoint writing, and evaluation work before scarce GPU time is requested. For a model that trains in several minutes on CPU, GPU startup and transfer overhead may exceed the time saved.
-
-CPU selection still needs measurement. Increase cores only while the library and data pipeline scale with them. Watch memory bandwidth, thread oversubscription, and non-uniform memory access on large hosts. More virtual CPUs can slow a job if several libraries each create their own thread pool. Record thread settings such as `OMP_NUM_THREADS` and the library-specific limits used by the run.
-
-The CPU baseline is complete once it reports model quality, end-to-end time, peak memory, examples per second, and cost. Those values give the accelerator test a fair comparison target.
-
-## Use GPUs for Parallel Tensor Work
-<!-- section-summary: GPU training fits sufficiently large tensor workloads whose batches, operators, and input pipeline can keep the device productive. -->
-
-GPU training earns its cost during repeated forward and backward passes over large tensors. Computer vision, language models, speech models, recommendation embeddings, and other deep networks commonly fit this pattern. The gain rises as a step exposes enough work to amortize kernel launch and transfer overhead.
-
-A **kernel** is a function executed on the GPU. Frameworks launch kernels for operations such as matrix multiplication or an activation. Many tiny kernels and frequent CPU synchronization can produce low throughput even if the model technically runs on GPU. Compilers such as `torch.compile` or XLA may reduce overhead for compatible models, although compiled and eager runs should be benchmarked as separate configurations.
-
-Batch size influences accelerator efficiency. A larger batch often fills more execution units and raises throughput, up to the point where memory runs out or model quality changes. Gradient accumulation can simulate a larger optimization batch while processing smaller device batches. It adds more steps and has different performance properties from a physically larger batch.
-
-The damaged-parts classifier is a plausible GPU candidate because convolutions process regular image tensors in batches. The engineer should still run a representative profile. If each GPU step takes `35 ms` and fetching the next batch takes `60 ms`, a faster GPU deepens the idle gap. Input work owns the next improvement.
-
-GPU use also introduces a compatibility contract: framework build, accelerator backend, driver, runtime libraries, and device capability. Pin the training image by digest and test it on the target device class before scheduling a full run.
-
-## Check Whether Training Fits In Accelerator Memory
-<!-- section-summary: GPU class selection starts with peak device-memory demand, then considers throughput, precision support, interconnect, availability, and cost. -->
-
-Device memory decides whether a configuration can run. During training, memory holds more than the model weights. A useful estimate is:
-
-`peak device memory ≈ parameters + gradients + optimizer state + activations + temporary workspaces + batch data`
-
-For Adam training with float32 values, parameters, gradients, and two optimizer moments can consume roughly `16 bytes` per parameter before activations and temporary buffers. Mixed precision, master-weight copies, fused optimizers, quantization, and framework implementation details change that estimate. Measure the real peak with the target training code.
-
-### Reduce Memory Use Before Choosing A Larger GPU
-
-If the run is close to the limit, test one memory control at a time. Options include a smaller micro-batch, gradient accumulation, automatic mixed precision, activation checkpointing, and a memory-efficient optimizer. Each choice changes speed or numerical behavior and belongs in the experiment record. Clear accidental tensor references and verify that evaluation code releases temporary outputs.
-
-If the model still does not fit, select a larger-memory accelerator. The decision starts from measured peak memory plus operational headroom for allocator variation and input shape. A configuration that peaks near the physical limit is fragile even if one benchmark succeeds.
-
-### Choose A GPU That Meets The Measured Limit
-
-After memory fit, compare tensor throughput, supported dtypes, memory bandwidth, host link, and availability. Cost-efficient accelerators such as L4- or A10-class devices can suit smaller vision models and fine-tuning. H100-, H200-, and newer Blackwell-class devices serve larger or more demanding training programs. Exact memory, topology, cloud availability, and pricing vary by product and region, so the platform catalog is the source of truth.
-
-For a single-device job, more interconnect bandwidth between GPUs adds no value. For a later multi-GPU design, NVLink, PCIe topology, and network fabric can determine scaling efficiency. Establish the one-device result before choosing a distributed topology.
-
-A concrete memory result makes the choice defensible. If the representative run peaks at `28 GiB`, a `24 GiB` device cannot host that configuration. The team can reduce the footprint or request the next suitable memory class. Theoretical compute throughput does not solve a capacity failure.
-
-## Choose Numeric Precision As Part Of The Experiment
-<!-- section-summary: Lower-precision training can reduce memory and increase accelerator throughput, while numerical range and model-quality checks determine whether it is acceptable. -->
-
-**Precision** describes how floating-point values are represented. Float32 uses 32 bits. Float16 and bfloat16 use 16 bits with different numerical ranges. Lower precision reduces memory traffic and can unlock specialized accelerator units, while selected operations still need float32 for stability.
-
-Automatic mixed precision (AMP) lets the framework choose lower precision for suitable operations and retain higher precision where needed. Current PyTorch uses `torch.autocast` with `torch.amp.GradScaler` for typical float16 training:
-
-```python
-scaler = torch.amp.GradScaler("cuda")
-
-for inputs, targets in train_loader:
-    inputs = inputs.to("cuda")
-    targets = targets.to("cuda")
-    optimizer.zero_grad(set_to_none=True)
-
-    with torch.autocast(device_type="cuda", dtype=torch.float16):
-        loss = loss_fn(model(inputs), targets)
-
-    scaler.scale(loss).backward()
-    scaler.step(optimizer)
-    scaler.update()
+```text
+100 minutes
 ```
 
-Float16 gradient scaling reduces underflow risk, yet some models overflow or produce non-finite values in that range. Bfloat16 has a wider exponent range and often runs without gradient scaling on supported hardware. Framework documentation and model behavior decide the appropriate path.
+You might imagine:
 
-Benchmark float32 and the chosen mixed-precision configuration with the same data and acceptance metrics. Record dtype policy, matmul precision settings, loss-scaler behavior, and non-finite checks. A higher examples-per-second result is useful only after the model reaches the required quality.
-
-TensorFlow follows the same principle through Keras mixed-precision policies. Hardware support differs across GPUs, TPUs, and CPUs. Portability therefore requires a new benchmark for the chosen dtype policy.
-
-## Benchmark the Complete Training Path
-<!-- section-summary: Hardware comparison measures submission-to-artifact time and time-to-quality under matched training conditions, including input, evaluation, checkpoint, and queue effects. -->
-
-Peak floating-point operations per second describe a device’s theoretical arithmetic capacity. Training jobs rarely sustain that peak across data loading, framework overhead, mixed operations, evaluation, and checkpoint output. The industrial comparison is an end-to-end benchmark.
-
-Hold the experiment contract fixed: data snapshot, split, model code, hyperparameters, optimization batch, precision policy, evaluation, stopping rule, and checkpoint behavior. Change one hardware configuration at a time. Warm up the runtime before measuring steady-state steps because initial compilation, memory allocation, and cache filling can distort short tests.
-
-GPU operations are asynchronous from the CPU caller. Synchronize the device around a focused timing region if the framework profiler is unavailable:
-
-```python
-torch.cuda.reset_peak_memory_stats()
-torch.cuda.synchronize()
-started = time.perf_counter()
-
-for _ in range(measured_steps):
-    train_one_step()
-
-torch.cuda.synchronize()
-elapsed = time.perf_counter() - started
-peak_bytes = torch.cuda.max_memory_allocated()
+```text
+2 GPUs → 50 minutes
+4 GPUs → 25 minutes
+8 GPUs → 12.5 minutes
 ```
 
-Use PyTorch Profiler or TensorFlow Profiler for causal detail. They separate CPU operation time, device kernels, memory allocation, shapes, and traces. Profiler collection adds overhead, so use a bounded representative window and run an unprofiled measurement for final throughput.
+Real systems rarely scale perfectly. Why? Multiple GPUs must coordinate. For data-parallel training:
 
-Collect at least these outcomes:
-
-- time from job submission to validated artifact;
-- time to reach the target validation metric;
-- examples or tokens per second after warm-up;
-- input wait and device-step distributions;
-- peak host and device memory;
-- accelerator, CPU, storage, and network activity;
-- failed attempts and usable checkpoint recovery;
-- total compute spend for the accepted result.
-
-Suppose CPU reaches the quality target in `7.5 hours` at low hourly cost. A queued GPU reaches it in `2.2 hours` from submission, while a larger GPU reaches it in `2.1 hours` because input loading dominates. The first GPU is the stronger operating choice despite the larger device’s higher theoretical throughput.
-
-## Prevent Data Loading From Leaving The Accelerator Idle
-<!-- section-summary: Input reads, decoding, transforms, batching, pinned host memory, and device transfer must deliver batches at least as fast as the accelerator consumes them. -->
-
-An **input pipeline** turns stored examples into device-ready batches. For images, it reads objects, decodes compressed bytes, applies augmentations, collates tensors, and copies them into device memory. For language models, tokenization, sequence packing, shuffling, and storage reads can play the same role.
-
-PyTorch `DataLoader` supports worker processes and pinned host memory:
-
-```python
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=128,
-    num_workers=8,
-    pin_memory=True,
-    persistent_workers=True,
-    prefetch_factor=2,
-)
-
-for inputs, targets in train_loader:
-    inputs = inputs.to("cuda", non_blocking=True)
-    targets = targets.to("cuda", non_blocking=True)
+```text
+GPU 1 ─┐
+GPU 2 ─┤
+GPU 3 ─┼→ synchronize gradients
+GPU 4 ─┘
 ```
 
-`num_workers` controls parallel loading processes and must be tuned against available CPU, RAM, storage, and network bandwidth. `pin_memory=True` prepares tensor batches in page-locked host memory, which supports faster host-to-CUDA transfer. `non_blocking=True` permits asynchronous copies in supported circumstances; profiler evidence should confirm useful overlap.
+Synchronization costs time. So a simplified model becomes:
 
-More workers can reduce throughput after CPU contention, memory pressure, or too many remote reads appear. Test worker count, prefetch depth, batch size, data layout, local caching, and transform placement independently. For reproducible shuffling and augmentation, preserve worker seeding and sampler state.
+$$
+T(N)
+=
+\frac{T_{\text{parallel compute}}}{N}
++
+T_{\text{communication}}(N)
++
+T_{\text{serial}}
+$$
 
-TensorFlow teams use the equivalent `tf.data` controls: parallel `map`, parallel `interleave`, `prefetch`, and carefully placed `cache`. `tf.data.AUTOTUNE` can select parallelism, while the TensorFlow Profiler shows whether the input pipeline still starves the device.
+As $$N$$ increases, computation per GPU falls. But communication may increase. Eventually adding another GPU barely helps. Suppose:
 
-A concrete diagnosis compares two durations. If median batch preparation is `55 ms` and median accelerator work is `30 ms`, the accelerator waits for input. If batch preparation falls to `12 ms` and accelerator work remains `30 ms`, the device can receive the next batch in time. The improvement came from the pipeline, not a larger GPU.
+```text
+1 GPU → 1,000 examples/sec
+2 GPU → 1,850 examples/sec
+4 GPU → 3,200 examples/sec
+8 GPU → 4,500 examples/sec
+```
 
-## Read Accelerator Utilization Together With Training Throughput
-<!-- section-summary: Utilization metrics identify active hardware components, while throughput and profiler traces reveal whether compute, memory, transfer, or input work limits progress. -->
+Calculate speedup:
 
-GPU utilization is a clue, not a verdict. A dashboard may report high activity during memory stalls or low average activity because short bursts are separated by input waits. Compare hardware counters with examples per second and per-step timing.
+$$
+S(N)=\frac{\text{throughput}(N)}
+{\text{throughput}(1)}
+$$
 
-For NVIDIA fleets, Data Center GPU Manager (DCGM) and `dcgm-exporter` provide production telemetry for Prometheus and Grafana. Useful fields include graphics-engine or streaming-multiprocessor activity, tensor-pipe activity, device-memory activity, framebuffer memory, PCIe traffic, and NVLink traffic. PyTorch Profiler or Nsight Systems supplies the shorter operation-level trace needed to find the responsible code path.
+Then:
 
-The patterns lead to different actions:
+```text
+2 GPUs → 1.85×
+4 GPUs → 3.20×
+8 GPUs → 4.50×
+```
 
-- Low device activity plus long data waits points to storage, decode, transforms, or host scheduling.
-- High device-memory activity with limited tensor activity suggests a memory-bandwidth-bound workload.
-- Repeated host-to-device traffic may reveal misplaced tensors or CPU fallbacks.
-- High tensor activity and rising throughput show that compute capacity is contributing useful work.
-- Nearly full device memory plus allocation retries points to memory fit and fragmentation.
+Scaling efficiency:
 
-DCGM metrics are interval averages. Correlate them with the same representative training window and the same run identity. A cluster-wide average can hide one starved worker in a distributed job or mix setup time with steady-state training.
+$$
+E(N)=\frac{S(N)}{N}
+$$
 
-## Place the Job on Managed Compute
-<!-- section-summary: Managed training services express the same decision through a versioned container, data inputs, CPU or accelerator resources, limits, quota, and monitored outputs. -->
+gives:
 
-Managed training jobs remove node administration from the ML team, yet they preserve the same hardware questions. The job needs a versioned image and a stable input-data path. Resource settings choose the hardware class and count. Storage, output location, timeout, and experiment identity complete the run contract.
+```text
+2 GPUs → 92.5%
+4 GPUs → 80.0%
+8 GPUs → 56.25%
+```
 
-Amazon SageMaker AI training jobs place instance type and count in the resource configuration. Service quota is checked before the job can run. CloudWatch and SageMaker profiling integrations expose resource behavior, and managed Spot training needs checkpoint configuration for interruption recovery.
+Eight GPUs are faster. But you're paying for eight GPUs to obtain only 4.5 times the throughput. That may or may not make economic sense. **Scale up** means use a more powerful device:
 
-Gemini Enterprise Agent Platform serverless training uses `CustomJob` worker-pool specifications to select the machine type plus accelerator type and count. Azure Machine Learning command jobs select a compute target and instance count, with the compute target providing the CPU or GPU node class. Both platforms need explicit versioned environments and data references for fair comparisons.
+```text
+smaller GPU → larger GPU
+```
 
-Databricks Runtime for Machine Learning provides established CPU and GPU cluster paths with framework libraries packaged together. Databricks AI Runtime and its serverless GPU interfaces are preview or beta capabilities in current documentation. Teams using those paths should apply organizational preview controls and record the exact environment because APIs and support boundaries can still change.
+**Scale out** means use more devices:
 
-Provider instance names change faster than the decision framework. Select a currently available regional instance, capture its accelerator model and memory, then benchmark the job. A managed service cannot infer whether image decode or model math owns the bottleneck.
+```text
+1 GPU → 2 → 4 → 8 GPUs
+```
 
-## Schedule Accelerators on Kubernetes
-<!-- section-summary: Kubernetes allocates accelerators through vendor integrations, explicit pod resources, compatible nodes, quota, and device-aware monitoring. -->
+Scaling up often preserves a simpler programming model. Scaling out introduces:
 
-Kubernetes needs a vendor integration before the scheduler can allocate GPUs. The established path uses a device plugin that advertises an extended resource such as `nvidia.com/gpu` to the kubelet. NVIDIA GPU Operator can manage the driver, container toolkit, device plugin, node labels, and DCGM monitoring for supported NVIDIA clusters.
+```text
+network communication
+gradient synchronization
+distributed failure modes
+worker coordination
+distributed checkpointing
+```
 
-A training container requests the GPU alongside the host resources that feed it:
+So if one larger accelerator can meet the requirement economically, it may be simpler than distributing across several smaller accelerators. But large models may simply not fit on one device. Then scaling out becomes necessary rather than optional. Consider a model needing:
 
-```yaml
+```text
+120 GB of training state
+```
+
+If your GPU has:
+
+```text
+80 GB
+```
+
+the question is no longer:
+
+```text
+Would multiple GPUs make this faster
+```
+
+It's:
+
+```text
+Can this training run exist at all on one GPU
+```
+
+You may need techniques such as:
+
+```text
+data parallelism
+model/tensor parallelism
+pipeline parallelism
+sharded optimizer state
+activation checkpointing
+CPU offloading
+```
+
+These techniques trade among:
+
+$$
+\text{memory}
+\leftrightarrow
+\text{computation}
+\leftrightarrow
+\text{communication}
+$$
+
+For example, activation checkpointing reduces stored activation memory but recomputes some values during the backward pass. So you spend computation to save memory. Ideally:
+
+```text
+same data
+same code
+same hyperparameters
+same random seed
+```
+
+would produce exactly the same model. In numerical computing, that is not always true. Different hardware can introduce differences through:
+
+```text
+floating-point rounding
+parallel reduction order
+different kernels
+library versions
+mixed precision
+non-deterministic algorithms
+```
+
+For example, mathematically:
+
+$$
+(a+b)+c = a+(b+c)
+$$
+
+But floating-point arithmetic has finite precision, so computationally the two can produce slightly different results. Parallel hardware may change reduction ordering. Those tiny differences can propagate through many optimization steps. Therefore reproducibility has levels.
+
+### Exact reproducibility
+
+```text
+bit-identical output
+```
+
+This can be expensive or impossible for some configurations.
+
+### Statistical reproducibility
+
+```text
+similar quality and behavior
+within defined tolerances
+```
+
+This is often more practical in ML. Record enough metadata to understand differences:
+
+```text
+CPU/GPU model
+GPU count
+driver/runtime versions
+framework version
+precision mode
+determinism settings
+random seeds
+container image
+dataset snapshot
+code commit
+```
+
+Suppose you trained:
+
+```text
+Experiment A
+GPU X
+FP32
+batch size 32
+```
+
+and then:
+
+```text
+Experiment B
+GPU Y
+BF16
+batch size 256
+```
+
+If validation performance changes, you haven't only changed infrastructure. You may have changed:
+
+```text
+numerical behavior
+batch-size dynamics
+gradient noise
+number of updates
+kernel implementations
+```
+
+That means hardware changes sometimes cross the boundary into experimental changes. Do not treat all infrastructure substitutions as invisible.
+
+## How Do Representative Benchmarks Reveal the Real Bottleneck?
+<!-- section-summary: Matched experiments reveal whether data loading, CPU, memory, GPU compute, storage, network, or communication actually limits completion. -->
+
+Scaling decisions should come from matched measurements, not from assumptions based on dataset size or model family alone.
+
+Instead of guessing CPU vs GPU, start with representative experiments.
+
+For example:
+
+```text
+Configuration A
+16 CPU
+64 GB RAM
+no GPU
+
+Configuration B
+16 CPU
+64 GB RAM
+1 GPU
+
+Configuration C
+32 CPU
+128 GB RAM
+1 faster GPU
+```
+
+Run the **same training specification**. Measure:
+
+```text
+startup time
+data-loading time
+training throughput
+validation time
+peak RAM
+peak GPU memory
+CPU utilization
+GPU utilization
+total wall time
+total cost
+final validation quality
+```
+
+Then compare. The critical rule is:
+
+Benchmark with representative data, model sizes and preprocessing.
+
+A benchmark using 1% of the dataset can favor CPU because the accelerator has insufficient work. The full-scale workload might behave completely differently. Suppose your training job takes 100 minutes:
+
+```text
+data preparation       45 min
+GPU computation        40 min
+validation             10 min
+checkpoint upload       5 min
+```
+
+You replace the GPU with one twice as fast. Best-case result:
+
+```text
+data preparation       45 min
+GPU computation        20 min
+validation             10 min
+checkpoint upload       5 min
+
+total                   80 min
+```
+
+You doubled GPU performance but improved total runtime only:
+
+$$
+100 \rightarrow 80
+$$
+
+or 20%. The first question should therefore be:
+
+$$
+\boxed{\text{What is limiting throughput right now?}}
+$$
+
+Possible answers include:
+
+```text
+CPU
+GPU compute
+GPU memory
+host RAM
+disk
+object storage
+network
+CPU→GPU transfer
+distributed communication
+data-loader workers
+checkpoint writes
+```
+
+Hardware choice follows bottleneck identification. Not the other way around. A training pipeline can make the choice systematically. Start here:
+
+```text
+What model and training objective
+             │
+             ▼
+Is the computation highly parallel
+and supported by optimized GPU kernels
+         /             \
+       no               yes
+       │                 │
+       ▼                 ▼
+start CPU         Is workload large enough
+                  to amortize GPU overhead
+                       /        \
+                     no          yes
+                     │            │
+                     ▼            ▼
+                start CPU    Does it fit
+                             GPU memory
+                              /      \
+                            yes       no
+                            │          │
+                            ▼          ▼
+                        benchmark    reduce memory,
+                                     bigger GPU,
+                                     or distribute
+```
+
+Then regardless of that initial choice:
+
+```text
+measure full pipeline
+      ↓
+identify bottleneck
+      ↓
+measure time-to-quality
+      ↓
+measure cost-to-quality
+      ↓
+change hardware only if measurements justify it
+```
+
+Imagine:
+
+```text
+dataset: 300,000 rows
+features: 80
+algorithm: gradient boosting
+training target: under 10 minutes
+```
+
+CPU result:
+
+```text
+16 cores
+training = 90 sec
+cost = £0.04
+```
+
+GPU result:
+
+```text
+1 accelerator
+initialization + transfer = 8 sec
+training = 22 sec
+cost = £0.10
+```
+
+The GPU is faster. But both are far below the ten-minute requirement. If cost and simplicity matter more, CPU may be the rational choice. The answer is not:
+
+```text
+GPU won the benchmark.
+```
+
+It is:
+
+```text
+Both meet the objective.
+CPU satisfies it more economically/simply.
+```
+
+Now imagine:
+
+```text
+dataset: 100 million examples
+model: deep neural network
+parameters: 800 million
+```
+
+CPU:
+
+```text
+estimated training time:
+several days
+```
+
+GPU:
+
+```text
+training time:
+hours
+```
+
+The mathematical workload contains enormous tensor operations, so the accelerator's parallelism dominates its startup and transfer overhead. Here the answer is likely unambiguous:
+
+```text
+GPU
+```
+
+Then the optimization question becomes:
+
+```text
+Which GPU
+How much memory
+What precision
+What batch size
+How many GPUs
+```
+
+Suppose you migrate a model from CPU to GPU. You observe:
+
+```text
+CPU training:
+500 samples/sec
+
+GPU training:
+650 samples/sec
+```
+
+You expected 10×. Monitoring shows:
+
+```text
+GPU utilization: 18%
+CPU utilization: 100%
+```
+
+Now inspect the pipeline:
+
+```text
+JPEG read
+   ↓
+JPEG decode
+   ↓
+random crop
+   ↓
+resize
+   ↓
+augmentation
+   ↓
+batch creation
+   ↓
+GPU
+```
+
+The CPU data pipeline can only generate:
+
+```text
+650 samples/sec
+```
+
+The GPU could process:
+
+```text
+5,000 samples/sec
+```
+
+but never receives enough work. So replacing the GPU again won't help. You might instead:
+
+```text
+increase data-loader workers
+cache decoded inputs
+precompute transformations
+use faster storage
+parallelize augmentation
+prefetch batches
+```
+
+Then perhaps:
+
+```text
+GPU throughput:
+4,200 samples/sec
+```
+
+Same GPU. Completely different result. Suppose:
+
+```text
+1 GPU
+training time = 4 hours
+price = £2/hour
+
+cost = £8
+```
+
+Four GPUs:
+
+```text
+training time = 1.5 hours
+price = £8/hour
+
+cost = £12
+```
+
+The four-GPU system is:
+
+$$
+\frac{4}{1.5} \approx 2.67\times
+$$
+
+faster, not 4× faster. If your objective says:
+
+```text
+must finish within 2 hours
+```
+
+then four GPUs may be required. If your objective says:
+
+```text
+must finish before tomorrow morning
+```
+
+then one GPU may be the better choice. The same benchmark can therefore lead to different hardware decisions depending on the actual objective.
+
+## How Should a Training Pipeline Select and Record Compute Resources?
+<!-- section-summary: A resource specification records eligibility, performance, economics, precision, data-loader support, and environment evidence for the measured workload. -->
+
+The pipeline can then turn the selected evidence into an explicit resource contract and preserve the hardware environment with the run.
+
+Once you understand the workload, resource choice becomes part of orchestration. A training specification might conceptually say:
+
+```text
+model:
+    recommendation_transformer
+
 resources:
-  requests:
-    cpu: "8"
-    memory: 48Gi
-    nvidia.com/gpu: "1"
-  limits:
-    cpu: "8"
-    memory: 48Gi
-    nvidia.com/gpu: "1"
+    cpu: 16
+    memory: 128 GB
+    gpu: 1
+    accelerator_memory_required: >= 40 GB
+
+precision:
+    bf16
+
+data_loader:
+    workers: 12
+
+execution:
+    timeout: 6 hours
 ```
 
-Kubernetes requires GPU requests and limits to match if both are present. The platform usually adds a node-pool label, taint, admission policy, or queue so the workload receives the intended GPU class. The generic `nvidia.com/gpu: 1` resource alone asks for one allocatable NVIDIA GPU; it does not express a memory size or product family.
+A different model might say:
 
-Dynamic Resource Allocation (DRA) is stable in current Kubernetes and supports richer device selection through `DeviceClass` and `ResourceClaim` objects. Production use still depends on a compatible vendor DRA driver, cluster version, scheduler configuration, and security review. Extended resources remain a sound baseline for clusters whose device-plugin path already meets their allocation needs.
+```text
+model:
+    churn_logistic_regression
 
-Namespace `ResourceQuota` and a workload queue prevent one experiment burst from consuming the full accelerator pool. Device-aware metrics should carry pod, namespace, and container labels so utilization can be joined with the training run and cost owner.
-
-## Compare The Cost Of A Successful Training Run
-<!-- section-summary: The economic comparison includes successful and failed attempts, billable runtime, queue delay, checkpoint recovery, and the number of experiments needed to reach the accepted model. -->
-
-Hourly price answers only one part of the decision. The useful unit is **cost per completed training objective**: all compute and supporting spend required to produce an artifact that passes the defined quality and operational checks.
-
-`cost per accepted candidate = spend across successful, failed, and resumed attempts ÷ accepted candidates`
-
-Two more durations shape the team’s iteration speed:
-
-`time to candidate = queue + provisioning + input staging + training + evaluation + artifact upload`
-
-A scarce GPU can have excellent step time and poor time to candidate. If an available mid-range GPU finishes before a high-end queue starts the job, the smaller resource provides faster learning. Quota failures and long approval lead times belong in capacity planning before the experiment deadline.
-
-The run record should include billed duration and the hardware rate. Add storage and transfer charges. Queue time completes the submission-to-start picture.
-
-Interruption count and recovered steps explain whether cheaper capacity produced useful work. Failed-attempt spend completes the economic result. Cost allocation tags connect each amount to its model, team, experiment, and environment.
-
-Spot or preemptible resources can reduce the compute rate for interruption-tolerant jobs. Use them after checkpoint save and resume behavior has been tested. A training job that restarts from zero may spend more across repeated attempts even at a lower hourly rate.
-
-Cost also includes people’s waiting time and experiment capacity. A more expensive GPU can be justified if it moves a daily experiment loop to several useful iterations and the model-development process can consume that speed. A faster run adds little value if label availability or review remains the longer delay.
-
-## Preserve Reproducibility Across Hardware
-<!-- section-summary: Hardware and precision can change numerical execution, so comparisons record the environment and use matched runs with tolerance-based acceptance. -->
-
-CPU and GPU executions can produce slightly different results under the same high-level training code. Floating-point operations are sensitive to order, kernels vary by device and library, and some algorithms are nondeterministic. PyTorch explicitly warns that identical results are not guaranteed across releases, platforms, or CPU and GPU executions.
-
-For a hardware comparison, keep data, model code, configuration, seeds, and evaluation fixed. Record the CPU model or GPU SKU plus the device count. Capture the driver, accelerator runtime, and framework build together. Compiler settings, precision mode, matrix-multiplication policy, deterministic flags, and DataLoader configuration complete the environment record.
-
-Deterministic settings are useful for diagnosis and regression tests. In PyTorch, `torch.use_deterministic_algorithms(True)` selects deterministic implementations where available and raises an error for covered operations without a deterministic path. Determinism may reduce performance, so the benchmark contract should state whether it is enabled.
-
-Compare quality with an agreed tolerance and repeated runs. One CPU run and one GPU run cannot distinguish a hardware effect from normal training variation. If the GPU configuration uses mixed precision, inspect loss curves, non-finite values, calibration, and important cohorts in addition to the final aggregate metric.
-
-Changing hardware may also change effective batch size or data order. Preserve the optimization batch, sampler semantics, checkpoint state, and evaluation implementation. A throughput improvement measured with a different training objective is a new experiment, not a hardware-only comparison.
-
-## Use Measurements To Decide Whether To Scale Up Or Out
-<!-- section-summary: Scale-up changes the resource only after a representative run identifies a compute or memory constraint and defines the expected improvement. -->
-
-Scale up means moving to a stronger single device or more host resources. Scale out means adding devices or nodes. A single larger-memory GPU is usually the first response to a memory-fit problem if the budget and queue support it. Distributed training adds communication, topology, failure coordination, and changed optimization behavior, so it needs its own design.
-
-The expected outcome separates a justified capacity change from an exploratory request. A compute-bound run should gain step throughput on a stronger device. A memory-bound configuration should fit safely or process a more useful micro-batch on a larger-memory device. The matched benchmark must confirm that result.
-
-```mermaid
-flowchart TD
-    A["Representative Baseline<br/>(matched data, model, and objective)"] --> B["Profile the Run<br/>(time, memory, throughput, and utilization)"]
-    B --> C{"Primary Constraint<br/>(measured limiting resource)"}
-    C -- "Input or transfer" --> D["Repair Data Path<br/>(storage, decode, workers, and copies)"]
-    C -- "Device memory" --> E["Change Memory Plan<br/>(precision, batch, checkpointing, or larger device)"]
-    C -- "Device compute" --> F["Try Stronger Device<br/>(same experiment contract)"]
-    C -- "Host compute" --> G["Resize CPU Resources<br/>(cores, RAM, and thread limits)"]
-    D --> H["Repeat Matched Benchmark<br/>(verify expected improvement)"]
-    E --> H
-    F --> H
-    G --> H
+resources:
+    cpu: 8
+    memory: 32 GB
+    gpu: 0
 ```
 
-Write the expected result before requesting capacity. For example: “Moving from the current device to a larger-memory class should eliminate gradient accumulation, lower time to target by at least 25%, preserve the cohort metrics within tolerance, and keep cost per accepted candidate below the approved limit.” This claim can fail, which makes it useful.
+This is healthier than blindly putting every ML workload onto GPU nodes. A clean training platform distinguishes three related decisions.
 
-Verify the new configuration with end-to-end time, time to quality, peak memory, profiler traces, input wait, utilization, queue time, recovery, and total cost. Keep the smaller configuration as the operating default if the larger one produces little improvement or unreliable access.
+### Resource eligibility
 
-For the damaged-parts classifier, the engineer selects the smallest GPU that fits the representative batch. After repairing an image-decoding stall, the job completes a validated checkpoint before the review. The release record includes the device, precision, profile, and cost. Future jobs can reuse the evidence and re-benchmark after model or data shape changes.
+Can the job run there?
 
-## The Main Idea
-<!-- section-summary: The right training hardware is the smallest reliable configuration that reaches the model objective within its time and cost constraints. -->
+```text
+model needs 42 GB accelerator memory
+GPU has 24 GB
 
-CPUs excel at general, irregular, and data-heavy work. GPUs excel at large batches of supported parallel tensor operations. Accelerator training still depends on CPU preparation, host memory, device transfer, device memory, framework support, and a fast input path.
+→ impossible
+```
 
-Choose from workload shape, prove memory fit, benchmark the complete job, and identify the limiting stage. Then bring platform availability, quota, queue time, cost, precision, and reproducibility into the same decision. The result is a training configuration backed by completion and model-quality evidence instead of a hardware preference.
+### Resource performance
 
-Repeat the decision after a material change in model architecture, dataset format, batch shape, or training software. Earlier evidence may no longer describe the current workload.
+Will it run efficiently there
+
+```text
+model fits
+
+but GPU utilization = 12%
+because input pipeline is slow
+
+→ technically possible, operationally poor
+```
+
+### Resource economics
+
+Is the improvement worth the price?
+
+```text
+GPU:
+10 min, £1.20
+
+CPU:
+14 min, £0.08
+
+→ depends on your objective
+```
+
+Those questions should not be collapsed into:
+
+"Does this framework support GPU?"
+
+The CPU/GPU decision becomes much clearer if you stop imagining training as a single calculation. Think of it as a flow of bytes and operations:
+
+```text
+               BYTES                           OPERATIONS
+
+storage
+   │
+   │ read
+   ▼
+host memory
+   │
+   │ preprocessing ───────────→ CPU computation
+   │
+   │ transfer
+   ▼
+accelerator memory
+   │
+   │ tensors ─────────────────→ GPU computation
+   │
+   │ gradients
+   ▼
+model state
+   │
+   │ checkpoints
+   ▼
+storage
+```
+
+Every arrow has:
+
+```text
+bandwidth
+latency
+capacity
+cost
+```
+
+Every computation has:
+
+```text
+parallelism
+precision
+memory requirements
+runtime
+```
+
+Your training speed is controlled by whichever resource becomes the bottleneck. Do not ask:
+
+**"Are GPUs better for machine learning?"**
+
+Ask:
+
+**"Where is the work in this training pipeline, and what hardware makes that work finish under my objective?"**
+
+The basic reasoning chain is:
+
+$$
+\boxed{
+\text{training objective}
+\rightarrow
+\text{workload shape}
+\rightarrow
+\text{data movement}
+\rightarrow
+\text{memory requirement}
+\rightarrow
+\text{hardware candidate}
+\rightarrow
+\text{benchmark}
+\rightarrow
+\text{cost/time-to-quality}
+}
+$$
+
+Use CPUs when powerful general-purpose cores, large host memory, irregular computation, small workloads, or low cost are the better match. Use GPUs when training exposes enough large-scale parallel tensor computation to justify moving data onto an accelerator and keeping that accelerator busy. And once one GPU becomes insufficient, don't automatically add more. First determine whether you're constrained by **compute, memory, data loading, communication, or the deadline**. The strongest invariant for a training platform is therefore:
+
+$$
+\boxed{
+\text{Choose resources from measured end-to-end training behavior,
+not from the label “machine learning.”}
+}
+$$
+
+A GPU is not inherently the faster training machine. It is an extraordinarily effective machine for a particular shape of computation. The job of a well-designed training pipeline is to recognize when the workload actually has that shape.
 
 ![A six-step hardware decision moves from the training objective through profiling, hardware fit, bottleneck repair, and matched benchmarking to the smallest reliable operating configuration, with quality, time, cost, and reproducibility evidence kept with the run.](/content-assets/articles/article-mlops-training-pipelines-cpu-vs-gpu-training/choose-training-hardware-evidence.png)
 
 *The hardware choice starts with the training objective, then follows profiling, fit, bottleneck repair, and a matched benchmark. The run record keeps the evidence required to reproduce the decision.*
 
-## References
+## Check Your Answers
 
-- [PyTorch documentation](https://docs.pytorch.org/docs/stable/)
-- [PyTorch Performance Tuning Guide](https://docs.pytorch.org/tutorials/recipes/recipes/tuning_guide.html)
-- [PyTorch DataLoader](https://docs.pytorch.org/docs/stable/data.html)
-- [PyTorch Profiler](https://docs.pytorch.org/docs/stable/profiler.html)
-- [PyTorch automatic mixed precision](https://docs.pytorch.org/docs/stable/amp.html)
-- [PyTorch reproducibility](https://docs.pytorch.org/docs/stable/notes/randomness.html)
-- [TensorFlow: Better performance with the tf.data API](https://www.tensorflow.org/guide/data_performance)
-- [TensorFlow mixed precision](https://www.tensorflow.org/guide/mixed_precision)
-- [TensorFlow Profiler](https://www.tensorflow.org/guide/profiler)
-- [NVIDIA DCGM profiling](https://docs.nvidia.com/datacenter/dcgm/latest/learn/modules/profiling.html)
-- [NVIDIA DCGM Exporter](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html)
-- [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/)
-- [Kubernetes: Schedule GPUs](https://kubernetes.io/docs/tasks/manage-gpus/scheduling-gpus/)
-- [Kubernetes device plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)
-- [Kubernetes Dynamic Resource Allocation](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/)
-- [Amazon SageMaker AI model training](https://docs.aws.amazon.com/sagemaker/latest/dg/train-model.html)
-- [Gemini Enterprise Agent Platform serverless training jobs](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/create-custom-job)
-- [Azure Machine Learning command job schema](https://learn.microsoft.com/en-us/azure/machine-learning/reference-yaml-job-command?view=azureml-api-2)
-- [Databricks: Train AI and ML models](https://docs.databricks.com/aws/en/machine-learning/train-model/)
+Use these short answers to revisit the reasoning behind each section.
+
+:::expand[What Training Objective and Workload Should Drive the Hardware Choice?]{kind="recap"}
+Hardware selection starts with required quality, deadline, and cost, then profiles data preparation, movement, computation, synchronization, and overhead.
+:::
+
+:::expand[Which Workloads Fit CPUs and GPUs Well?]{kind="recap"}
+CPUs favor small, irregular, branch-heavy, preprocessing-dominated work; GPUs favor sufficiently large regular tensor operations with optimized kernels.
+:::
+
+:::expand[How Do Memory, Batch Size, Precision, and Data Movement Affect GPU Training?]{kind="recap"}
+Training-state memory, activation memory, batch size, numeric precision, preprocessing, transfer, and prefetching determine whether the accelerator can stay productive.
+:::
+
+:::expand[Which Measurements Compare the Complete Training Path?]{kind="recap"}
+Utilization is diagnostic; representative end-to-end benchmarks compare throughput, time and cost to target quality, queue time, failures, and total pipeline work.
+:::
+
+:::expand[How Do CPU and GPU Work Combine in Managed Training?]{kind="recap"}
+CPU workers feed and coordinate accelerators, while managed services and Kubernetes place requested resources without deciding whether the workload benefits from them.
+:::
+
+:::expand[When Should One GPU Scale Up or Scale Out?]{kind="recap"}
+Multiple GPUs add memory and compute along with communication, synchronization, failure, cost, and reproducibility concerns; scaling efficiency measures the trade.
+:::
+
+:::expand[How Do Representative Benchmarks Reveal the Real Bottleneck?]{kind="recap"}
+Matched experiments reveal whether data loading, CPU, memory, GPU compute, storage, network, or communication actually limits completion.
+:::
+
+:::expand[How Should a Training Pipeline Select and Record Compute Resources?]{kind="recap"}
+A resource specification records eligibility, performance, economics, precision, data-loader support, and environment evidence for the measured workload.
+:::

@@ -9,402 +9,1714 @@ id: "article-mlops-model-evaluation-classification-metrics"
 
 ## Table of Contents
 
-1. [Classification Metrics Measure More Than Correct Labels](#classification-metrics-measure-more-than-correct-labels)
-2. [Check Accuracy Against Class Imbalance And Error Costs](#check-accuracy-against-class-imbalance-and-error-costs)
-3. [Use A Confusion Matrix To Count Four Kinds Of Result](#use-a-confusion-matrix-to-count-four-kinds-of-result)
-4. [Precision, Recall, Specificity, and F1 Answer Different Questions](#precision-recall-specificity-and-f1-answer-different-questions)
-5. [Use A Threshold To Turn A Score Into An Action](#use-a-threshold-to-turn-a-score-into-an-action)
-6. [Check Whether Predicted Probabilities Match Real Outcomes](#check-whether-predicted-probabilities-match-real-outcomes)
-7. [Choose How To Average Metrics Across Several Classes](#choose-how-to-average-metrics-across-several-classes)
-8. [Compare Classification Results Across Important Segments](#compare-classification-results-across-important-segments)
-9. [Build a Repeatable Classification Report](#build-a-repeatable-classification-report)
-10. [The Main Idea](#the-main-idea)
-11. [References](#references)
+1. [How Does the Confusion Matrix Describe Classification Outcomes?](#how-does-the-confusion-matrix-describe-classification-outcomes)
+2. [When Should You Use Recall, Precision, Specificity, F1, or Balanced Accuracy?](#when-should-you-use-recall-precision-specificity-f1-or-balanced-accuracy)
+3. [How Do Thresholds, ROC Curves, and Precision-Recall Curves Compare Classifiers?](#how-do-thresholds-roc-curves-and-precision-recall-curves-compare-classifiers)
+4. [How Do Log Loss, Calibration, and Brier Score Evaluate Probabilities?](#how-do-log-loss-calibration-and-brier-score-evaluate-probabilities)
+5. [How Do Base Rates, Multiclass Problems, and Multilabel Problems Change the Metrics?](#how-do-base-rates-multiclass-problems-and-multilabel-problems-change-the-metrics)
+6. [How Do Segments, Confidence, Uncertainty, and Error Costs Affect Evaluation?](#how-do-segments-confidence-uncertainty-and-error-costs-affect-evaluation)
+7. [What Should a Repeatable Classification Report and Release Rule Contain?](#what-should-a-repeatable-classification-report-and-release-rule-contain)
+8. [How Do the Major Classification Metrics Fit into One Decision Model?](#how-do-the-major-classification-metrics-fit-into-one-decision-model)
+9. [Check Your Answers](#check-your-answers)
 
-## Classification Metrics Measure More Than Correct Labels
-<!-- section-summary: Classification evaluation follows the prediction from a score to a class decision, then measures mistakes, probability quality, and effects on important populations. -->
+A medical screening classifier finds 99% of true cases, but most of its alerts are false. Another model raises fewer false alarms but misses more people who need follow-up. Calling either model “more accurate” hides the decision the metric is supposed to support.
 
-A **classification model** predicts a category. An email filter may choose `spam` or `safe`. A quality-control system may choose `defect` or `pass`. A message-routing model may choose `urgent`, `standard`, or `low_priority`.
+Classification produces several kinds of evidence: whether labels are correct, whether positive cases rank above negative ones, and whether confidence values mean what they claim. The **confusion matrix** exposes the underlying outcomes, while precision, recall, threshold curves, and probability metrics examine different parts of that evidence.
 
-At first, evaluation seems like a simple counting exercise: compare the predicted category with the known category and calculate the percentage that match. That percentage is accuracy. It answers a real question, but it answers only one question.
+Use these questions to connect each metric to its denominator, threshold, base rate, and production cost:
 
-Production teams usually need a richer explanation. They need to know which class the model missed, how many unnecessary actions it created, whether an uncommon class received poor treatment, and what changed after the decision threshold moved. If the output is used as a probability, they also need to know whether a score such as `0.8` carries trustworthy meaning.
+1. **How Does the Confusion Matrix Describe Classification Outcomes?**
+2. **When Should You Use Recall, Precision, Specificity, F1, or Balanced Accuracy?**
+3. **How Do Thresholds, ROC Curves, and Precision-Recall Curves Compare Classifiers?**
+4. **How Do Log Loss, Calibration, and Brier Score Evaluate Probabilities?**
+5. **How Do Base Rates, Multiclass Problems, and Multilabel Problems Change the Metrics?**
+6. **How Do Segments, Confidence, Uncertainty, and Error Costs Affect Evaluation?**
+7. **What Should a Repeatable Classification Report and Release Rule Contain?**
+8. **How Do the Major Classification Metrics Fit into One Decision Model?**
 
-You can think of classification evaluation as three connected layers:
+## How Does the Confusion Matrix Describe Classification Outcomes?
+<!-- section-summary: The confusion matrix counts true and false outcomes for each class and provides the common foundation for label-based classification metrics. -->
 
-- **Score quality:** Does the model place positive cases above negative cases? ROC AUC and average precision examine this layer across many possible thresholds.
-- **Decision quality:** After a threshold turns scores into labels, which cases become true positives, false positives, false negatives, and true negatives? Accuracy, precision, recall, specificity, and F1 examine this layer.
-- **Probability quality:** If the score claims to be a probability, do confident predictions deserve that confidence? Log loss, Brier score, and calibration curves examine this layer.
+Classification starts with uncertain scores and possible outcomes, so the confusion matrix provides the clearest shared vocabulary.
 
-These layers feed a product decision. A fraud score may decide which payments enter review. A defect score may decide which parts leave the production line. An urgency score may decide which messages reach an on-call queue. The useful metric follows the consequence of that action.
+Classification metrics answer a deceptively simple question:
 
-```mermaid
-flowchart TD
-    D["Product decision<br/>What action will the model influence?"] --> P["Positive class<br/>Which event requires attention?"] --> S["Model score or probability"] --> T["Decision threshold"] --> C["Confusion-matrix counts"] --> M["Decision metrics<br/>precision, recall, specificity, F1"] --> R["Release evidence by class and segment"]
-    S --> Q["Score and probability checks<br/>AP, ROC AUC, log loss, Brier, calibration"] --> R
+> **How good is a model at distinguishing among categories?**
 
-    class D,P context
-    class S,T,C mechanism
-    class M,Q,R evidence
-```
+But "good" can mean many different things. A classifier can be good at finding almost every positive case, good at avoiding false alarms, good at ranking risky cases above safe ones, good at estimating probabilities, or simply good at being correct on average. Those are different properties. The first-principles way to understand classification metrics is therefore:
 
-The positive class deserves an explicit definition before any calculation. In defect detection, `positive` might mean a part that must be removed. In urgent-message triage, it might mean a message that needs a response within fifteen minutes. The words *positive* and *negative* describe the class chosen for measurement; they do not mean good and bad.
+$$
+\boxed{
+\text{Start with the kinds of outcomes the classifier can produce}
+}
+$$
 
-The evaluation population matters just as much. A recall score from last month's completed reviews may say little about new regions, new devices, or cases whose labels have not matured. A trustworthy metric report states the label definition, evaluation population, time window, and decision rule beside every result.
+Then ask which kinds of success and failure matter for the real decision. Suppose we want to determine whether a transaction is fraudulent. The true label is:
 
-## Check Accuracy Against Class Imbalance And Error Costs
-<!-- section-summary: Accuracy counts every correct label equally, so a common class can dominate the result while the model fails on the rare class that drives the product decision. -->
+$$
+Y\in\{0,1\}
+$$
 
-**Accuracy** is the share of examples whose predicted label matches the known label. It gives every evaluated example the same influence on the final percentage.
+where:
 
-`accuracy = correct predictions / all predictions`
+$$
+Y=1 \Rightarrow \text{fraud}
+$$
 
-It is easy to explain and useful for tasks where classes occur at similar rates and mistakes carry similar costs. Handwritten-digit recognition on a balanced evaluation set is one possible case. Predicting the wrong digit still needs inspection, but no single digit automatically owns almost the whole score.
+and
 
-Now consider 10,000 incoming messages. Only 100 are genuinely urgent. A model that labels every message as `standard` gets 9,900 predictions correct.
+$$
+Y=0 \Rightarrow \text{legitimate}
+$$
 
-```mermaid
-pie showData
-    title True labels in the message evaluation set
-    "Standard messages" : 9900
-    "Urgent messages" : 100
-```
+A model receives features $$x$$ and may produce a score such as:
 
-The model has 99 percent accuracy and zero ability to find urgent work. The common class overwhelms the headline number. This pattern is called **class imbalance**: one class appears far more often than another in the evaluation population.
+$$
+\hat p=P(Y=1\mid x)
+$$
 
-Class imbalance is part of the explanation, but frequency alone does not choose the metric. The cost of each mistake matters. Missing an urgent message may delay incident response. Flagging a standard message may consume a few minutes of human review. Those consequences point toward high recall for the urgent class, with precision and queue volume protecting the reviewers.
+For one transaction, perhaps:
 
-Accuracy can also hide a trade-off after the model improves. Suppose a second model catches 90 of the 100 urgent messages and incorrectly flags 400 standard messages. It makes 410 mistakes, so its accuracy is 95.9 percent. The all-standard model still has higher accuracy. Yet the second model may create a far better service if the team can review 490 alerts and urgent misses carry serious cost.
+$$
+\hat p=0.82
+$$
 
-**Balanced accuracy** gives each class more influence. For binary classification, it averages recall for the positive class and recall for the negative class, which is also called specificity. It helps reveal a model that succeeds mainly through the majority class.
+This does **not** yet mean:
 
-Balanced accuracy still remains a statistical summary. It does not know that a missed urgent message costs more than an unnecessary review. The report should preserve the actual error counts, class-specific rates, and operational workload beside any average.
+"Fraud."
 
-## Use A Confusion Matrix To Count Four Kinds Of Result
-<!-- section-summary: A confusion matrix records the four possible outcomes of a binary decision and provides the counts used by most threshold-based classification metrics. -->
+The model has produced a probability or risk score. A decision rule then converts that score into a class:
 
-A **confusion matrix** compares the known class with the class chosen by the model. For a binary decision, every evaluated example falls into one of four cells.
+$$
+\hat Y=
+\begin{cases}
+1  \hat p\ge t\\
+0  \hat p<t
+\end{cases}
+$$
 
-The word *true* means the prediction agrees with the known label. The word *false* means it disagrees. *Positive* and *negative* name the two sides of the decision. Combining those words produces the four outcomes: true positive, false positive, false negative, and true negative.
+where $$t$$ is the decision threshold. If:
 
-The matrix makes two perspectives visible at once. Looking across actual positive cases reveals which ones were found or missed. Looking across positive predictions reveals which actions were useful or unnecessary. The diagram below follows one evaluated case through those two questions and ends at its matrix cell.
+$$
+t=0.5
+$$
 
-```mermaid
-flowchart TD
-    A{"Is the actual case positive?"}
-    A -- "Yes" --> PY{"Did the model predict positive?"} -- "Yes" --> TP["True positive<br/>Needed action and received it"]
-    PY -- "No" --> FN["False negative<br/>Needed action and was missed"]
-    A -- "No" --> PN{"Did the model predict positive?"} -- "Yes" --> FP["False positive<br/>Received unnecessary action"]
-    PN -- "No" --> TN["True negative<br/>Correctly left alone"]
+then:
 
-    class A,PY,PN question
-    class TP,TN correct
-    class FP,FN error
-```
+$$
+0.82\ge0.5
+$$
 
-Suppose a camera system checks 1,000 manufactured parts. A confirmed defect is the positive class. At the chosen threshold, the system produces these counts:
+so we classify the transaction as fraud. This gives us three conceptually separate objects:
 
-| Actual class | Predicted pass | Predicted defect |
-|---|---:|---:|
-| Pass | 855 true negatives | 45 false positives |
-| Defect | 25 false negatives | 75 true positives |
+$$
+\boxed{
+\text{true outcome}
+\rightarrow
+\text{predicted score}
+\rightarrow
+\text{predicted class}
+}
+$$
 
-Read the matrix in operational language:
+Different classification metrics evaluate different parts of this process. Imagine 1,000 transactions:
 
-- **75 true positives:** defective parts were removed.
-- **25 false negatives:** defective parts continued down the line.
-- **45 false positives:** acceptable parts were stopped for inspection.
-- **855 true negatives:** acceptable parts continued without interruption.
+$$
+990 \text{ legitimate}
+$$
 
-The raw counts reveal scale. A recall of 75 percent might sound acceptable until the reader learns that the remaining 25 defects enter a safety-critical assembly each hour. A precision of 62.5 percent might sound weak until the reader learns that the inspection station can cheaply clear the 45 false alarms.
+and:
 
-The same metric can describe different consequences in another product. A false positive in spam filtering moves a safe email to a review folder. A false positive in payment risk may delay a legitimate customer. A false negative in defect detection releases a faulty part. Metric names stay constant while their costs change.
+$$
+10 \text{ fraudulent}
+$$
 
-Pay close attention to matrix orientation. Scikit-learn's `confusion_matrix(y_true, y_pred, labels=[0, 1])` places true labels on rows and predicted labels on columns. Other tools may display the axes differently. A production report should label both axes, show the class names, and keep the class order explicit. Silent axis reversal can turn a false-negative count into a false-positive count during review.
+Consider a completely useless classifier that predicts:
+
+legitimate
+
+for every transaction. It gets all 990 legitimate transactions correct and all 10 frauds wrong. Its accuracy is:
+
+$$
+\frac{990}{1000}=99\%
+$$
+
+A 99% accurate model sounds excellent. But it detects:
+
+$$
+0
+$$
+
+frauds. The problem is **class imbalance**. The majority class is so common that a classifier can achieve high accuracy merely by predicting the majority class. So the first lesson is:
+
+$$
+\boxed{
+\text{Accuracy is useful only when the kinds of errors it averages are acceptable to average together.}
+}
+$$
+
+For binary classification, every prediction falls into one of four categories.
+
+|                      |   Actually Positive |   Actually Negative |
+| -------------------- | ------------------: | ------------------: |
+| **Predict Positive** |  True Positive (TP) | False Positive (FP) |
+| **Predict Negative** | False Negative (FN) |  True Negative (TN) |
+
+These four numbers are the foundation of most classification metrics. Suppose we are detecting disease. A **true positive** means:
+
+$$
+\text{disease present}
++
+\text{model says disease}
+$$
+
+A **false positive** means:
+
+$$
+\text{no disease}
++
+\text{model says disease}
+$$
+
+A **false negative** means:
+
+$$
+\text{disease present}
++
+\text{model says no disease}
+$$
+
+A **true negative** means:
+
+$$
+\text{no disease}
++
+\text{model says no disease}
+$$
+
+Everything depends on what question we ask about these four quantities. Correct predictions are:
+
+$$
+TP+TN
+$$
+
+Total predictions are:
+
+$$
+TP+TN+FP+FN
+$$
+
+Therefore:
+
+$$
+\text{Accuracy}
+=
+\frac{TP+TN}
+{TP+TN+FP+FN}
+$$
+
+Suppose:
+
+$$
+TP=80,\quad TN=850,\quad FP=50,\quad FN=20
+$$
+
+Then:
+
+$$
+\text{Accuracy}
+=
+\frac{80+850}{1000}
+=
+93\%
+$$
+
+Accuracy is intuitive. It works well when classes are reasonably balanced and false positives and false negatives have similar consequences. But accuracy silently treats all correct predictions as equivalent and all mistakes as equivalent. Usually the real world does not.
+
+## When Should You Use Recall, Precision, Specificity, F1, or Balanced Accuracy?
+<!-- section-summary: Recall, precision, specificity, F1, and balanced accuracy emphasize different errors, populations, and tradeoffs rather than interchangeable notions of quality. -->
+
+Once the four outcome counts are visible, each familiar metric can be understood by the errors and denominator it chooses.
+
+Suppose there were:
+
+$$
+100
+$$
+
+fraudulent transactions. Your model detected:
+
+$$
+80
+$$
+
+of them.
+
+Then:
+
+$$
+TP=80
+$$
+
+and:
+
+$$
+FN=20
+$$
+
+Recall is:
+
+$$
+\text{Recall}
+=
+\frac{TP}{TP+FN}
+$$
+
+Therefore:
+
+$$
+\text{Recall}
+=
+\frac{80}{100}
+=
+80\%
+$$
+
+The denominator is crucial. We are looking at **all actual positives**:
+
+$$
+TP+FN
+$$
+
+and asking what proportion were caught. So recall answers:
+
+Among everything we were supposed to find, how much did we find
+
+High recall means few false negatives. Suppose a screening model detects a dangerous disease. Missing a patient could have severe consequences. Then false negatives matter enormously. You may therefore prioritize:
+
+$$
+\boxed{\text{high recall}}
+$$
+
+A model with 99% recall misses only:
+
+$$
+1\%
+$$
+
+of actual positive cases. But high recall alone is not enough. You could obtain perfect recall by predicting:
+
+disease
+
+for everyone.
+
+Then:
+
+$$
+FN=0
+$$
+
+and:
+
+$$
+\text{Recall}=100\%
+$$
+
+But you would generate enormous numbers of false positives. That leads to precision. Suppose the model flagged:
+
+$$
+100
+$$
+
+transactions as fraud. Of those:
+
+$$
+80
+$$
+
+actually were fraud.
+
+Then:
+
+$$
+TP=80
+$$
+
+and:
+
+$$
+FP=20
+$$
+
+Precision is:
+
+$$
+\text{Precision}
+=
+\frac{TP}{TP+FP}
+$$
+
+so:
+
+$$
+\text{Precision}
+=
+\frac{80}{100}
+=
+80\%
+$$
+
+Notice that the denominator is different from recall. For recall:
+
+$$
+TP+FN
+$$
+
+means:
+
+all actual positives.
+
+For precision:
+
+$$
+TP+FP
+$$
+
+means:
+
+all predicted positives.
+
+So:
+
+$$
+\boxed{
+\text{Recall: Did we find the positives?}
+}
+$$
+
+while:
+
+$$
+\boxed{
+\text{Precision: Can we trust positive predictions?}
+}
+$$
+
+Imagine an email spam classifier. If an ordinary email is classified as spam, an important message might disappear into the spam folder. That is a false positive. If false positives are particularly undesirable, we may demand high precision.
+
+For example:
+
+$$
+\text{Precision}=99.9\%
+$$
+
+means that among emails marked as spam, very few legitimate emails are incorrectly included. Another example is manual fraud investigation. Suppose analysts can examine only 100 cases each day. A low-precision model might waste most of their capacity. So high precision can be operationally important. The distinction becomes especially clear if we think in terms of sets. Let:
+
+$$
+A=\{\text{all actual positives}\}
+$$
+
+and:
+
+$$
+P=\{\text{all predicted positives}\}
+$$
+
+Their intersection contains the true positives:
+
+$$
+A\cap P=TP
+$$
+
+Then:
+
+$$
+\text{Recall}
+=
+\frac{|A\cap P|}{|A|}
+$$
+
+while:
+
+$$
+\text{Precision}
+=
+\frac{|A\cap P|}{|P|}
+$$
+
+Recall asks:
+
+How much of reality did we capture
+
+Precision asks:
+
+How pure are our positive predictions
+
+That is the conceptual difference. Recall focuses on positives. We can ask the analogous question about actual negatives:
+
+Of all real negatives, how many did we correctly reject
+
+This is **specificity**:
+
+$$
+\text{Specificity}
+=
+\frac{TN}{TN+FP}
+$$
+
+Suppose:
+
+$$
+TN=850
+$$
+
+and:
+
+$$
+FP=50
+$$
+
+Then:
+
+$$
+\text{Specificity}
+=
+\frac{850}{900}
+\approx94.4\%
+$$
+
+High specificity means relatively few false positives. The false-positive rate is its complement:
+
+$$
+FPR
+=
+\frac{FP}{FP+TN}
+$$
+
+and therefore:
+
+$$
+FPR=1-\text{Specificity}
+$$
+
+If specificity is:
+
+$$
+94.4\%
+$$
+
+then:
+
+$$
+FPR=5.6\%
+$$
+
+In some domains, especially medicine:
+
+$$
+\text{Sensitivity}
+=
+\text{Recall}
+$$
+
+so:
+
+$$
+\text{Sensitivity}
+=
+\frac{TP}{TP+FN}
+$$
+
+Thus you will often see sensitivity and specificity discussed together:
+
+$$
+\text{Sensitivity}
+=
+\text{ability to detect positives}
+$$
+
+$$
+\text{Specificity}
+=
+\text{ability to reject negatives}
+$$
+
+These aren't fundamentally new concepts. They are two views of the confusion matrix. Sometimes you want one number reflecting both precision and recall. The F1 score uses their harmonic mean:
+
+$$
+F_1=
+2\frac{PR}{P+R}
+$$
+
+where $$P$$ is precision and $$R$$ is recall. Suppose:
+
+$$
+P=0.90
+$$
+
+and:
+
+$$
+R=0.60
+$$
+
+Then:
+
+$$
+F_1
+=
+2\frac{0.9\times0.6}{0.9+0.6}
+=
+0.72
+$$
+
+Why not simply average them? The ordinary arithmetic mean would give:
+
+$$
+\frac{0.9+0.6}{2}=0.75
+$$
+
+The harmonic mean punishes imbalance more strongly. If either precision or recall becomes very small, F1 becomes small.
+
+For example:
+
+$$
+P=1,\qquad R=0
+$$
+
+gives:
+
+$$
+F_1=0
+$$
+
+So F1 rewards systems that perform reasonably well on both dimensions. F1 makes an implicit choice:
+
+Precision and recall should both matter, with a particular symmetric tradeoff.
+
+The real system may disagree. Suppose missing a fraud costs:
+
+$$
+\$10{,}000
+$$
+
+while investigating an innocent transaction costs:
+
+$$
+\$5
+$$
+
+Then false negatives and false positives clearly do not have equal importance. Using F1 because it is familiar would hide that asymmetry. There are generalized $$F_\beta$$ scores:
+
+$$
+F_\beta
+=
+(1+\beta^2)
+\frac{PR}
+{\beta^2P+R}
+$$
+
+When:
+
+$$
+\beta>1
+$$
+
+recall gets more emphasis. When:
+
+$$
+\beta<1
+$$
+
+precision gets more emphasis. But if actual costs are known, directly evaluating expected cost can be even clearer.
 
 ![A defect-detection confusion matrix connects four exact outcome counts to precision recall and specificity calculations](/content-assets/articles/article-mlops-model-evaluation-classification-metrics/confusion-matrix.png)
 
 *The matrix keeps the operational consequence of each cell visible. Precision, recall, and specificity select different denominators from the same four counts.*
 
-## Precision, Recall, Specificity, and F1 Answer Different Questions
-<!-- section-summary: Precision, recall, specificity, and F1 summarize different relationships among the same four counts, so the product consequence should choose which one leads. -->
+## How Do Thresholds, ROC Curves, and Precision-Recall Curves Compare Classifiers?
+<!-- section-summary: A threshold converts scores into labels, while ROC and precision-recall curves show performance across many possible operating rules. -->
 
-The confusion matrix gives the facts. Metrics turn selected parts of those facts into rates that can be compared across evaluation sets.
+Those metrics change when the decision threshold changes, which makes threshold curves more informative than treating `0.5` as fixed.
 
-### Use Precision To Measure How Often Positive Predictions Are Correct
+Ordinary accuracy can be dominated by the majority class. One alternative is balanced accuracy:
 
-**Precision** starts from everything the model predicted as positive. It asks: *Of the cases that received the action, how many truly needed it?*
+$$
+\text{Balanced Accuracy}
+=
+\frac{\text{Recall}+\text{Specificity}}{2}
+$$
 
-`precision = TP / (TP + FP)`
+Suppose:
 
-For the defect system, precision is `75 / (75 + 45) = 0.625`. About 62.5 percent of stopped parts are defective. The remaining 37.5 percent create unnecessary inspection work.
+$$
+\text{Recall}=70\%
+$$
 
-Precision matters if false alarms are expensive. A manual review team has limited capacity. A customer may be harmed by an unnecessary block. An alert stream may lose trust if most alerts lead nowhere.
+and:
 
-### Use Recall To Measure How Many Positive Cases The Model Finds
+$$
+\text{Specificity}=98\%
+$$
 
-**Recall**, also called **sensitivity** or the **true positive rate**, starts from every truly positive case. It asks: *Of all cases that needed action, how many did the model find?*
+Then:
 
-`recall = TP / (TP + FN)`
+$$
+\text{Balanced Accuracy}
+=
+84\%
+$$
 
-The defect system has recall `75 / (75 + 25) = 0.75`. It catches 75 percent of the defects and misses 25 percent.
+The positive and negative classes contribute equally, regardless of how common they are. This can be useful when class imbalance is substantial and both classes matter. Suppose the model outputs probabilities. Consider five cases:
 
-Recall deserves priority if missing a positive case carries serious cost. Urgent-message routing, disease screening, fraud detection, and safety inspection often fit this pattern. High recall usually creates more positive predictions, so the team watches precision and workload beside it.
+| Case | Predicted probability |
+| ---- | --------------------: |
+| A    |                  0.95 |
+| B    |                  0.81 |
+| C    |                  0.63 |
+| D    |                  0.41 |
+| E    |                  0.12 |
 
-### Use Specificity To Measure How Many Negative Cases The Model Leaves Untouched
+If the threshold is:
 
-**Specificity**, also called the **true negative rate**, starts from every truly negative case. It asks: *Of all cases that should remain untouched, how many did the model leave alone?*
+$$
+t=0.8
+$$
 
-`specificity = TN / (TN + FP)`
+only A and B become positive predictions. If:
 
-The defect system has specificity `855 / (855 + 45) = 0.95`. It lets 95 percent of acceptable parts continue normally.
+$$
+t=0.4
+$$
 
-Specificity deserves attention in products where the negative class represents a large population that should avoid interruption. Screening systems often report sensitivity and specificity together because one protects detection and the other protects people from unnecessary follow-up.
+then A, B, C, and D become positive. Lowering the threshold usually means:
 
-### F1 Combines Precision And Recall Into One Score
+$$
+\text{more predicted positives}
+$$
 
-**F1** is the harmonic mean of precision and recall.
+which usually gives:
 
-`F1 = 2 × precision × recall / (precision + recall)`
+$$
+\text{recall}\uparrow
+$$
 
-For the example, F1 is about `0.682`. The harmonic mean drops sharply if either precision or recall is weak, so F1 is useful for comparing systems that need a balance between finding positives and limiting false alarms.
+because more true positives are captured. But it also tends to give:
 
-F1 leaves true negatives out of its calculation. It also gives precision and recall equal importance. Those choices may fit a search for one balanced summary, but they may conflict with the product. An urgent triage service may care far more about recall. A costly automatic block may place more weight on precision. `F_beta` makes that weighting explicit: values of `beta` above one emphasize recall, while values below one emphasize precision.
+$$
+\text{false positives}\uparrow
+$$
 
-```mermaid
-mindmap
-  root((Choose from the consequence))
-    Missed positives dominate
-      Recall
-      False-negative count
-    Unnecessary actions dominate
-      Precision
-      False-positive count
-    Protect the negative class
-      Specificity
-      False-positive rate
-    Need a balanced summary
-      F1 or F-beta
-      Keep raw counts visible
-    Both classes deserve equal weight
-      Balanced accuracy
-      Per-class recall
-```
+which often causes:
 
-No summary should erase support, which is the number of true examples for a class. A recall of 80 percent based on ten positive examples has a different evidence strength from the same rate based on ten thousand. Counts and uncertainty remain part of the release decision.
+$$
+\text{precision}\downarrow
+$$
 
-## Use A Threshold To Turn A Score Into An Action
-<!-- section-summary: A decision threshold converts scores into labels, changing precision, recall, false alarms, misses, and workload without changing the underlying model. -->
+So precision and recall are not merely properties of the model. They are properties of:
 
-Many binary classifiers produce a score or probability before they produce a class label. The **decision threshold** is the cutoff that turns that continuous output into an action.
+$$
+\boxed{\text{model + threshold}}
+$$
 
-Suppose an urgent-message model assigns scores from zero to one. A threshold of `0.70` sends only high-scoring messages to the urgent queue. A threshold of `0.30` sends many more messages. The model weights stay the same; the workflow changes.
+Why classify something as positive whenever:
 
-```mermaid
-flowchart TD
-    S["Same model scores"] --> L["Lower threshold"]
-    S --> H["Higher threshold"]
-    L --> LA["More cases predicted positive"] --> LR["Recall usually rises"]
-    LA --> LP["False alarms and workload may rise"]
-    H --> HA["Fewer cases predicted positive"] --> HP["Precision may rise"]
-    HA --> HM["More positive cases may be missed"]
+$$
+P(Y=1)>0.5
+$$
 
-    class S source
-    class L,H choice
-    class LA,LR,LP,HA,HP,HM effect
-```
+That makes sense only under particular decision assumptions. Suppose an undetected fraud costs:
 
-Scikit-learn classifiers commonly use `0.5` for probabilities or `0` for decision scores in their default binary class prediction. Those defaults have no automatic connection to staffing, safety, customer friction, or financial loss. The product needs an operating point that matches its actual decision.
+$$
+\$1{,}000
+$$
 
-Consider an alert service with capacity for 800 reviews per day:
+while investigating a transaction costs:
 
-| Threshold | Recall | Precision | Alerts per day |
-|---:|---:|---:|---:|
-| 0.30 | 0.94 | 0.22 | 1,260 |
-| 0.45 | 0.88 | 0.31 | 790 |
-| 0.60 | 0.76 | 0.46 | 510 |
-| 0.75 | 0.58 | 0.64 | 300 |
+$$
+\$20
+$$
 
-Threshold `0.30` finds most positive cases and exceeds capacity. Threshold `0.75` creates a clean queue and misses many positives. Threshold `0.45` fits the stated capacity and may become a candidate operating point if its false-negative cost is acceptable.
+You may rationally investigate even when fraud probability is much lower than 50%. Ignoring complications, if an investigation costing $20 prevents a $1,000 fraud loss, investigation begins to make sense roughly when:
 
-Threshold selection belongs on validation data. Repeatedly adjusting the cutoff against the final holdout leaks information from the release test into the design. The team can tune the threshold through a versioned rule or a tool such as `TunedThresholdClassifierCV`, then lock it before final evaluation.
+$$
+p(1000)>20
+$$
 
-Score-based metrics answer a related question before the threshold is fixed. **ROC AUC** measures how often positive cases tend to rank above negative cases across thresholds. **Average precision (AP)** summarizes the precision-recall curve and is often informative for rare positives. Random scores have AP near the positive-class prevalence, so the baseline stays visible.
+so:
 
-ROC AUC or AP can show that a candidate orders cases better overall. Neither metric says how many alerts the selected threshold produces. The release report needs the curve summary and the actual operating-point counts.
+$$
+p>0.02
+$$
+
+The economically sensible threshold might therefore be closer to:
+
+$$
+2\%
+$$
+
+than:
+
+$$
+50\%
+$$
+
+The threshold should come from the **decision problem**, not from a software default. Instead of choosing one threshold immediately, we can evaluate the classifier across thresholds. For every threshold, calculate:
+
+$$
+TPR=\text{Recall}
+$$
+
+and:
+
+$$
+FPR=\frac{FP}{FP+TN}
+$$
+
+A ROC curve plots:
+
+$$
+\text{True Positive Rate}
+$$
+
+against:
+
+$$
+\text{False Positive Rate}
+$$
+
+as the threshold changes. A classifier that ranks positives well tends to have a curve toward the upper-left. The area under the ROC curve is called ROC-AUC. A useful interpretation is approximately:
+
+If we randomly choose one positive and one negative example, how often does the model give the positive one the higher score
+
+So:
+
+$$
+AUC=0.5
+$$
+
+is roughly random ranking. And:
+
+$$
+AUC=1
+$$
+
+means perfect ranking. This is an important insight:
+
+$$
+\boxed{
+\text{AUC primarily evaluates ranking, not probability calibration or one operating threshold.}
+}
+$$
+
+A model can have good AUC while its probabilities are badly calibrated. It can also have a higher AUC overall while being worse at the threshold your production system actually uses. Suppose only:
+
+$$
+0.1\%
+$$
+
+of transactions are fraud. There are huge numbers of negative examples. In such cases, ROC-AUC can sometimes look reassuring even when the model produces many false positives relative to the small positive population. A precision–recall curve instead plots:
+
+$$
+\text{Precision}
+$$
+
+against:
+
+$$
+\text{Recall}
+$$
+
+at different thresholds. This focuses attention directly on performance for the positive class. For rare-event problems such as:
+
+* fraud,
+* certain defects,
+* rare diseases,
+* abuse detection,
+
+PR curves and average precision are often especially informative. This does **not** mean PR-AUC is universally "better" than ROC-AUC. They answer different questions.
+
+## How Do Log Loss, Calibration, and Brier Score Evaluate Probabilities?
+<!-- section-summary: Probability metrics evaluate the confidence values themselves, and calibration tests whether predicted probabilities correspond to observed frequencies. -->
+
+A correct label can still come from a misleading confidence value, so probability quality needs its own measurements.
+
+Consider two predictions for a positive example. Model A says:
+
+$$
+P(Y=1)=0.51
+$$
+
+Model B says:
+
+$$
+P(Y=1)=0.99
+$$
+
+At threshold 0.5, both produce:
+
+$$
+\hat Y=1
+$$
+
+So accuracy sees them as identical. Now suppose the true outcome is negative. Again, both are wrong according to accuracy. But the errors are not conceptually identical. Model A was uncertain. Model B was almost completely confident and wrong. If the probabilities themselves matter, we need metrics that evaluate probabilities rather than only thresholded labels. For binary classification, log loss is:
+
+$$
+-\frac{1}{N}
+\sum_i
+[
+y_i\log p_i
++
+(1-y_i)\log(1-p_i)
+]
+$$
+
+The key intuition matters more than memorizing the equation. If the true label is positive and the model predicts:
+
+$$
+p=0.9
+$$
+
+the model is rewarded. If it predicts:
+
+$$
+p=0.01
+$$
+
+it is heavily penalized. Log loss particularly dislikes predictions that are **confidently wrong**. This makes sense when we want truthful probabilistic predictions. Suppose the model assigns:
+
+$$
+0.8
+$$
+
+probability to 1,000 examples. If the probabilities are calibrated, then approximately:
+
+$$
+800
+$$
+
+of those examples should actually be positive. In general:
+
+$$
+P(Y=1\mid\hat p=p)\approx p
+$$
+
+A classifier can rank perfectly while being poorly calibrated. Suppose all positives receive:
+
+$$
+0.6
+$$
+
+and all negatives receive:
+
+$$
+0.4
+$$
+
+The ranking is perfect. But perhaps the true probabilities for those groups are closer to 95% and 5%. The classifier orders cases correctly but misrepresents their risks. Suppose a bank estimates:
+
+$$
+P(\text{default})=10\%
+$$
+
+and uses that value directly to price loans. If borrowers given a 10% prediction actually default:
+
+$$
+30\%
+$$
+
+of the time, the model's ranking may still be useful, but its probabilities are economically misleading. Calibration matters whenever probabilities feed into:
+
+* expected-value calculations,
+* resource allocation,
+* pricing,
+* risk estimation,
+* decision thresholds based on costs.
+
+So we should distinguish:
+
+$$
+\boxed{\text{Can the model rank examples correctly?}}
+$$
+
+from:
+
+$$
+\boxed{\text{Are its probability estimates numerically trustworthy?}}
+$$
+
+For binary classification:
+
+$$
+\text{Brier Score}
+=
+\frac{1}{N}
+\sum_i(p_i-y_i)^2
+$$
+
+Suppose:
+
+$$
+p=0.9,\quad y=1
+$$
+
+The squared error is:
+
+$$
+(0.9-1)^2=0.01
+$$
+
+If instead:
+
+$$
+p=0.1,\quad y=1
+$$
+
+then:
+
+$$
+(0.1-1)^2=0.81
+$$
+
+Lower is better. Unlike threshold-based accuracy, the Brier score cares about the numerical quality of probability predictions.
+
+## How Do Base Rates, Multiclass Problems, and Multilabel Problems Change the Metrics?
+<!-- section-summary: Prevalence changes precision, and multiclass or multilabel tasks require per-class definitions plus explicit micro, macro, or weighted aggregation. -->
+
+Metric interpretation also changes with prevalence and with tasks that have several classes or several simultaneous labels.
+
+Rather than memorizing dozens of metrics independently, it helps to organize them conceptually.
+
+| What do you want to evaluate     | Typical metrics                    |
+| --------------------------------- | ---------------------------------- |
+| Correct final labels              | Accuracy, balanced accuracy        |
+| Ability to find positives         | Recall / sensitivity               |
+| Reliability of positive alerts    | Precision                          |
+| Ability to reject negatives       | Specificity                        |
+| Precision–recall balance          | F1, $$F_\beta$$                    |
+| Ranking quality                   | ROC-AUC, PR-AUC, average precision |
+| Probability quality               | Log loss, Brier score              |
+| Probability reliability           | Calibration plots/errors           |
+| Performance at operating capacity | Precision@K, Recall@K              |
+
+Each family answers a different question. Imagine a medical test whose:
+
+$$
+\text{Recall}=99\%
+$$
+
+and:
+
+$$
+\text{Specificity}=99\%
+$$
+
+That sounds extraordinary. Suppose the disease occurs in only:
+
+$$
+0.1\%
+$$
+
+of people. Test 100,000 people. Approximately:
+
+$$
+100
+$$
+
+actually have the disease. With 99% recall, approximately:
+
+$$
+99
+$$
+
+are detected. Approximately:
+
+$$
+99{,}900
+$$
+
+do not have the disease. With 99% specificity, 1% of them test positive incorrectly:
+
+$$
+999
+$$
+
+false positives. So positive predictions total approximately:
+
+$$
+99+999=1{,}098
+$$
+
+Precision is:
+
+$$
+\frac{99}{1098}
+\approx9\%
+$$
+
+Despite 99% sensitivity and specificity, only around 9% of positive results correspond to actual disease under these assumptions. Why? Because the disease is extremely rare. This is why **prevalence matters**. Precision is:
+
+$$
+P(Y=1\mid\hat Y=1)
+$$
+
+By Bayes' rule, it depends partly on:
+
+$$
+P(Y=1)
+$$
+
+the underlying positive-class rate. Therefore if production prevalence changes, precision can change even if the model's conditional behavior stays similar. That is particularly important when evaluation datasets are artificially balanced. Suppose production is:
+
+$$
+1\%\text{ positive}
+$$
+
+but the test dataset was created as:
+
+$$
+50\%\text{ positive}
+$$
+
+The precision measured directly on that test set may badly misrepresent production precision. Metrics need to be interpreted relative to the population on which they were measured. Suppose we classify an animal as:
+
+$$
+\{\text{cat},\text{dog},\text{bird}\}
+$$
+
+The confusion matrix becomes larger:
+
+| Actual ↓ / Predicted → | Cat | Dog | Bird |
+| ---------------------- | --: | --: | ---: |
+| Cat                    |  90 |   8 |    2 |
+| Dog                    |  12 |  80 |    8 |
+| Bird                   |   3 |   7 |   90 |
+
+The diagonal contains correct predictions. Off-diagonal cells reveal **which classes are confused with which**.
+
+For example:
+
+$$
+12
+$$
+
+dogs were classified as cats. That information can be more useful than the overall accuracy alone. For class "cat," temporarily treat:
+
+$$
+\text{cat}=\text{positive}
+$$
+
+and all other classes as negative. Then calculate:
+
+$$
+Precision_{\text{cat}}
+$$
+
+and:
+
+$$
+Recall_{\text{cat}}
+$$
+
+Do the same for dog and bird. You might obtain:
+
+| Class | Precision | Recall |  F1 |
+| ----- | --------: | -----: | --: |
+| Cat   |       86% |    90% | 88% |
+| Dog   |       84% |    80% | 82% |
+| Bird  |       90% |    90% | 90% |
+
+Now comes another question:
+
+How should these class-level scores be summarized
+
+That is where macro, micro, and weighted averages appear. Suppose recalls are:
+
+$$
+R_A=0.95
+$$
+
+$$
+R_B=0.80
+$$
+
+$$
+R_C=0.45
+$$
+
+Macro recall is:
+
+$$
+\frac{0.95+0.80+0.45}{3}
+\approx0.733
+$$
+
+Each class contributes equally. So a class containing 10 examples matters as much as a class containing 10,000 examples. Macro averaging is useful when:
+
+$$
+\boxed{\text{performance on every class matters}}
+$$
+
+especially with imbalance. A weighted average multiplies each class metric by its prevalence. Suppose:
+
+$$
+90\%
+$$
+
+of examples belong to class A. Then A contributes much more heavily to the weighted score.
+
+Conceptually:
+
+$$
+M_{\text{weighted}}
+=
+\sum_k
+\frac{n_k}{N}M_k
+$$
+
+Weighted metrics reflect the observed class distribution. That can be appropriate when overall population-level performance matters, but it can hide weak performance on rare classes. Micro averaging first combines the underlying counts across classes and then calculates the metric. So instead of treating each class equally, it effectively treats each **example-level decision** equally. Large classes therefore naturally have more influence. In single-label multiclass classification, micro precision, recall, and F1 have particular relationships to accuracy. The deeper distinction is:
+
+$$
+\boxed{\text{Macro: each class matters equally}}
+$$
+
+versus:
+
+$$
+\boxed{\text{Micro: each example matters equally}}
+$$
+
+versus:
+
+$$
+\boxed{\text{Weighted: each class matters according to its frequency}}
+$$
+
+There is no universally correct choice. The averaging rule should correspond to what you care about. Suppose an image can simultaneously contain:
+
+$$
+\{\text{person},\text{car},\text{tree}\}
+$$
+
+This is not ordinary multiclass classification. It is **multilabel classification**. Several labels can be true at once. Now you may care about:
+
+* correctness of each individual label,
+* whether the entire predicted label set is exactly right,
+* precision and recall across labels,
+* per-example performance.
+
+For example, exact-match accuracy is extremely strict. If reality is:
+
+$$
+\{\text{person},\text{car},\text{tree}\}
+$$
+
+and the prediction is:
+
+$$
+\{\text{person},\text{car}\}
+$$
+
+exact-match accuracy counts the entire example as wrong. That may or may not match the application's needs. Again, metric design follows the meaning of an error.
 
 ![ROC AUC and average precision are compared with an exact threshold table and an 800-review daily capacity](/content-assets/articles/article-mlops-model-evaluation-classification-metrics/ranking-thresholds.png)
 
 *Score-ordering metrics describe behavior across thresholds. The locked operating point determines recall, precision, and the workload the production team must handle.*
 
-## Check Whether Predicted Probabilities Match Real Outcomes
-<!-- section-summary: Log loss, Brier score, and calibration curves evaluate probability estimates, while confusion-matrix metrics evaluate the labels created by a threshold. -->
+## How Do Segments, Confidence, Uncertainty, and Error Costs Affect Evaluation?
+<!-- section-summary: A useful result includes segment behaviour, confidence, sampling uncertainty, and the real costs of false positives and false negatives. -->
 
-A class decision and a probability answer different questions about the same case. The decision says which action to take. The probability describes how uncertain the outcome is.
+Aggregate values remain incomplete until the evaluation shows who is affected, how confident the estimate is, and what each error costs.
 
-The label `urgent` answers, “Should this message enter the urgent queue under the current policy?” The probability `0.80` makes a stronger claim: “Messages with similar evidence should be urgent about 80 percent of the time.”
+Suppose overall recall is:
 
-Two models can create identical labels at a threshold of `0.50` and receive identical precision and recall. One may assign positive cases probabilities near `0.55`, while another assigns probabilities near `0.99`. Thresholded metrics treat both as positive. Probability metrics see the difference in confidence.
+$$
+92\%
+$$
 
-```mermaid
-flowchart TD
-    P["Predicted probability"] --> D["Apply the product threshold"] --> L["Class label"] --> M["Confusion matrix, precision,<br/>recall, specificity, F1"]
-    P --> F["Keep the probability"] --> B["Brier score and log loss"] --> R["Is the probability forecast useful?"]
-    F --> C["Calibration curve"]
-    C --> R
+That looks good. But consider:
 
-    class P input
-    class D,L,F route
-    class M,B,C,R evidence
-```
+| Segment            | Recall |
+| ------------------ | -----: |
+| Existing customers |    96% |
+| New customers      |    71% |
 
-**Brier score loss** is the mean squared difference between the predicted probability and the binary outcome. A prediction of `0.90` followed by a positive outcome has a small error. The same prediction followed by a negative outcome has a large error. Lower Brier loss is better.
+The aggregate metric hides a substantial weakness. This happens because aggregate performance is a weighted average:
 
-**Log loss**, also called cross-entropy loss, uses the logarithm of the probability assigned to the true class. It penalizes confident wrong predictions heavily. Predicting `0.99` for a positive event that fails is far worse than predicting `0.60` for the same failure. Lower log loss is better.
+$$
+M_{\text{overall}}
+\approx
+\sum_g w_gM_g
+$$
 
-Both are **proper scoring rules**. In expectation, the model receives the best score by reporting honest probabilities. They measure the probability forecast as a whole, including discrimination and calibration. A lower Brier score by itself is therefore weak proof of better calibration.
+A large group can dominate the total. Therefore important metrics should often be calculated for meaningful slices such as geography, product category, acquisition channel, device type, language, time period, rare cases, or operational conditions. The purpose is not to generate hundreds of arbitrary slice metrics. It is to find where the model behaves materially differently. Consider two wrong predictions. Prediction A:
 
-A **calibration curve**, or reliability diagram, examines calibration more directly. It groups similar predicted probabilities and compares each group's average prediction with its observed positive rate. If 1,000 cases receive scores near `0.80` and only 600 become positive, the model is overconfident in that region.
+$$
+P(\text{cat})=0.36
+$$
 
-Probability quality matters if the number is shown to a person, used to price risk, divided into risk bands, or combined with changing decision costs. If the score is used only to order cases and the threshold is continually set by queue capacity, ranking and operating-point quality may matter more. The report should state how the product consumes the output.
+but the animal is actually a dog. Prediction B:
 
-## Choose How To Average Metrics Across Several Classes
-<!-- section-summary: Multiclass precision, recall, and F1 are calculated per class and then combined, so macro, weighted, and micro averages can tell different stories. -->
+$$
+P(\text{cat})=0.999
+$$
 
-A binary problem has two classes. A **multiclass** problem chooses one class from three or more options, such as `scratch`, `dent`, `crack`, and `clean`. Precision, recall, and F1 still apply, but each class takes a turn as the positive class while the remaining classes form the comparison group.
+but the animal is actually a dog. Both count as one error under accuracy. Operationally, Prediction B may be more concerning. High-confidence errors can reveal:
 
-This produces one metric value per class. A report may then combine those values:
+* distribution shift,
+* label problems,
+* systematic blind spots,
+* bad probability calibration,
+* genuinely difficult examples.
 
-- **Macro average** gives every class equal weight. The recall of a rare crack class counts as much as the recall of the common clean class. Macro scores help keep infrequent but important classes visible.
-- **Weighted average** weights each class by its support. Common classes contribute more. This summarizes the experience of a typical row in the evaluation set, although strong majority-class performance can hide a weak rare class.
-- **Micro average** pools the true-positive, false-positive, and false-negative counts before calculating the metric. Each sample-class decision contributes to the same total. For ordinary single-label multiclass classification across every class, micro precision, recall, and F1 match accuracy.
+A useful classification evaluation therefore looks beyond one aggregate score. Suppose two models produce:
 
-```mermaid
-mindmap
-  root((Multiclass report))
-    Per-class metrics
-      Scratch
-      Dent
-      Crack
-      Clean
-    Macro average
-      Equal class weight
-      Highlights rare classes
-    Weighted average
-      Weight by support
-      Reflects common cases
-    Micro average
-      Pool all decisions
-      Often matches accuracy for single-label multiclass
-    Always preserve
-      Support
-      Confusion matrix
-      Important class gates
-```
+$$
+F1_A=0.841
+$$
 
-Imagine 10,000 inspected parts: 8,500 are clean, 1,000 have scratches, 450 have dents, and 50 have cracks. A model can perform extremely well on clean parts and scratches while missing most cracks. Its weighted F1 may remain high because the crack class has little support. Macro F1 will fall more sharply because cracks receive equal class weight.
+and:
 
-Neither average decides whether crack detection is acceptable. If a missed crack creates a safety risk, the report needs a separate recall gate for that class. The macro average provides a useful warning; the class-level metric carries the release condition.
+$$
+F1_B=0.845
+$$
 
-**Multilabel** classification is different. One example may have several labels at once, such as an image containing both `helmet_missing` and `restricted_area`. Micro averaging is common because it pools label decisions. A samples average can also summarize quality per example. The report should identify whether the task is multiclass or multilabel because the same word *accuracy* can describe different calculations.
+Can we confidently say B is better? Not necessarily. The test set is only a sample from a larger population. If we had drawn a different test sample, we might obtain slightly different values.
 
-## Compare Classification Results Across Important Segments
-<!-- section-summary: Segment evaluation repeats the chosen metrics across meaningful populations so strong overall performance cannot conceal a weak device, language, region, or workflow route. -->
+Conceptually:
 
-Classes describe what the model predicts. **Segments** describe populations or operating conditions inside the evaluation set. A fraud classifier may predict `fraud` and `legitimate`, while its segments include payment type, device, region, customer tenure, and transaction-value band.
+$$
+\text{observed score}
+=
+\text{underlying performance}
++
+\text{sampling variation}
+$$
 
-Suppose a fraud model has 87 percent recall overall. The same report shows 91 percent recall on desktop traffic and 61 percent on mobile web. The aggregate score is mathematically correct. It is also incomplete for a rollout that includes mobile web.
+So differences between models should be interpreted with:
 
-Segment evaluation follows a disciplined path:
+* test-set size,
+* confidence intervals,
+* bootstrap estimates,
+* repeated evaluations when relevant.
 
-```mermaid
-flowchart TD
-    O["Overall metric and operating point"] --> S["Predefined important segments"] --> C["Check support, label maturity,<br/>coverage, and join quality"] --> P["Compute the same counts and metrics"] --> B["Compare candidate with production<br/>on the same segment"] --> G{"Evidence meets the segment rule?"}
-    G -- "Yes" --> A["Include the supported segment"]
-    G -- "No" --> N["Block, investigate, or narrow scope"]
+A tiny improvement is not automatically a meaningful improvement. Suppose the confusion matrix produces two fundamentally different mistakes:
 
-    class O,S evidence
-    class C,P,B analysis
-    class G,A decision
-    class N hold
-```
+$$
+FP
+$$
 
-Support and label quality belong beside every segment metric. A recall of 50 percent based on two positive examples is unstable. A segment with thousands of scored cases and almost no mature labels has a measurement gap. It should not silently inherit the overall result.
+and:
 
-Choose segments from the intended use, known harms, product boundaries, incident history, and domain knowledge. For urgent-message triage, language and intake channel may matter. For defect detection, camera station, supplier, material, and lighting regime may matter. For fraud, device, payment rail, geography, and value band may matter.
+$$
+FN
+$$
 
-Searching hundreds of arbitrary segments after seeing the result creates false discoveries and confusing release debates. Predefine the important segments and their rules. Exploratory slicing can still find hypotheses, but a newly discovered weakness needs confirmation on fresh or appropriately held-out evidence.
+Let their costs be:
 
-The comparison should include the production baseline. A candidate with 72 percent recall on a segment may still be an improvement over production at 45 percent. It may also remain below the minimum needed for safe use. Show both the replacement effect and the absolute floor.
+$$
+C_{FP}
+$$
 
-## Build a Repeatable Classification Report
-<!-- section-summary: A production evaluation job pins the dataset, positive class, threshold, metric definitions, segments, and model identity, then saves machine-readable evidence for release review. -->
+and:
 
-A useful report lets another engineer reproduce the same result. The job should pin the candidate identity, evaluation dataset, label policy, positive class, threshold, and library environment. It should produce machine-readable metrics as well as plots for human review.
+$$
+C_{FN}
+$$
 
-Scikit-learn provides the standard metric functions needed for a focused report. The example below expects a scored evaluation frame with a mature binary label in `is_positive` and a predicted probability in `score`. It applies one declared threshold, calculates decision and probability metrics, and prints a JSON-ready dictionary. The visible output contains the raw matrix, per-class report, threshold, average precision, ROC AUC, Brier loss, and log loss.
+Then a simple expected error cost might be:
 
-```python
-from sklearn import metrics
+$$
+C
+=
+C_{FP}\cdot FP
++
+C_{FN}\cdot FN
+$$
 
-threshold = 0.45
-y_true = eval_df["is_positive"].to_numpy()
-y_score = eval_df["score"].to_numpy()
-y_pred = (y_score >= threshold).astype("int8")
+If:
 
-report = {
-    "threshold": threshold,
-    "confusion_matrix": metrics.confusion_matrix(
-        y_true, y_pred, labels=[0, 1]
-    ).tolist(),
-    "by_class": metrics.classification_report(
-        y_true,
-        y_pred,
-        labels=[0, 1],
-        target_names=["negative", "positive"],
-        output_dict=True,
-        zero_division=0,
-    ),
-    "average_precision": metrics.average_precision_score(y_true, y_score),
-    "roc_auc": metrics.roc_auc_score(y_true, y_score),
-    "brier_loss": metrics.brier_score_loss(y_true, y_score),
-    "log_loss": metrics.log_loss(y_true, y_score),
+$$
+C_{FN}\gg C_{FP}
+$$
+
+then recall deserves substantial attention. If:
+
+$$
+C_{FP}\gg C_{FN}
+$$
+
+precision or specificity may become more important. This reveals the deeper principle:
+
+Precision, recall, specificity, and F1 are not competing definitions of "correctness." They are different projections of different error costs.
+
+## What Should a Repeatable Classification Report and Release Rule Contain?
+<!-- section-summary: A layered report records the operating threshold, metric definitions, examples, uncertainty, baselines, segments, and release criteria before comparison. -->
+
+The worked example and report structure turn those choices into a reproducible release test rather than post-hoc metric selection.
+
+Suppose a fraud classifier processes:
+
+$$
+10{,}000
+$$
+
+transactions. There are:
+
+$$
+200
+$$
+
+fraudulent transactions. At a particular threshold:
+
+$$
+TP=160
+$$
+
+$$
+FN=40
+$$
+
+$$
+FP=240
+$$
+
+$$
+TN=9560
+$$
+
+Now compute the metrics. Accuracy:
+
+$$
+\frac{160+9560}{10000}
+=
+97.2\%
+$$
+
+Recall:
+
+$$
+\frac{160}{160+40}
+=
+80\%
+$$
+
+Precision:
+
+$$
+\frac{160}{160+240}
+=
+40\%
+$$
+
+Specificity:
+
+$$
+\frac{9560}{9560+240}
+\approx97.55\%
+$$
+
+F1:
+
+$$
+2\frac{0.4\times0.8}{0.4+0.8}
+\approx53.3\%
+$$
+
+Same model. Same predictions. Yet we can truthfully say all of these:
+
+$$
+97.2\%\text{ accurate}
+$$
+
+$$
+80\%\text{ recall}
+$$
+
+$$
+40\%\text{ precision}
+$$
+
+$$
+97.55\%\text{ specificity}
+$$
+
+$$
+53.3\%\text{ F1}
+$$
+
+None is mathematically contradictory. They answer different questions. That is why saying:
+
+"The model scores 97.2%"
+
+without naming the metric is almost meaningless. A useful evaluation usually starts with the confusion matrix because it exposes the raw pattern of mistakes. Then report metrics directly connected to the application. For an imbalanced binary classifier, for example, you might report:
+
+| Evaluation dimension     | Metric                       |
+| ------------------------ | ---------------------------- |
+| Overall correctness      | Accuracy / balanced accuracy |
+| Positive detection       | Recall                       |
+| Alert quality            | Precision                    |
+| Negative rejection       | Specificity                  |
+| Precision–recall balance | F1                           |
+| Ranking                  | PR-AUC and/or ROC-AUC        |
+| Probability quality      | Log loss / Brier score       |
+| Probability reliability  | Calibration                  |
+| Operational performance  | Metric at chosen threshold   |
+| Robustness               | Per-segment metrics          |
+| Statistical confidence   | Confidence intervals         |
+
+Not every project requires every metric. The point is to ensure that each important property of the system is actually measured. Suppose Model A has:
+
+$$
+ROC\text{-}AUC=0.96
+$$
+
+and Model B:
+
+$$
+ROC\text{-}AUC=0.94
+$$
+
+It would be tempting to deploy A. But suppose the business requires:
+
+$$
+\text{Precision}\ge95\%
+$$
+
+At that operating point:
+
+$$
+Recall_A=52\%
+$$
+
+while:
+
+$$
+Recall_B=68\%
+$$
+
+Model B is much better under the actual production requirement. Global threshold-independent metrics are useful summaries. But eventually the model operates somewhere specific. Therefore always ask:
+
+$$
+\boxed{
+\text{How does the model perform at our real operating point?}
 }
-print(report)
-```
+$$
 
-The explicit `labels=[0, 1]` and `target_names` keep the class meaning stable. `y_pred` is derived once from the declared threshold, so the confusion matrix and class report describe the same decision. `y_score` remains available for ranking and probability checks.
+Before comparing models, define the evaluation protocol.
 
-This compact calculation belongs inside a wider evaluation contract. In practice, the job should also:
+For example:
 
-- validate required columns, score range, duplicate identifiers, label maturity, and join coverage;
-- compare the candidate with the current production path on the same rows;
-- compute the threshold table on validation data and evaluate the locked threshold on the holdout;
-- repeat the class metrics for predefined segments and include support counts;
-- save curves, failed examples, environment details, and the metric configuration;
-- fail the release job if required evidence is missing or a declared gate fails.
+**Positive class:** fraudulent transaction
+**Primary metric:** Recall at 90% precision
+**Threshold selection:** chosen on validation data
+**Final evaluation:** untouched chronological test set
+**Ranking metric:** PR-AUC
+**Probability metric:** Brier score
+**Guardrail:** false-positive rate below 0.5%
+**Segments:** country, transaction type, new versus existing customer
+**Baseline:** current production model
+**Uncertainty:** bootstrap 95% confidence intervals
 
-An experiment tracker such as MLflow can store the metrics and artifacts beside the model identity. The calculation should stay understandable outside the tracker. A release reviewer needs to see which data, threshold, class mapping, segment rules, and metric implementation produced the result.
+Why define this in advance? Imagine testing ten models and examining twenty metrics. Almost inevitably, some model will look best on some metric by chance. If you select the metric after seeing the results, you can accidentally manufacture evidence for whichever model you prefer. A predefined evaluation protocol makes comparisons much more meaningful.
 
-Test the evaluation code with small fixtures whose confusion-matrix counts are known. Include a case with no predicted positives to verify the chosen `zero_division` policy. Add a failed segment below its recall floor and confirm that the pipeline blocks. These tests protect the meaning of the report, not just its syntax.
+## How Do the Major Classification Metrics Fit into One Decision Model?
+<!-- section-summary: Metric families separate label correctness, ranking, and probability quality so the production decision can select the evidence it actually needs. -->
 
-## The Main Idea
-<!-- section-summary: Classification metrics are a connected explanation of scores, decisions, errors, probabilities, classes, and segments, all anchored to the product action. -->
+The final relationship map makes clear which metric family answers which classification question.
 
-Classification quality cannot be reduced to one universal score. Accuracy summarizes all correct labels. The confusion matrix reveals the four outcomes behind that total. Precision, recall, specificity, F1, and balanced accuracy emphasize different parts of those counts.
+The simplest mental map is this:
 
-The threshold turns model scores into product actions, so it changes both the metrics and the workload. ROC AUC and average precision describe score ordering across thresholds. Log loss, Brier score, and calibration curves examine probability quality. Macro, weighted, and micro averages combine multiclass results in different ways, while segment reports show whether important populations share the overall result.
+$$
+\text{Classification model}
+$$
 
-A production report anchors every metric to the decision and its error costs. It preserves raw counts, declares the positive class and threshold, separates decision quality from probability quality, compares against production, and carries class and segment evidence into the release gate.
+produces:
+
+$$
+\text{scores/probabilities}
+$$
+
+Those scores can be evaluated using:
+
+$$
+\boxed{\text{Log loss, Brier score, calibration}}
+$$
+
+They also induce a ranking, evaluated using metrics such as:
+
+$$
+\boxed{\text{ROC-AUC, PR-AUC}}
+$$
+
+A threshold converts scores into labels:
+
+$$
+\text{score}\xrightarrow{\text{threshold}}\text{class}
+$$
+
+Those labels create:
+
+$$
+TP,\ FP,\ FN,\ TN
+$$
+
+from which we calculate:
+
+$$
+\boxed{
+\text{accuracy, precision, recall, specificity, F1}
+}
+$$
+
+This hierarchy explains why two metrics can disagree without either being wrong. They may simply be measuring different stages of the system. Classification is ultimately not about maximizing an abstract metric. It is about using uncertain information to make decisions. The complete chain is:
+
+$$
+X
+\rightarrow
+P(Y\mid X)
+\rightarrow
+\text{decision rule}
+\rightarrow
+\hat Y
+\rightarrow
+\text{consequence}
+$$
+
+Metrics observe different parts of this chain.
+
+For example:
+
+$$
+\text{Log loss}
+\rightarrow
+\text{quality of probability estimates}
+$$
+
+$$
+\text{AUC}
+\rightarrow
+\text{quality of ranking}
+$$
+
+$$
+\text{Recall}
+\rightarrow
+\text{ability to capture positives at a threshold}
+$$
+
+$$
+\text{Precision}
+\rightarrow
+\text{reliability of positive actions at that threshold}
+$$
+
+$$
+\text{Accuracy}
+\rightarrow
+\text{fraction of final labels that are correct}
+$$
+
+None contains the full story by itself. The most important principle is:
+
+$$
+\boxed{
+\text{There is no universally best classification metric.}
+}
+$$
+
+Every metric asks a particular question. Accuracy asks:
+
+$$
+\text{"How often are we right?"}
+$$
+
+Recall asks:
+
+$$
+\text{"How many real positives do we find?"}
+$$
+
+Precision asks:
+
+$$
+\text{"How trustworthy are our positive predictions?"}
+$$
+
+Specificity asks:
+
+$$
+\text{"How well do we reject negatives?"}
+$$
+
+F1 asks:
+
+$$
+\text{"How well do precision and recall balance?"}
+$$
+
+AUC asks:
+
+$$
+\text{"How well do scores rank positives above negatives?"}
+$$
+
+Calibration asks:
+
+$$
+\text{"Can we trust the numerical probabilities?"}
+$$
+
+The right evaluation therefore begins not with:
+
+**"Which metric is standard?"**
+
+but with:
+
+$$
+\boxed{
+\text{"Which mistakes matter, how will predictions become actions, and what property of the classifier must be good for those actions to succeed?"}
+}
+$$
+
+Once those questions are answered, the appropriate classification metrics usually become much easier to choose.
 
 ![A repeatable classification report links pinned inputs and confusion counts to decision probability and segment evidence before release review](/content-assets/articles/article-mlops-model-evaluation-classification-metrics/report-artifacts.png)
 
 *A reproducible report keeps the candidate, dataset, positive class, and threshold beside the counts, probability checks, class support, segments, baseline comparison, and saved artifacts.*
 
-## References
+## Check Your Answers
 
-- [scikit-learn: Metrics and scoring](https://scikit-learn.org/stable/modules/model_evaluation.html) - Official definitions for confusion matrices, accuracy, balanced accuracy, precision, recall, F-measures, average precision, ROC AUC, log loss, Brier score, and multiclass averaging.
-- [scikit-learn: Tuning the decision threshold](https://scikit-learn.org/stable/modules/classification_threshold.html) - Official guide to separating probability prediction from product decisions and tuning a threshold after model fitting.
-- [scikit-learn: Probability calibration](https://scikit-learn.org/stable/modules/calibration.html) - Official guidance for calibration curves, probabilistic classifiers, Brier score, log loss, and calibration methods.
-- [scikit-learn: classification_report](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.classification_report.html) - Official API reference for per-class precision, recall, F1, support, and macro, weighted, micro, and samples averages.
-- [scikit-learn: confusion_matrix](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html) - Official API reference for matrix orientation and label ordering.
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[How Does the Confusion Matrix Describe Classification Outcomes?]{kind="recap"}
+The confusion matrix counts true and false outcomes for each class and provides the common foundation for label-based classification metrics.
+:::
+
+:::expand[When Should You Use Recall, Precision, Specificity, F1, or Balanced Accuracy?]{kind="recap"}
+Recall, precision, specificity, F1, and balanced accuracy emphasize different errors, populations, and tradeoffs rather than interchangeable notions of quality.
+:::
+
+:::expand[How Do Thresholds, ROC Curves, and Precision-Recall Curves Compare Classifiers?]{kind="recap"}
+A threshold converts scores into labels, while ROC and precision-recall curves show performance across many possible operating rules.
+:::
+
+:::expand[How Do Log Loss, Calibration, and Brier Score Evaluate Probabilities?]{kind="recap"}
+Probability metrics evaluate the confidence values themselves, and calibration tests whether predicted probabilities correspond to observed frequencies.
+:::
+
+:::expand[How Do Base Rates, Multiclass Problems, and Multilabel Problems Change the Metrics?]{kind="recap"}
+Prevalence changes precision, and multiclass or multilabel tasks require per-class definitions plus explicit micro, macro, or weighted aggregation.
+:::
+
+:::expand[How Do Segments, Confidence, Uncertainty, and Error Costs Affect Evaluation?]{kind="recap"}
+A useful result includes segment behaviour, confidence, sampling uncertainty, and the real costs of false positives and false negatives.
+:::
+
+:::expand[What Should a Repeatable Classification Report and Release Rule Contain?]{kind="recap"}
+A layered report records the operating threshold, metric definitions, examples, uncertainty, baselines, segments, and release criteria before comparison.
+:::
+
+:::expand[How Do the Major Classification Metrics Fit into One Decision Model?]{kind="recap"}
+Metric families separate label correctness, ranking, and probability quality so the production decision can select the evidence it actually needs.
+:::

@@ -9,340 +9,2150 @@ id: "article-mlops-model-serving-saving-loading-models-safely"
 
 ## Table of Contents
 
-1. [What Saving A Model Really Means](#what-saving-a-model-really-means)
-2. [Save Everything Needed To Reproduce A Prediction](#save-everything-needed-to-reproduce-a-prediction)
-3. [Choose A Model Format From How It Will Be Loaded And Trusted](#choose-a-model-format-from-how-it-will-be-loaded-and-trusted)
-4. [Give Every Saved Model An Immutable Identity](#give-every-saved-model-an-immutable-identity)
-5. [Record The Input, Output, And Expected Prediction Behaviour](#record-the-input-output-and-expected-prediction-behaviour)
-6. [Record Which Software And Hardware Can Run The Model](#record-which-software-and-hardware-can-run-the-model)
-7. [Link The Saved Model To Its Training Run And Registry](#link-the-saved-model-to-its-training-run-and-registry)
-8. [Load And Validate The Model Before Serving](#load-and-validate-the-model-before-serving)
-9. [Verify Model Files And Their Build Provenance](#verify-model-files-and-their-build-provenance)
-10. [Test The Loaded Model Before Traffic](#test-the-loaded-model-before-traffic)
-11. [Roll Out And Roll Back The Complete Release](#roll-out-and-roll-back-the-complete-release)
-12. [The Main Idea](#the-main-idea)
-13. [References](#references)
+1. [What Must a Saved Model Preserve for the Same Prediction Function?](#what-must-a-saved-model-preserve-for-the-same-prediction-function)
+2. [How Do Format, Trust, Identity, Integrity, Authenticity, and Provenance Protect an Artifact?](#how-do-format-trust-identity-integrity-authenticity-and-provenance-protect-an-artifact)
+3. [Which Input, Output, Software, and Hardware Contracts Must Travel with the Model?](#which-input-output-software-and-hardware-contracts-must-travel-with-the-model)
+4. [What Invariants Should a Safe Loading Path Establish before Traffic?](#what-invariants-should-a-safe-loading-path-establish-before-traffic)
+5. [How Do Registries, Immutable Versions, Aliases, and Containers Coordinate Deployment?](#how-do-registries-immutable-versions-aliases-and-containers-coordinate-deployment)
+6. [How Do Shadowing, Rollback, Compatibility, and Self-Description Control Release Risk?](#how-do-shadowing-rollback-compatibility-and-self-description-control-release-risk)
+7. [Why Must Loading Be Treated as Importing Code and Tested End to End?](#why-must-loading-be-treated-as-importing-code-and-tested-end-to-end)
+8. [Which Two Meanings of Safe Preserve the Model's Function?](#which-two-meanings-of-safe-preserve-the-models-function)
+9. [Check Your Answers](#check-your-answers)
 
-## What Saving A Model Really Means
-<!-- section-summary: Saving a model preserves enough information for another process to reproduce the reviewed prediction behaviour. -->
+A model file downloads successfully and passes its checksum, but the service applies a different category order than training used. The model loads, returns numbers, and makes the wrong decisions. Byte integrity protected the file; it did not preserve the prediction function.
 
-A fitted model may exist only as a Python object inside a notebook. The object disappears when that process ends, while a production service may start on another machine months later. **Saving a model** means turning the useful result of training into stored artifacts that another process can load to recreate the approved prediction behaviour.
+Saving a model means packaging enough state and contracts to reconstruct intended behaviour safely. The bundle may need preprocessing, postprocessing, signatures, dependencies, provenance, and reference examples in addition to weights. Loading then becomes a staged verification process before traffic can reach the model.
 
-The word *model* can hide several separate things. The learned weights or tree structure perform the mathematical calculation. Preprocessing turns a request into the values that calculation expects. A signature describes the allowed input and output shape. The runtime supplies framework libraries and native code. Metadata explains the class order, threshold, training lineage, and release identity.
+Use these questions to follow the artifact from serialization and trust through compatibility, readiness, rollout, and rollback:
 
-Saving only the learned parameters may therefore preserve the mathematics and lose the product behaviour.
+1. **What Must a Saved Model Preserve for the Same Prediction Function?**
+2. **How Do Format, Trust, Identity, Integrity, Authenticity, and Provenance Protect an Artifact?**
+3. **Which Input, Output, Software, and Hardware Contracts Must Travel with the Model?**
+4. **What Invariants Should a Safe Loading Path Establish before Traffic?**
+5. **How Do Registries, Immutable Versions, Aliases, and Containers Coordinate Deployment?**
+6. **How Do Shadowing, Rollback, Compatibility, and Self-Description Control Release Risk?**
+7. **Why Must Loading Be Treated as Importing Code and Tested End to End?**
+8. **Which Two Meanings of Safe Preserve the Model's Function?**
 
-Consider a binary classifier that returns probabilities in this order:
+## What Must a Saved Model Preserve for the Same Prediction Function?
+<!-- section-summary: A usable model bundle preserves weights, architecture, preprocessing, postprocessing, signatures, and behaviour, while the serving release adds runtime and policy. -->
+
+Saving weights is useful only if loading can reconstruct the same complete prediction function in another environment.
+
+Saving and loading models safely becomes much easier to reason about if we start with a deceptively simple question:
+
+**What has to survive after training so that a completely different process, perhaps months later on another machine, can reproduce the prediction we intended?**
+
+A model file is only part of that answer. Imagine training produces a classifier. At serving time we want:
 
 ```text
-model classes: ["manual_review", "auto_approve"]
-probabilities: [0.08, 0.92]
+input
+  ↓
+preprocessing
+  ↓
+model
+  ↓
+postprocessing
+  ↓
+prediction
 ```
 
-The service loads the model successfully. Its response code assumes the first probability means `auto_approve`, so it publishes the opposite decision. Deserialization, health checks, and latency all look normal. The missing class-order contract changed the meaning of the output.
+You might think the model is simply:
 
-The production goal is a **release bundle**: an immutable set of model data, companion assets, contracts, runtime identity, and evidence that reproduces a reviewed input-to-output path.
-
-```mermaid
-flowchart TD; A["Training Result<br/>(fitted computation in memory)"] --> B["Release Bundle<br/>(model and companion responsibilities)"]; B --> C["Verified Loader<br/>(identity and trust checks)"]; C --> D["Known Prediction<br/>(reviewed input-to-output behaviour)"]; D --> E["Ready Runtime<br/>(traffic may reach this version)"]
+```text
+weights.bin
 ```
+
+But the actual prediction is closer to:
+
+$$
+y =
+\text{postprocess}
+(
+f_\theta(
+\text{preprocess}(x)
+)
+)
+$$
+
+where:
+
+* $$x$$ is the raw input,
+* `preprocess` determines how the input becomes tensors,
+* $$f$$ is the architecture/model code,
+* $$\theta$$ is the learned state,
+* `postprocess` determines how tensors become an API result.
+
+So the serving behavior depends on more than weights.
+
+Conceptually:
+
+```text
+prediction
+=
+weights
++ architecture
++ preprocessing
++ configuration
++ tokenizer/vocabulary
++ postprocessing
++ software behavior
+```
+
+That gives us the first principle:
+
+> **Saving a model means preserving everything necessary to reconstruct the intended prediction function, not merely writing learned weights to disk.**
+
+Suppose training ends with:
+
+```python
+model
+```
+
+living in RAM. When the process exits, that state disappears. Saving is essentially converting useful in-memory state into persistent artifacts:
+
+```text
+training process
+      │
+      ▼
+  in-memory state
+      │
+      │ serialize
+      ▼
+ persistent bytes
+      │
+      │ later
+      ▼
+ deserialize
+      │
+      ▼
+ serving process
+```
+
+The goal is not simply:
+
+```text
+object → bytes → object
+```
+
+The real goal is:
+
+```text
+trained prediction behavior
+          ↓
+      persistent form
+          ↓
+reconstructed prediction behavior
+```
+
+Those are different requirements. A file can deserialize successfully while reproducing the wrong behavior. Suppose a neural network has:
+
+```text
+weights.pt
+```
+
+But its architecture was:
+
+```python
+Linear(768, 256)
+ReLU()
+Dropout(...)
+Linear(256, 3)
+```
+
+The weights do not necessarily tell you all the assumptions required to reconstruct that architecture. Similarly, an NLP model might require:
+
+```text
+model weights
+tokenizer vocabulary
+special-token configuration
+normalization rules
+maximum sequence length
+label mapping
+```
+
+Consider:
+
+```text
+model output:
+
+[0.02, 0.91, 0.07]
+```
+
+What does index `1` mean? Perhaps training used:
+
+```text
+0 = negative
+1 = positive
+2 = neutral
+```
+
+If serving mistakenly uses:
+
+```text
+0 = positive
+1 = negative
+2 = neutral
+```
+
+the numerical model output is perfectly correct while the API response is catastrophically wrong. So something like:
+
+```json
+{
+  "labels": {
+    "0": "negative",
+    "1": "positive",
+    "2": "neutral"
+  }
+}
+```
+
+is part of the deployable model contract. Suppose a vision model was trained on:
+
+```text
+RGB images
+resize → 224×224
+pixel values / 255
+normalize with particular mean/std
+```
+
+But serving does:
+
+```text
+BGR images
+resize → 256×256
+different normalization
+```
+
+The weights loaded perfectly. The program runs. No exception occurs. Yet predictions may be garbage. From the serving system's perspective:
+
+```text
+model = preprocessing + learned function
+```
+
+not just:
+
+```text
+model = learned weights
+```
+
+The same applies to:
+
+```text
+tokenization
+feature scaling
+categorical encoding
+missing-value handling
+audio resampling
+image cropping
+text normalization
+feature ordering
+```
+
+For a tabular model, even this can break predictions:
+
+```text
+Training:
+[column_age, column_income, column_balance]
+
+Serving:
+[column_income, column_age, column_balance]
+```
+
+Same three numbers. Wrong semantics. Suppose the raw model produces logits:
+
+```text
+[2.1, -0.4, 1.2]
+```
+
+Perhaps serving must perform:
+
+```text
+softmax
+    ↓
+probability
+    ↓
+threshold
+    ↓
+label
+```
+
+A threshold might have been selected during evaluation:
+
+```text
+fraud if probability >= 0.83
+```
+
+If serving defaults to:
+
+```text
+0.50
+```
+
+you have deployed a different decision system. Therefore the saved release may need:
+
+```text
+thresholds
+class mappings
+calibration parameters
+decoding parameters
+generation defaults
+stop sequences
+postprocessing rules
+```
+
+Again:
+
+**Whatever affects the externally observable prediction belongs to the reproducibility story.**
+
+Rather than:
+
+```text
+model.pt
+```
+
+a better mental model is:
+
+```text
+model-release/
+│
+├── weights
+├── model configuration
+├── tokenizer / vocabulary
+├── preprocessing configuration
+├── postprocessing configuration
+├── label mapping
+├── runtime requirements
+├── metadata
+├── validation information
+└── integrity information
+```
+
+Not every system literally stores these as separate files. Some formats bundle many together. The conceptual bundle is what matters. There is another useful distinction. A **model artifact** might contain:
+
+```text
+weights
+architecture/config
+tokenizer
+```
+
+But the thing actually deployed may also depend on:
+
+```text
+serving application
+container image
+runtime libraries
+CUDA version
+inference engine configuration
+API schema
+```
+
+So:
+
+```text
+Model artifact
+      +
+Serving software
+      +
+Runtime environment
+      =
+Deployable model release
+```
+
+This matters greatly for rollback. If model version 17 only behaves correctly with preprocessing code version 9, then rolling back:
+
+```text
+weights v17 → weights v16
+```
+
+while leaving:
+
+```text
+preprocessing v9
+```
+
+may not restore the old behavior. A rollback should normally restore a compatible **complete release**.
+
+## How Do Format, Trust, Identity, Integrity, Authenticity, and Provenance Protect an Artifact?
+<!-- section-summary: Format choice follows the trust model; immutable identity, integrity checks, signatures, and provenance establish what the artifact is and where it came from. -->
+
+Once the bundle contents are clear, the loader needs evidence that the bytes are trusted, intact, immutable, and traceable.
+
+Now consider how bytes become a model again. A naive assumption is:
+
+"If the file contains model data, loading it is merely reading data."
+
+That is not always true. Some serialization systems can encode arbitrary objects whose reconstruction invokes executable code.
+
+Conceptually:
+
+```text
+model file
+    ↓
+deserialize
+    ↓
+possibly execute code
+```
+
+This creates an important trust boundary. If an attacker can replace the artifact, then:
+
+```text
+load("model_file")
+```
+
+may potentially become something much more dangerous than:
+
+```text
+read weights
+```
+
+So we need two separate questions.
+
+### Question 1
+
+Can this format represent what the model needs?
+
+### Question 2
+
+What powers does the loader exercise while reconstructing it? That gives us another principle:
+
+**Treat model deserialization as a security-sensitive operation, not as harmless file parsing.**
+
+At one extreme, a model file is essentially:
+
+```text
+tensor name
+tensor dimensions
+tensor dtype
+raw tensor bytes
+```
+
+The loader's job is mostly:
+
+```text
+allocate
+copy
+check dimensions
+```
+
+At another extreme, a serialization format can reconstruct arbitrary language objects. That might require:
+
+```text
+import this class
+construct this object
+invoke restoration behavior
+execute arbitrary object logic
+```
+
+The latter is much more flexible. But flexibility expands the attack surface. This is why formats designed around tensor/data storage can be attractive when weights are obtained across a trust boundary. The general rule is more important than any specific format:
+
+```text
+less executable semantics
+        ↓
+smaller deserialization attack surface
+```
+
+Suppose a tensor-only format cannot execute arbitrary Python code. That's good. But an attacker might replace:
+
+```text
+good_model
+```
+
+with:
+
+```text
+attacker_model
+```
+
+that simply produces maliciously chosen predictions. So we must distinguish:
+
+```text
+safe to deserialize
+```
+
+from:
+
+```text
+authorized model artifact
+```
+
+and from:
+
+```text
+correct model artifact
+```
+
+These are separate properties. A useful model is:
+
+```text
+Can loader safely parse it
+           ↓
+Is this exactly the artifact we expected
+           ↓
+Was it produced by an authorized build
+           ↓
+Does it behave like the model we approved
+```
+
+You want all four. Suppose production configuration says:
+
+```text
+MODEL_VERSION=latest
+```
+
+What exactly is running? Today:
+
+```text
+latest → model v21
+```
+
+Tomorrow:
+
+```text
+latest → model v22
+```
+
+If you investigate an incident next month, `"latest"` tells you almost nothing. Mutable names are useful for discovery:
+
+```text
+production
+staging
+champion
+latest
+```
+
+but poor identities. The actual artifact should have an immutable identifier.
+
+For example:
+
+```text
+model version: 7.4.2
+artifact digest:
+sha256:abcd...
+```
+
+A cryptographic digest is especially useful because it depends on the bytes themselves.
+
+Conceptually:
+
+$$
+id = H(\text{artifact bytes})
+$$
+
+If one bit changes:
+
+```text
+artifact A → digest X
+artifact B → digest Y
+```
+
+with overwhelming probability:
+
+```text
+X ≠ Y
+```
+
+Now you can say:
+
+Production is running artifact `sha256:...`
+
+rather than:
+
+Production is running whichever file happened to be named `model.pt`.
+
+Suppose deployment expects:
+
+```text
+digest = ABC123
+```
+
+but downloads bytes producing:
+
+```text
+digest = XYZ789
+```
+
+Then:
+
+```text
+expected != actual
+```
+
+The correct behavior is generally:
+
+```text
+do not load
+do not serve
+raise an alert/error
+```
+
+This detects things such as:
+
+```text
+corrupted upload
+partial download
+wrong artifact
+unexpected replacement
+storage corruption
+```
+
+A digest answers:
+
+"Are these exactly the bytes I expected?"
+
+It does not necessarily answer:
+
+"Who authorized these bytes?"
+
+For that, you may additionally use signed artifacts, authenticated registries, controlled build pipelines, or other provenance mechanisms. This distinction is worth making explicit. A checksum gives:
+
+```text
+artifact bytes
+     ↓ hash
+ABC123
+```
+
+If your deployment already knows that `ABC123` is the approved digest, that's powerful. But suppose an attacker can replace both:
+
+```text
+model file
+and
+checksum file
+```
+
+Then checking one against the other proves very little. Authenticity requires an external trust anchor.
+
+Conceptually:
+
+```text
+artifact
+   ↓
+cryptographic identity
+   ↓
+signed/approved by trusted build identity
+   ↓
+deployment verifies trust
+```
+
+The exact mechanism depends on infrastructure. The principle is:
+
+**Do not let the artifact prove its own legitimacy.**
+
+Imagine an incident with model:
+
+```text
+fraud-model-v43
+```
+
+Someone asks:
+
+"Why does this model behave differently from v42?"
+
+You should ideally be able to trace backward:
+
+```text
+production artifact
+       ↓
+registry entry
+       ↓
+evaluation result
+       ↓
+training run
+       ↓
+training code revision
+       ↓
+training configuration
+       ↓
+dataset/version information
+```
+
+This is lineage. A model artifact might therefore record metadata such as:
+
+```text
+training run ID
+source-code commit
+training configuration
+dataset/version references
+hyperparameters
+evaluation metrics
+creation time
+framework version
+parent/base model
+```
+
+Not necessarily every raw training input should be copied into the model artifact. Instead, the artifact should contain enough references to reconstruct provenance. Suppose:
+
+```text
+model v21
+```
+
+starts producing strange predictions. You discover that all affected models came from:
+
+```text
+dataset snapshot D102
+```
+
+or:
+
+```text
+training image build B74
+```
+
+If lineage exists:
+
+```text
+artifact → training run → dataset/build
+```
+
+you can identify every affected model. Without it, you have:
+
+```text
+a directory full of binaries
+```
+
+and human memory. This becomes increasingly dangerous as the number of models grows.
 
 ![Binary classifier with class order manual review then auto approve shows how a model can load successfully yet produce the opposite decision when the service misreads probability index zero](/content-assets/articles/article-mlops-model-serving-saving-loading-models-safely/model-bundle-class-order.png)
 
 *The release bundle preserves the model, transformations, contracts, runtime, immutable identity, and evidence required to reproduce the reviewed prediction meaning.*
 
-## Save Everything Needed To Reproduce A Prediction
-<!-- section-summary: A release bundle preserves computation, transformations, contracts, environment, and identity as distinct responsibilities. -->
+## Which Input, Output, Software, and Hardware Contracts Must Travel with the Model?
+<!-- section-summary: Input and output semantics, reference behaviour, dependencies, platform, and hardware requirements make compatibility explicit instead of relying on memory. -->
 
-Design the bundle by following one prediction from the caller to the response. Each step must either live inside the artifact or point to a separately versioned dependency.
+Identity does not guarantee compatibility, so the bundle must declare the input, output, software, and hardware contracts it expects.
 
-### Test Each Saved Part Separately
+A model cannot accept arbitrary values. Suppose it expects:
 
-The separation matters because each part can fail without breaking the others. Valid weights can receive the wrong feature order. Correct preprocessing can feed an old model. A compatible runtime can return a score that the response layer maps to the wrong label. Naming each responsibility gives release tests a precise boundary to check.
-
-**Model computation** includes fitted trees, coefficients, neural-network weights, persistent buffers, and any graph or architecture needed to use them. PyTorch commonly stores a `state_dict`, which contains parameters and persistent buffers. The trusted application code still defines the model class and constructs the architecture before loading those values.
-
-**Preprocessing and postprocessing** preserve the meaning around the computation. A scikit-learn `Pipeline` can keep an encoder and estimator together. A text model needs its tokenizer configuration and vocabulary. An image model needs resize, channel order, and normalization rules. A classifier needs ordered labels and thresholds. Calibration or an inverse transform may sit after prediction.
-
-**The signature** describes machine-checkable input and output structure: field names, data types, tensor shapes, and optional values. A separate feature or request contract records semantics such as currency units, time zones, missing-value policy, and category definitions. A float named `income` can pass a signature while using cents in one system and dollars in another.
-
-**The environment** identifies the code and libraries that interpret the artifact. Some formats need the original Python class. Others need an ONNX runtime and supported operators. Native libraries, CPU architecture, accelerator runtime, and host driver may also affect load and inference.
-
-**Identity and evidence** connect the bytes to their source and review. Digests bind the approved bytes. The training run and source commit explain which code produced them. A dataset snapshot links the candidate to its training inputs. Evaluation evidence and the release decision show why the candidate was allowed to move forward.
-
-```mermaid
-flowchart TD; A["Request Contract<br/>(names, types, and semantics)"] --> B["Preprocessing<br/>(encoding and normalization)"]; B --> C["Model Computation<br/>(weights, structure, or graph)"]; C --> D["Postprocessing<br/>(thresholds, labels, and calibration)"]; D --> E["Response Contract<br/>(meaning returned to the caller)"]; F["Runtime Identity<br/>(code, libraries, and hardware)"] --> B; F --> C; G["Release Evidence<br/>(lineage, digests, and approval)"] --> E
+```text
+input:
+  dtype: float32
+  shape: [batch, 3, 224, 224]
+  value range: normalized
+  color space: RGB
 ```
 
-Large shared assets do not have to be copied into every directory. A bundle can reference a tokenizer or base weights by digest. That choice makes availability and retention of the referenced object part of the release contract.
+That information should not live only inside someone's head. For an NLP model, the contract might include:
 
-## Choose A Model Format From How It Will Be Loaded And Trusted
-<!-- section-summary: Serialization formats preserve different objects and expose different code-execution, portability, and compatibility boundaries. -->
+```text
+tokenizer: tokenizer version X
+max token count: 8192
+special tokens: ...
+truncation policy: ...
+```
 
-**Serialization** converts in-memory state into bytes and reconstructs useful state from those bytes. The format decides what it can represent, which runtime can read it, and how much authority the loader gives the artifact.
+For tabular inference:
 
-### Separate Safe Data Loading From Executable Object Loading
+```text
+features:
+  - age: float
+  - country_code: categorical
+  - account_balance: float
 
-An object format asks the loader to rebuild application objects and possibly call Python functions. A weights format asks the loader to read tensor data that trusted application code will use. A graph format asks a runtime to interpret operators. These are different security boundaries even if all three files are called models.
+feature order: fixed
+missing-value policy: ...
+```
 
-Framework-native formats usually preserve the framework's own concepts. PyTorch recommends saving a module's `state_dict` for inference. The loader creates the architecture from trusted code, loads the parameter dictionary, and switches the module to evaluation mode. XGBoost and LightGBM have native model formats with their own version support. These formats stay close to the training framework, so their compatibility rules still matter.
+This gives the serving layer something concrete to validate. Suppose your model emits:
 
-Python object formats preserve more application structure. `pickle`, `joblib`, and `cloudpickle` can reconstruct estimators and pipelines, including custom Python objects. That convenience creates an executable-code boundary: pickle deserialization can call functions while rebuilding an object. A benign demonstration makes the behaviour visible:
+```text
+shape: [batch, 2]
+dtype: float32
+```
+
+What does each column represent? You need semantics:
+
+```text
+column 0 = legitimate
+column 1 = fraud
+```
+
+Maybe output values are:
+
+```text
+logits
+```
+
+not:
+
+```text
+probabilities
+```
+
+Maybe the serving code must perform:
+
+```text
+softmax
+```
+
+before returning them. Without an output contract, the caller may interpret valid numbers incorrectly. So a deployable model needs to answer:
+
+```text
+What do inputs mean
+What do outputs mean
+```
+
+not merely:
+
+```text
+What shapes do the tensors have
+```
+
+A schema can tell us:
+
+```text
+input shape = [1, 3, 224, 224]
+output shape = [1, 1000]
+```
+
+But suppose the serving environment accidentally changes image normalization. Shapes remain correct. The model runs. We need a stronger test. Save one or more known examples:
+
+```text
+reference input A
+     ↓
+expected output A
+```
+
+For example:
+
+```text
+input:
+  a known test image
+
+expected:
+  class = "cat"
+```
+
+or more strictly:
+
+```text
+expected probabilities ≈ [...]
+```
+
+Then after loading:
+
+```text
+load model
+   ↓
+run reference input
+   ↓
+compare with expected result
+```
+
+This is often called a smoke test, golden test, or reference-prediction test. Suppose the original prediction is:
+
+```text
+0.9134721
+```
+
+and a different GPU/runtime produces:
+
+```text
+0.9134718
+```
+
+Those may be effectively equivalent. Floating-point computations can differ because of:
+
+```text
+different kernels
+different hardware
+different reduction order
+different precision
+different compiler optimizations
+```
+
+So validation might use:
+
+$$
+|y_\text{actual} - y_\text{expected}| < \epsilon
+$$
+
+rather than:
+
+```text
+actual == expected
+```
+
+For classification you might test:
+
+```text
+same top class
+probability within tolerance
+```
+
+For generative models, exact text may be inappropriate unless inference is fully deterministic. You might instead verify:
+
+```text
+model loads
+vocabulary matches
+output shape is correct
+logits are finite
+known deterministic configuration behaves within tolerance
+```
+
+The validation criterion should match the model's mathematical behavior. Suppose a model was saved under:
+
+```text
+framework version A
+```
+
+and loaded under:
+
+```text
+framework version Z
+```
+
+Maybe it works. Maybe a serialization format changed. Maybe an operator changed. Maybe a custom layer no longer exists. Therefore the artifact or release metadata should record requirements such as:
+
+```text
+Python/runtime version
+ML framework/version
+tokenizer library/version
+inference runtime/version
+custom package versions
+```
+
+This doesn't necessarily mean freezing the universe forever. It means making compatibility explicit. A model might require:
+
+```text
+GPU
+```
+
+or perhaps:
+
+```text
+specific accelerator capability
+minimum VRAM
+supported numerical precision
+```
+
+Suppose a model expects:
+
+```text
+BF16
+```
+
+but is deployed to hardware without the intended support. Perhaps it fails immediately. Perhaps the runtime silently changes behavior. Or suppose weights occupy:
+
+```text
+22 GB
+```
+
+and the serving GPU has:
+
+```text
+16 GB
+```
+
+The artifact itself is fine. The deployment target is incompatible. So a model release may include resource requirements:
+
+```text
+minimum RAM
+minimum VRAM
+supported device types
+required accelerator/runtime features
+```
+
+A model can be:
+
+```text
+valid artifact
+```
+
+but still impossible to run on a particular machine. Think of two predicates:
+
+$$
+valid(model)
+$$
+
+and:
+
+$$
+compatible(model, runtime)
+$$
+
+The second might check:
+
+```text
+framework version
+operator availability
+GPU architecture
+memory capacity
+dtype support
+```
+
+Only if both hold should startup proceed.
+
+## What Invariants Should a Safe Loading Path Establish before Traffic?
+<!-- section-summary: A staged loader verifies metadata and size, allocates carefully, checks structure, warms the model, and runs representative behaviour before accepting traffic. -->
+
+Those declarations become executable checks in a staged load path before the service announces readiness.
+
+Avoid treating:
 
 ```python
-import pickle
-
-
-class RunsDuringLoad:
-    def __reduce__(self):
-        return (print, ("Deserialization executed a function",))
-
-
-payload = pickle.dumps(RunsDuringLoad())
-pickle.loads(payload)  # Prints during loading.
+model = load(path)
 ```
 
-A file from an untrusted source can replace `print` with a harmful operation. `joblib` and `cloudpickle` use the pickle protocol and carry the same core risk. scikit-learn documents `skops.io` as a more controlled option because it lets reviewers inspect unknown types and explicitly trust them before loading. MLflow's current scikit-learn flavor also uses `skops` as its default serialization format. The runtime still needs compatible packages and a careful decision about every permitted type.
+as the entire process. A safer conceptual pipeline is:
 
-PyTorch uses pickle in its serialization machinery. Current PyTorch releases use a restricted `weights_only` loader by default in the common `torch.load` path. It limits dynamic imports and the objects that can be constructed. PyTorch also documents remaining denial-of-service and possible memory-safety limits. A restricted loader narrows one attack path; it does not establish trust in arbitrary checkpoint bytes.
-
-**Safetensors** stores tensors in a deliberately simple format and avoids pickle-style object reconstruction. It is a strong fit for distributing weights. The file does not preserve the model architecture, tokenizer, custom layers, inference code, or product contract. Those responsibilities must come from reviewed code and companion metadata. Large or adversarial tensor shapes can still create resource risk in downstream software.
-
-**ONNX** stores a portable computation graph and initializers for supported operators. ONNX Runtime supports several languages and hardware execution providers. Export coverage, custom operators, numerical differences, and task-quality comparison still need testing. ONNX Runtime explicitly warns that an untrusted graph can consume excessive memory or compute, so untrusted models belong in a constrained inspection environment.
-
-```mermaid
-flowchart TD; A{"Primary Need<br/>(what must cross the boundary?)"} -->|Framework Reconstruction| B["Native State<br/>(weights plus trusted architecture code)"]; A -->|Python Object Graph| C["Controlled Python Format<br/>(trusted source and compatible environment)"]; A -->|Cross-Language Graph| D["ONNX<br/>(supported operators and runtime validation)"]; A -->|Tensor Distribution| E["Safetensors<br/>(weights with separate code and contracts)"]; B --> F["Behaviour Comparison<br/>(same fixtures and tolerances)"]; C --> F; D --> F; E --> F
+```text
+1. resolve exact artifact identity
+          ↓
+2. retrieve artifact
+          ↓
+3. verify integrity/authenticity
+          ↓
+4. inspect metadata
+          ↓
+5. verify runtime compatibility
+          ↓
+6. deserialize
+          ↓
+7. validate structure
+          ↓
+8. run smoke/reference predictions
+          ↓
+9. warm the runtime
+          ↓
+10. mark serving process ready
 ```
 
-No extension solves every responsibility. A team may retain native weights as the durable source, create an ONNX export for serving, and record both as related artifacts. Each representation receives its own digest and comparison evidence.
+Each stage establishes stronger confidence. Suppose a model artifact is clearly intended for:
 
-## Give Every Saved Model An Immutable Identity
-<!-- section-summary: A manifest and content digests bind every companion file into one release candidate. -->
-
-Production models rarely fit into one file. A text classifier may ship weights, tokenizer files, a label map, a signature, a preprocessing configuration, and expected fixture results. A **bundle manifest** lists those parts and their cryptographic digests.
-
-The manifest gives reviewers one object to approve. Without it, a deployment might select the model from version 42 and retrieve a tokenizer through a mutable `latest` path. Both files can be individually valid while their combination has never passed evaluation.
-
-Each manifest entry describes a path and the digest expected at that path. The loader verifies every entry before it allows the format-specific parser to touch the model. Deployment and runtime telemetry record the manifest digest as the bundle identity.
-
-```json
-{
-  "bundle_version": "document-classifier-42",
-  "model": {"path": "model.onnx", "sha256": "5f31d2..."},
-  "tokenizer": {"path": "tokenizer.json", "sha256": "8aa109..."},
-  "labels": {"path": "labels.json", "sha256": "d7024c..."},
-  "class_order": ["manual_review", "auto_approve"],
-  "signature": {"path": "signature.json", "sha256": "22bd91..."},
-  "fixture": {"path": "fixture.json", "sha256": "91e8a0..."}
-}
+```text
+80 GB GPU memory
 ```
 
-The manifest itself receives a digest. That top-level digest identifies the exact set of model and companion bytes. Replacing `labels.json` creates a new candidate even if `model.onnx` stays unchanged.
+while the machine has:
 
-An object store can publish each candidate under a new immutable prefix. The writer uploads the files, verifies them, writes the final manifest, and creates the registry record only after the bundle is complete. Readers ignore partial prefixes. An OCI registry can store a bundle as a digest-addressed artifact with related metadata. A model registry can point its version to the immutable object or OCI digest.
-
-Human-friendly aliases such as `champion` or `production` remain useful for discovery. They are mutable pointers. Deployment resolves the alias to an immutable model or bundle identity and records that resolved value in the release. A running service should never report only the alias because the alias may move after the process has loaded an older version.
-
-```mermaid
-flowchart TD; A["Bundle Files<br/>(model and companion assets)"] --> B["File Digests<br/>(exact bytes for every part)"]; B --> C["Bundle Manifest<br/>(one identity for the set)"]; C --> D["Immutable Store<br/>(object or OCI digest)"]; D --> E["Registry Version<br/>(governed metadata and lineage)"]; E --> F["Resolved Release<br/>(deployment pins immutable identity)"]
+```text
+24 GB
 ```
 
-## Record The Input, Output, And Expected Prediction Behaviour
-<!-- section-summary: Signatures validate structure, while representative examples expose semantic and preprocessing mistakes. -->
+It is better to discover that from metadata before attempting a huge allocation. Similarly, verify:
 
-A model signature is the machine-readable boundary around prediction. For tabular data it can describe column names, types, and optional fields. For tensors it can describe data type and shape. MLflow signatures can also describe outputs and inference parameters.
-
-### Check Input Shape And Prediction Behaviour Separately
-
-Signature validation asks whether an input is structurally acceptable. A representative fixture asks whether the complete prediction path still gives an expected result. Production loading needs both because semantic mistakes often preserve shape.
-
-An **input example** is a concrete valid request stored with the model. It helps infer or inspect the signature and gives logging or serving tools something real to validate. MLflow can store both with an MLflow Model:
-
-```python
-import mlflow
-from mlflow.models import infer_signature
-
-sample = X_train.iloc[[0, 1]]
-predictions = model.predict_proba(sample)
-signature = infer_signature(sample, predictions)
-
-with mlflow.start_run():
-    model_info = mlflow.sklearn.log_model(
-        sk_model=model,
-        name="credit-decision",
-        signature=signature,
-        input_example=sample,
-        metadata={"class_order": [str(value) for value in model.classes_]},
-    )
+```text
+artifact digest
+required runtime
+expected model architecture
+configuration
 ```
 
-The signature catches a missing field or incompatible tensor shape. It cannot tell that a monetary value changed from dollars to cents, that RGB became BGR, or that a label array was reversed. **Representative fixtures** cover this semantic layer. Each fixture carries a realistic input, the expected transformed representation or prediction, and an allowed tolerance.
+before doing expensive initialization. This follows the same principle used in request validation:
 
-For an image classifier, one fixture might record a small approved image, the expected resized tensor statistics, and the top class. A serving change that omits division by 255 still produces a tensor with the correct shape and data type. The tensor values and final prediction reveal the error.
+> **Reject incompatibility at the cheapest trustworthy boundary that can detect it.**
 
-Boundary fixtures deserve extra attention: missing optional values, unseen categories, maximum text length, timestamps around daylight-saving transitions, and probabilities near a product threshold. The goal is a small set that exposes meaning, not a copy of the evaluation dataset.
+Suppose metadata claims:
 
-## Record Which Software And Hardware Can Run The Model
-<!-- section-summary: The release records the software and hardware conditions required to interpret and execute the artifact. -->
-
-Model bytes do not explain how to run themselves. A Python artifact needs a compatible language and model framework. Numerical packages such as NumPy and SciPy may also affect loading or inference. Custom application packages supply architecture and transformation code. Neural workloads add tokenizer libraries, native kernels, and precision settings.
-
-MLflow Models can include files such as `requirements.txt`, `conda.yaml`, and `python_env.yaml`. These files help recreate an environment. A locked dependency set or serving-image digest provides a stronger release identity because it records the reviewed resolution or built filesystem. The bundle must link to the exact runtime tested with it.
-
-Hardware matters whenever the artifact or runtime relies on a particular CPU architecture or instruction set. Accelerator serving adds a GPU class, host driver, user-space runtime, and memory limit. A compiled engine may bind several of those choices into one artifact. A TensorRT engine built for one environment is therefore a derived deployment artifact and may need rebuilding elsewhere. An ONNX graph may load with the CPU provider while the intended GPU provider is missing. That load is technically successful and operationally wrong.
-
-```mermaid
-flowchart TD; A["Model Artifact<br/>(serialized state or graph)"] --> B["Framework Runtime<br/>(loader and operator support)"]; B --> C["Native Libraries<br/>(numerical and accelerator code)"]; C --> D["Serving Image<br/>(pinned filesystem and application)"]; D --> E["Hardware Lane<br/>(CPU or approved accelerator class)"]; E --> F["Compatibility Evidence<br/>(load, behaviour, and resource results)"]
+```text
+hidden_size = 4096
+vocabulary_size = 100000
 ```
 
-Training and serving environments can differ. An exported graph often exists to support that separation. The release must record and test the exporter-to-runtime pair. Copying the training environment into production may carry unnecessary packages and still fail to prove the intended hardware path.
+but loaded weights contain incompatible shapes. The loader should fail clearly before serving. Checks can include:
 
-## Link The Saved Model To Its Training Run And Registry
-<!-- section-summary: Artifact storage holds bytes, a model registry governs versions, and lineage explains how each candidate was produced and evaluated. -->
-
-A production team needs to find model bytes, decide which versions may be used, and understand where each version came from. Those needs lead to three related systems: an artifact store, a model registry, and lineage records.
-
-You can think of the artifact store as the secured shelf, the registry as the catalog and approval desk, and lineage as the production history attached to each item. Combining the names can make the platform sound more complicated than it is. Keeping their responsibilities separate prevents a registry alias from being mistaken for immutable storage or a training run from being mistaken for release approval.
-
-The **artifact store** holds model and companion bytes. Typical choices include S3, Google Cloud Storage, Azure Data Lake Storage, or an OCI registry. Access policy, retention, immutability, encryption, and digest verification protect the stored bundle.
-
-The **model registry** is the governed catalog. It gives the candidate a stable identity, links approval state and aliases, and supports promotion or retirement. A registry entry should point to immutable artifact content. It should never act as a substitute for the artifact's own digest.
-
-**Lineage** answers how the candidate came to exist. The source side links the training run, code commit, data snapshot, feature definitions, and training configuration. The review side links the evaluation dataset, segment results, exporter identity, and serving compatibility evidence.
-
-### MLflow Models And Logged Models
-
-MLflow illustrates how these responsibilities connect. An **MLflow Model** is a directory convention with an `MLmodel` descriptor, artifacts, dependency metadata, signatures, and one or more **flavors**. A flavor tells a compatible tool how to interpret the model. A scikit-learn model can expose its native flavor and the generic `python_function` flavor used by `mlflow.pyfunc`.
-
-MLflow 3 also treats a **Logged Model** as a first-class record with its own model ID. Its record can connect artifacts and parameters to metrics from one or more runs. It also retains the source run and any registry registration. The model URI `models:/<model_id>` can refer to that identity. The packaging envelope does not erase the trust model of the contained flavor. A Python flavor that carries custom code still requires a trusted source and controlled loader.
-
-```mermaid
-flowchart TD; A["Training Run<br/>(code, data, parameters, and metrics)"] --> B["Logged Model<br/>(first-class candidate identity)"]; B --> C["MLflow Model<br/>(flavors, signature, environment, and artifacts)"]; C --> D["Artifact Store<br/>(immutable model bytes)"]; B --> E["Model Registry<br/>(governed version and aliases)"]; D --> F["Release Record<br/>(resolved bundle and runtime digests)"]; E --> F
+```text
+expected tensor names exist
+unexpected tensors are handled
+shapes match architecture
+dtypes are permitted
+number of layers is expected
+tokenizer vocabulary size matches embeddings
+output head matches label configuration
 ```
 
-## Load And Validate The Model Before Serving
-<!-- section-summary: A production loader resolves, fetches, verifies, parses, warms, and validates a candidate before publishing readiness. -->
+A file being parsable doesn't mean its internal components are mutually consistent. Consider this deployment:
 
-Loading a model is a release operation inside the running process. It downloads bytes, gives a parser access to them, allocates memory, may compile kernels, and changes which model will answer requests. A single `load_model()` call hides those stages.
-
-### Keep The Current Model Active Until Validation Passes
-
-A controlled loader starts from an approved immutable identity. It fetches the bundle into a staging area, checks file sizes and digests, verifies any required signature and provenance policy, and reads the manifest under resource limits. Only then does the format-specific runtime parse the model.
-
-After parsing, the loader checks the signature, class order, tokenizer or preprocessing identity, and available execution provider. It runs warm-up plus representative fixtures. Readiness publishes the loaded model ID and digests after every check passes.
-
-```mermaid
-flowchart TD; A["Approved Identity<br/>(resolved model and bundle digest)"] --> B["Staged Download<br/>(bounded temporary location)"]; B --> C["Integrity Verification<br/>(size, digest, signature, and policy)"]; C --> D["Runtime Load<br/>(format parsed under resource limits)"]; D --> E["Contract Validation<br/>(signature and companion identities)"]; E --> F["Warm-Up And Fixtures<br/>(known behaviour on the target runtime)"]; F --> G["Readiness Published<br/>(verified identity may receive traffic)"]; C --> H["Load Rejected<br/>(current release remains active)"]; D --> H; E --> H; F --> H
+```text
+container starts
+    ↓
+health check passes because HTTP server responds
+    ↓
+traffic arrives
+    ↓
+first /predict
+    ↓
+model load fails
 ```
 
-A new worker can fail readiness and leave traffic on healthy old workers. An in-process swap needs two slots or a drain procedure: version A continues serving while version B loads and proves itself. Replacing the active pointer before B passes fixtures exposes an unreviewed model for a brief period.
+That's backwards. The proper lifecycle is closer to:
 
-The loader should distinguish failure classes. A download timeout may support a bounded retry. A digest mismatch is an integrity failure. An unsupported operator is a compatibility failure. A wrong fixture result is a behaviour failure. Each one needs different evidence and recovery.
+```text
+process starts
+   ↓
+artifact verified
+   ↓
+model loaded
+   ↓
+compatibility checked
+   ↓
+smoke prediction passes
+   ↓
+warmup completes
+   ↓
+READY
+   ↓
+traffic
+```
+
+Readiness should mean:
+
+**This exact loaded model is prepared to serve predictions.**
+
+Not:
+
+"Python is running."
+
+A model may load successfully but fail during its first inference.
+
+For example:
+
+```text
+missing GPU operator
+unsupported kernel
+out-of-memory allocation
+shape specialization issue
+compiler problem
+```
+
+So:
+
+```text
+deserialization success
+```
+
+is weaker than:
+
+```text
+successful representative inference
+```
+
+Warmup tests both execution and performance-related initialization. Imagine two bugs:
+
+### Bug A
+
+The artifact is corrupt.
+
+```text
+load → error
+```
+
+Easy to detect.
+
+### Bug B
+
+The wrong tokenizer is loaded.
+
+```text
+load → success
+prediction → wrong
+```
+
+Much more dangerous. Production safety should focus especially on **silent semantic failures**. This is why behavioral validation matters. Suppose you store:
+
+```text
+input:
+  "I loved this film"
+
+expected result:
+  positive
+```
+
+After loading:
+
+```text
+model + tokenizer + preprocessing
+            ↓
+      reference input
+            ↓
+         positive
+```
+
+This checks several things together:
+
+```text
+weights
+architecture
+tokenizer
+preprocessing
+label mapping
+postprocessing
+```
+
+Not perfectly, of course. But it is much stronger than verifying that a file opened. You can think of it as:
+
+**A checksum over behavior rather than only bytes.**
+
+A stronger validation suite might include cases chosen to exercise important boundaries:
+
+```text
+normal input
+maximum supported length
+empty/minimal input
+each output class
+multimodal input if supported
+Unicode/special tokens
+known regression cases
+```
+
+For a model producing numerical output, save expected tolerances.
+
+For example:
+
+```text
+case_17:
+expected_class = 2
+expected_score = 0.814
+tolerance = 0.005
+```
+
+This becomes part of release qualification.
+
+## How Do Registries, Immutable Versions, Aliases, and Containers Coordinate Deployment?
+<!-- section-summary: Registries coordinate immutable versions and mutable aliases, while containers or separate artifacts provide deployment boundaries without using pathnames as identity. -->
+
+The validated artifact still needs coordination across registry records, aliases, containers, storage, and deployment identity.
+
+Model files and their metadata often move through:
+
+```text
+training system
+artifact store
+registry
+CI/CD
+deployment environment
+developer machines
+backups
+```
+
+So avoid embedding:
+
+```text
+API keys
+database passwords
+cloud credentials
+private tokens
+```
+
+Credentials should come from the serving environment's secret-management mechanism. The model artifact should be portable without also becoming a credential package. Some model artifacts contain more than weights. Examples can include:
+
+```text
+vocabularies
+lookup tables
+feature metadata
+sample inputs
+debug examples
+training statistics
+```
+
+Those can accidentally contain private or sensitive data. Saving "everything useful" does **not** mean copying the whole training environment indiscriminately. A better principle is:
+
+**Preserve everything necessary to reproduce serving behavior, but minimize unrelated sensitive material.**
+
+Suppose you have:
+
+```text
+model_v3_final.pt
+model_v3_final2.pt
+model_v3_really_final.pt
+model_prod_NEW.pt
+```
+
+This is effectively a broken registry implemented through filenames. A proper registry answers questions like:
+
+```text
+What models exist
+What immutable artifact corresponds to each
+Which model is approved
+Which one is in staging
+Which one is production
+Which training run created it
+What metrics did it achieve
+```
+
+Conceptually:
+
+```text
+training run
+    ↓
+registered model version
+    ↓
+approved release
+    ↓
+deployment
+```
+
+This is a useful pattern:
+
+```text
+immutable versions:
+
+model:v17
+model:v18
+model:v19
+```
+
+Then aliases:
+
+```text
+candidate → v19
+production → v18
+```
+
+When rollout succeeds:
+
+```text
+production → v19
+```
+
+The alias changes. The artifact does not. This gives you convenient names without sacrificing reproducibility. Weak deployment:
+
+```text
+load /models/current/model.bin
+```
+
+because:
+
+```text
+current
+```
+
+may change underneath you. Stronger deployment:
+
+```text
+resolve production alias
+        ↓
+obtain immutable digest/version
+        ↓
+pin that identity
+        ↓
+download exact artifact
+        ↓
+verify digest
+        ↓
+load
+```
+
+Now every replica can report exactly:
+
+```text
+serving model digest = XYZ
+```
+
+That makes debugging far easier. Suppose deployment updates files individually:
+
+```text
+weights v12
+tokenizer v12
+config v12
+```
+
+It performs:
+
+```text
+replace weights
+```
+
+then crashes before replacing tokenizer. Now disk contains:
+
+```text
+weights v13
+tokenizer v12
+config v12
+```
+
+This is a partial release. A safer design treats the bundle as immutable and activates it atomically.
+
+Conceptually:
+
+```text
+release-v13/
+    weights
+    tokenizer
+    config
+```
+
+Then:
+
+```text
+current → release-v12
+```
+
+becomes:
+
+```text
+current → release-v13
+```
+
+only after the complete bundle exists and validates. Never construct production state by gradually mutating unrelated pieces if you can avoid it. One deployment strategy is:
+
+```text
+container image
+    ├── serving code
+    ├── runtime dependencies
+    └── perhaps model artifact
+```
+
+Now:
+
+```text
+container digest
+```
+
+can identify a larger part of the runtime. Another strategy keeps the model separately:
+
+```text
+container image digest = A
+model artifact digest  = B
+```
+
+Then the serving release is identified by:
+
+```text
+(A, B)
+```
+
+Both can work. What matters is knowing exactly which pair is running. Bundling a 100 GB model into every serving container can be cumbersome. So you might store:
+
+```text
+container
+    ↓
+downloads immutable model artifact from registry
+```
+
+during initialization. That's fine if the startup process verifies:
+
+```text
+expected identity
+integrity
+provenance
+compatibility
+```
+
+before loading. Otherwise:
+
+```text
+download whatever "latest" currently points to
+```
+
+makes deployments non-reproducible.
 
 ![Seven-stage controlled loader keeps the current model serving while a candidate resolves its approved digest, downloads to bounded staging, passes integrity, parser, contract, backend, warm-up, and fixture checks, then publishes readiness](/content-assets/articles/article-mlops-model-serving-saving-loading-models-safely/model-loader-admission-path.png)
 
 *Traffic may move only after the staged candidate publishes its verified loaded identity. Integrity, compatibility, contract, or behaviour failure rejects the candidate without replacing the current release.*
 
-## Verify Model Files And Their Build Provenance
-<!-- section-summary: Digests, signatures, provenance, permissions, and isolation answer separate questions about artifact trust. -->
+## How Do Shadowing, Rollback, Compatibility, and Self-Description Control Release Risk?
+<!-- section-summary: Progressive rollout, full-release rollback, two-direction compatibility, and verified manifests limit exposure when an apparently valid bundle behaves differently. -->
 
-A **cryptographic digest** answers, “Are these the exact bytes the release expected?” Recomputing SHA-256 after download detects corruption or replacement. The expected digest must come from an approved record; a digest stored beside a replaced file gives an attacker both values.
+Release controls then test the bundle under production-like conditions and preserve a complete known-good rollback candidate.
 
-A **digital signature** connects the digest to a signing identity. Sigstore Cosign can sign and verify blobs or OCI artifacts, including keyless workflows backed by an identity certificate and transparency evidence. Verification policy should restrict the expected issuer and signer identity. A valid signature says who signed particular bytes. Predictive quality still comes from evaluation and behaviour tests.
+Suppose model v18 passes offline evaluation. Do you immediately replace every production replica You could:
 
-**Provenance** records how an artifact was built: source repository, commit, build workflow, and builder identity. It helps a policy decide whether the artifact came from the approved pipeline. Least-privilege storage permissions prevent serving identities from replacing what they read. Audit logs record publication, promotion, download, and load events.
-
-Parser isolation supplies another layer. A pickle-like artifact receives no production credentials during inspection. An untrusted ONNX graph runs inside a resource-constrained sandbox because a graph can still request excessive compute or memory. File-size, tensor-shape, path, and decompression limits should be checked before large allocations wherever the format permits.
-
-```mermaid
-flowchart TD; A["Expected Digest<br/>(approved byte identity)"] --> E["Admission Policy<br/>(all required evidence evaluated)"]; B["Artifact Signature<br/>(approved signer identity)"] --> E; C["Build Provenance<br/>(source and builder history)"] --> E; D["Behaviour Evidence<br/>(signature and fixture results)"] --> E; E --> F["Controlled Loader<br/>(least privilege and resource limits)"]
+```text
+100% v17
+    ↓
+100% v18
 ```
 
-## Test The Loaded Model Before Traffic
-<!-- section-summary: Load validation proves identity, structure, semantic behaviour, and runtime mode on the exact artifact that will serve. -->
+But if something was missed, every user is affected at once. A safer rollout might be:
 
-A serving smoke test exercises the real loader and prediction function. Importing the model class is too early in the path. Successfully deserializing the file proves only that the parser accepted it.
+```text
+99% v17   1% v18
+       ↓
+95% v17   5% v18
+       ↓
+50% v17  50% v18
+       ↓
+100% v18
+```
 
-The following focused PyTorch example verifies the bytes before parsing, loads only tensor state into trusted architecture code, selects evaluation mode, checks the label order, and compares a known prediction:
+while monitoring:
+
+```text
+errors
+latency
+resource consumption
+prediction distributions
+business metrics
+model-specific quality signals
+```
+
+The exact rollout strategy depends on the model. Instead of letting the new model affect users:
+
+```text
+request
+   ├──→ production model → user response
+   │
+   └──→ candidate model  → measurement only
+```
+
+Now the candidate receives realistic traffic while users still see the current model. You can compare:
+
+```text
+latency
+failures
+prediction distributions
+resource consumption
+agreement/disagreement
+```
+
+before promotion. Shadowing isn't appropriate in every system because it doubles some resource use and raises data-governance concerns, but conceptually it is powerful. Suppose release v18 consists of:
+
+```text
+model weights v18
+tokenizer v7
+preprocessing v12
+serving code v31
+generation config v4
+```
+
+Release v17 had:
+
+```text
+model weights v17
+tokenizer v6
+preprocessing v11
+serving code v30
+generation config v3
+```
+
+If v18 fails, doing only:
+
+```text
+weights v18 → v17
+```
+
+may leave an incompatible combination. A rollback should ideally switch:
+
+```text
+Release 18
+     ↓
+Release 17
+```
+
+as a unit. This is why the concept of a **model release** is stronger than a model filename. If rolling back requires:
+
+```text
+find old model
+rebuild container
+recreate configuration
+guess tokenizer version
+manually deploy
+```
+
+then rollback isn't really available under pressure. Instead maintain immutable prior releases:
+
+```text
+release-17 ✓
+release-18 ✓
+```
+
+and deployment controls simply change which release receives traffic. A release mechanism should make:
+
+```text
+forward deployment
+```
+
+and:
+
+```text
+rollback
+```
+
+structurally similar operations. Suppose API clients expect:
+
+```json
+{
+  "label": "positive",
+  "score": 0.93
+}
+```
+
+The new model's native output becomes:
+
+```json
+{
+  "class_id": 1,
+  "logits": [0.1, 2.3]
+}
+```
+
+Even though the model is better, you can't necessarily deploy that directly. There are two contracts:
+
+```text
+artifact ↔ serving runtime
+```
+
+and:
+
+```text
+serving API ↔ clients
+```
+
+A model upgrade should preserve both or deliberately version the affected contract. Imagine two versions have the same JSON response:
+
+```json
+{
+  "risk": 0.8
+}
+```
+
+But v1 means:
+
+```text
+probability of default within 30 days
+```
+
+while v2 means:
+
+```text
+probability of default within 90 days
+```
+
+The structure hasn't changed. The meaning has. Therefore:
+
+**A model contract includes semantics, not merely types and shapes.**
+
+Document:
+
+```text
+what each output means
+what population it applies to
+what threshold means
+what calibration assumptions exist
+```
+
+where appropriate. A useful artifact manifest might conceptually contain:
+
+```json
+{
+  "model_name": "sentiment-classifier",
+  "model_version": "17",
+  "artifact_digest": "sha256:...",
+  "architecture": "classifier-x",
+  "input_schema_version": "3",
+  "output_schema_version": "2",
+  "tokenizer_version": "9",
+  "framework_version": "...",
+  "training_run": "...",
+  "created_at": "...",
+  "supported_precision": ["fp32", "fp16"]
+}
+```
+
+The exact fields depend on the system. The point is that loading code shouldn't need to infer critical information from:
+
+```text
+filename conventions
+```
+
+or tribal knowledge. Suppose the artifact declares:
+
+```text
+model_version = 17
+```
+
+but its bytes aren't the approved v17 bytes. Metadata is data supplied by the artifact. So:
+
+```text
+manifest says "I am model 17"
+```
+
+is weaker than:
+
+```text
+artifact digest matches registered model 17
+```
+
+The registry or deployment configuration should provide the expected identity independently.
+
+## Why Must Loading Be Treated as Importing Code and Tested End to End?
+<!-- section-summary: Loading can execute or instantiate powerful computation, so untrusted artifacts require strict handling and serving validation must close the training-to-production gap. -->
+
+Because some formats can execute code and training success does not prove serving success, end-to-end validation remains a security and correctness boundary.
+
+Even when a representation is data-oriented, loading a model changes how production behaves. Before:
+
+```text
+service implements prediction function A
+```
+
+After loading:
+
+```text
+service implements prediction function B
+```
+
+That is semantically similar to deploying new software. Therefore model changes deserve many software-release practices:
+
+```text
+versioning
+review
+provenance
+tests
+staging
+canary rollout
+monitoring
+rollback
+```
+
+This is a very important conceptual shift. A model file is not just "data." Operationally, it changes application behavior. Suppose a model obtains:
+
+```text
+95% validation accuracy
+```
+
+in training. Production can still fail because:
+
+```text
+tokenizer missing
+wrong feature order
+unsupported operator
+wrong precision
+artifact corrupted
+GPU lacks memory
+threshold missing
+label map mismatched
+serving code incompatible
+```
+
+Training verifies:
+
+```text
+the mathematical model performed well in its evaluation environment
+```
+
+Serving validation verifies:
+
+```text
+the packaged release reproduces the intended behavior in its execution environment
+```
+
+These are different tests. One particularly strong test is:
+
+```text
+raw API request
+      ↓
+production preprocessing
+      ↓
+loaded production artifact
+      ↓
+production postprocessing
+      ↓
+API response
+```
+
+Compare that response with a known expectation. This tests much more than:
 
 ```python
-from hashlib import sha256
-import json
-from pathlib import Path
-
-import torch
-
-from service.model import ReviewClassifier
-
-
-def file_sha256(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-weights = Path("bundle/model-state.pt")
-manifest = json.loads(Path("bundle/manifest.json").read_text())
-assert file_sha256(weights) == manifest["model"]["sha256"]
-
-model = ReviewClassifier()
-state = torch.load(weights, map_location="cpu", weights_only=True)
-model.load_state_dict(state, strict=True)
-model.eval()
-
-assert manifest["class_order"] == ["manual_review", "auto_approve"]
-fixture = torch.tensor([[0.2, -1.1, 0.7]], dtype=torch.float32)
-with torch.inference_mode():
-    actual = model(fixture).softmax(dim=1)
-torch.testing.assert_close(actual, torch.tensor([[0.08, 0.92]]), rtol=0.02, atol=0.01)
+model(tensor)
 ```
 
-In a real bundle, the fixture should enter before preprocessing if the service owns that transformation. The test then catches a changed scaler, tokenizer, image normalization rule, or category map. It also checks output schema, finite values, class or range constraints, and the exact loaded identity.
+because production bugs often live at the boundaries. The overall lifecycle might look like:
 
-Negative fixtures matter too. Try a missing required field, an unseen category, an oversized input, and a corrupted copy of the artifact. The service should keep readiness false, return no prediction, and report the first failed boundary without leaking secrets or raw sensitive input.
-
-## Roll Out And Roll Back The Complete Release
-<!-- section-summary: Deployment and recovery move a proven combination of model, runtime, preprocessing, contracts, and policy. -->
-
-After load validation, the new release can receive a small amount of canary or shadow traffic. Runtime telemetry records the model ID and bundle digest alongside the serving-image digest. It also reports the preprocessing or tokenizer version. Load results and prediction health complete the evidence. Together, these fields confirm that users reached the release the deployment intended.
-
-The model ID and bundle digest identify the candidate. The image digest identifies the process interpreting it. A tokenizer or preprocessing version closes the transformation boundary. Load status and prediction telemetry show whether that exact combination stayed healthy after traffic arrived.
-
-Rollback must restore a **complete known release**. Reverting only the weights can leave the new tokenizer, threshold, label map, feature contract, or runtime image in place. That mixed combination may never have been tested.
-
-For example, version 43 adds a third output class and a new response mapping. Production behaviour fails after rollout. Pointing the model alias back to version 42 leaves workers that already loaded version 43 untouched, and the new response code may misread version 42's two-class output. Recovery selects the previous release record, restores its model bundle and compatible image, starts fresh workers, runs the version 42 fixtures, and then returns traffic.
-
-```mermaid
-flowchart TD; A["Candidate Release<br/>(bundle, image, contract, and policy)"] --> B["Pre-Traffic Validation<br/>(load, fixture, and readiness evidence)"]; B --> C["Canary Traffic<br/>(limited production exposure)"]; C -->|Healthy| D["Expanded Rollout<br/>(verified identity across workers)"]; C -->|Unhealthy| E["Previous Release<br/>(complete retained combination)"]; E --> F["Rollback Validation<br/>(old fixtures and live identity)"]; F --> G["Traffic Restored<br/>(known release serves again)"]
+```text
+                     TRAINING
+                        │
+                        ▼
+                ┌───────────────┐
+                │ trained state │
+                └───────┬───────┘
+                        │
+                 package/export
+                        │
+                        ▼
+                ┌───────────────┐
+                │ model artifact│
+                │               │
+                │ weights       │
+                │ config        │
+                │ tokenizer     │
+                │ metadata      │
+                └───────┬───────┘
+                        │
+                  evaluate/test
+                        │
+                        ▼
+                ┌───────────────┐
+                │ registry      │
+                │ immutable ID  │
+                │ provenance    │
+                └───────┬───────┘
+                        │
+                     approve
+                        │
+                        ▼
+                ┌───────────────┐
+                │ deployment    │
+                └───────┬───────┘
+                        │
+                 retrieve exact ID
+                        │
+                        ▼
+                 verify artifact
+                        │
+                        ▼
+                 check compatibility
+                        │
+                        ▼
+                     load
+                        │
+                        ▼
+               behavioral smoke test
+                        │
+                        ▼
+                     warmup
+                        │
+                        ▼
+                     READY
+                        │
+                        ▼
+                 canary / rollout
+                        │
+                        ▼
+                    production
 ```
 
-Retention policy therefore covers the previous bundle, serving image, dependency records, signatures, evaluation evidence, configuration, and rollout instructions. Operators verify the live loaded identity after rollback. An alias update alone cannot prove that every worker changed.
+Every transition establishes another property. We can express the whole system as a sequence of claims. After training:
 
-## The Main Idea
-<!-- section-summary: Safe persistence preserves the complete reviewed prediction path and verifies it before any new artifact receives traffic. -->
+```text
+"We have learned parameters."
+```
 
-A model file preserves one part of a production prediction. Transformations preserve the meaning of its inputs and outputs. A signature records structure, while examples record expected behaviour. Environment identity tells the loader which software and hardware combination has been tested. Lineage connects the candidate to training and review. Immutable digests bind all of those parts to the release.
+After packaging:
 
-Production safety comes from the full path: publish immutable bytes, resolve a governed identity, verify before parsing, load under controlled permissions and resources, run representative behaviour checks, expose the loaded version, and retain the complete previous release. A successful deserialization is one checkpoint inside that process.
+```text
+"We have everything required to reconstruct inference."
+```
 
-This framework also gives incident responders a useful order. Confirm the loaded bundle and image identities first. Then inspect integrity, contract, preprocessing, runtime, and fixture evidence. The first broken boundary points toward the repair and identifies the complete release that can serve as rollback.
+After registration:
+
+```text
+"We know exactly which immutable artifact this is and where it came from."
+```
+
+After integrity verification:
+
+```text
+"These are exactly the bytes we intended to deploy."
+```
+
+After compatibility checking:
+
+```text
+"This runtime should be capable of executing them."
+```
+
+After loading:
+
+```text
+"The model structure is internally valid."
+```
+
+After smoke tests:
+
+```text
+"It reproduces expected serving behavior."
+```
+
+After warmup:
+
+```text
+"It can execute on the real hardware."
+```
+
+After readiness:
+
+```text
+"It is safe to receive traffic."
+```
+
+That is the real purpose of the lifecycle. A robust loader might conceptually look like:
+
+```python
+def prepare_model(release):
+    artifact = fetch(release.artifact_id)
+
+    verify_digest(
+        artifact,
+        expected=release.digest,
+    )
+
+    verify_provenance(artifact)
+
+    metadata = read_metadata(artifact)
+
+    check_runtime_compatibility(
+        metadata,
+        current_environment(),
+    )
+
+    model = deserialize_safely(artifact)
+
+    validate_structure(
+        model,
+        metadata,
+    )
+
+    run_reference_tests(
+        model,
+        release.reference_tests,
+    )
+
+    warm_up(model)
+
+    return model
+```
+
+Then startup does:
+
+```python
+model = prepare_model(RELEASE_ID)
+ready = True
+```
+
+rather than:
+
+```python
+model = load("model_latest.pkl")
+ready = True
+```
+
+The difference is not cosmetic. The first establishes a chain of evidence.
+
+## Which Two Meanings of Safe Preserve the Model's Function?
+<!-- section-summary: Security safety asks whether the artifact can be trusted to load; semantic safety asks whether the loaded bundle still implements the intended prediction function. -->
+
+The final distinction separates trusting the loading mechanism from preserving the model's intended function.
+
+It helps to separate two meanings of safe loading.
+
+### Security safety
+
+```text
+Can a malicious artifact compromise the process
+Was the artifact authorized
+Was it modified
+```
+
+This concerns:
+
+```text
+deserialization
+integrity
+signatures
+registry permissions
+supply-chain provenance
+```
+
+### Prediction safety
+
+```text
+Will this artifact reproduce the intended model behavior
+```
+
+This concerns:
+
+```text
+tokenizers
+preprocessing
+label maps
+runtime compatibility
+reference predictions
+release testing
+```
+
+You need both. A file can be completely non-malicious and still produce disastrously wrong predictions because somebody deployed the wrong tokenizer. When loading a model, consider progressively stronger conditions:
+
+```text
+file exists
+    ↓
+file is readable
+    ↓
+file matches expected digest
+    ↓
+file came from trusted pipeline
+    ↓
+format is safely loadable
+    ↓
+artifact is structurally consistent
+    ↓
+runtime is compatible
+    ↓
+model executes
+    ↓
+reference behavior matches
+    ↓
+service meets operational requirements
+```
+
+Passing an earlier level does not imply passing later ones.
+
+For example:
+
+```text
+"file loads"
+```
+
+is a surprisingly weak statement. At training time, the actual behavior is some function:
+
+$$
+F(x)
+$$
+
+After saving, moving, loading, and deploying, we want the serving system to implement:
+
+$$
+\hat F(x)
+$$
+
+such that, within defined numerical and operational tolerances:
+
+$$
+\hat F(x) \approx F(x)
+$$
+
+for the domain we care about. Everything we save exists to make that true:
+
+```text
+weights
+architecture
+tokenizer
+preprocessing
+postprocessing
+runtime assumptions
+```
+
+Everything we verify exists to ensure we loaded the correct implementation:
+
+```text
+hashes
+provenance
+compatibility checks
+reference predictions
+```
+
+Everything around deployment exists to keep failures contained:
+
+```text
+registry
+canaries
+monitoring
+immutable releases
+rollback
+```
+
+A weak mental model is:
+
+```text
+train model
+   ↓
+save model.pt
+   ↓
+load model.pt
+   ↓
+serve
+```
+
+A stronger model is:
+
+```text
+              TRAINING BEHAVIOR
+                     │
+                     ▼
+          package complete inference state
+                     │
+                     ▼
+             immutable artifact
+                     │
+            identity + provenance
+                     │
+                     ▼
+                 registry
+                     │
+                     ▼
+           exact artifact selected
+                     │
+                     ▼
+         integrity/authenticity check
+                     │
+                     ▼
+          runtime compatibility check
+                     │
+                     ▼
+                  load
+                     │
+                     ▼
+            structural validation
+                     │
+                     ▼
+            behavioral validation
+                     │
+                     ▼
+                  warmup
+                     │
+                     ▼
+                  READY
+                     │
+                     ▼
+          gradual production rollout
+                     │
+              monitor behavior
+                     │
+                     ▼
+        promote or roll back release
+```
+
+The central principle is:
+
+**A saved model should be treated as an immutable, versioned, security-sensitive software artifact whose purpose is to reproduce a particular prediction function.**
+
+And the practical consequence is:
+
+**Do not ask only “Can I load this model?” Ask “Is this exactly the artifact we approved, can this environment execute it safely, does the complete preprocessing-model-postprocessing pipeline reproduce the expected behavior, and can we revert the entire release if it does not?”**
+
+Once you think this way, model formats, hashes, registries, provenance, environment metadata, reference predictions, startup validation, canary releases, and rollback are no longer separate best practices. They are all mechanisms for preserving one thing across time and machines:
+
+```text
+the identity and behavior of the model you intended to serve
+```
 
 ![Complete model release path validates an immutable bundle and serving image before canary traffic, expands only with healthy evidence, and restores the complete retained release before verifying rollback in live traffic](/content-assets/articles/article-mlops-model-serving-saving-loading-models-safely/model-release-rollback-summary.png)
 
 *Healthy canary evidence supports gradual expansion and reassessment. A failed check or stop condition restores the retained bundle, compatible image, transformations, contracts, policy, and fixtures before new requests prove recovery.*
 
-## References
+## Check Your Answers
 
-- [MLflow Models](https://mlflow.org/docs/latest/ml/model/)
-- [MLflow model signatures and input examples](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/)
-- [scikit-learn model persistence](https://scikit-learn.org/stable/model_persistence.html)
-- [PyTorch serialization semantics](https://docs.pytorch.org/docs/stable/notes/serialization.html)
-- [PyTorch saving and loading models](https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html)
-- [ONNX Runtime](https://onnxruntime.ai/docs/)
-- [ONNX external data security](https://onnx.ai/onnx/repo-docs/ExternalDataSecurity.html)
-- [Safetensors documentation](https://huggingface.co/docs/safetensors/)
-- [Sigstore Cosign blob signing](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/)
-- [Sigstore Cosign signature verification](https://docs.sigstore.dev/cosign/verifying/verify/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Must a Saved Model Preserve for the Same Prediction Function?]{kind="recap"}
+A usable model bundle preserves weights, architecture, preprocessing, postprocessing, signatures, and behaviour, while the serving release adds runtime and policy.
+:::
+
+:::expand[How Do Format, Trust, Identity, Integrity, Authenticity, and Provenance Protect an Artifact?]{kind="recap"}
+Format choice follows the trust model; immutable identity, integrity checks, signatures, and provenance establish what the artifact is and where it came from.
+:::
+
+:::expand[Which Input, Output, Software, and Hardware Contracts Must Travel with the Model?]{kind="recap"}
+Input and output semantics, reference behaviour, dependencies, platform, and hardware requirements make compatibility explicit instead of relying on memory.
+:::
+
+:::expand[What Invariants Should a Safe Loading Path Establish before Traffic?]{kind="recap"}
+A staged loader verifies metadata and size, allocates carefully, checks structure, warms the model, and runs representative behaviour before accepting traffic.
+:::
+
+:::expand[How Do Registries, Immutable Versions, Aliases, and Containers Coordinate Deployment?]{kind="recap"}
+Registries coordinate immutable versions and mutable aliases, while containers or separate artifacts provide deployment boundaries without using pathnames as identity.
+:::
+
+:::expand[How Do Shadowing, Rollback, Compatibility, and Self-Description Control Release Risk?]{kind="recap"}
+Progressive rollout, full-release rollback, two-direction compatibility, and verified manifests limit exposure when an apparently valid bundle behaves differently.
+:::
+
+:::expand[Why Must Loading Be Treated as Importing Code and Tested End to End?]{kind="recap"}
+Loading can execute or instantiate powerful computation, so untrusted artifacts require strict handling and serving validation must close the training-to-production gap.
+:::
+
+:::expand[Which Two Meanings of Safe Preserve the Model's Function?]{kind="recap"}
+Security safety asks whether the artifact can be trusted to load; semantic safety asks whether the loaded bundle still implements the intended prediction function.
+:::

@@ -1,0 +1,31 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "PATH": "/usr/local/bin:/usr/bin:/bin"
+  },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/usr/local/bin/python": { "type": "file", "content": "#!/bin/sh\necho Python 3.13 local\n", "mode": 493 },
+    "/usr/bin/python": { "type": "file", "content": "#!/bin/sh\necho Python 3.12 system\n", "mode": 493 },
+    "/usr/local/bin/ordersctl": { "type": "file", "content": "#!/bin/sh\necho ordersctl 2.4\n", "mode": 493 },
+    "/opt/python/bin/python": { "type": "file", "content": "#!/bin/sh\necho Python experimental\n", "mode": 493 }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "/usr/local/bin/python",
+      "/usr/bin/python",
+      "/usr/local/bin/ordersctl"
+    ],
+    "requireCommands": ["command", "type"],
+    "requireCommandPatterns": [
+      "^command\\s+-v\\s+python$",
+      "^type\\s+-a\\s+python$",
+      "^command\\s+-v\\s+ordersctl$"
+    ]
+  }
+}

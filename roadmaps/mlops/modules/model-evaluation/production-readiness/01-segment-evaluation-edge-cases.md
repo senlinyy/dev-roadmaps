@@ -9,952 +9,998 @@ id: "article-mlops-model-evaluation-segment-evaluation-edge-cases"
 
 ## Table of Contents
 
-1. [Why One Average Can Hide a Production Failure](#why-one-average-can-hide-a-production-failure)
-2. [Segment, Slice, Cohort, and Edge Case Mean Different Things](#segment-slice-cohort-and-edge-case-mean-different-things)
-3. [Define Which Cases The Model Is Allowed To Handle](#define-which-cases-the-model-is-allowed-to-handle)
-4. [Choose Groups From Real Product, Data, Policy, And System Boundaries](#choose-groups-from-real-product-data-policy-and-system-boundaries)
-5. [Check Important Group Combinations Without Flooding The Dashboard](#check-important-group-combinations-without-flooding-the-dashboard)
-6. [Interpret Every Segment Metric With Counts And Uncertainty](#interpret-every-segment-metric-with-counts-and-uncertainty)
-7. [Collect Better Evidence for Rare and High-Harm Segments](#collect-better-evidence-for-rare-and-high-harm-segments)
-8. [Treat Edge Cases as Boundary Conditions and Failure Modes](#treat-edge-cases-as-boundary-conditions-and-failure-modes)
-9. [Group Similar Errors To Find Which Layer Is Failing](#group-similar-errors-to-find-which-layer-is-failing)
-10. [Separate Planned Release Checks From Newly Discovered Groups](#separate-planned-release-checks-from-newly-discovered-groups)
-11. [Compare Candidate and Production Models on Identical Slices](#compare-candidate-and-production-models-on-identical-slices)
-12. [How Current Tools Calculate And Record Segment Results](#how-current-tools-calculate-and-record-segment-results)
-13. [Use Segment Results To Approve, Limit, Or Reject A Release](#use-segment-results-to-approve-limit-or-reject-a-release)
-14. [Monitor The Same Segments After Release](#monitor-the-same-segments-after-release)
-15. [The Main Idea](#the-main-idea)
-16. [References](#references)
+1. [Why Can a Strong Average Hide a Failed Segment or Edge Case?](#why-can-a-strong-average-hide-a-failed-segment-or-edge-case)
+2. [How Do You Choose Useful Segments Without Creating an Unmanageable Explosion?](#how-do-you-choose-useful-segments-without-creating-an-unmanageable-explosion)
+3. [How Do Counts, Denominators, Sampling, and Consequences Change Segment Metrics?](#how-do-counts-denominators-sampling-and-consequences-change-segment-metrics)
+4. [How Do Segment Failures Reveal Mechanisms and Shape Release Scope?](#how-do-segment-failures-reveal-mechanisms-and-shape-release-scope)
+5. [How Do You Define and Maintain Reproducible Segment and Edge-Case Sets?](#how-do-you-define-and-maintain-reproducible-segment-and-edge-case-sets)
+6. [How Do the Same Segments Support Production Monitoring and Drift Analysis?](#how-do-the-same-segments-support-production-monitoring-and-drift-analysis)
+7. [What Should an Edge-Case Review and Segment Dashboard Explain?](#what-should-an-edge-case-review-and-segment-dashboard-explain)
+8. [How Does Conditional Performance Change the Meaning of Model Quality?](#how-does-conditional-performance-change-the-meaning-of-model-quality)
+9. [Check Your Answers](#check-your-answers)
 
-## Why One Average Can Hide a Production Failure
-<!-- section-summary: An overall score combines easy, hard, common, and rare cases, so important failures can disappear inside a strong average. -->
+A document model reports 95% accuracy. Normal documents make up most of the test set and score 99%, while a small group of regulated scanned documents scores 30%. The average is mathematically correct and operationally dangerous.
 
-A model can perform well across the full evaluation set while failing repeatedly for one region, device type, or rare operating condition. **Segment evaluation asks where a model works and where it fails.**
-An overall metric describes the evaluation population as one group.
-A segment metric repeats the same measurement for a smaller, meaningful part of that population.
+A **segment** groups examples that share a condition worth measuring. An **edge case** is a case near or beyond a difficult operating boundary; it may be common, and a rare case may still be easy. Segment evaluation exposes conditional behaviour, but it also introduces small samples, changing denominators, interaction explosions, and release decisions that need more than pass or fail.
 
-Suppose 95 percent of requests belong to a familiar input group and the model is 95 percent accurate there.
-The remaining 5 percent come from a less familiar group where accuracy is only 40 percent.
-The weighted overall accuracy is still above 92 percent:
+These questions follow the work from choosing risk-based segments to carrying the same definitions into production monitoring:
 
-`(0.95 × 0.95) + (0.05 × 0.40) = 0.9225`
+1. **Why Can a Strong Average Hide a Failed Segment or Edge Case?**
+2. **How Do You Choose Useful Segments Without Creating an Unmanageable Explosion?**
+3. **How Do Counts, Denominators, Sampling, and Consequences Change Segment Metrics?**
+4. **How Do Segment Failures Reveal Mechanisms and Shape Release Scope?**
+5. **How Do You Define and Maintain Reproducible Segment and Edge-Case Sets?**
+6. **How Do the Same Segments Support Production Monitoring and Drift Analysis?**
+7. **What Should an Edge-Case Review and Segment Dashboard Explain?**
+8. **How Does Conditional Performance Change the Meaning of Model Quality?**
 
-The overall result sounds strong.
-The smaller group receives wrong predictions six times out of ten.
-That failure may affect a new product route, a particular document format, a rare medical finding, or the traffic handled by one region.
+## Why Can a Strong Average Hide a Failed Segment or Edge Case?
+<!-- section-summary: An aggregate score is a weighted average over a particular mixture and can remain high while a rare, difficult, or consequential condition performs badly. -->
 
-This happens because an average gives more influence to common examples.
-The calculation treats every row according to its frequency, even if some mistakes carry greater harm or some operating conditions deserve separate attention.
+An overall metric describes the average example in one mixture, which makes it possible for common easy cases to hide an unacceptable condition.
 
-You can think of the overall metric as the view from far away.
-It shows the general direction.
-Segment metrics move closer and reveal the terrain hidden inside that view.
+The easiest way to understand segments is to begin with a problem in the most common evaluation method. Suppose a model gets **95% accuracy** on an evaluation set. That number sounds useful, but it answers only:
 
-```mermaid
-flowchart TD
-    A["Evaluation population<br/>100,000 examples"] --> B["Common inputs<br/>95% of examples"]
-    A --> C["Less familiar inputs<br/>5% of examples"]
-    B --> D["95% accuracy"]
-    C --> E["40% accuracy"]
-    D --> F["Overall accuracy<br/>92.25%"]
-    E --> F
-    F --> G["Overall result looks healthy"]
-    E --> H["One important group<br/>still fails often"]
+“How well does the model perform on the average example in this particular mixture of examples?”
 
-    class A population
-    class B,C group
-    class D,E,F,G result
-    class H risk
-```
+It does **not** tell you whether the model is good everywhere you care about. A model could behave like this:
 
-Segment evaluation adds detail to the overall result and keeps that broad result visible.
-The full-population metric still describes broad performance.
-The segment report reveals concentrated failures, and an edge-case suite checks specific situations that deserve an explicit guarantee.
+| Type of case                 | Share of traffic | Accuracy |
+| ---------------------------- | ---------------: | -------: |
+| Normal inputs                |              90% |      99% |
+| Scanned documents            |               5% |      80% |
+| Very long documents          |               4% |      75% |
+| Critical regulated documents |               1% |      30% |
+
+The overall number can still look excellent because the easy, common cases dominate the average. That observation gives us the first principle:
+
+> **Model quality is not one number. It is a function of the kind of input the model receives.**
+
+Segments, slices, cohorts, and edge-case evaluation are ways of exposing that function. Imagine a model $$f$$, an input $$x$$, the correct outcome $$y$$, and some measure of error:
+
+$$
+L(f(x),y)
+$$
+
+The ordinary evaluation metric estimates something like:
+
+$$
+R = E[L(f(x),y)]
+$$
+
+In words:
+
+What is the average loss over the population
+
+Now divide that population into groups $$S_1,S_2,\ldots,S_k$$. For each group we can calculate:
+
+$$
+R_i = E[L(f(x),y)\mid x\in S_i]
+$$
+
+The overall risk is roughly a weighted combination of those risks:
+
+$$
+R = \sum_i P(S_i)R_i
+$$
+
+This equation explains almost everything about segmentation. Suppose only 1% of traffic belongs to a dangerous segment. Even if its failure rate is enormous, its contribution to the overall average is multiplied by $$0.01$$. So:
+
+**Averages naturally hide small groups.**
+
+This isn't a flaw in arithmetic. It's what averages are supposed to do. Therefore, if some small group matters independently of its traffic share, you must evaluate it independently. These terms are sometimes used interchangeably, but separating them gives you clearer reasoning.
+
+| Term          | Useful first-principles meaning                                                     | Example                                    |
+| ------------- | ----------------------------------------------------------------------------------- | ------------------------------------------ |
+| **Segment**   | A defined subset of the population that matters operationally                       | Spanish-language requests                  |
+| **Slice**     | Any subset isolated for analysis                                                    | Requests containing tables                 |
+| **Cohort**    | Cases connected by some shared origin, time, treatment, or journey                  | Users onboarded after a new product launch |
+| **Edge case** | A situation near or outside assumptions under which normal model behavior may break | A 500-page malformed PDF                   |
+
+A useful distinction is that **segments are usually intentional and persistent**, while **slices can be temporary diagnostic views**. For example, suppose you operate a document-understanding model. “Scanned PDFs” might be an official evaluation segment that appears in every release report. After discovering some failures, an engineer might temporarily create a slice:
+
+scanned PDFs + rotated pages + handwritten notes.
+
+That slice might help diagnose the problem without becoming a permanent release metric. A cohort adds another idea: shared history.
+
+For example:
+
+documents submitted during the week after an OCR-system upgrade.
+
+The documents may not resemble one another semantically, but their shared system history makes the group interesting. This distinction matters. People often define an edge case as:
+
+something that almost never happens.
+
+That's incomplete. An edge case is better understood as:
+
+**A case where assumptions underlying normal operation become weak or false.**
+
+It may be rare, but rarity isn't what makes it an edge case. Consider a model that processes text.
+
+| Situation                              | Why it might be an edge case             |
+| -------------------------------------- | ---------------------------------------- |
+| Empty input                            | Assumption that information exists fails |
+| 200,000-token input                    | Normal context assumptions fail          |
+| Mixed Arabic and English               | Language assumptions may fail            |
+| Contradictory instructions             | Task interpretation becomes ambiguous    |
+| Corrupted encoding                     | Input representation assumptions fail    |
+| Prompt injection inside retrieved text | Trust-boundary assumptions fail          |
+| New unseen product type                | Training-distribution assumption fails   |
+
+Some edge cases can eventually become common. If customers suddenly start uploading phone photographs rather than digital PDFs, yesterday's edge case may become tomorrow's major segment. So the categories are dynamic. This is one of the most important steps. You cannot sensibly ask:
+
+“Does the model work?”
+
+until you define:
+
+“Under what conditions is the model expected to work?”
+
+Think of the model as having an **operating envelope**. Inside that envelope, you promise some level of performance. Outside it, the correct behavior may instead be rejection, abstention, escalation, or fallback. Suppose a document model officially supports:
+
+| Dimension     | Allowed operating region            |
+| ------------- | ----------------------------------- |
+| Language      | English, French, German             |
+| File type     | PDF, PNG, JPEG                      |
+| Document size | ≤100 pages                          |
+| Scan quality  | Above defined readability threshold |
+| Document type | Invoices and receipts               |
+| Security      | No encrypted files                  |
+
+Now imagine somebody uploads a 700-page encrypted Japanese legal document. A failure doesn't necessarily mean:
+
+“The model is bad.”
+
+The first question is:
+
+**Why did the system allow this input to reach a model that was never supposed to handle it?**
+
+That might be a product-routing failure rather than a model-quality failure. This leads to a broader principle:
+
+**Evaluation should test both model competence and whether the system correctly recognizes the boundaries of that competence.**
+
+A good system sometimes says:
+
+“I can't reliably handle this case.”
+
+An evaluation that only rewards answering can accidentally train teams to prefer confident mistakes over appropriate abstention.
+
+## How Do You Choose Useful Segments Without Creating an Unmanageable Explosion?
+<!-- section-summary: Useful segments come from the operating envelope and risk hypotheses, then prioritize meaningful intersections without enumerating every possible combination. -->
+
+Finding those conditions requires deliberate hypotheses about the operating envelope, not an uncontrolled search through every column combination.
+
+A common mistake is sitting in a meeting and brainstorming dozens of arbitrary demographic or data categories. Instead, derive segments from the actual structure of the system. There are roughly four sources.
+
+| Boundary        | Questions to ask                               | Example segments                             |
+| --------------- | ---------------------------------------------- | -------------------------------------------- |
+| **Product**     | How do customers actually use this            | free/pro users, mobile/web, new/expert users |
+| **Data**        | What fundamentally changes the input          | language, length, noise, file format         |
+| **Policy/risk** | Where do mistakes have different consequences | ordinary vs regulated requests               |
+| **System**      | Where does the technical path change          | different retrievers, tools, models, regions |
+
+This is much better than blindly slicing every available metadata field. Why? Because a segment should usually exist because you have a **reason to expect either performance or consequences to differ**. Suppose you're evaluating a customer-support assistant. You create the segment:
+
+conversations longer than 20 turns.
+
+Why? Perhaps your hypothesis is:
+
+“Long conversations may cause the model to lose track of earlier constraints.”
+
+Now the segment has scientific meaning. You can test:
+
+$$
+P(\text{failure}\mid\text{long conversation})
+$$
+
+against:
+
+$$
+P(\text{failure}\mid\text{short conversation})
+$$
+
+If there is no meaningful difference across many evaluations, perhaps this isn't an important permanent segment. But if the failure rate repeatedly increases, you've identified a real system boundary. This mindset prevents segment dashboards from becoming enormous collections of meaningless charts. Suppose your results look like this:
+
+| Segment      | Accuracy |
+| ------------ | -------: |
+| English      |      96% |
+| Spanish      |      94% |
+| Digital PDFs |      97% |
+| Scanned PDFs |      93% |
+
+Everything looks acceptable. But perhaps:
+
+| Segment               | Accuracy |
+| --------------------- | -------: |
+| Spanish + scanned PDF |  **61%** |
+
+Neither individual dimension exposed the problem. This happens because failures frequently arise from **interactions between properties**. Mathematically:
+
+$$
+P(\text{failure}\mid A,B)
+$$
+
+can be much greater than either:
+
+$$
+P(\text{failure}\mid A)
+$$
+
+or
+
+$$
+P(\text{failure}\mid B)
+$$
+
+This is why intersectional analysis matters. Suppose you have 10 dimensions and each has five possible values. Potential combinations:
+
+$$
+5^{10}=9,765,625
+$$
+
+You obviously cannot build nine million dashboards. So you need prioritization. A useful mental model is:
+
+$$
+\text{segment priority}
+\approx
+\text{probability}
+\times
+\text{failure likelihood}
+\times
+\text{failure severity}
+$$
+
+But don't treat this as a rigid formula. A tiny probability multiplied by catastrophic severity may deserve attention even when expected frequency is small. A practical hierarchy looks something like:
+
+**Level 1:** major predefined segments such as language, product workflow, or document type. **Level 2:** intersections you have a reason to suspect, such as language × document quality. **Level 3:** exploratory combinations surfaced by observed failures. That creates depth where evidence or risk warrants it without turning evaluation into exhaustive combinatorics.
 
 ![An overall accuracy of 92.25 percent hides a less familiar five-percent segment with only 40 percent accuracy](/content-assets/articles/article-mlops-model-evaluation-segment-evaluation-edge-cases/overall-score-hidden-segment.png)
 
 *The common group dominates the weighted average, while the smaller group receives wrong predictions six times out of ten.*
 
-A production-readiness review therefore asks three connected questions:
+## How Do Counts, Denominators, Sampling, and Consequences Change Segment Metrics?
+<!-- section-summary: Every segment metric needs its count, correct denominator, uncertainty, prevalence, and consequence because small or targeted groups behave differently from the overall sample. -->
 
-1. Does the candidate improve the intended population overall?
-2. Does it remain acceptable across the populations and operating conditions that matter?
-3. Does it handle known boundary conditions and high-consequence cases?
+Once a segment is chosen, its metric cannot be interpreted without the number and type of examples that form its denominator.
 
-Those questions lead to different evidence.
-The overall holdout answers the first.
-Segment metrics answer the second.
-Reviewed edge cases and robustness tests contribute to the third.
+Suppose a dashboard says:
 
-## Segment, Slice, Cohort, and Edge Case Mean Different Things
-<!-- section-summary: Segment, slice, cohort, and edge case describe related forms of focused evaluation, yet each one answers a different question. -->
+German accuracy: 100%.
 
-These terms are often used as if they were interchangeable.
-Clear definitions let the team choose the right evidence and explain exactly what each result represents.
+That could mean:
 
-A **segment** is a product-relevant group of cases.
-It has a reason to exist beyond the evaluation table.
-Examples include new users, mortgage applications submitted through a broker, searches written in a supported language, or images produced by a particular scanner model.
+10,000 / 10,000 correct.
 
-A **slice** is the subset of evaluation rows used to calculate a metric.
-Put more concretely, it is the rule that turns a meaningful group into rows the evaluation code can select.
-The segment may be “short voice queries,” while the slice rule is `channel = voice AND token_count < 5`.
-Evaluation tools usually work with slices because a rule can be applied consistently to a dataset.
+Or:
 
-A **cohort** groups cases through a shared starting event, exposure, or time period.
-For example, users who first saw a new recommendation policy during one rollout week form a cohort.
-Following that cohort over the next month can reveal delayed effects that a simple region or device segment would miss.
+1 / 1 correct.
 
-An **edge case** is a specific boundary condition or failure mode that the system must handle.
-An empty optional field, an unseen category, and a request exactly on a policy threshold are all edge cases.
-So are a daylight-saving transition and a feature-store timeout.
-An edge case may affect only one fixture today and become common after a product or traffic change.
+The percentages are identical. The evidence is not remotely identical. Every segment result should therefore be interpreted alongside its denominator. At minimum you want something conceptually like:
 
-```mermaid
-mindmap
-  root((Focused evaluation))
-    Segment
-      Product-relevant population
-      Stable business meaning
-      Example: new users
-    Slice
-      Dataset subset
-      Executable membership rule
-      Example: account_age_days under 30
-    Cohort
-      Shared start or exposure
-      Followed across time
-      Example: rollout-week users
-    Edge case
-      Boundary or failure mode
-      Explicit expected behaviour
-      Example: missing feature lookup
+| Segment | Successes |  Cases | Estimated success |
+| ------- | --------: | -----: | ----------------: |
+| A       |     9,500 | 10,000 |             95.0% |
+| B       |        19 |     20 |             95.0% |
+
+These should not produce the same level of confidence. Imagine observing zero failures. With 10 examples:
+
+$$
+0/10
+$$
+
+With 100,000 examples:
+
+$$
+0/100000
+$$
+
+Again, the measured failure rate is identical:
+
+$$
+0\%
+$$
+
+But the conclusions are radically different. A useful approximation called the **rule of three** says that when you observe zero failures in $$n$$ independent examples, the approximate upper end of a 95% confidence interval for the true failure rate is:
+
+$$
+\frac{3}{n}
+$$
+
+So with 10 successful examples:
+
+$$
+\frac{3}{10}=30\%
+$$
+
+Zero observed failures is still compatible with a surprisingly large true failure rate. With 10,000 successful examples:
+
+$$
+\frac{3}{10000}=0.03\%
+$$
+
+Now you have much stronger evidence. Therefore:
+
+**“No observed failures” is not the same as “failure is impossible.”**
+
+Especially for rare segments. This becomes important in classification. Suppose you're detecting dangerous transactions. Overall accuracy might use every transaction. But recall asks:
+
+$$
+\text{Recall}
+=
+\frac{\text{dangerous transactions detected}}
+{\text{all truly dangerous transactions}}
+$$
+
+If your segment has 10,000 examples but only 8 truly dangerous transactions, your recall estimate is effectively based on **8 relevant cases**, not 10,000. So writing:
+
+Segment size = 10,000
+
+can give false confidence. A serious evaluation system records the denominator relevant to each metric. For precision, that's predicted positives. For recall, actual positives. For ordinary error rate, total evaluated examples. For human-rated generative quality, it might be number of independently reviewed outputs. Suppose 0.01% of production requests belong to an important high-risk segment. If you randomly sample 10,000 requests, you expect only:
+
+$$
+10,000\times0.0001=1
+$$
+
+such example. That's nowhere near enough to evaluate reliably. You therefore need **targeted sampling**. Instead of taking the natural traffic mixture, deliberately collect perhaps 500 examples from that segment. Now you can estimate:
+
+$$
+P(\text{failure}\mid\text{rare segment})
+$$
+
+much more effectively. But there is an important distinction. Targeted sampling helps answer:
+
+How well does the model perform when this situation happens
+
+It does not automatically tell you:
+
+How often does this situation happen in production
+
+Those are two different estimation problems. This distinction is extremely useful. Suppose:
+
+$$
+P(S)=0.001
+$$
+
+meaning 0.1% of production traffic falls into segment $$S$$. And:
+
+$$
+P(\text{failure}\mid S)=0.40
+$$
+
+meaning the model fails 40% of the time within it. These numbers describe different things. The first is about the environment. The second is about the model. If you oversample the segment, you may get excellent evidence about the second quantity while learning nothing about the first. So strong evaluation systems often maintain two datasets:
+
+**Representative evaluation data**, designed to approximate actual production traffic. And **challenge or targeted evaluation data**, deliberately enriched for difficult or risky situations. Both are valuable, but they answer different questions. Consider two segments. Segment A fails 10% of the time and the result is a slightly awkward response. Segment B fails 1% of the time and the result can cause a large financial or safety problem. Raw failure rates aren't enough. You need something closer to:
+
+$$
+\text{Risk}
+=
+P(\text{failure})
+\times
+\text{severity of consequence}
+$$
+
+This explains why some tiny segments deserve extensive testing. The purpose isn't necessarily to optimize average accuracy. It is to control **unacceptable failure modes**.
+
+## How Do Segment Failures Reveal Mechanisms and Shape Release Scope?
+<!-- section-summary: Segment evaluation should investigate causes, compare candidates on identical cases, and support block, restricted release, routing, or additional evidence rather than one global decision. -->
+
+A low segment score is the start of diagnosis and a scoped release decision, rather than a label attached without a mechanism.
+
+Suppose a dashboard shows:
+
+scanned-document accuracy = 68%.
+
+That's useful as detection. But it doesn't tell you what to fix. You inspect failures and discover:
+
+| Error cluster                                | Likely failing layer    |
+| -------------------------------------------- | ----------------------- |
+| OCR misses decimal points                    | preprocessing/OCR       |
+| Correct text retrieved, wrong interpretation | model reasoning         |
+| Wrong page sent to model                     | retrieval               |
+| Model answer correct but rejected            | policy layer            |
+| Correct result truncated                     | product/post-processing |
+| Requests occasionally time out               | infrastructure          |
+
+This distinction is extremely important. An end-to-end system might contain:
+
+$$
+\text{input}
+\rightarrow
+\text{preprocessing}
+\rightarrow
+\text{retrieval}
+\rightarrow
+\text{model}
+\rightarrow
+\text{policy}
+\rightarrow
+\text{postprocessing}
+\rightarrow
+\text{user}
+$$
+
+A segment tells you **where performance changes**. Error clustering helps tell you **why performance changes**. Without the second step, teams often respond to every bad metric by training another model, even when the model isn't the broken component. Before launch you might define 20 important segments. After launch someone discovers:
+
+The assistant fails when a user uploads a spreadsheet whose first row contains merged cells and whose column names are in Japanese.
+
+Nobody anticipated that combination. That's normal. You should therefore maintain two conceptual classes of evaluation groups.
+
+| Type                              | Purpose                                                       |
+| --------------------------------- | ------------------------------------------------------------- |
+| **Release / contract segments**   | Known requirements that every candidate must satisfy          |
+| **Discovery / diagnostic slices** | Newly identified groups used to investigate emerging failures |
+
+This separation matters because otherwise every debugging filter gradually becomes a permanent release gate. The dashboard becomes impossible to understand. A discovery slice should graduate into a permanent segment when there is evidence that it represents a persistent, important failure surface. Imagine production reveals an important failure. A weak process looks like:
+
+$$
+\text{failure}
+\rightarrow
+\text{fix}
+$$
+
+A stronger process looks like:
+
+$$
+\text{failure}
+\rightarrow
+\text{reproduce}
+\rightarrow
+\text{understand segment}
+\rightarrow
+\text{add evaluation}
+\rightarrow
+\text{fix}
+\rightarrow
+\text{regression test}
+$$
+
+Now the evaluation suite becomes organizational memory. Three months later, a new model cannot accidentally reintroduce the same problem without being detected. This is why good eval sets tend to grow from real incidents. Suppose model A gets:
+
+93% on French requests.
+
+Model B gets:
+
+95% on French requests.
+
+That comparison is much stronger if both models evaluated **the exact same French requests**. Why? Because otherwise the apparent difference could simply come from the second sample being easier. Ideally you evaluate:
+
+$$
+f_A(x_i)
+$$
+
+and
+
+$$
+f_B(x_i)
+$$
+
+for the same $$x_i$$. Then you can look at per-case changes.
+
+For example:
+
+| Outcome            | Number |
+| ------------------ | -----: |
+| Both correct       |    850 |
+| A correct, B wrong |     40 |
+| A wrong, B correct |     80 |
+| Both wrong         |     30 |
+
+Now the important information isn't simply:
+
+B has higher average accuracy.
+
+You can ask:
+
+Which cases did B fix
+
+and:
+
+Which cases did B break
+
+That is much more actionable. Suppose:
+
+| Segment             | Production model | Candidate |
+| ------------------- | ---------------: | --------: |
+| Common cases        |              93% |       97% |
+| Long documents      |              90% |       93% |
+| Scanned documents   |              89% |       90% |
+| High-risk documents |              96% |       79% |
+
+The candidate may have better overall performance. But whether it is releasable is now a product/risk question rather than a simple leaderboard question. This is why release evaluation should specify constraints before examining the candidate.
+
+Conceptually:
+
+$$
+\text{release if}
+\begin{cases}
+\text{overall quality}\ge T_0\\
+\text{segment A quality}\ge T_A\\
+\text{segment B quality}\ge T_B\\
+\text{critical failure rate}\le T_C
+\end{cases}
+$$
+
+Without predefined requirements, teams are tempted to rationalize regressions after seeing the results. Suppose a candidate performs excellently except on image inputs. The choices aren't necessarily binary. The release architecture might allow:
+
+| Evidence                                | Possible decision                             |
+| --------------------------------------- | --------------------------------------------- |
+| Requirements met across intended domain | Approve                                       |
+| Weak only on identifiable input class   | Release while routing that class to old model |
+| Uncertain because sample is too small   | Gather more evidence / constrain exposure     |
+| High-severity requirement violated      | Reject candidate                              |
+| Strong only in one workflow             | Deploy only to that workflow                  |
+
+This leads to an important engineering principle:
+
+**Segmentation can become deployment policy.**
+
+If you know where a model works, routing can enforce that boundary. The production system becomes:
+
+$$
+x
+\xrightarrow{\text{router}}
+\begin{cases}
+\text{new model}\\
+\text{old model}\\
+\text{specialized model}\\
+\text{human review}\\
+\text{abstain}
+\end{cases}
+$$
+
+Model evaluation and system design are therefore closely connected.
+
+## How Do You Define and Maintain Reproducible Segment and Edge-Case Sets?
+<!-- section-summary: Definitions, source fields, versions, and curated edge-case examples must remain reproducible and avoid leaking model outputs into the segment itself. -->
+
+Those decisions remain defensible only when segment definitions and edge-case datasets can be regenerated and reviewed over time.
+
+Suppose an analyst says:
+
+“I looked at difficult prompts.”
+
+That's not a reliable segment. What exactly counts as difficult? Instead, imagine:
+
+`input_tokens > 16,000`
+
+or:
+
+`language == "es"`
+
+or:
+
+`document_source == "camera_scan"`
+
+Now somebody else can reproduce the analysis. A modern evaluation system therefore generally works at the **example level**. Each example contains something conceptually like:
+
+```text
+example_id
+input
+expected_output
+model_output
+score
+language
+country
+input_length
+document_type
+source
+risk_level
+timestamp
+model_version
+dataset_version
 ```
 
-The distinctions affect the kind of claim a team can make.
-A slice metric estimates performance for rows matching a rule.
-A cohort analysis studies behaviour after a shared event.
-An edge-case test verifies a particular expected outcome.
-Passing ten curated examples verifies those ten cases without estimating performance for the whole segment.
-A segment average estimates group behaviour without proving that every known boundary case works.
+A segment is essentially a predicate over those rows.
 
-Consider a document classifier:
+For example:
 
-- “Invoices from small suppliers” is a segment with product meaning.
-- `supplier_size = small AND document_type = invoice` is its slice definition.
-- “Suppliers onboarded through the new portal” is a cohort whose behaviour may change over time.
-- “A scanned invoice rotated by 90 degrees” is an edge case that can be kept as a regression fixture.
-
-A good review therefore needs meaningful groups, executable definitions, time-aware cohorts where relevant, and a small set of concrete failure conditions.
-
-## Define Which Cases The Model Is Allowed To Handle
-<!-- section-summary: The release population defines which cases the model is expected to serve, so every segment result has a clear denominator and scope. -->
-
-Before choosing segments, define the **release population**.
-This is the complete set of cases the proposed model is allowed to handle.
-
-For an online risk model, the release population might include active accounts in two countries that are scored through the real-time API.
-The definition could also require complete identity features and a decision horizon of thirty days.
-For a forecasting model, it might include stocked products in established stores with at least twelve weeks of history.
-For an image model, it might include specific device families and acquisition protocols approved for production use.
-
-This definition sets the denominator for the overall result.
-It also prevents a subtle form of overclaiming.
-A model tested only on English text and modern mobile clients supplies evidence for those conditions.
-Other languages and older clients remain outside the measured scope, even if they can reach the endpoint.
-
-The release population should state:
-
-- which entities or requests are eligible;
-- which product routes and channels are included;
-- which regions, languages, devices, or data sources are covered;
-- which time window and label-maturity rule produced the outcomes;
-- which exclusions are intentional;
-- which serving policy turns the model output into an action.
-
-The exclusions matter because the deployment must enforce them.
-If low-resolution scans were excluded from evaluation, the production router needs a rule that sends those scans to a supported fallback.
-An exclusion written only in a report leaves production traffic unchanged.
-
-```mermaid
-flowchart TD
-    A["All possible product traffic"] --> B{"Eligible for this release?"}
-    B -->|"Yes"| C["Release population"]
-    B -->|"No"| D["Existing model, fallback,<br/>or human workflow"]
-    C --> E["Overall evaluation"]
-    C --> F["Segment evaluation"]
-    C --> G["Edge-case and robustness checks"]
-    E --> H["Evidence-backed release scope"]
-    F --> H
-    G --> H
-    H --> I["Production router enforces<br/>the same scope"]
-
-    class A,B traffic
-    class C scope
-    class E,F,G evidence
-    class D,H,I action
+```text
+language == "Spanish"
+AND source == "scan"
+AND input_length > 10_000
 ```
 
-Release scope is a contract between evaluation and deployment.
-The evaluation says where the evidence applies.
-The router, policy engine, or batch selection query keeps production traffic inside that boundary.
+The evaluation system filters matching rows and computes the relevant metrics. The idea is simple:
 
-Store the population definition with an identifier and version.
-The identifier lets the candidate report, approval record, deployment configuration, and monitoring jobs refer to the same meaning.
-If the business expands the population later, the team evaluates that added scope as a new question.
-The older metric keeps its original meaning.
+$$
+\text{Segment result}
+=
+\text{metric}(\{x_i:x_i\text{ satisfies segment rule}\})
+$$
 
-## Choose Groups From Real Product, Data, Policy, And System Boundaries
-<!-- section-summary: A segment taxonomy organizes the product, data, policy, and system boundaries that can change model behaviour or user consequences. -->
+A report saying:
 
-After defining the release population, choose the groups that deserve separate evidence.
-The strongest choices come from how the product works, how the data is produced, how decisions are made, and how the system serves predictions.
+Long-document accuracy = 87%
 
-This organized set of segment dimensions is a **segment taxonomy**.
-You can think of it as a map of the meaningful ways the release population can differ.
-The taxonomy keeps teams from selecting whichever columns look interesting after seeing the results.
+isn't enough. You also need to know what “long document” meant. Was it:
 
-Four perspectives uncover most useful segments.
+$$
+10\text{ pages}
+$$
 
-### Group Cases By Different Product Uses And Consequences
+or
 
-Product segments include use case, customer journey, account stage, item category, language, geography, and new-versus-returning behaviour.
+$$
+50\text{ pages}
+$$
 
-For a search model, navigational queries and research queries may need different measures.
-For a demand forecast, newly launched products have less history than established products.
-For a triage model, a missed urgent case may carry a different consequence from a missed routine case.
+or
 
-The question is straightforward: **could this group experience a different benefit, harm, or workflow?**
-If the answer is yes, the group may deserve separate evaluation.
+$$
+32,000\text{ tokens}
+$$
 
-### Group Cases By How The Evidence Was Produced
+If definitions silently change between model releases, historical comparisons become meaningless. Segment results therefore need lineage:
 
-Data segments include source system, missingness pattern, input length, image resolution, label source, feature age, unseen-category status, and confidence in an upstream detector.
+| Property           | Example               |
+| ------------------ | --------------------- |
+| Segment name       | long_document         |
+| Segment definition | input_tokens ≥ 16,000 |
+| Dataset version    | eval-v17              |
+| Model version      | candidate-2026-08     |
+| Scorer version     | factuality-v4         |
+| Number of examples | 1,284                 |
+| Metric             | 91.3%                 |
+| Uncertainty        | confidence interval   |
+| Evaluation date    | recorded timestamp    |
 
-Suppose a speech model receives both studio recordings and telephone audio.
-The same words appear in both groups, while the signal quality differs sharply.
-An audio-source slice can reveal that the model succeeds on studio data and fails on telephone calls.
+This is part of making evaluation an engineering system rather than a collection of notebook experiments. You can search thousands of possible segments and inevitably find something that looks terrible by chance. For example, imagine examining:
 
-Feature availability also deserves attention.
-A fraud model may behave well with complete account history and rely heavily on a fallback score for newly created accounts.
-Separating complete, partially missing, and fallback-feature cases reveals that dependency.
+$$
+10,000
+$$
 
-### Group Cases By How Scores Become Actions
+different subgroups. Even if all groups actually have identical performance, random sampling noise means some will appear unusually good or bad. This is a version of the **multiple comparisons problem**. So when an automated slicing tool says:
 
-Policy segments include threshold bands, eligibility rules, manual-review routes, automatic-action routes, fallback paths, and different capacity constraints.
+“We discovered a segment where accuracy drops 23%!”
 
-Imagine a risk score with three actions:
-low scores pass automatically, middle scores receive human review, and high scores are blocked.
-Errors near the two thresholds deserve explicit analysis because a small score change can alter the action.
+the next question should be:
 
-This perspective connects model behaviour to the actual decision.
-Two cases with similar prediction errors can have very different consequences if one crosses a policy boundary.
+Is this a real repeatable phenomenon or sampling noise
 
-### Group Cases By Their Production Route
+Useful confirmation methods include evaluating the segment on fresh data, checking whether the mechanism makes sense, and seeing whether the difference persists across model versions or time periods. Exploratory discovery should generate hypotheses. It should not automatically create release policy. This is another subtle trap. Suppose you create:
 
-System segments include model route, client version, serving region, feature-source route, hardware type, and fallback status.
+“cases where the model was uncertain.”
 
-A candidate may appear healthy overall while one region repeatedly uses stale features.
-A new mobile client may serialize an optional field differently.
-A GPU route and CPU fallback may return slightly different outputs after preprocessing.
+Then compare two models using that group. Whose uncertainty defines membership If model A determines the slice, model B may be evaluated on a population selected specifically around A's weaknesses. Sometimes that's useful diagnostically. But it is not the same as an independent product segment. Stable release segments are usually best defined from properties available independently of the candidate model:
 
-These groups often explain failures that look like model quality problems.
-They also make the later production investigation much faster.
+$$
+S(x,\text{metadata})
+$$
 
-```mermaid
-flowchart TD
-    A["Release population"] --> B["Product boundaries<br/>Uses and consequences"]
-    A --> C["Data boundaries<br/>Sources and input conditions"]
-    A --> D["Policy boundaries<br/>Thresholds and actions"]
-    A --> E["System boundaries<br/>Routes and dependencies"]
-    B --> F["Reviewed segment taxonomy"]
-    C --> F
-    D --> F
-    E --> F
-    F --> G["Executable slice definitions"]
-    G --> H["Metrics, evidence limits,<br/>and release consequences"]
+rather than:
 
-    class A root
-    class B,C,D,E boundary
-    class F,G,H result
-```
+$$
+S(x,f(x))
+$$
 
-Each taxonomy entry needs an owner and an executable rule.
-“New user” is too vague until the team decides whether it means fewer than 7, 30, or 90 days since registration.
-“Long document” needs a unit and a boundary.
-“Fallback route” needs a field recorded consistently in offline data and production telemetry.
+unless output-dependent segmentation is explicitly what you intend to study. You can manufacture difficult examples.
 
-Stable definitions make comparisons possible.
-They also expose important unknown groups.
-If 4 percent of requests have `language = unknown`, dropping those rows would hide a real production condition.
-Treat unknown and missing values as visible categories until the team understands them.
+For example:
 
-## Check Important Group Combinations Without Flooding The Dashboard
-<!-- section-summary: Intersections reveal failures caused by interacting conditions, while deliberate limits keep the review understandable and statistically credible. -->
+“Generate 1,000 bizarre invoices.”
 
-A model can pass every one-dimensional segment and still fail on a meaningful combination.
-This is why segment reviews sometimes need **intersections**, also called crossed slices.
+That may be useful. But synthetic edge cases can easily become unrealistic. The strongest evidence often combines several sources:
 
-Suppose an intent classifier performs well for Spanish queries overall and for voice queries overall.
-The model may still struggle with short Spanish voice queries because speech recognition, limited context, and language coverage combine.
-The intersection describes a mechanism that neither single dimension captures.
+| Evidence source                   | What it gives you                 |
+| --------------------------------- | --------------------------------- |
+| Representative production samples | Real-world prevalence             |
+| Historical failures               | Known weaknesses                  |
+| Targeted sampling                 | Enough examples from rare groups  |
+| Human-designed challenge cases    | Deliberately difficult situations |
+| Synthetic generation              | Breadth and cheap coverage        |
+| Adversarial/red-team testing      | Failure-seeking examples          |
+| Production replay                 | Realistic system interactions     |
 
-The useful rule is to cross dimensions for a reason.
-Start with one-dimensional slices.
-Then add a small set of two-dimensional intersections suggested by product risk, data generation, previous incidents, or a plausible failure mechanism.
+No single source tells you everything. For example, adversarial testing is excellent for answering:
 
-Good examples include:
+“Can we make this fail?”
 
-- locale × input-length band for a text model;
-- device family × image-resolution band for a vision model;
-- new-versus-returning user × missing-history status for a recommender;
-- serving region × feature-source route for a real-time model;
-- product category × forecast horizon for a demand model.
+It is usually poor evidence for:
 
-Crossing every available dimension creates a different problem.
-Ten dimensions with several values each can produce thousands of cells.
-Most will contain little evidence, some extreme results will appear by chance, and reviewers will struggle to find the few combinations that matter.
+“How often will ordinary users encounter this failure?”
 
-```mermaid
-flowchart TD
-    A["Start with one-dimensional slices"] --> B{"Is there a product reason,<br/>incident, or plausible mechanism?"}
-    B -->|"Yes"| C["Add a named two-way intersection"]
-    B -->|"No"| D["Keep dimensions separate"]
-    C --> E{"Enough examples and outcomes?"}
-    E -->|"Yes"| F["Use as reviewed segment evidence"]
-    E -->|"No"| G["Mark as limited evidence<br/>and collect more data"]
-    F --> H["Consider a release gate"]
-    G --> I["Use review, pilot, or fallback"]
-    D --> J["Avoid unnecessary combinations"]
+Again, conditional vulnerability and real-world frequency are different questions. Suppose a harmless style preference is wrong 2% of the time. You might tolerate uncertainty around that number. Suppose a financial transaction model makes an irreversible harmful mistake. Now uncertainty itself becomes dangerous. The required amount of evidence should therefore depend not only on frequency but on consequence.
 
-    class A start
-    class B,E question
-    class C,D,F,G,J evidence
-    class H,I action
-```
+Conceptually:
 
-Exploratory tools can still search more broadly for unexpected weak slices.
-Those results begin as hypotheses.
-A later section explains how to confirm them on fresh evidence before turning them into permanent gates.
+$$
+\text{required evidence}
+=
+f(\text{severity},\text{frequency},\text{reversibility},\text{detectability})
+$$
 
-Keep the reviewed intersection set small enough that a release reviewer can understand why each one exists.
-A practical taxonomy usually carries many single dimensions and a focused group of justified intersections.
-The exact number depends on the product and evidence volume.
-Every retained intersection should have a traceable purpose.
+A failure that is:
+
+rare, catastrophic, irreversible, and difficult to detect deserves much stronger evaluation than a visible, easily corrected formatting error.
 
 ![Spanish and voice segments can each look acceptable while their short-query intersection needs separate evidence](/content-assets/articles/article-mlops-model-evaluation-segment-evaluation-edge-cases/justified-segment-intersection.png)
 
 *A named intersection earns a release consequence only when a real mechanism justifies it and counts, coverage, pairing, and uncertainty support the claim.*
 
-## Interpret Every Segment Metric With Counts And Uncertainty
-<!-- section-summary: A segment score needs counts, coverage, uncertainty, and a comparison point before it can support a release decision. -->
+## How Do the Same Segments Support Production Monitoring and Drift Analysis?
+<!-- section-summary: Production uses the same definitions to separate changes in traffic composition from changes in conditional model behaviour. -->
 
-A segment metric can look precise even though it rests on very little evidence.
-The score should therefore travel with the information needed to interpret it.
+Stable definitions also allow evaluation to continue after deployment and separate population drift from performance drift.
 
-Suppose two slices both report recall of 0.84.
-The first contains 1,200 positive outcomes and misses 192 of them.
-The second contains 19 positive outcomes and misses 3.
-The displayed recall is similar, yet the confidence in future behaviour is very different.
+Offline evaluation asks:
 
-For each segment, preserve:
+How did the model behave on our test data
 
-- the total number of eligible examples;
-- the number of positive outcomes or other task-relevant events;
-- the count behind the metric, such as true positives and false negatives;
-- prediction coverage, including cases that produced no usable prediction;
-- label coverage and prediction-to-outcome join coverage;
-- the estimate and its uncertainty interval;
-- the production or baseline result calculated on the same examples;
-- the segment-definition version and evaluation-population identifier.
+Production monitoring asks:
 
-These fields form an **evidence bundle**.
-The metric says what happened in the sample, while the surrounding evidence says how much trust that result deserves.
+Is it still behaving that way in the real world
 
-```mermaid
-flowchart TD
-    A["Segment result"] --> B["Metric estimate<br/>Recall, MAE, NDCG, or another measure"]
-    A --> C["Evidence volume<br/>Rows, outcomes, and error counts"]
-    A --> D["Coverage<br/>Predictions, labels, and joins"]
-    A --> E["Uncertainty<br/>Interval or resampling distribution"]
-    A --> F["Comparison<br/>Production model on the same rows"]
-    A --> G["Identity<br/>Population and taxonomy versions"]
-    B --> H["Interpretable release evidence"]
-    C --> H
-    D --> H
-    E --> H
-    F --> H
-    G --> H
+If your offline evaluation has:
 
-    class A result
-    class B,C,D,E,F,G context
-    class H decision
+English
+Spanish
+long-context
+scanned-document
+high-risk transaction
+
+but your production monitoring tracks only:
+
+overall success rate
+
+you have lost much of what you learned. Whenever feasible, carry important segment definitions into production monitoring. Then you can see something like:
+
+| Segment      | Offline | Production | Traffic share |
+| ------------ | ------: | ---------: | ------------: |
+| Standard     |     97% |        96% |           71% |
+| Long context |     92% |        90% |           15% |
+| Scan         |     91% |        84% |            9% |
+| High-risk    |     98% |        97% |            5% |
+
+Now an overall production drop can be diagnosed. Perhaps the model didn't change at all.
+
+Instead:
+
+$$
+P(\text{scan})
+$$
+
+increased dramatically because a mobile feature launched. That is **composition drift**. This is an important statistical insight. Suppose:
+
+| Segment | Accuracy | Old traffic | New traffic |
+| ------- | -------: | ----------: | ----------: |
+| Easy    |      99% |         90% |         50% |
+| Hard    |      80% |         10% |         50% |
+
+The model hasn't changed. Segment accuracies haven't changed. But overall accuracy changes from:
+
+$$
+0.9(0.99)+0.1(0.80)=97.1\%
+$$
+
+to:
+
+$$
+0.5(0.99)+0.5(0.80)=89.5\%
+$$
+
+Nothing happened to the model. The **population changed**. Segment monitoring lets you distinguish:
+
+$$
+\text{model degradation}
+$$
+
+from
+
+$$
+\text{traffic composition change}
+$$
+
+which can look identical in an aggregate metric. Imagine production performance falls. It could be because:
+
+### Composition changed
+
+More users now belong to a difficult segment:
+
+$$
+P(S)\uparrow
+$$
+
+while:
+
+$$
+P(\text{failure}\mid S)
+$$
+
+stays constant. Or:
+
+### Conditional performance changed
+
+The same segment now performs worse:
+
+$$
+P(\text{failure}\mid S)\uparrow
+$$
+
+perhaps because upstream data changed. Separating these explanations is one of the biggest operational benefits of segmentation. You can think of a mature model evaluation system as five layers:
+
+```text
+                GLOBAL METRICS
+                     │
+                     ▼
+             IMPORTANT SEGMENTS
+                     │
+                     ▼
+           RISKY INTERSECTIONS
+                     │
+                     ▼
+              ERROR CLUSTERS
+                     │
+                     ▼
+            INDIVIDUAL EXAMPLES
 ```
 
-Coverage is easy to overlook.
-Imagine 10,000 eligible documents, 9,700 successful predictions, and 8,100 mature labels.
-If the quality report uses only the 8,000 rows that have both values, its result applies to that joined subset.
-It leaves the other eligible traffic unmeasured.
-The missing 2,000 rows may concentrate in one source system or document type.
-
-Report the flow explicitly:
-
-`eligible rows → successful predictions → mature outcomes → joined evaluation rows`
-
-A quality metric calculated after silent row loss can look better than the service users experienced.
-Failed predictions, abstentions, and unmatched outcomes need visible counts and a defined treatment.
-
-Uncertainty also matters beyond a minimum-row rule.
-The number of positive outcomes can be much smaller than the total sample.
-A fraud slice with 20,000 transactions and only 12 confirmed fraud cases still provides weak evidence about recall.
-For common classification rates, confidence intervals or bootstrap intervals communicate that limitation.
-For ranking, regression, and repeated entities, the resampling unit should respect the data structure, such as query, user, store, or patient.
-
-A release gate should react to uncertainty deliberately.
-One policy might require the lower confidence bound to exceed a minimum.
-Another may classify a small high-harm slice as `needs_more_evidence` and keep it on the existing model.
-The important point is that a sparse estimate should not receive false certainty simply because a pipeline can calculate it.
-
-## Collect Better Evidence for Rare and High-Harm Segments
-<!-- section-summary: Rare and high-harm segments need targeted evidence collection, careful estimation, and safer release routes because a tiny sample cannot support a confident quality claim. -->
-
-Some important groups will always be small in ordinary traffic.
-A severe adverse event or a rare fraud pattern may appear too infrequently for a stable metric in the general holdout.
-The same problem affects an unusual equipment type or a newly launched market.
-
-The solution is to improve the evidence collection strategy.
-Several methods can work together.
-
-**Targeted sampling** deliberately collects more cases from the underrepresented group.
-A document team might sample extra handwritten forms.
-A vision team might collect more images from the device model associated with poor contrast.
-A forecasting team might preserve more promotion weeks because ordinary weeks dominate the calendar.
-
-**Stratified evaluation** ensures that every important segment appears in the review set.
-If the sampling rate differs from production, calculate each segment metric directly.
-Use sampling weights for an estimate intended to represent the full production mix.
-An oversampled holdout can measure a rare segment well, while an unweighted overall average from that holdout would misrepresent normal traffic.
-
-**Outcome maturation** waits until the truth is observable.
-A credit outcome, customer renewal, or equipment failure may take weeks or months to arrive.
-Declaring the small amount of early labelled data representative can create a misleading pass.
-
-**Controlled pilots** send a bounded amount of traffic to the candidate and preserve a safe fallback.
-This provides fresh evidence from the real serving path while limiting exposure.
-The pilot needs monitoring, an owner, a stop condition, and a clear route back to the existing system.
-
-**Expert review and scenario testing** help with high-harm cases that remain too rare for conventional estimates.
-They can verify expected behaviour on known conditions and inspect plausible failure modes.
-They do not turn a handful of examples into a population-level performance estimate.
-
-```mermaid
-flowchart TD
-    A["Important segment has little evidence"] --> B["Targeted and stratified sampling"]
-    A --> C["Wait for mature outcomes"]
-    A --> D["Expert-reviewed scenarios"]
-    A --> E["Bounded production pilot"]
-    B --> F["More representative labelled cases"]
-    C --> F
-    D --> G["Known obligations and failure modes"]
-    E --> H["Fresh traffic evidence"]
-    F --> I{"Evidence supports the intended scope?"}
-    G --> I
-    H --> I
-    I -->|"Yes"| J["Release within the supported scope"]
-    I -->|"Still uncertain"| K["Fallback, human review,<br/>or narrower release"]
-
-    class A risk
-    class B,C,D,E method
-    class F,G,H,I evidence
-    class J,K action
-```
-
-Consider a model that detects a rare manufacturing defect.
-The general holdout contains only nine defective items from one production line.
-The team can collect historical defect images across several lines and ask specialists to review the labels.
-A shadow pilot can then compare model alerts with the current inspection process.
-Until that evidence is strong enough, the model can assist inspectors while a person retains the final acceptance decision.
-
-The release action follows both consequence and evidence strength.
-A small low-consequence segment may justify a monitored pilot.
-A small high-consequence segment may require the existing workflow, an abstention, or human review.
-The same numerical uncertainty leads to different operational choices because the cost of a wrong decision differs.
-
-## Treat Edge Cases as Boundary Conditions and Failure Modes
-<!-- section-summary: Edge cases represent specific boundaries and failure modes that deserve an explicit expected behaviour in every candidate review. -->
-
-An edge case is broader than an unusual demographic group.
-It is any condition near the boundary of what the product, data pipeline, model, or serving system must handle correctly.
-
-Common families include:
-
-- empty, missing, duplicated, or out-of-order inputs;
-- maximum-length text and extremely large or small numeric values;
-- Unicode, mixed-language text, unusual punctuation, and right-to-left scripts;
-- unseen categories and values outside the training range;
-- exact ties or scores immediately around a policy threshold;
-- stale features, missing feature lookups, and dependency timeouts;
-- daylight-saving changes, leap days, and time-zone boundaries;
-- corrupted images, unusual aspect ratios, and unsupported file metadata;
-- fallback-model activation and partial batch retries.
-
-The goal is to preserve an expected **invariant**.
-An invariant is a behaviour that should remain true across model versions.
-For example, a missing optional feature should trigger the reviewed fallback and keep the endpoint available.
-A payment risk score at an approval boundary should follow the current policy version.
-A duplicated batch record should not produce two downstream actions.
-
-Each edge-case fixture should record the smallest amount of context needed to keep that expectation meaningful:
-
-```yaml
-case_id: missing-realtime-balance
-condition:
-  feature_status: unavailable
-  request_shape: valid
-expected:
-  route: reviewed_fallback_model
-  action: manual_review
-  response_schema: valid
-owner: risk-platform
-policy_version: decision-policy-v6
-failure_action: block_automatic_release
-```
-
-This fixture avoids coupling the test to one exact prediction score.
-It verifies the business and system behaviour that matters: the request stays valid, follows the approved fallback, and receives human review.
-
-Another fixture can preserve a model-specific regression.
-Suppose a text classifier once treated the phrase “production is unaffected” as a severe incident.
-The model had focused on the word “production.”
-The reviewed fixture can require a non-urgent result and preserve the original text, expected class, incident reference, and explanation.
-
-Edge cases come from several places:
-
-- incidents and customer escalations;
-- policy and safety reviews;
-- data-schema boundaries;
-- robustness tests;
-- failed examples discovered during segment analysis;
-- known serving and dependency failure modes.
-
-Keep the suite readable.
-Hundreds of near-duplicate cases make ownership and interpretation difficult.
-Group fixtures by failure mode, preserve why each case exists, and review expectations after product policy changes.
-
-An edge-case suite complements representative evaluation.
-Passing a curated case proves that the candidate handled that case under the tested conditions.
-The wider population still needs representative data before the team can estimate its error rate.
-
-## Group Similar Errors To Find Which Layer Is Failing
-<!-- section-summary: An error taxonomy turns weak segment metrics into concrete investigations across labels, data, models, policies, and serving paths. -->
-
-A weak segment score tells the team where to look.
-The cause remains unknown until the team follows the affected examples through their data and decision paths.
-
-The next step is **example review**: inspect representative errors, correct predictions, and cases near important decision boundaries.
-The review uses an error taxonomy to group observations into recurring failure patterns.
-
-A practical taxonomy follows the prediction path:
-
-1. **Outcome or label problem:** the recorded truth is missing, delayed, ambiguous, or based on inconsistent reviewer policy.
-2. **Data capture problem:** the source omitted, truncated, corrupted, or encoded the input incorrectly.
-3. **Feature or preprocessing problem:** a transformation, lookup, imputation, or category mapping changed the information.
-4. **Model problem:** the model lacks coverage, relies on a shortcut, or produces poorly ranked or calibrated scores.
-5. **Threshold or policy problem:** the score is reasonable, while the action boundary creates an unacceptable trade-off.
-6. **Serving or fallback problem:** production uses the wrong artifact, stale features, a different preprocessing path, or an unreviewed fallback.
-7. **Evaluation-join problem:** predictions and outcomes were matched incorrectly or sampled under different rules.
-
-```mermaid
-flowchart TD
-    A["Weak segment result"] --> B["Inspect examples and lineage"]
-    B --> C{"Where does the first<br/>incorrect assumption appear?"}
-    C --> D["Outcome or label"]
-    C --> E["Capture, feature,<br/>or preprocessing"]
-    C --> F["Model score or ranking"]
-    C --> G["Threshold or policy"]
-    C --> H["Serving or fallback"]
-    C --> I["Evaluation join"]
-    D --> J["Repair the responsible layer"]
-    E --> J
-    F --> J
-    G --> J
-    H --> J
-    I --> J
-    J --> K["Re-evaluate every affected segment"]
-
-    class A result
-    class B,C inspect
-    class D,E,F,G,H,I layer
-    class J,K action
-```
-
-Suppose a recommendation model has poor click-through prediction for new users.
-Reviewing only the largest errors may suggest that the model needs more capacity.
-A broader sample reveals that many new-user rows have an empty interest history, and the serving system replaces that history with a popular-items fallback.
-The investigation may point to the cold-start route as the responsible layer.
-
-Now consider a loan-risk segment with unusually high false negatives.
-Reviewers find that outcome labels arrive later for this segment, so many recent defaults still appear as non-defaults.
-Retraining on those labels would strengthen the measurement error.
-The repair belongs in outcome maturation and evaluation data, followed by a fresh model comparison.
-
-Sample deliberately during review.
-Include false positives, false negatives, correct cases, missing predictions, and scores just above and below important thresholds.
-Compare several cases from the weak segment with similar cases from a strong segment.
-This helps reviewers find differences in data and decision paths instead of explaining only the most dramatic failures.
-
-Record the assigned error category, relevant feature or lineage evidence, reviewer confidence, and proposed owner.
-The summary can then show that most errors come from one preprocessing rule or that several independent mechanisms are mixed inside the same segment.
-
-## Separate Planned Release Checks From Newly Discovered Groups
-<!-- section-summary: Predeclared slices can support release gates, while newly discovered slices need confirmation on fresh evidence before they become permanent rules. -->
-
-Suppose a release report searches hundreds of possible slices after the candidate has been scored.
-One small group will often appear unusually weak simply because the search created many chances to find an extreme result.
-The team still wants to discover unexpected failures, yet a release gate needs stronger evidence than one surprising search result.
-
-Segment analysis therefore has two useful modes.
-
-**Predeclared analysis** defines the segment, metric, minimum evidence, and release consequence before the final result is reviewed.
-These slices come from known product risks, policy boundaries, operating routes, and previous incidents.
-They can support release gates because the decision rule was not chosen to fit the candidate’s results.
-
-**Exploratory analysis** searches for unexpected patterns.
-It may inspect more features, thresholds, and intersections than the reviewed taxonomy.
-This is valuable for discovery, yet broad searches naturally produce some unusually good or bad results through chance.
-
-Imagine scanning 500 possible slices.
-One small slice shows a 15-point recall drop.
-That is a useful clue.
-The evidence grows stronger if the same pattern appears in a later time window, a newly labelled sample, or an untouched holdout.
-
-```mermaid
-flowchart TD
-    A["Before final evaluation"] --> B["Predeclare important slices,<br/>metrics, and consequences"]
-    B --> C["Run confirmatory evaluation"]
-    C --> D["Reviewed release evidence"]
-    C --> E["Explore for unexpected patterns"]
-    E --> F["New weak slice discovered"]
-    F --> G["Form a failure hypothesis"]
-    G --> H["Confirm on fresh labels,<br/>a later time window, or untouched data"]
-    H --> I{"Pattern repeats?"}
-    I -->|"Yes"| J["Add to taxonomy and future gates"]
-    I -->|"No"| K["Keep the finding as limited evidence"]
-
-    class A before
-    class B,C,D confirm
-    class E,F,G,H discover
-    class I,J,K decision
-```
-
-High-consequence discoveries still deserve immediate care.
-If reviewers find a plausible severe failure, the team can restrict the release or add human review.
-The existing model can continue serving that route while the team gathers evidence.
-The report should describe the finding honestly: a serious observed failure with uncertain population frequency.
-
-After confirmation, promote the slice into the governed taxonomy.
-Give it an owner, a stable definition, an evidence requirement, and a release consequence.
-This turns one discovery into a repeatable protection for future candidates.
-
-## Compare Candidate and Production Models on Identical Slices
-<!-- section-summary: A fair segment comparison scores the candidate and production model on the same examples, definitions, labels, and operating policy. -->
-
-A candidate-versus-production comparison should change one main object: the model or reviewed decision policy under consideration.
-The surrounding evaluation rules stay aligned.
-
-For every segment, use the same:
-
-- eligible examples and outcome definitions;
-- segment-membership function and taxonomy version;
-- label-maturity and join rules;
-- weighting and missing-value treatment;
-- threshold or top-k policy being compared;
-- metric implementation and uncertainty method.
-
-This creates a **paired comparison**.
-Each example receives a production prediction and a candidate prediction.
-The segment delta comes from the same rows, so traffic mix and sample difficulty do not create the apparent difference.
-
-```mermaid
-flowchart TD
-    A["One frozen evaluation population"] --> B["Apply one taxonomy version"]
-    B --> C["Segment A"]
-    B --> D["Segment B"]
-    B --> E["Segment C"]
-    C --> F["Production prediction<br/>Candidate prediction"]
-    D --> G["Production prediction<br/>Candidate prediction"]
-    E --> H["Production prediction<br/>Candidate prediction"]
-    F --> I["Paired metric delta<br/>with uncertainty"]
-    G --> I
-    H --> I
-    I --> J["Overall and segment release evidence"]
-
-    class A,B population
-    class C,D,E slice
-    class F,G,H,I compare
-    class J result
-```
-
-Suppose the candidate’s overall recall improves by two points.
-On long documents, it improves by six points.
-On scanned documents, it falls by eight points.
-Both models used the same document rows and slice rules.
-The scanned-document regression therefore reflects changed model behaviour instead of a different sample.
-
-Coverage changes need explicit handling.
-Suppose the production model covers 99.8 percent of a segment and the candidate covers 94 percent.
-Calculating quality only on successful candidate predictions hides the failed 6 percent.
-Report prediction coverage beside the metric and define how abstentions or failures enter the release rule.
-
-The candidate may intentionally change the operating point.
-For example, a new threshold can increase recall and review volume together.
-Evaluate the complete candidate policy and keep the old policy result visible.
-Reviewers can then separate a model change from a threshold change.
-
-## How Current Tools Calculate And Record Segment Results
-<!-- section-summary: TFMA, MLflow, Evidently, and managed evaluation services can automate slice calculations after the population and taxonomy are defined. -->
-
-The release population, group definitions, evidence fields, and decision rules form a repeatable evaluation design.
-Current tools can run that design across a large dataset and keep the result with the candidate model.
-
-Evaluation tools automate those responsibilities.
-They apply declared slice rules, calculate metrics, retain per-example evidence, and publish artifacts for a release workflow.
-The tool receives definitions that the team has already justified; it cannot discover the product meaning on the team's behalf.
-
-### TensorFlow Model Analysis for declared slices and model validation
-
-TensorFlow Model Analysis, usually shortened to **TFMA**, evaluates TensorFlow models over large datasets and can calculate metrics for declared slices.
-Its `EvalConfig` records the label, metrics, models, and slicing rules used by the evaluation.
-
-The following focused example asks for the overall result and two single dimensions: locale and input-length band.
-It also asks for one deliberate intersection between locale and length:
-
-```python
-from google.protobuf import text_format
-import tensorflow_model_analysis as tfma
-
-eval_config = text_format.Parse(
-    """
-    model_specs { label_key: "label" }
-    metrics_specs {
-      metrics { class_name: "ExampleCount" }
-      metrics { class_name: "Recall" }
-    }
-    slicing_specs {}
-    slicing_specs { feature_keys: ["locale"] }
-    slicing_specs { feature_keys: ["input_length_band"] }
-    slicing_specs {
-      feature_keys: ["locale", "input_length_band"]
-    }
-    """,
-    tfma.EvalConfig(),
-)
-```
-
-The empty slicing specification represents the overall population.
-The single-feature specifications calculate every observed value for the named feature.
-The final specification creates crossed slices.
-TFMA documentation warns that broad crosses can be expensive, which reinforces the earlier design rule: add intersections deliberately.
-
-TFMA can also evaluate a candidate and baseline model, apply value or change thresholds, and produce validation results.
-The threshold still needs a product justification, and sparse slices still need an explicit evidence policy.
-
-### MLflow for evaluation runs and inspectable examples
-
-MLflow can evaluate classic machine-learning models through `mlflow.models.evaluate`.
-The result exposes aggregate metrics, artifacts, and an evaluation-results table containing per-row outputs.
-
-That table gives the team the rows needed for segment work.
-The evaluation job applies governed slice definitions, calculates the report, and preserves the exact examples behind weak results.
-The report can be logged with the run alongside the dataset, model, code revision, and taxonomy version.
-
-The team still chooses the meaningful product segments.
-MLflow provides a durable place to keep the evaluation run and its artifacts.
-If the team creates custom metrics, aggregate values belong in run metrics and per-example values belong in evaluation tables or artifacts.
-
-### Evidently for grouped reports and explicit tests
-
-Evidently reports can calculate metrics over current and reference data.
-Its `GroupBy` metric can split a measure by a categorical column, which works well for bounded dimensions such as region, route, or document type.
-
-```python
-from evidently import Report
-from evidently.metrics import MaxValue
-from evidently.metrics.group_by import GroupBy
-
-report = Report([
-    GroupBy(
-        MaxValue(column="absolute_error"),
-        "forecast_horizon",
-    )
-])
-result = report.run(evaluation_data, None)
-```
-
-This example shows the largest absolute error for each forecast-horizon group.
-A real release report would usually add a central error measure, counts, coverage, and uncertainty through its surrounding evaluation pipeline.
-
-Current Evidently documentation notes that automatically generated test conditions are unavailable inside `GroupBy`.
-For release gates, define reviewed conditions explicitly in the pipeline and store the result with the report.
-
-### Managed services follow the same framework
-
-SageMaker AI, Gemini Enterprise Agent Platform (formerly Vertex AI), Azure Machine Learning, and Databricks provide managed evaluation, registry, monitoring, and workflow capabilities.
-Their APIs and integration details differ.
-The design questions remain the same:
-
-- What is the release population?
-- Which segment taxonomy is governed?
-- Which rows and outcomes support each metric?
-- How are candidate and production results paired?
-- Which release action follows a failed or uncertain segment?
-
-Choose a tool that fits the platform already responsible for models, data, and approvals.
-Avoid duplicating the same segment definitions independently across notebooks, dashboards, and deployment code.
-A shared library, versioned SQL view, or governed feature transformation can keep the membership rules consistent.
-
-## Use Segment Results To Approve, Limit, Or Reject A Release
-<!-- section-summary: Segment results become useful after they lead to an enforceable release scope, fallback, review path, or request for more evidence. -->
-
-A segment report should end with an operational decision.
-The decision combines performance, uncertainty, consequence, and the system’s ability to control traffic.
-
-Four outcomes cover many reviews:
-
-1. **Full release:** the overall population and every required segment meet the reviewed rules.
-2. **Scoped release:** the candidate passes for a defined subset, and production routing can enforce that boundary.
-3. **More evidence:** an important segment has too few mature outcomes for a reliable claim.
-4. **Block or fallback:** a required segment fails, a known high-consequence edge case breaks, or the deployment cannot enforce the proposed scope.
-
-Human review is a concrete operating route with capacity and failure behaviour.
-The release plan should name which cases enter review and what reviewers see.
-It should also protect review capacity and define the action taken after the queue reaches its limit.
-
-```mermaid
-flowchart TD
-    A["Overall and segment evidence"] --> B{"Required segments pass?"}
-    B -->|"Yes"| C{"Edge cases and coverage pass?"}
-    B -->|"No"| D{"Can traffic be safely separated?"}
-    C -->|"Yes"| E["Full release"]
-    C -->|"No"| F["Block or use reviewed fallback"]
-    D -->|"Yes"| G["Scoped release<br/>Keep failed routes on fallback"]
-    D -->|"No"| F
-    A --> H{"Evidence too sparse?"}
-    H -->|"Yes"| I["Collect more labels,<br/>pilot, or add human review"]
-    G --> J["Monitor scope and route leakage"]
-    E --> J
-    I --> J
-
-    class A evidence
-    class B,C,D,H question
-    class E,F,G,I,J action
-```
-
-Consider a vision model that passes every required segment except low-resolution images from one older device family.
-The service already records device type and can route that family to the current model.
-A scoped release is credible because the technical boundary matches the evaluation boundary.
-
-Now consider a language segment inferred by an unreliable detector after the model has already run.
-The report proposes excluding one language, yet the serving system cannot identify it reliably before routing.
-That scope is not enforceable.
-The team needs a dependable routing signal, a model repair, or a broader block.
-
-Release configuration should refer to the population and taxonomy versions used in evaluation.
-It should also define rollback or fallback behaviour.
-This closes the gap between “the report excluded those rows” and “production actually protects those users.”
-
-## Monitor The Same Segments After Release
-<!-- section-summary: Production monitoring reuses the evaluation taxonomy so teams can see traffic mix, coverage, model quality, and route changes for the same populations. -->
-
-Offline evaluation is a snapshot.
-Production traffic, data sources, policies, and model routes continue to change after release.
-The same segment definitions should therefore appear in production telemetry.
-
-At prediction time, record bounded, governed fields such as:
-
-- model and policy versions;
-- release-population identifier;
-- segment-taxonomy version;
-- product route and model route;
-- important input-condition bands;
-- fallback or abstention status;
-- a governed prediction identifier for later outcome joining.
-
-The fields support two monitoring layers.
-
-The first layer is available immediately.
-It tracks traffic volume, unknown-category rate, prediction coverage, fallback rate, and route leakage by segment.
-For example, a scoped release can alert if the excluded device family starts reaching the candidate route.
-
-The second layer arrives after outcomes mature.
-It repeats the relevant quality metrics by the same segment definitions and compares them with release evidence.
-This reveals model decay, traffic changes, and segments whose live behaviour differs from the offline sample.
-
-```mermaid
-flowchart TD
-    A["Prediction request"] --> B["Apply governed segment function"]
-    B --> C["Record population, taxonomy,<br/>model, policy, and route versions"]
-    C --> D["Immediate monitoring"]
-    C --> E["Governed outcome join"]
-    D --> F["Traffic, coverage, fallback,<br/>unknown values, route leakage"]
-    E --> G["Delayed quality by the same segments"]
-    F --> H["Compare with release expectations"]
-    G --> H
-    H --> I{"Material change or regression?"}
-    I -->|"Yes"| J["Investigate, restrict,<br/>fallback, or retrain"]
-    I -->|"No"| K["Continue monitoring"]
-
-    class A request
-    class B,C record
-    class D,E,F,G,H,I monitor
-    class J,K action
-```
-
-Keep metric dimensions bounded.
-Fields such as route, region, model version, and a small set of reviewed segment values can work as metric labels.
-Customer IDs, raw text, prediction IDs, and other high-cardinality or sensitive values belong in governed logs, traces, or decision records.
-
-Taxonomy changes need migrations.
-If “new user” changes from 30 days to 60 days, create a new version and run both definitions during an overlap period where practical.
-This prevents a definition change from looking like a sudden model improvement or regression.
-
-The production feedback loop also improves the taxonomy.
-Unknown values, growing fallback traffic, and repeated incidents can reveal a missing segment or edge case.
-The team investigates the pattern, confirms it with fresh evidence, and adds a reviewed definition for future candidates.
-
-## The Main Idea
-<!-- section-summary: Segment evaluation turns one overall score into evidence about the populations, operating conditions, and boundary cases a release must actually support. -->
-
-An overall metric answers how the model performs across the evaluation population as a whole.
-Segment evaluation asks where that result holds and where it breaks.
-Edge-case testing protects specific boundaries and known failure modes.
-
-The release population sets the first boundary for the method.
-A governed taxonomy then turns product, data, policy, and system boundaries into executable slices.
-Each segment result carries counts, coverage, uncertainty, and a paired production comparison.
-Rare and high-harm groups receive targeted evidence collection and safer operating routes.
-Example review identifies the failing layer, while edge-case fixtures preserve the expected behaviour.
-
-TFMA, MLflow, Evidently, and managed cloud platforms can automate calculations and keep artifacts.
-The product meaning, evidence policy, and release consequence still come from the team.
-
-A complete review produces more than a dashboard.
-It states where the candidate may serve, which routes need fallback or human review, and what remains uncertain.
-It also tells production monitoring which definitions to continue measuring.
+Each level answers a different question. **Global metric**
+
+Is the system broadly improving
+
+**Segment**
+
+Where does performance differ
+
+**Intersection**
+
+Under which combinations does it break
+
+**Error cluster**
+
+What kind of failure is occurring
+
+**Individual example**
+
+What exactly happened
+
+You usually move down this hierarchy during diagnosis.
+
+## What Should an Edge-Case Review and Segment Dashboard Explain?
+<!-- section-summary: A complete review shows coverage, distributions, incidents, paired deltas, uncertainty, mechanism hypotheses, and release implications for the important conditions. -->
+
+The worked example and dashboard show how to present those conditional results without burying the counts or release consequence.
+
+Imagine you've built an AI customer-support system. Overall answer-quality score:
+
+$$
+94\%
+$$
+
+Looks excellent. You break performance down by language:
+
+| Language | Quality |
+| -------- | ------: |
+| English  |     95% |
+| Spanish  |     93% |
+| French   |     94% |
+
+Still good. Then by conversation length:
+
+| Length    | Quality |
+| --------- | ------: |
+| ≤10 turns |     96% |
+| >10 turns |     89% |
+
+Interesting. Now examine intersections:
+
+| Segment        | Quality |
+| -------------- | ------: |
+| English + long |     91% |
+| French + long  |     90% |
+| Spanish + long | **68%** |
+
+Now you have a real signal. You inspect the errors. Most occur when the conversation switched between English and Spanish. You create a diagnostic slice:
+
+Spanish + long + code-switching.
+
+Accuracy:
+
+$$
+41\%
+$$
+
+Error analysis shows that an upstream conversation compressor drops earlier Spanish constraints. The root cause isn't the main LLM. It's the summarization layer. You fix the compressor. Then you add the discovered pattern to your regression suite. The next candidate produces:
+
+| Segment                      | Old | New |
+| ---------------------------- | --: | --: |
+| Overall                      | 94% | 95% |
+| Long conversations           | 89% | 94% |
+| Spanish + long               | 68% | 92% |
+| Spanish + long + code-switch | 41% | 90% |
+
+Now the evaluation suite contains knowledge that didn't exist before the incident. That is the ideal feedback loop. The purpose isn't to display hundreds of percentages. It should make five questions easy to answer:
+
+| Question                  | Evidence                         |
+| ------------------------- | -------------------------------- |
+| **Where are we failing?** | segment metric                   |
+| **How sure are we?**      | count + uncertainty              |
+| **How important is it?**  | volume + severity                |
+| **Why are we failing?**   | error clusters                   |
+| **What changed?**         | candidate/production comparisons |
+
+If your dashboard can't answer those questions, adding more slices probably won't help. Once you understand the framework, several common mistakes follow naturally. **Only reporting averages** fails because small groups disappear inside weighted averages. **Reporting percentages without counts** fails because you cannot distinguish measurement from noise. **Creating every possible intersection** fails because combinatorial explosion produces noise and unusable dashboards. **Random sampling for extremely rare risks** fails because you may collect almost no relevant examples. **Oversampling and treating it as natural prevalence** fails because targeted datasets deliberately distort the population mixture. **Calling every unusual example an edge case** fails because edge cases should correspond to meaningful assumption boundaries.
+
+**Treating every poor segment as a model problem** fails because end-to-end failures may originate in data, retrieval, policy, infrastructure, or UX. **Changing segment definitions between releases** destroys comparability. **Comparing models on different samples** mixes model differences with sample differences. **Creating slices after seeing results and treating them as proven** risks discovering statistical accidents. People often think evaluation is trying to estimate:
+
+$$
+P(\text{model is correct})
+$$
+
+But for a real system the more useful question is:
+
+$$
+P(\text{model is correct}\mid\text{conditions})
+$$
+
+For example:
+
+$$
+P(\text{correct}
+\mid
+\text{Spanish},
+\text{long conversation},
+\text{mobile},
+\text{high risk})
+$$
+
+You can't measure every possible condition. So evaluation engineering is fundamentally a problem of deciding:
+
+**Which conditions matter enough to measure separately?**
+
+Those conditions become your segments.
+
+## How Does Conditional Performance Change the Meaning of Model Quality?
+<!-- section-summary: Model quality is a function of the input condition, so release evidence should describe conditional guarantees instead of relying on one population average. -->
+
+The final mental model treats quality as conditional on the kind of case the system receives.
+
+Think of your model's operating environment as a landscape. An overall benchmark tells you something like the **average elevation** of the landscape. But products do not fail because the average elevation is wrong. They fail because there are **cliffs, holes, and dangerous regions** hidden inside it. Segments map the important regions. Intersections reveal regions hidden by one-dimensional averages. Edge cases probe the boundaries where your assumptions stop working. Counts and uncertainty tell you whether the map is based on real evidence. Error clustering tells you what created the dangerous terrain. Release gates tell you which regions must be safe before deployment. Production monitoring tells you whether either the terrain or the traffic moving across it has changed. So the fundamental goal of segmentation is not:
+
+**“Produce more metrics.”**
+
+It is:
+
+> **Understand where your model works, where it doesn't, how certain you are about that conclusion, and what the system should do about it.**
+
+That is the first-principles purpose of segments and edge cases in model evaluation.
 
 ![Segment readiness links the release population and taxonomy to comparable evidence, edge cases, an enforceable decision, and production monitoring](/content-assets/articles/article-mlops-model-evaluation-segment-evaluation-edge-cases/segment-readiness-summary.png)
 
 *The evaluation report, routing configuration, and production telemetry share the same versioned population and segment definitions.*
 
-## References
+## Check Your Answers
 
-- [TensorFlow Model Analysis: Getting started](https://www.tensorflow.org/tfx/model_analysis/get_started)
-- [TensorFlow Model Analysis: Setup and slicing](https://www.tensorflow.org/tfx/model_analysis/setup)
-- [TensorFlow Model Analysis: Model validations](https://www.tensorflow.org/tfx/model_analysis/model_validations)
-- [MLflow: Model evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
-- [MLflow: Metrics API](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.metrics.html)
-- [Evidently: Reports](https://docs.evidentlyai.com/docs/library/report)
-- [Evidently: Classification quality](https://docs.evidentlyai.com/metrics/preset_classification)
-- [Evidently: Tests](https://docs.evidentlyai.com/docs/library/tests)
-- [Google Cloud: Gemini Enterprise Agent Platform name changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
-- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Why Can a Strong Average Hide a Failed Segment or Edge Case?]{kind="recap"}
+An aggregate score is a weighted average over a particular mixture and can remain high while a rare, difficult, or consequential condition performs badly.
+:::
+
+:::expand[How Do You Choose Useful Segments Without Creating an Unmanageable Explosion?]{kind="recap"}
+Useful segments come from the operating envelope and risk hypotheses, then prioritize meaningful intersections without enumerating every possible combination.
+:::
+
+:::expand[How Do Counts, Denominators, Sampling, and Consequences Change Segment Metrics?]{kind="recap"}
+Every segment metric needs its count, correct denominator, uncertainty, prevalence, and consequence because small or targeted groups behave differently from the overall sample.
+:::
+
+:::expand[How Do Segment Failures Reveal Mechanisms and Shape Release Scope?]{kind="recap"}
+Segment evaluation should investigate causes, compare candidates on identical cases, and support block, restricted release, routing, or additional evidence rather than one global decision.
+:::
+
+:::expand[How Do You Define and Maintain Reproducible Segment and Edge-Case Sets?]{kind="recap"}
+Definitions, source fields, versions, and curated edge-case examples must remain reproducible and avoid leaking model outputs into the segment itself.
+:::
+
+:::expand[How Do the Same Segments Support Production Monitoring and Drift Analysis?]{kind="recap"}
+Production uses the same definitions to separate changes in traffic composition from changes in conditional model behaviour.
+:::
+
+:::expand[What Should an Edge-Case Review and Segment Dashboard Explain?]{kind="recap"}
+A complete review shows coverage, distributions, incidents, paired deltas, uncertainty, mechanism hypotheses, and release implications for the important conditions.
+:::
+
+:::expand[How Does Conditional Performance Change the Meaning of Model Quality?]{kind="recap"}
+Model quality is a function of the input condition, so release evidence should describe conditional guarantees instead of relying on one population average.
+:::

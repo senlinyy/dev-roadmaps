@@ -9,367 +9,1627 @@ id: "article-mlops-model-evaluation-candidate-vs-production-model"
 
 ## Table of Contents
 
-1. [Compare A New Model With The Complete System Running Today](#compare-a-new-model-with-the-complete-system-running-today)
-2. [Start With the Current System and a Release Question](#start-with-the-current-system-and-a-release-question)
-3. [Give Both Systems a Fair Comparison](#give-both-systems-a-fair-comparison)
-4. [Measure What Changes If The New Model Replaces The Current System](#measure-what-changes-if-the-new-model-replaces-the-current-system)
-5. [Find Who Benefits and Who Carries the Errors](#find-who-benefits-and-who-carries-the-errors)
-6. [Test the Complete Release Under Production Conditions](#test-the-complete-release-under-production-conditions)
-7. [Test Offline First, Then With Shadow And Limited Live Traffic](#test-offline-first-then-with-shadow-and-limited-live-traffic)
-8. [Choose The Smallest Release Scope Justified By The Results](#choose-the-smallest-release-scope-justified-by-the-results)
-9. [Verify The Release After It Starts Receiving Traffic](#verify-the-release-after-it-starts-receiving-traffic)
-10. [The Main Idea](#the-main-idea)
-11. [References](#references)
+1. [What Production System Is the Candidate Actually Trying to Replace?](#what-production-system-is-the-candidate-actually-trying-to-replace)
+2. [How Do Paired Cases and Segments Reveal Who Benefits and Who Pays?](#how-do-paired-cases-and-segments-reveal-who-benefits-and-who-pays)
+3. [What Do Offline Replay, Shadow Traffic, and Randomized Live Traffic Each Prove?](#what-do-offline-replay-shadow-traffic-and-randomized-live-traffic-each-prove)
+4. [How Do Product Outcomes, Latency, Cost, Compatibility, and Fallbacks Affect the Comparison?](#how-do-product-outcomes-latency-cost-compatibility-and-fallbacks-affect-the-comparison)
+5. [How Do Uncertainty, Release Scope, Canary Exposure, and Rollback Control Risk?](#how-do-uncertainty-release-scope-canary-exposure-and-rollback-control-risk)
+6. [How Do Versioning, Routing, Scale, and an Imperfect Production Baseline Change the Decision?](#how-do-versioning-routing-scale-and-an-imperfect-production-baseline-change-the-decision)
+7. [What Evidence Should Continue After Launch and Strengthen Future Evaluations?](#what-evidence-should-continue-after-launch-and-strengthen-future-evaluations)
+8. [How Do Deltas, Constraints, and the Release Ladder Produce a Final Decision?](#how-do-deltas-constraints-and-the-release-ladder-produce-a-final-decision)
+9. [Check Your Answers](#check-your-answers)
 
-## Compare A New Model With The Complete System Running Today
-<!-- section-summary: Candidate review asks whether replacing the current production decision path creates enough useful improvement to justify the change. -->
+A candidate model scores 94% on a benchmark while production scores 91%. The candidate is also slower, costs more per request, and fails on one high-value customer segment that production handles well. Replacing production is therefore a system decision, not a leaderboard decision.
 
-Suppose a delivery service already gives customers an estimated arrival time. The running model predicts the time, a policy clips extreme estimates, and a route-based fallback supplies an answer if live features are missing. A new model reduces average error in a notebook.
+A **candidate-versus-production comparison** measures the change users and operators would actually experience. Both systems need identical cases and definitions, followed by evidence from offline replay, shadow traffic, limited randomized exposure, and post-release monitoring. The important quantity is usually the delta, including which decisions improve and which new errors appear.
 
-That result gives the team a promising **candidate model**, which is a model proposed for release. It has not yet shown that customers would receive a better service. The current **production model** operates inside a larger path that includes feature retrieval, preprocessing, thresholds, policy rules, fallbacks, infrastructure, and human workflows. Releasing the candidate changes that whole path.
+Use these questions to follow that comparison from the real baseline to a controlled release decision:
 
-A candidate can beat the current model on one headline metric while increasing latency or harming an important segment. It may also change how many cases reach human review. **Candidate-versus-production evaluation asks what will change if the candidate replaces the decision system running today.** The team establishes a fair comparison, measures the uncertainty and uneven effects, then adds operating tests and a scoped release decision.
+1. **What Production System Is the Candidate Actually Trying to Replace?**
+2. **How Do Paired Cases and Segments Reveal Who Benefits and Who Pays?**
+3. **What Do Offline Replay, Shadow Traffic, and Randomized Live Traffic Each Prove?**
+4. **How Do Product Outcomes, Latency, Cost, Compatibility, and Fallbacks Affect the Comparison?**
+5. **How Do Uncertainty, Release Scope, Canary Exposure, and Rollback Control Risk?**
+6. **How Do Versioning, Routing, Scale, and an Imperfect Production Baseline Change the Decision?**
+7. **What Evidence Should Continue After Launch and Strengthen Future Evaluations?**
+8. **How Do Deltas, Constraints, and the Release Ladder Produce a Final Decision?**
 
-You can think of the review as five connected responsibilities:
+## What Production System Is the Candidate Actually Trying to Replace?
+<!-- section-summary: A candidate replaces the current production system, including preprocessing, policies, fallbacks, latency, and costs, so success must be defined against that real alternative. -->
 
-1. **Purpose:** define the useful improvement and the outcomes that must remain protected.
-2. **Comparability:** give the candidate and production paths the same eligible cases, labels, time boundaries, and decision policy.
-3. **Effect:** measure how much the replacement changes quality, cost, and harm, including uncertainty and important segments.
-4. **Operability:** test the exact release identity under realistic contracts, load, dependencies, monitoring, and recovery.
-5. **Authority:** choose whether the evidence supports more investigation, shadow traffic, a limited canary, a restricted population, or broad release.
+A higher standalone benchmark does not identify the system users will experience, so the comparison starts from today's full production alternative.
 
-These responsibilities depend on one another. A confidence interval cannot repair leaked evaluation data. Excellent offline quality says little about a feature lookup that times out under production load. A successful city canary provides evidence about that city and traffic level; it provides no evidence for an untested country or a hundred-percent rollout.
+Suppose you have built a new model. It scores:
 
-```mermaid
-flowchart TD
-    P["Purpose<br/>What should improve?"] --> C["Comparable evidence<br/>Was the test fair?"]
-    C --> E["Replacement effect<br/>How much changes?"]
-    E --> O["Operating proof<br/>Can the release run and recover?"]
-    O --> A["Release authority<br/>Which traffic is justified?"]
+$$
+94\%
+$$
 
-    C -. "invalid evidence" .-> H["Hold and repair"]
-    E -. "harm or uncertainty" .-> H
-    O -. "unsafe operation" .-> H
+on your benchmark. Your current production model scores:
 
-    class P,C,E,O question
-    class A decision
-    class H hold
+$$
+91\%
+$$
+
+Should you replace the production model? Not necessarily. The new model might be:
+
+* slower,
+* more expensive,
+* worse on an important customer segment,
+* more likely to violate a product policy,
+* incompatible with existing prompts or tools,
+* less reliable under production load,
+* better on the benchmark but worse on today's actual traffic.
+
+So the real release question is not:
+
+**“Is the candidate model good?”**
+
+It is:
+
+**“What would happen to the product if the candidate replaced some or all of the system currently serving users?”**
+
+That difference is the foundation of candidate-versus-production evaluation. Let the production system be:
+
+$$
+S_P
+$$
+
+and the candidate system be:
+
+$$
+S_C
+$$
+
+Notice that I wrote **system**, not model. A real production application may look like:
+
+```text
+user request
+    ↓
+input validation
+    ↓
+routing
+    ↓
+prompt construction
+    ↓
+retrieval/tools
+    ↓
+model
+    ↓
+policy checks
+    ↓
+postprocessing
+    ↓
+fallback/retry logic
+    ↓
+user response
 ```
 
-The diagram shows why one improved metric cannot carry the decision. Each stage adds a different kind of confidence, and a failure sends the candidate back to the boundary that needs repair.
+Changing the underlying model can interact with every one of these components. Therefore, the useful comparison is usually:
 
-## Start With the Current System and a Release Question
-<!-- section-summary: A release question defines the current decision path, intended improvement, protected outcomes, population, and smallest useful scope before results are examined. -->
+$$
+S_P(x)
+\quad\text{vs}\quad
+S_C(x)
+$$
 
-The first task is to describe the **status quo**: the decision users receive today. Sometimes that is one production model. It may also include a rules engine, a human review queue, a threshold chosen by product policy, or a fallback used during missing data and outages.
+not merely:
 
-Return to the arrival-time example. The running path clips estimates to a sensible range and falls back to a route estimate if weather features are unavailable. The candidate adds weather data. Comparing the two raw model outputs would remove the clipping and fallback that shape the customer experience. The fair subject is the complete production path against the complete proposed path.
+$$
+M_P(x)
+\quad\text{vs}\quad
+M_C(x)
+$$
 
-The baseline gives the team the context for a **release question**. This short, testable statement describes the improvement the candidate is expected to deliver. It should name:
+where $$M$$ denotes only the raw models. Imagine the candidate model is intrinsically better. But your production prompt was heavily optimized for the old model. Suppose:
 
-- the population and decision that may change;
-- the primary outcome and a practically useful margin;
-- outcomes, segments, and operating limits that must remain protected;
-- the first release scope under consideration.
+| Configuration                   | Quality |
+| ------------------------------- | ------: |
+| Old model + production prompt   |     92% |
+| New model + generic test prompt |     90% |
 
-For example, the team may ask whether the candidate reduces arrival-time mean absolute error by at least 0.3 minutes for completed urban deliveries, while rainy-weather underestimation, p95 latency, fallback rate, and infrastructure cost stay inside declared limits. The first requested authority might be a small city canary rather than broad traffic.
+You could incorrectly conclude that the candidate is worse. Or the opposite could happen. Perhaps the candidate looks excellent in a clean benchmark but behaves poorly with:
 
-The improvement margin matters because a detectable difference can still be commercially useless. Saving 0.02 minutes may be real in a huge dataset, yet the extra feature service could cost more, add latency, and create another outage dependency.
+* your actual retrieval pipeline,
+* real tool responses,
+* production system instructions,
+* long conversations,
+* malformed user inputs.
 
-Two common release questions make this trade-off explicit:
+The object of release evaluation must therefore match the thing you intend to deploy. If deployment would change only the model:
 
-- **Superiority** asks the candidate to improve an outcome by at least a useful amount. A fraud candidate might need to recover more fraudulent value without exceeding the review team's daily capacity.
-- **Non-inferiority** allows a small, predeclared quality loss because the candidate brings another important benefit. A compact model might be acceptable if recall falls by no more than one percentage point while latency and serving cost drop substantially.
+$$
+S_C =
+\text{same system with candidate model}
+$$
 
-The margin comes from product consequences, operational capacity, safety requirements, and migration cost. It should be written before reviewers see the candidate result. Choosing it afterwards lets an attractive result redefine success.
+If you are also changing prompts, retrieval, thresholds, or routing, then the candidate is really a **candidate system configuration**. That entire configuration must be evaluated. This is a surprisingly important principle. Teams often ask:
 
-A compact comparison plan can summarize the decision after the reasoning is clear:
+“Does the candidate reach 90% accuracy?”
 
-| Decision part | Arrival-time example | What it protects |
-|---|---|---|
-| Primary improvement | Reduce mean absolute error by at least 0.3 minutes | Avoid a release for a trivial gain |
-| Protected behaviour | Rainy-weather underestimation remains below its limit | Prevent an average gain from hiding a known harm |
-| Operating limits | p95 latency, feature-miss rate, and cost stay within budget | Keep the improvement deliverable |
-| Initial authority | Small canary on an enforceable city route | Keep exposure aligned with the evidence |
+But suppose production already achieves:
 
-This plan creates more than pass or fail. Mixed evidence can lead to offline revision, shadow traffic, a limited canary, or a restricted population. Those outcomes become important after the team has produced a fair comparison.
+$$
+96\%
+$$
 
-## Give Both Systems a Fair Comparison
-<!-- section-summary: A shared protocol holds eligible cases, labels, prediction times, policies, and metric calculations constant and keeps failed requests in the denominator. -->
+Then 90% is irrelevant. The actual decision is:
 
-A comparison is fair if both decision paths face the same question under the same rules. In technical terms, the team records a **comparison protocol**: the eligible cases, label definition, prediction timestamp, feature cutoff, evaluation period, policy settings, metric implementation, segment definitions, and statistical grouping unit.
+$$
+\text{keep }S_P
+$$
 
-The protocol starts with the unit that receives a decision. It might be one delivery, patient, account, query, device, or store-week. Both systems should produce an outcome for the same eligible units. This row-level pairing reveals what would actually change after replacement.
+versus:
 
-Using the same CSV file does not guarantee fairness. Several hidden differences can distort the result:
+$$
+\text{replace with }S_C
+$$
 
-- the candidate reads a feature created after the historical prediction time;
-- production predictions include a policy override while candidate predictions are raw scores;
-- one system evaluates mature labels and the other includes labels still changing;
-- failed candidate requests disappear before metrics are calculated;
-- repeated observations from the same user are split as if they were independent.
+So evaluation should center on:
 
-Coverage deserves attention before quality. Imagine 10,000 eligible requests. Production completes 9,980 and the candidate completes 9,710. If the report scores only the 9,710 shared successes, the candidate receives no penalty for 290 extra failures. The evaluation table should keep every eligible unit and record `success`, `validation_failure`, `timeout`, `fallback`, or `missing_prediction` for each path.
+$$
+\Delta = M(S_C)-M(S_P)
+$$
 
-The following focused example assumes a Pandas DataFrame named `eval_rows`. Each row contains one eligible delivery, its mature outcome, both predictions, and both completion statuses. The code first reports coverage, then calculates paired absolute-error change only for rows completed by both paths. The expected output is a coverage warning alongside a negative paired change such as `-0.40`; the candidate is more accurate on shared successes while completing less traffic.
+where $$M$$ is some metric. For quality:
 
-```python
-eligible = eval_rows.loc[eval_rows["eligible"]].copy()
+$$
+\Delta_{\text{quality}}
+=
+Q_C-Q_P
+$$
 
-coverage = {
-    "production": eligible["production_ok"].mean(),
-    "candidate": eligible["candidate_ok"].mean(),
-}
+For latency:
 
-paired = eligible.loc[
-    eligible["production_ok"] & eligible["candidate_ok"]
-].copy()
+$$
+\Delta_{\text{latency}}
+=
+L_C-L_P
+$$
 
-paired["production_loss"] = (
-    paired["actual_minutes"] - paired["production_minutes"]
-).abs()
-paired["candidate_loss"] = (
-    paired["actual_minutes"] - paired["candidate_minutes"]
-).abs()
-paired["loss_change"] = paired["candidate_loss"] - paired["production_loss"]
+For cost:
 
-print(coverage)
-print({"paired_mae_change": paired["loss_change"].mean()})
+$$
+\Delta_{\text{cost}}
+=
+C_C-C_P
+$$
+
+The release question is fundamentally about these **changes**. Suppose production already has:
+
+* 94% task success,
+* 1.8-second latency,
+* $0.012 cost/request,
+* 0.2% unsafe-response rate.
+
+The candidate has:
+
+* 96% task success,
+* 3.7-second latency,
+* $0.031 cost/request,
+* 0.1% unsafe-response rate.
+
+Which is better? There is no universal answer. The candidate improves some dimensions and regresses others. So before evaluation, define what the release needs to accomplish.
+
+For example:
+
+Increase task success by at least 1 percentage point without increasing severe safety failures, with p95 latency below 3 seconds and cost increase below 50%.
+
+Now the experiment has a purpose. Without a release question, teams can look at dozens of metrics and rationalize whatever answer they prefer afterward. A release policy might say:
+
+$$
+Q_C-Q_P \ge +1\%
+$$
+
+while requiring:
+
+$$
+\text{CriticalFailure}_C
+\le
+\text{CriticalFailure}_P
+$$
+
+and:
+
+$$
+L_{C,p95}<3\text{ seconds}
+$$
+
+and perhaps:
+
+$$
+C_C \le 1.5C_P
+$$
+
+These are different kinds of requirements. Some may be **improvement requirements**:
+
+The candidate should actually be better.
+
+Others may be **non-regression requirements**:
+
+The candidate cannot become meaningfully worse.
+
+Others may be absolute constraints:
+
+Critical policy violations must remain below a fixed maximum.
+
+That distinction is useful. Suppose the candidate is dramatically cheaper. You may not need it to improve quality. Instead your hypothesis might be:
+
+The candidate is substantially cheaper while preserving essentially the same quality.
+
+Then you need something like a **non-inferiority** requirement. Instead of:
+
+$$
+Q_C>Q_P
+$$
+
+you allow a small acceptable degradation:
+
+$$
+Q_C-Q_P > -\delta
+$$
+
+where $$\delta$$ is your maximum tolerable quality loss.
+
+For example:
+
+$$
+\delta=0.5\text{ percentage points}
+$$
+
+If the candidate is no more than 0.5 points worse while reducing inference costs by 60%, that might satisfy the release objective. So candidate evaluation depends on **why the candidate exists**.
+
+## How Do Paired Cases and Segments Reveal Who Benefits and Who Pays?
+<!-- section-summary: Paired outcomes on identical cases reveal new wins and losses, while segment deltas show which populations benefit or absorb the regression. -->
+
+Once success and the baseline are fixed, evaluating both systems on the same cases exposes which decisions change rather than only two averages.
+
+Suppose production is evaluated on 1,000 easy requests. Candidate is evaluated on 1,000 different, harder requests. Even if production scores 95% and candidate scores 93%, you don't know which system is actually better. The samples differ. A much stronger design uses the same inputs:
+
+$$
+x_1,x_2,\ldots,x_n
+$$
+
+Run:
+
+$$
+S_P(x_i)
+$$
+
+and:
+
+$$
+S_C(x_i)
+$$
+
+for every $$i$$. Now differences are much easier to attribute to the system change. This is a **paired comparison**. Suppose both systems process 1,000 examples. Production accuracy:
+
+$$
+90\%
+$$
+
+Candidate accuracy:
+
+$$
+94\%
+$$
+
+The four-point improvement is useful. But the paired table is more informative:
+
+| Outcome                             | Cases |
+| ----------------------------------- | ----: |
+| Both correct                        |   860 |
+| Production correct, candidate wrong |    40 |
+| Production wrong, candidate correct |    80 |
+| Both wrong                          |    20 |
+
+Now we know the candidate:
+
+* fixed 80 production failures,
+* introduced 40 new failures,
+* produced a net gain of 40.
+
+That immediately creates two valuable investigation sets.
+
+### Wins
+
+$$
+S_P(x_i)\text{ wrong},\quad S_C(x_i)\text{ correct}
+$$
+
+### Regressions
+
+$$
+S_P(x_i)\text{ correct},\quad S_C(x_i)\text{ wrong}
+$$
+
+The regressions are often more important than the aggregate number. Suppose:
+
+$$
+Q_P=90\%
+$$
+
+and:
+
+$$
+Q_C=95\%
+$$
+
+It is tempting to imagine that the candidate simply fixed half the old model's errors. But perhaps it did this:
+
+```text
+Production errors fixed:       120
+New errors introduced:          70
+Net improvement:                50
 ```
 
-The two outputs answer separate questions. Coverage shows whether each path served the intended population. The paired change shows the quality difference where both paths produced a result. A release report needs both; one cannot substitute for the other.
+The candidate isn't the production system plus improvements. It represents a **different error distribution**. Every model replacement is partly an exchange:
 
-### Use Different Evaluation Sets For Different Release Questions
+some old failures disappear and some new failures appear.
 
-One dataset rarely answers every release question. Teams commonly combine:
+The job of comparative evaluation is to determine whether that exchange is acceptable. Imagine the candidate produces 100 fewer errors overall. But its ten newly introduced errors include:
 
-- a **frozen holdout** for stable comparisons across successive candidates;
-- a **recent time-based set** for current products, traffic, and behaviour;
-- a **known-failure suite** containing past incidents, rare cases, and contractual expectations;
-- rolling backtests for forecasting or other time-dependent systems;
-- entity or location holdouts if the model must generalize to new customers, devices, stores, or sites.
+* incorrect high-value transactions,
+* disclosure of private information,
+* dangerous tool calls.
 
-The sets have different jobs. Repeatedly consulting the frozen holdout during tuning weakens its independence. A recent set may contain labels that have not matured. A known-failure suite can prove that specific regressions stay fixed, although its hand-selected cases do not estimate ordinary production frequency.
+A count saying:
 
-The report should keep those roles visible instead of blending all rows into one score. The protocol also records dataset versions, code revision, model and policy identities, and exclusions so another reviewer can reconstruct the comparison.
+$$
+-100\text{ total errors}
+$$
 
-## Measure What Changes If The New Model Replaces The Current System
-<!-- section-summary: Paired effects describe the change caused by replacement, while uncertainty shows how precisely the evaluation estimates that change. -->
+doesn't capture the decision. Errors have different severity. A better conceptual measure is:
 
-After the comparison is valid, the next question is how much the replacement changes the outcome. Two isolated scores answer, “How did each system perform on average?” A **paired effect** answers, “What changed for the same unit after switching from production to the candidate?”
+$$
+\text{Expected Harm}
+=
+\sum_j
+P(E_j)\times H(E_j)
+$$
 
-Suppose one delivery has an absolute error of 6 minutes under production and 4 minutes under the candidate. Its paired loss change is `4 - 6 = -2 minutes`; negative is an improvement because lower error is better. Calculating this difference for every shared delivery creates a distribution of replacement effects.
+where $$E_j$$ is an error type and $$H(E_j)$$ is its consequence. You do not have to literally collapse this into one numerical score. Often separate severity categories are safer and more interpretable. Suppose:
 
-Pairing removes some noise from cases that are difficult for both systems. A snowstorm may make every route hard. Comparing the two errors on the same deliveries isolates the candidate's contribution more directly than comparing unrelated averages.
+| Segment      | Production | Candidate |
+| ------------ | ---------: | --------: |
+| Overall      |        91% |   **95%** |
+| English      |        92% |   **97%** |
+| French       |        90% |   **94%** |
+| Spanish      |    **91%** |       84% |
+| Long context |    **88%** |       80% |
 
-The effect size still comes from a finite sample. A confidence interval describes the range of replacement effects compatible with that sample and method. Paired resampling keeps the candidate and production results for each evaluation unit together, so every resampled difference preserves the fact that both systems faced the same case.
+The candidate wins overall. But some users would receive a meaningfully worse product. This is why candidate comparisons should calculate:
 
-If many deliveries share the same store and day, row-level resampling treats correlated events as independent and can produce an interval that is too narrow. A store-day block, user, patient, query, or another grouped unit may represent the real source of variation. The protocol should state that choice and explain why it fits the product.
+$$
+\Delta_g
+=
+M_{C,g}-M_{P,g}
+$$
 
-```mermaid
-flowchart TD
-    U["Same eligible unit"] --> P["Production outcome"]
-    U --> C["Candidate outcome"]
-    P --> D["Candidate minus production effect"]
-    C --> D
-    D --> G["Group effects by the real dependency<br/>such as user, store-day, or query"]
-    G --> I["Estimate interval"]
-    I --> Q{"Does the interval answer<br/>the release question?"}
-    Q -- "Yes" --> S["Continue to segment and operating review"]
-    Q -- "No" --> M["Collect more evidence or narrow the claim"]
+for each important segment $$g$$. Now the question becomes:
 
-    class U,P,C input
-    class D,G,I analysis
-    class Q,S decision
-    class M hold
+Where does the candidate improve, where does it regress, and how important are those changes
+
+Suppose traffic is divided into groups $$g$$. Overall candidate impact is approximately:
+
+$$
+\Delta
+=
+\sum_g P(g)\Delta_g
+$$
+
+This equation explains how a large regression can disappear in the overall metric. If Spanish requests are 3% of traffic:
+
+$$
+P(\text{Spanish})=0.03
+$$
+
+then a large Spanish regression receives relatively little weight in the global score. That does not mean the regression is acceptable. It means the aggregate metric is performing exactly as a weighted average should. Therefore important groups need explicit constraints. A model release isn't experienced by an “average request.” Different users and tasks experience different changes. One useful release report might look like:
+
+| Group              | Traffic share | Quality change | Main effect          |
+| ------------------ | ------------: | -------------: | -------------------- |
+| Standard support   |           65% |          +5 pp | strong improvement   |
+| Technical support  |           15% |          +2 pp | moderate improvement |
+| Spanish            |            8% |          -4 pp | regression           |
+| Long conversations |            7% |          -7 pp | serious regression   |
+| High-risk requests |            5% |           0 pp | unchanged            |
+
+Now the candidate's tradeoff becomes visible. This is fundamentally an allocation question:
+
+**Who receives the benefits of the new model and who receives its newly introduced errors?**
+
+Using identical examples isn't enough if the scorer changes. Suppose:
+
+```text
+Production model
+→ evaluated with scorer v3
+
+Candidate model
+→ evaluated with scorer v4
 ```
 
-For a superiority decision, the whole interval may need to exceed the practical improvement margin. For non-inferiority, the harmful end of the interval must remain within the accepted loss. A result can therefore be:
+Now you have two changes:
 
-- clearly useful;
-- clearly harmful;
-- too small to matter;
-- promising but too uncertain for the requested scope.
+$$
+\text{model}
++
+\text{evaluation method}
+$$
 
-The last outcome is common. It may lead to more data or a smaller release, depending on the risk and whether that smaller scope can be enforced.
+Any difference may come from either. For clean comparative evidence, hold constant as much as possible:
 
-Statistical precision covers only sampling variation. **Evidence uncertainty** includes stale traffic, incomplete labels, measurement error, unobserved segments, and a policy change that happened after the evaluation window. A narrow interval cannot correct those problems. Reviewers should record them as limitations and decide which production claims remain defensible.
+* examples,
+* labels,
+* prompts,
+* tool environment,
+* scoring rules,
+* segment definitions,
+* preprocessing,
+* evaluation configuration.
+
+The candidate itself should be the main thing that changes. Suppose we observe:
+
+$$
+Y_C-Y_P
+$$
+
+We want that difference to approximate the causal effect:
+
+What changes because we switch systems
+
+The more unrelated things change simultaneously, the harder that question becomes. If you replace:
+
+* model,
+* system prompt,
+* retrieval system,
+* tool APIs,
+* postprocessor,
+
+all at once and performance improves, you have tested the **bundle**. That's perfectly legitimate if you intend to deploy the bundle. But you cannot confidently say:
+
+“The model caused the improvement.”
+
+Comparative evaluation requires clarity about the treatment being tested. Production evolves. Maybe the original benchmark says the incumbent got:
+
+$$
+87\%
+$$
+
+six months ago. Since then:
+
+* prompts improved,
+* routing changed,
+* retrieval improved,
+* bugs were fixed.
+
+Current production might now score:
+
+$$
+93\%
+$$
+
+Comparing the candidate against an old benchmark would exaggerate its benefit. So ideally rerun:
+
+$$
+S_P
+$$
+
+and:
+
+$$
+S_C
+$$
+
+on the same current evaluation suite. The comparator should represent **what users would continue receiving if you didn't release the candidate**.
 
 ![Production and candidate paths are compared on the same eligible cases, prediction time, policy, and labels before their paired effect is measured](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/candidate-paired-comparison.png)
 
 *A fair replacement test holds the question constant, then measures which decisions would actually change and how certain that effect is.*
 
-## Find Who Benefits and Who Carries the Errors
-<!-- section-summary: Segment and trade-off analysis shows whether an average improvement hides harm, unstable evidence, or unaffordable work for a particular population or condition. -->
+## What Do Offline Replay, Shadow Traffic, and Randomized Live Traffic Each Prove?
+<!-- section-summary: Offline replay provides controlled repeatability, shadow traffic exposes production inputs without affecting users, and randomized live traffic estimates causal product effects. -->
 
-An average describes the centre of a population. It can hide a region whose upstream data changed or a device that takes a different fallback path. Language, product route, class, and operating conditions can also change the consequence of an error. The release question therefore needs a second view: where does the candidate improve, regress, or remain uncertain?
+Paired offline evidence is necessary but cannot reproduce every production condition or causal user response, which creates a staged evidence ladder.
 
-Choose segments from product consequences and known failure boundaries. Incident history may show that missing device identifiers cause a fraud model to fall back. Domain experts may identify high-risk clinical symptoms. A routing system may need separate results by language and queue. Generating hundreds of arbitrary slices creates false alarms and review noise; the useful segments have a reason to exist.
+You generally don't begin by exposing users to an untested candidate. Start offline. Use:
 
-Consider a classifier that prioritizes cases for a team able to review 2,000 alerts each day. The candidate raises recall from 0.78 to 0.84 by lowering its threshold. It also produces 6,500 alerts. The model metric improved, while the delivered workflow now leaves thousands of alerts unread. The meaningful comparison includes recall at the real capacity, precision among reviewed alerts, missed-case cost, and queue delay.
+* curated benchmarks,
+* representative production replays where appropriate,
+* regression suites,
+* important segments,
+* robustness tests,
+* safety tests,
+* fairness checks,
+* latency and cost measurements.
 
-Every important segment report should include:
+Offline evaluation is inexpensive and controlled. It is especially good at answering:
 
-- the number of eligible and labelled units;
-- production and candidate outcomes at the same operating policy;
-- the paired effect and its uncertainty;
-- coverage, fallback, and missing-label rates;
-- the product consequence of the observed errors.
+Does the candidate contain an obvious reason not to deploy it
 
-Sparse segments require careful wording. Ten examples cannot support the same claim as ten thousand. The response may be targeted data collection, longer observation, human review, shadow traffic, or a release restricted to the population with adequate evidence. Quietly removing the segment would turn missing evidence into broad authority.
+Suppose you have a sample of historical production requests:
 
-Trade-offs should remain visible across responsibilities. A remote feature may improve prediction quality and add 80 milliseconds of latency plus an outage dependency. A compact model may lose a small amount of accuracy and cut GPU cost enough to make regional redundancy affordable. Calibration may improve resource allocation even if ranking stays almost unchanged.
+$$
+x_1,\ldots,x_n
+$$
 
-The release report should state which trade-off is accepted, who owns the consequence, and which production signal will reveal a wrong assumption. That statement prepares the operating review.
+Replay them through both systems:
 
-## Test the Complete Release Under Production Conditions
-<!-- section-summary: Operational review proves that the exact model, code, data contract, policy, and runtime can serve the intended workload, identify itself, and recover. -->
+$$
+S_P(x_i),S_C(x_i)
+$$
 
-Offline evaluation can compare predictions without proving that the candidate can run inside production. The candidate may require more memory than the serving fleet provides. A new feature may be absent for a region. The container may load the wrong preprocessing code. A fallback may return a well-formed response that changes the product decision.
+Then compare outputs. This gives you realistic traffic without affecting users. You can analyze:
 
-The team therefore creates a complete **release identity**. The model and serving image each receive an immutable version or digest. Feature definitions and the input schema identify the data contract. Thresholds, preprocessing, and post-processing identify the policy around the model. The evaluation report then points back to that exact combination. This is the subject of the decision. A change to any part that can alter predictions needs new evidence or an explicit compatibility rule.
+* quality,
+* regressions,
+* latency,
+* tool behavior,
+* segments,
+* error clusters.
 
-The operational tests should recreate the intended workload:
+But production replay has limits. The historical user only saw the old system. If the candidate produced a different response, the user might have behaved differently afterward. Therefore replay cannot fully reproduce interactive feedback loops. Imagine a chatbot. Production generated:
 
-### Check Inputs, Dependencies, And Fallbacks
+“Please upload your invoice.”
 
-Representative requests should pass through input validation, feature lookup, preprocessing, inference, post-processing, and fallback. The test covers missing optional fields, invalid types, large payloads, dependency timeouts, and model startup. A model signature from MLflow or a provider registry helps describe inputs and outputs; application-level tests still verify policy and fallback behaviour around the model.
+The user then uploaded an invoice. But candidate might have generated:
 
-### Capacity and cost checks
+“I already have enough information.”
 
-Load tests should use realistic request sizes, concurrency, traffic shape, and hardware. Review p50, p95, and p99 latency, throughput, queue time, error rate, memory, accelerator utilization, cold starts, and cost per useful prediction. Averages can hide the tail experienced by users.
+Then the rest of the real conversation would never have happened. So replaying later conversation turns against the candidate creates an artificial sequence. This is an important limitation. For interactive systems:
 
-### Check Release Identity, Monitoring, And Rollback
+$$
+\text{system output}_t
+\rightarrow
+\text{user behavior}_{t+1}
+$$
 
-Prediction events need enough safe metadata to identify the release. The model and deployment IDs show which runtime produced the result. Feature and policy versions explain the surrounding decision logic. A traffic role distinguishes candidate, control, and shadow events, while a correlation ID connects approved operational records. Sensitive raw inputs belong in governed storage only if policy permits them.
+The model changes the future input distribution. Offline replay can test individual responses, but eventually you may need controlled live experimentation to understand user-system interaction. A **shadow deployment** sends real production requests to the candidate without letting its responses affect users.
 
-The recovery drill sends identifiable test traffic, activates the rollback or fallback, and confirms that new events report the retained production release. Moving a mutable registry alias is insufficient proof because running workers may have already loaded the candidate into memory.
+Conceptually:
 
-Industrial stacks divide these responsibilities across several tools:
-
-| Responsibility | Common implementation | Evidence the reviewer should see |
-|---|---|---|
-| Model and evaluation identity | MLflow, Weights & Biases, or a managed model registry | Pinned model version or digest, dataset reference, metrics, signature |
-| Repeatable checks | GitHub Actions, GitLab CI, Jenkins, or a managed ML pipeline | Versioned test command, logs, report, and pass/fail result |
-| Serving and traffic control | Managed endpoints first; Argo Rollouts for established Kubernetes platforms | Exact deployment identity, traffic route, capacity result |
-| Service evidence | OpenTelemetry, Prometheus and Grafana, or cloud-native monitoring | Release-labelled latency, errors, saturation, and dependency signals |
-| Recovery | Managed endpoint rollback, retained stable deployment, or platform runbook | Drill record plus post-action serving identity |
-
-The registry organizes evidence and provides model versions. The CI or managed pipeline repeats checks. The serving platform controls traffic. The monitoring system observes the running release. Combining those responsibilities into a single `approved=true` tag hides important boundaries.
-
-For ordinary teams, a managed endpoint is the practical starting point. Amazon SageMaker AI provides model approval status plus managed canary and rollback controls; Azure Machine Learning supports versioned assets and traffic across endpoint deployments. Kubernetes teams with an existing platform can use Argo Rollouts to combine canary traffic with metric analysis. The operating cost of Kubernetes rarely makes sense solely to gain a canary controller.
-
-## Test Offline First, Then With Shadow And Limited Live Traffic
-<!-- section-summary: Offline, shadow, and canary stages answer different questions, so the release path should match the model's risk and delivery pattern. -->
-
-No test environment reproduces every part of production. A historical replay can use mature labels and still miss a feature-service timeout introduced yesterday. Sending the candidate real requests reveals that timeout, although it says nothing about user outcomes if the candidate's answer remains hidden. Teams build confidence in stages because each stage exposes a different part of the production path.
-
-**Offline evaluation** compares candidate and production behaviour on recorded examples with mature labels. It gives the most controlled view of prediction quality, paired effects, and known failure cases. It cannot reveal every current schema, dependency, latency, or feedback effect.
-
-**Shadow traffic** copies current requests to the candidate while the production result remains authoritative. It can reveal current feature coverage, schema failures, prediction divergence, latency, resource pressure, and dependency behaviour. It provides no direct product authority, and many final outcomes still reflect the production decision. The shadow path should be isolated so a slow candidate cannot consume production capacity or trigger side effects.
-
-**Canary traffic** lets the candidate influence a small, identifiable share of real decisions. It can measure service behaviour, user response, workload changes, support contacts, and eventually mature outcomes. It also creates real exposure. Stable assignment, stop signals, a retained production path, and working rollback should exist before the first canary request.
-
-```mermaid
-flowchart LR
-    O["Offline<br/>historical quality and known failures"] --> S["Shadow<br/>current inputs and runtime"]
-    S --> C["Canary<br/>limited real decisions"]
-    C --> W["Wider traffic<br/>continued verification"]
-
-    O -. "leakage or invalid protocol" .-> H["Repair evidence"]
-    S -. "contract, capacity, or dependency failure" .-> H
-    C -. "guardrail or harm signal" .-> R["Stop and restore stable traffic"]
-
-    class O,S evidence
-    class C,W live
-    class H,R hold
+```text
+                    ┌→ Production → user
+user request ───────┤
+                    └→ Candidate → logged only
 ```
 
-This sequence is a menu rather than a compulsory ladder. A monthly batch forecast may start with historical replay. The team can then generate the old and new outputs in parallel and let a planner inspect the difference before publication. A high-impact automated decision may first use shadow traffic. Its canary can stay small and under human oversight until the full label-maturity window has passed.
+This is valuable because the candidate sees:
 
-Progressive-delivery tooling applies the same principle in different environments. SageMaker AI can shift a canary portion to a new fleet and use CloudWatch alarms to trigger rollback. Azure managed online endpoints can keep blue and green deployments behind one endpoint and move traffic explicitly. Argo Rollouts can run Prometheus-backed analysis during Kubernetes canaries. Each tool controls exposure; the team still defines the ML quality, segment, and product signals that determine success.
+* real traffic,
+* real load patterns,
+* real dependency behavior,
+* current input distribution.
 
-## Choose The Smallest Release Scope Justified By The Results
-<!-- section-summary: A release outcome binds an exact candidate to the population, traffic level, conditions, owners, stop signals, and expiry justified by its evidence. -->
+Yet users still receive the incumbent response. This is a safer bridge between offline and live testing.
 
-After the evidence stages, the team decides how much authority the candidate has earned. “Approved” by itself is too vague. Approval for isolated shadow traffic carries no permission to change user decisions. Approval for five percent of one route carries no permission for another region or broad traffic.
+For example:
 
-The useful outcomes are:
+Does the candidate time out more often on actual production traffic
+Does it trigger tools differently
+Does its larger context window increase latency unpredictably
+Does production contain input types absent from our evaluation set
+Does it overload downstream services
+Does actual cost match our estimates
 
-| Outcome | Evidence condition | Authority |
-|---|---|---|
-| Reject | The candidate has an invalid premise or known unacceptable harm | No release authority |
-| Collect more evidence | A material uncertainty remains unresolved | Offline work or another approved evidence stage |
-| Shadow | Offline evidence is credible and runtime evidence remains incomplete | Copy traffic with no candidate decision |
-| Limited canary | Evidence supports a small enforceable population and exposure | Declared route, segment, and traffic cap |
-| Restricted release | One population has adequate evidence and another does not | Only the enforceable supported population |
-| Broad release | Predictive, segment, operational, and recovery evidence supports the intended scope | Declared production traffic with continuing guardrails |
+These are precisely the kinds of system properties that may not appear in static benchmarks. Because users never see candidate outputs, shadow testing cannot directly tell you:
 
-Suppose the arrival-time candidate improves overall error and passes its load test. Rainy-weather underestimation still crosses the protected limit. Shadow traffic can collect current weather and runtime evidence without changing customer estimates. A dry-weather canary is defensible only if routing can identify that condition safely, policy can enforce the boundary, and monitoring can detect leakage into excluded traffic. If those controls are absent, the candidate remains outside decisioning traffic.
+* whether users prefer them,
+* whether task completion improves,
+* whether users abandon less,
+* whether candidate responses change later behavior,
+* whether conversion or retention changes.
 
-The decision record should identify:
+Those require live exposure. So the stages answer different questions.
 
-- the exact candidate and production baseline;
-- the comparison protocol and evidence locations;
-- overall and segment effects with uncertainty;
-- operating and recovery evidence;
-- authorized population, route, traffic cap, and duration;
-- stop conditions, rollback target, and responsible owners;
-- known limitations and evidence required for expansion.
+```text
+offline
+  ↓
+Can it work
 
-Modern MLflow Registry workflows use model versions, tags, and aliases; fixed model stages are deprecated. A tag can help people find a reviewed candidate, and an alias can provide a convenient reference such as `candidate` or `champion`. Aliases are movable. Deployment automation should resolve and pin the approved version or digest, then verify the identity serving traffic.
+shadow
+  ↓
+Can it operate on production traffic
+
+limited live
+  ↓
+Does it improve real user outcomes
+
+broader rollout
+  ↓
+Does that result remain stable at scale
+```
+
+Now suppose some production requests go to:
+
+$$
+S_P
+$$
+
+and some to:
+
+$$
+S_C
+$$
+
+Ideally assignment is randomized where appropriate.
+
+For example:
+
+$$
+50\%\rightarrow S_P
+$$
+
+$$
+50\%\rightarrow S_C
+$$
+
+Then you can measure real outcomes. For a support assistant:
+
+* issue-resolution rate,
+* follow-up rate,
+* escalation rate,
+* user satisfaction,
+* latency,
+* abandonment.
+
+Random assignment helps make the groups comparable. This is essentially an A/B experiment. Suppose you instead route:
+
+experienced customers → candidate
+
+and:
+
+new customers → production.
+
+Candidate gets 80% satisfaction. Production gets 70%. Did the model cause the difference? Maybe not. Experienced customers might have been easier to satisfy anyway. Formally, assignment became correlated with other variables:
+
+$$
+P(X\mid C)\neq P(X\mid P)
+$$
+
+Randomization tries to make:
+
+$$
+P(X\mid C)\approx P(X\mid P)
+$$
+
+so observed outcome differences are easier to attribute to the candidate.
+
+## How Do Product Outcomes, Latency, Cost, Compatibility, and Fallbacks Affect the Comparison?
+<!-- section-summary: The comparison needs model metrics, product outcomes, latency distributions, workload cost, interface compatibility, downstream effects, and fallback behaviour. -->
+
+Live viability depends on more than predictive scores, so operational and product outcomes belong in the same comparison.
+
+Suppose you randomly route every **request** independently. A single user might get:
+
+```text
+Turn 1 → production
+Turn 2 → candidate
+Turn 3 → production
+```
+
+For a conversational product, this may create nonsense. You may instead randomize at:
+
+* user level,
+* conversation level,
+* account level,
+* organization level.
+
+The experimental unit should match the way treatment can affect later behavior. Otherwise the systems contaminate each other's observations. Suppose a candidate changes recommendations shown to sellers. Sellers alter their inventory. That inventory also affects production-model users. Now the candidate treatment changes the environment experienced by the control group. This violates a simple experimental assumption:
+
+one unit's treatment does not affect another unit's outcome.
+
+This is called **interference**. It appears in:
+
+* marketplaces,
+* social networks,
+* recommendation systems,
+* auctions,
+* shared resource systems.
+
+Candidate-versus-production experiments in such environments need extra care. Suppose candidate answer quality improves from:
+
+$$
+90\%\rightarrow94\%
+$$
+
+But response latency increases from:
+
+$$
+1.5\text{s}\rightarrow8\text{s}
+$$
+
+Users abandon more often. Real task completion falls. Then the model improvement did not translate into a product improvement. The end-to-end metric might be:
+
+$$
+P(\text{user task completed successfully})
+$$
+
+rather than:
+
+$$
+P(\text{model output judged correct})
+$$
+
+Both are useful. But product release ultimately concerns user/system outcomes. A useful release view often includes at least:
+
+### Capability
+
+* accuracy,
+* task success,
+* factuality,
+* preference rate.
+
+### Safety
+
+* harmful outcomes,
+* policy violations,
+* severe failure categories.
+
+### Robustness
+
+* corrupted inputs,
+* dependency failures,
+* long contexts,
+* adversarial conditions.
+
+### Fairness and segments
+
+* important group outcomes,
+* regression gaps.
+
+### Reliability
+
+* request failures,
+* malformed outputs,
+* timeout rates.
+
+### Performance
+
+* latency,
+* throughput.
+
+### Economics
+
+* inference cost,
+* tool usage,
+* infrastructure consumption.
+
+A model replacement is a systems tradeoff, not a leaderboard contest. Suppose:
+
+$$
+\text{mean latency}=2\text{s}
+$$
+
+for both systems. They can still have very different user experiences. Maybe:
+
+| Metric | Production | Candidate |
+| ------ | ---------: | --------: |
+| p50    |      1.5 s |     1.2 s |
+| p95    |        3 s |       5 s |
+| p99    |        5 s |      18 s |
+
+The candidate is faster for typical requests but has a terrible latency tail. If long-tail latency causes timeouts, average latency hides a major regression. Therefore production comparisons often need:
+
+$$
+p50,\quad p95,\quad p99
+$$
+
+rather than only the mean. Suppose candidate inference is advertised as:
+
+30% cheaper per token.
+
+But perhaps it:
+
+* writes longer answers,
+* calls tools more frequently,
+* retries more often,
+* uses more context.
+
+Actual request cost may rise. So evaluate:
+
+$$
+E[\text{total system cost per production request}]
+$$
+
+not merely:
+
+$$
+\text{model token price}
+$$
+
+Again, compare the system that will actually run. Suppose an LLM produces structured tool calls. Production might call a search tool in:
+
+$$
+20\%
+$$
+
+of requests. Candidate might call it in:
+
+$$
+45\%
+$$
+
+Even if both have equal quality, candidate deployment could:
+
+* double search infrastructure demand,
+* increase latency,
+* hit API quotas,
+* increase external-service costs.
+
+This is why model behavior must be evaluated in context. A seemingly small behavioral change can create large system effects. A candidate may generate semantically correct output that breaks downstream code. Suppose production reliably emits:
+
+```json
+{"amount": 100, "currency": "GBP"}
+```
+
+Candidate occasionally emits:
+
+```json
+{"amount": "£100"}
+```
+
+A human sees the same information. The parser may not. So system evaluation should test contracts such as:
+
+* JSON schema compliance,
+* tool-call validity,
+* required fields,
+* output lengths,
+* enum values,
+* expected refusal formats.
+
+A candidate can be smarter and still be less deployable. Imagine the candidate's primary answer quality is better. But when retrieval fails:
+
+| System     | Safe fallback rate |
+| ---------- | -----------------: |
+| Production |                99% |
+| Candidate  |                78% |
+
+Candidate often fabricates an answer instead. If retrieval failures occur regularly, this could dominate the release risk. Candidate evaluation therefore needs scenarios beyond the happy path. You are replacing production behavior under:
+
+$$
+\text{normal conditions}
+$$
+
+and:
+
+$$
+\text{abnormal conditions}
+$$
+
+both.
+
+## How Do Uncertainty, Release Scope, Canary Exposure, and Rollback Control Risk?
+<!-- section-summary: Intervals and practical margins guide the smallest justified canary scope, with fixed goals and a tested rollback path controlling unknown risk. -->
+
+Those dimensions remain estimates with unknown risks, making uncertainty, limited exposure, stable goals, and rollback part of the experiment.
+
+Suppose:
+
+$$
+Q_P=91.0\%
+$$
+
+and:
+
+$$
+Q_C=91.4\%
+$$
+
+Is the candidate really better? Maybe. Or the 0.4-point difference could result from sampling noise. The important estimate is:
+
+$$
+\Delta=Q_C-Q_P
+$$
+
+along with uncertainty around $$\Delta$$.
+
+Conceptually:
+
+$$
+\Delta
+=
+0.4\%\pm\text{uncertainty}
+$$
+
+If plausible values range from:
+
+$$
+-0.5\%
+$$
+
+to:
+
+$$
++1.3\%
+$$
+
+the evidence is very different from a result tightly concentrated around +0.4%. Suppose with 50 million test observations you determine with enormous statistical confidence:
+
+$$
+Q_C-Q_P=+0.01\%
+$$
+
+The improvement is real. But perhaps economically or operationally irrelevant. Conversely:
+
+$$
+Q_C-Q_P=+3\%
+$$
+
+might be highly valuable even if a small sample leaves substantial statistical uncertainty. So you need both:
+
+**How confident are we that the effect exists?**
+
+and:
+
+**Is the effect large enough to matter?**
+
+These are different questions. Online experiments can collect huge numbers of events. That makes tiny differences statistically detectable. Then dashboards become full of:
+
+```text
+p < 0.001
+```
+
+while the product impact is negligible. It is often useful to predefine a **minimum practically important effect**.
+
+For example:
+
+We need at least +1 percentage point task completion to justify the additional cost.
+
+Now the decision isn't merely:
+
+$$
+\Delta>0
+$$
+
+but:
+
+$$
+\Delta>\delta_{\text{useful}}
+$$
+
+Suppose your live test sees:
+
+$$
+1,000,000
+$$
+
+requests. Overall estimates may be extremely precise. But a critical segment could contain only:
+
+$$
+400
+$$
+
+requests. So you may know:
+
+Overall performance definitely improved.
+
+while remaining uncertain about:
+
+Whether the candidate is safe for this specific group.
+
+This is another reason release scope doesn't need to be all-or-nothing. Suppose the evidence says:
+
+| Traffic type            | Candidate result      |
+| ----------------------- | --------------------- |
+| General English support | clearly better        |
+| French                  | clearly better        |
+| Spanish                 | uncertain             |
+| Long-context requests   | worse                 |
+| High-risk workflow      | insufficient evidence |
+
+One possible release architecture is:
+
+```text
+English normal → candidate
+French normal  → candidate
+Spanish        → production
+Long context   → production
+High risk      → production/human
+```
+
+This isn't necessarily a compromise. It is using evidence precisely. The release boundary should match the boundary of what you have actually demonstrated. Suppose evaluation tells you:
+
+$$
+S_C
+$$
+
+is excellent for short coding questions but weaker on long legal documents. Then production routing can implement:
+
+$$
+r(x)=
+\begin{cases}
+S_C  \text{short coding}\\
+S_P  \text{long legal}\\
+\text{specialized system}  \text{other}
+\end{cases}
+$$
+
+Evaluation doesn't merely decide which single model wins. It can determine **which model should handle which cases**. This is often more powerful than globally replacing one model with another. Even after offline, shadow, and experimental evaluation, production may reveal things you did not anticipate. A canary rollout might expose the candidate to:
+
+$$
+1\%
+$$
+
+of eligible traffic first. Then perhaps:
+
+$$
+5\%
+\rightarrow
+20\%
+\rightarrow
+50\%
+\rightarrow
+100\%
+$$
+
+if important metrics remain acceptable. The exact percentages are product-specific. The principle is:
+
+**Increase exposure as evidence increases.**
+
+You are limiting the blast radius of unknown failures. Suppose the candidate causes a severe regression. How quickly can production return to the incumbent? If rollback requires a week-long deployment process, your release carries much greater operational risk. Strong release design therefore defines:
+
+* which metrics trigger rollback,
+* who or what can initiate it,
+* whether routing can immediately return traffic to production,
+* whether data or schema changes are backwards-compatible.
+
+Release evaluation and operational control are linked. Suppose your predefined condition says:
+
+Do not release if Spanish task success falls by more than 2 percentage points.
+
+Candidate result:
+
+$$
+-4\%
+$$
+
+Then someone says:
+
+“Spanish traffic is small, so maybe four points isn't actually that bad.”
+
+Perhaps there is genuinely new information. But repeatedly redefining acceptance rules after observing results creates biased decision-making. This is why major release criteria should be specified before evaluation. Exploratory findings can still modify the plan, but changes should be explicit rather than silently rationalized. Suppose every failed candidate example becomes a prompt tweak. Then you rerun on exactly the same examples. Eventually the candidate achieves:
+
+$$
+100\%
+$$
+
+But you may have simply overfit your engineering process to the evaluation set. This is conceptually the same as training-set overfitting. So candidate evaluation often benefits from:
+
+* development evals for iteration,
+* held-out release evals,
+* fresh production samples,
+* live validation.
+
+The release suite should contain evidence the model-development process has not repeatedly optimized against.
 
 ![Offline evaluation, shadow traffic, and a limited canary answer different release questions and grant progressively narrower forms of production authority](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/candidate-evidence-stages.png)
 
 *Offline evidence tests historical quality, shadow traffic tests the current runtime without changing decisions, and a canary tests a small amount of real product impact.*
 
-The scope must be technically enforceable. A written city-only approval has little value if the router cannot keep other traffic out. The release record, deployment policy, and traffic controller should describe the same boundary.
+## How Do Versioning, Routing, Scale, and an Imperfect Production Baseline Change the Decision?
+<!-- section-summary: Versioned prompts, data, metrics, routing rules, and scale tests support local value even when the candidate is not globally superior and production itself has flaws. -->
 
-## Verify The Release After It Starts Receiving Traffic
-<!-- section-summary: Post-release verification checks the serving identity, traffic boundary, early operating signals, mature outcomes, and rollback path before authority expands. -->
+A candidate may serve only some traffic or fail only at scale, and a flawed production baseline should remain a comparator rather than unquestioned truth.
 
-A release decision is a claim about future production behaviour. Traffic provides the first chance to test that claim against current inputs, dependencies, users, and feedback effects.
+To reproduce a comparison, you need to know what actually ran. Record things like:
 
-Verification starts with facts available immediately:
+```text
+candidate_model_version
+production_model_version
+system_prompt_version
+retrieval_version
+tool_versions
+routing_config
+postprocessor_version
+evaluation_dataset_version
+scorer_version
+segment_definition_version
+timestamp
+```
 
-- Is the approved model, image, feature, and policy version serving?
-- Is the candidate receiving only the approved route and traffic percentage?
-- Are requests being assigned consistently?
-- Are schema failures, missing features, latency, errors, saturation, decision rates, and fallback use inside their limits?
-- Can operators restore the retained production path and see that identity on new events?
+Otherwise, six weeks later:
 
-These early signals can stop a broken release quickly. They cannot prove prediction quality if labels arrive days or weeks later. Outcome-based verification should wait for the label definition and maturity window used by the comparison protocol.
+“Candidate beat production by 3%”
 
-Consider a payment-risk model whose label means a missed payment within thirty days. Outcomes observed after one week contain many cases that still have time to become positive. Treating those provisional negatives as mature labels can make the canary appear unusually accurate. The release dashboard should show label volume, maturity, and join coverage beside quality metrics.
+may be impossible to reconstruct. Evaluation lineage turns a result into auditable engineering evidence. Suppose production has a long instruction:
 
-Compare candidate and control over the same period and decision policy. A global market event can hurt both paths at once, so relative comparison alone is insufficient. Absolute product and service limits still matter. Google SRE's canary guidance makes the same operational point: compare the canary with the control and retain absolute service objectives because both groups can deteriorate together.
+“Never do X. Always do Y. If Z, follow procedure Q…”
 
-If a stop condition fires, the team contains exposure, verifies stable traffic, preserves evidence, and investigates the responsible boundary. A bad feature feed may require a feature fallback rather than a different model. A capacity failure may require smaller traffic or more resources. A segment regression may return the candidate to data and model work.
+Maybe that prompt exists because the incumbent model had a particular weakness. The candidate may:
 
-Expansion is another release decision. More traffic changes sample size, capacity, queue pressure, cost, and user exposure. The next step should use the same framework: confirm the comparison still holds, review new evidence, state the larger scope, and verify it after traffic moves.
+* interpret it better,
+* interpret it differently,
+* or suffer because the workaround is now counterproductive.
 
-## The Main Idea
-<!-- section-summary: Candidate review replaces leaderboard thinking with a fair, risk-aware comparison between two complete production decision paths. -->
+So a model upgrade can require revalidating the surrounding prompts. But be careful about comparison. It can be useful to perform two experiments:
 
-A candidate deserves release because the complete decision path creates a useful, credible improvement over the system running today. The team defines that improvement before seeing results, gives both paths the same comparison, measures paired effects and uncertainty, examines important segments, and proves that the exact release can operate and recover.
+### Drop-in comparison
 
-Offline, shadow, and canary stages add different evidence. The final outcome grants the smallest scope that evidence can support and the platform can enforce. Production verification then checks the serving identity, traffic boundary, operating signals, and mature outcomes before the scope grows.
+Same system, model swapped. This answers:
 
-This approach protects useful change and the known production baseline at the same time. A candidate can move forward without asking one attractive score to carry more authority than it has earned.
+What happens if we replace only the model
+
+### Optimized-system comparison
+
+Production system versus a candidate-specific configuration. This answers:
+
+What is the best candidate system we could realistically deploy
+
+Both questions are legitimate, but they should not be confused. Suppose:
+
+$$
+P =
+\text{old model + old prompt}
+$$
+
+First test:
+
+$$
+C_1 =
+\text{new model + old prompt}
+$$
+
+This isolates compatibility of the model replacement. Then perhaps:
+
+$$
+C_2 =
+\text{new model + optimized prompt}
+$$
+
+Now:
+
+$$
+C_2\text{ vs }P
+$$
+
+answers the actual release question if $$C_2$$ is what you intend to deploy. And:
+
+$$
+C_2\text{ vs }C_1
+$$
+
+shows the effect of candidate-specific system tuning. This structure can make debugging much easier. Imagine:
+
+| Workload      | Production | Candidate |
+| ------------- | ---------: | --------: |
+| General tasks |    **94%** |       91% |
+| Coding        |        90% |   **98%** |
+
+The candidate is worse globally. But it could be a significant improvement as a specialized coding model. So asking:
+
+Which model wins
+
+may be the wrong question. Better:
+
+**For which inputs does each system provide the best acceptable behavior?**
+
+This naturally leads to routing and specialized deployment. Sometimes a candidate wins offline and loses online. Why? Potential reasons include:
+
+* production prompts differ,
+* real inputs are longer,
+* users react differently,
+* load affects latency,
+* dependencies behave differently,
+* hidden traffic segments were missing,
+* evaluation labels poorly represent real success.
+
+This is not necessarily evidence that offline evaluation is useless. It is evidence that offline metrics were imperfect proxies for the final product outcome. The mismatch itself should improve the next evaluation suite. Suppose the candidate gets fewer thumbs-up ratings. That doesn't automatically mean it's worse. Maybe:
+
+* users see it on harder requests,
+* rating UI changed,
+* response latency affects ratings,
+* exposure wasn't randomized,
+* only dissatisfied users tend to rate,
+* the candidate correctly refuses requests that the old model incorrectly answered.
+
+Online metrics also require interpretation. Production data is more realistic, not magically unbiased.
+
+## What Evidence Should Continue After Launch and Strengthen Future Evaluations?
+<!-- section-summary: Delayed outcomes and traffic composition continue the comparison after launch, while each incident adds cases and guardrails to future evaluation. -->
+
+The comparison continues after launch because delayed effects and changing traffic can invalidate the early result.
+
+Suppose the candidate reaches 100% traffic on Monday. You should still verify:
+
+Did the expected improvement appear
+
+You might compare:
+
+$$
+\text{predicted offline improvement}
+$$
+
+against:
+
+$$
+\text{observed production improvement}
+$$
+
+and monitor:
+
+* important segment metrics,
+* safety outcomes,
+* error clusters,
+* latency,
+* cost,
+* tool usage,
+* user behavior,
+* failure rates.
+
+A release isn't complete when traffic switches. It is complete when the expected production behavior is verified. Some model changes have consequences that emerge slowly.
+
+For example:
+
+* users adapt to response style,
+* support escalations accumulate,
+* cost patterns change over long conversations,
+* new model outputs enter future training data,
+* downstream operators alter their workflows.
+
+A one-hour canary may not detect these. Evaluation windows should match the timescale of the consequence you care about. Suppose candidate quality appears to decline one month later. Maybe the model has not changed.
+
+Instead:
+
+$$
+P(\text{long-context traffic})
+$$
+
+increased from:
+
+$$
+10\%\rightarrow40\%
+$$
+
+If long-context requests are harder, aggregate performance falls. So compare:
+
+$$
+P(\text{traffic segment})
+$$
+
+and:
+
+$$
+P(\text{failure}\mid\text{segment})
+$$
+
+Separating population change from conditional performance change prevents false diagnoses. Suppose the candidate passed all evaluations. After release, you discover it fails whenever tool output contains an empty array. A weak process:
+
+```text
+incident
+  ↓
+patch
+  ↓
+forget
+```
+
+A stronger process:
+
+```text
+incident
+  ↓
+reproduce
+  ↓
+identify mechanism
+  ↓
+add candidate-vs-production regression test
+  ↓
+fix
+  ↓
+run on every future candidate
+```
+
+The comparison suite becomes organizational memory. You can think about candidate evaluation as progressively reducing uncertainty.
+
+```text
+       DEVELOPMENT EVALS
+             │
+             ▼
+       HELD-OUT OFFLINE
+             │
+             ▼
+       PRODUCTION REPLAY
+             │
+             ▼
+        SHADOW TRAFFIC
+             │
+             ▼
+     LIMITED LIVE TRAFFIC
+             │
+             ▼
+       STAGED ROLLOUT
+             │
+             ▼
+    POST-RELEASE MONITORING
+```
+
+Each stage answers a different question.
+
+### Development evaluation
+
+Does this idea look promising
+
+### Held-out evaluation
+
+Does the improvement generalize
+
+### Replay
+
+How does it behave on realistic historical traffic
+
+### Shadow
+
+Can it survive today's live environment
+
+### Limited live traffic
+
+Does it improve real user outcomes
+
+### Staged rollout
+
+Does it remain safe as exposure grows
+
+### Monitoring
+
+Does the improvement persist
+
+Imagine you operate an AI support assistant. Production system:
+
+$$
+S_P
+$$
+
+Candidate system:
+
+$$
+S_C
+$$
+
+Your release objective is:
+
+Improve issue resolution without worsening severe factual errors or increasing p95 latency beyond 3 seconds.
+
+### Offline evaluation
+
+| Metric                | Production | Candidate |
+| --------------------- | ---------: | --------: |
+| Task success          |        89% |   **94%** |
+| Severe factual errors |       0.7% |  **0.4%** |
+| p95 latency           |  **1.9 s** |     2.5 s |
+
+Promising.
+
+### Segment analysis
+
+| Segment            | Production | Candidate |
+| ------------------ | ---------: | --------: |
+| Simple requests    |        93% |   **97%** |
+| Billing            |        90% |   **94%** |
+| Technical          |        85% |   **93%** |
+| Long conversations |    **88%** |       79% |
+
+Now there is a serious regression. Error analysis shows the candidate loses early conversation constraints.
+
+### Robustness test
+
+Long-context degradation becomes severe beyond 25,000 tokens. So the team defines an initial routing boundary:
+
+```text
+context ≤ 25k → candidate
+context > 25k → production
+```
+
+### Shadow traffic
+
+Candidate sees real production traffic. You discover it calls the knowledge-search service 30% more frequently. Cost increases, but remains acceptable. No unexpected safety problem appears.
+
+### Limited live test
+
+Eligible conversations are randomized between production and candidate. Results:
+
+| Metric                | Production | Candidate |
+| --------------------- | ---------: | --------: |
+| User issue resolution |        72% |   **77%** |
+| Escalation            |        18% |   **14%** |
+| p95 latency           |  **2.0 s** |     2.6 s |
+| Severe factual error  |       0.6% |  **0.4%** |
+
+The offline improvement translates into user outcomes.
+
+### Initial release
+
+Candidate receives all eligible conversations with:
+
+$$
+\text{context}\le25k
+$$
+
+Longer conversations continue using production. This is not:
+
+Candidate won.
+
+The actual conclusion is:
+
+> **Evidence supports candidate deployment inside this operating region.**
+
+That is a much more precise statement.
+
+## How Do Deltas, Constraints, and the Release Ladder Produce a Final Decision?
+<!-- section-summary: A release decision evaluates candidate-minus-production deltas under quality, safety, latency, cost, compatibility, and reversibility constraints. -->
+
+The final dashboard and constrained-optimization view turn all of those deltas into an explicit release decision.
+
+**Model selection** asks:
+
+Which candidate performs best on my development objective
+
+Suppose:
+
+$$
+M_1,\ M_2,\ M_3
+$$
+
+and you pick:
+
+$$
+M_2
+$$
+
+because it has the best benchmark score. **Release evaluation** asks:
+
+Is replacing some part of the production system with $$M_2$$ actually justified
+
+Those are different problems. A candidate can win model selection and still fail release evaluation.
+
+For example:
+
+* benchmark improves,
+* but latency violates requirements;
+* quality improves,
+* but one critical segment regresses;
+* accuracy improves,
+* but system reliability falls.
+
+Production is the real alternative. A particularly useful mental shift is replacing:
+
+```text
+Candidate accuracy: 94%
+```
+
+with:
+
+```text
+Change vs production:
+Overall quality        +3.0 pp
+High-risk errors       -0.2 pp
+Spanish quality        -4.5 pp
+p95 latency            +0.7 sec
+Cost/request           +18%
+Timeout rate           +0.03 pp
+```
+
+This immediately aligns evaluation with the actual decision. You aren't trying to understand whether 94% is “good.” You are asking:
+
+What do we gain, what do we lose, and where
+
+Conceptually, you may want:
+
+$$
+\max \text{user benefit}
+$$
+
+subject to constraints such as:
+
+$$
+\text{safety risk}\le T_s
+$$
+
+$$
+\text{latency}\le T_l
+$$
+
+$$
+\text{cost}\le T_c
+$$
+
+$$
+\text{critical segment regression}\le T_g
+$$
+
+The candidate does not need to dominate production on every metric. It needs to produce a better acceptable operating point given your product requirements. This explains why a single composite leaderboard score is often insufficient for release decisions.
+
+| Question                           | What you need                      |
+| ---------------------------------- | ---------------------------------- |
+| **Did overall behavior improve?**  | candidate-production delta         |
+| **Where did it improve?**          | wins and segment deltas            |
+| **Where did it regress?**          | paired regressions                 |
+| **How certain are we?**            | counts and uncertainty             |
+| **What else changed?**             | latency, cost, reliability, safety |
+| **Where can we safely deploy it?** | release boundaries                 |
+
+A dashboard containing forty standalone candidate metrics but no production comparison misses the main decision. The deepest mistake is to think:
+
+**“We have a new model. Let's determine whether it is good enough.”**
+
+That is usually not the actual production decision. The actual question is:
+
+$$
+\boxed{
+\text{What would change if we replace the system users receive today?}
+}
+$$
+
+That leads naturally to the full process:
+
+$$
+\boxed{
+\text{Current production}
+\rightarrow
+\text{release hypothesis}
+\rightarrow
+\text{same-case comparison}
+\rightarrow
+\text{wins and regressions}
+\rightarrow
+\text{segments}
+\rightarrow
+\text{system stress tests}
+\rightarrow
+\text{shadow traffic}
+\rightarrow
+\text{limited live traffic}
+\rightarrow
+\text{smallest justified release scope}
+\rightarrow
+\text{production verification}
+}
+$$
+
+The candidate should therefore never be evaluated merely as an isolated model. Evaluate it against the **real alternative**: the complete system already serving users. And do not ask only:
+
+“Is the candidate better on average?”
+
+Ask:
+
+**What does it fix? What does it break? Who experiences each change? Under what conditions does the improvement hold? And what is the smallest production boundary for which the evidence actually supports replacement?**
+
+That is the first-principles meaning of **candidate vs production evaluation**.
 
 ![Five-step release decision starts with a pinned candidate and evidence, then grants defer, shadow, canary, or release authority while only live scopes enter production verification](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/candidate-release-authority-summary.png)
 
 *A deferred candidate returns for new evidence. Shadow, canary, and released scopes are verified only against the traffic and outcomes each decision actually authorizes.*
 
-## References
+## Check Your Answers
 
-- [scikit-learn: Model evaluation](https://scikit-learn.org/stable/modules/model_evaluation.html)
-- [SciPy: Bootstrap confidence intervals](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.bootstrap.html)
-- [MLflow: Model evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
-- [MLflow: Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
-- [MLflow: Model signatures](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [Amazon SageMaker AI: Canary traffic shifting](https://docs.aws.amazon.com/sagemaker/latest/dg/deployment-guardrails-blue-green-canary.html)
-- [Azure Machine Learning: Progressive rollout of MLflow models to online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-deploy-mlflow-models-online-progressive?view=azureml-api-2)
-- [Argo Rollouts: Analysis and progressive delivery](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)
-- [Google SRE Workbook: Canarying releases](https://sre.google/workbook/canarying-releases/)
-- [NIST AI Risk Management Framework Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Production System Is the Candidate Actually Trying to Replace?]{kind="recap"}
+A candidate replaces the current production system, including preprocessing, policies, fallbacks, latency, and costs, so success must be defined against that real alternative.
+:::
+
+:::expand[How Do Paired Cases and Segments Reveal Who Benefits and Who Pays?]{kind="recap"}
+Paired outcomes on identical cases reveal new wins and losses, while segment deltas show which populations benefit or absorb the regression.
+:::
+
+:::expand[What Do Offline Replay, Shadow Traffic, and Randomized Live Traffic Each Prove?]{kind="recap"}
+Offline replay provides controlled repeatability, shadow traffic exposes production inputs without affecting users, and randomized live traffic estimates causal product effects.
+:::
+
+:::expand[How Do Product Outcomes, Latency, Cost, Compatibility, and Fallbacks Affect the Comparison?]{kind="recap"}
+The comparison needs model metrics, product outcomes, latency distributions, workload cost, interface compatibility, downstream effects, and fallback behaviour.
+:::
+
+:::expand[How Do Uncertainty, Release Scope, Canary Exposure, and Rollback Control Risk?]{kind="recap"}
+Intervals and practical margins guide the smallest justified canary scope, with fixed goals and a tested rollback path controlling unknown risk.
+:::
+
+:::expand[How Do Versioning, Routing, Scale, and an Imperfect Production Baseline Change the Decision?]{kind="recap"}
+Versioned prompts, data, metrics, routing rules, and scale tests support local value even when the candidate is not globally superior and production itself has flaws.
+:::
+
+:::expand[What Evidence Should Continue After Launch and Strengthen Future Evaluations?]{kind="recap"}
+Delayed outcomes and traffic composition continue the comparison after launch, while each incident adds cases and guardrails to future evaluation.
+:::
+
+:::expand[How Do Deltas, Constraints, and the Release Ladder Produce a Final Decision?]{kind="recap"}
+A release decision evaluates candidate-minus-production deltas under quality, safety, latency, cost, compatibility, and reversibility constraints.
+:::

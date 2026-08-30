@@ -12,387 +12,1654 @@ aliases:
 
 ## Table of Contents
 
-1. [What A Model Rollback Must Restore](#what-a-model-rollback-must-restore)
-2. [What Rollback Can And Cannot Change](#what-rollback-can-and-cannot-change)
-3. [Identify The Complete Release To Restore](#identify-the-complete-release-to-restore)
-4. [Prepare And Test Rollback Before Release](#prepare-and-test-rollback-before-release)
-5. [Define Rollback Triggers And Authorized Actions](#define-rollback-triggers-and-authorized-actions)
-6. [Use Separate Steps For Containment, Rollback, And Recovery](#use-separate-steps-for-containment-rollback-and-recovery)
-7. [Choose Between Rollback And A New Corrective Release](#choose-between-rollback-and-a-new-corrective-release)
-8. [Roll Back an Online Decision Service Safely](#roll-back-an-online-decision-service-safely)
-9. [Know Which Control Changes The Registry, Workload, Or Traffic](#know-which-control-changes-the-registry-workload-or-traffic)
-10. [Check Feature, API, And Policy Compatibility Before Rollback](#check-feature-api-and-policy-compatibility-before-rollback)
-11. [Include Caches, In-Flight Work, And State In Rollback](#include-caches-in-flight-work-and-state-in-rollback)
-12. [Restore Batch Predictions As Versioned Data](#restore-batch-predictions-as-versioned-data)
-13. [Verify Recovery From Infrastructure To Product Outcome](#verify-recovery-from-infrastructure-to-product-outcome)
-14. [Repair Decisions Made By The Bad Release](#repair-decisions-made-by-the-bad-release)
-15. [Update GitOps And The Release Record After Emergency Rollback](#update-gitops-and-the-release-record-after-emergency-rollback)
-16. [Practice The Complete Rollback Path](#practice-the-complete-rollback-path)
-17. [The Main Idea](#the-main-idea)
-18. [References](#references)
+1. [What Complete Known-Good Behaviour Must a Model Rollback Restore?](#what-complete-known-good-behaviour-must-a-model-rollback-restore)
+2. [How Do Preplanned Triggers Distinguish Containment, Rollback, Recovery, and Roll-Forward?](#how-do-preplanned-triggers-distinguish-containment-rollback-recovery-and-roll-forward)
+3. [How Do Traffic, Registry, Workload, Compatibility, Data, Caches, In-Flight Work, State, and Batch Jobs Complicate Rollback?](#how-do-traffic-registry-workload-compatibility-data-caches-in-flight-work-state-and-batch-jobs-complicate-rollback)
+4. [How Do You Verify the Rollback and Repair Decisions Made by the Bad Release?](#how-do-you-verify-the-rollback-and-repair-decisions-made-by-the-bad-release)
+5. [How Do Progressive Delivery, Blue-Green Capacity, Shadowing, and Statistics Make Rollback Cheaper?](#how-do-progressive-delivery-blue-green-capacity-shadowing-and-statistics-make-rollback-cheaper)
+6. [How Do Feature Dependencies, Release Atomicity, Practice, Recovery Time, and Data Loss Define Readiness?](#how-do-feature-dependencies-release-atomicity-practice-recovery-time-and-data-loss-define-readiness)
+7. [How Does a Rollback State Transition Work in a Concrete Example?](#how-does-a-rollback-state-transition-work-in-a-concrete-example)
+8. [What Final Principle Defines a Successful Model Rollback?](#what-final-principle-defines-a-successful-model-rollback)
+9. [Check Your Answers](#check-your-answers)
 
-## What A Model Rollback Must Restore
-<!-- section-summary: A model rollback restores the complete set of compatible components that produced an approved decision instead of changing one model file in isolation. -->
+A team sees harmful predictions from model `v12` and points production back to `v11`. The old weights now receive new feature definitions and a new threshold, so the system continues making different decisions from the known-good release. The model changed back; behaviour did not.
 
-Suppose a newly released model begins sending valid requests to the wrong product action. A **model rollback** moves production away from that unsafe release and restores a previously approved way of making decisions. The goal is to stop new harm quickly and return to behaviour the team already understands.
+A **model rollback** restores a complete known-good decision path. It must account for traffic, model and feature artifacts, runtime, configuration, policy, schemas, caches, in-flight work, batch outputs, and historical consequences. Containment, rollback, recovery, and remediation are separate operations.
 
-Imagine a new ranking model starts placing unavailable products at the top of search results. The API still returns `200 OK`, latency looks healthy, and every container is ready. Customers see poor results anyway. The team needs to send new searches back through the previous ranking path.
+Use these questions to prepare, execute, verify, and learn from that complete state transition:
 
-Changing the model file may solve the problem if the artifact was the only change. Production releases often change more. The candidate may use a new feature transformation, container image, request schema, threshold, fallback rule, or cache format. Loading the old model with those new components can produce errors or a different failure.
+1. **What Complete Known-Good Behaviour Must a Model Rollback Restore?**
+2. **How Do Preplanned Triggers Distinguish Containment, Rollback, Recovery, and Roll-Forward?**
+3. **How Do Traffic, Registry, Workload, Compatibility, Data, Caches, In-Flight Work, State, and Batch Jobs Complicate Rollback?**
+4. **How Do You Verify the Rollback and Repair Decisions Made by the Bad Release?**
+5. **How Do Progressive Delivery, Blue-Green Capacity, Shadowing, and Statistics Make Rollback Cheaper?**
+6. **How Do Feature Dependencies, Release Atomicity, Practice, Recovery Time, and Data Loss Define Readiness?**
+7. **How Does a Rollback State Transition Work in a Concrete Example?**
+8. **What Final Principle Defines a Successful Model Rollback?**
 
-You can think of a decision path as a recipe, ingredients, and kitchen equipment working together. Restoring an old recipe gives an uncertain result if the ingredients and equipment have changed. In MLOps, the safe rollback target is therefore a **known-good decision path**: a compatible collection of model, data contract, runtime, policy, and routing versions.
+## What Complete Known-Good Behaviour Must a Model Rollback Restore?
+<!-- section-summary: Rollback restores a complete previously known-good decision path, including model, features, preprocessing, runtime, configuration, policy, schemas, and dependent behaviour. -->
 
-```mermaid
-flowchart TD
-    Q["Request or batch record"] --> F["Feature contract and transformations"]
-    F --> M["Model artifact"]
-    M --> P["Thresholds and decision policy"]
-    P --> A["Product or operational action"]
-    R["Runtime, configuration, and route"] --> F
-    R --> M
-    A --> O["Observed customer or business outcome"]
+Replacing weights is insufficient when other release components determine the production decision, so rollback begins with complete behaviour.
+
+A **model rollback** means replacing a newly released ML model system with an earlier known-good release because the new release is causing unacceptable behavior. That sounds simple:
+
+“Model v12 is bad. Put v11 back.”
+
+In a real production system, however, the model file is only one part of what determines predictions. A release may also change preprocessing, feature definitions, runtime libraries, routing rules, configuration, thresholds, policies, caches, schemas, and downstream behavior. So the first principle is:
+
+> **Rollback is not primarily about restoring an old model file. It is about restoring a previously known-good system behavior.**
+
+That distinction explains nearly everything else. Suppose a fraud system produces:
+
+$$
+\text{decision} = f(x)
+$$
+
+where $$f$$ is the model. It is tempting to imagine production as:
+
+$$
+x \rightarrow \text{model} \rightarrow y
+$$
+
+But an actual deployed system is closer to:
+
+$$
+\text{raw data}
+\rightarrow
+\text{feature transformation}
+\rightarrow
+\text{model}
+\rightarrow
+\text{calibration}
+\rightarrow
+\text{threshold/policy}
+\rightarrow
+\text{business action}
+$$
+
+The resulting behavior depends on all of these. We can represent a release as:
+
+$$
+R =
+(M, F, C, P, S, I, T)
+$$
+
+where:
+
+* $$M$$ = model artifact and weights
+* $$F$$ = feature/preprocessing logic
+* $$C$$ = configuration and thresholds
+* $$P$$ = business policies
+* $$S$$ = schemas and interfaces
+* $$I$$ = serving infrastructure/runtime
+* $$T$$ = traffic-routing configuration
+
+A rollback therefore asks:
+
+$$
+R_{\text{current}}
+\rightarrow
+R_{\text{known-good}}
+$$
+
+not merely:
+
+$$
+M_{12} \rightarrow M_{11}
+$$
+
+This is why rollback design belongs to **release engineering**, not just model management. The goal is not necessarily to make every machine identical to its previous state. The goal is to restore the important **system invariants**. For example, before the bad deployment:
+
+$$
+P(\text{incorrect fraud rejection}) < 0.1\%
+$$
+
+or:
+
+$$
+p99\ latency < 150\text{ ms}
+$$
+
+or:
+
+$$
+\text{prediction schema} = \text{schema expected by downstream service}
+$$
+
+A successful rollback restores those operational and product properties. This distinction is important. Suppose model v12 was deployed at 14:00 and caused severe latency. At 14:10 you restore v11. You might now have:
+
+* different pods,
+* different process IDs,
+* different cache contents,
+* different request IDs,
+* different machines.
+
+That is fine. A rollback does not have to reproduce the exact historical physical state. It must reproduce the **relevant known-good behavior**. So conceptually:
+
+$$
+\text{Successful rollback}
+=
+\text{restored required invariants}
+$$
+
+not:
+
+$$
+\text{Successful rollback}
+=
+\text{perfect historical rewind}
+$$
+
+A rollback can change **future behavior**. It usually cannot undo **past consequences**. Suppose the bad model was live for 30 minutes and generated:
+
+* 20,000 loan decisions,
+* 5,000 fraud blocks,
+* 300 recommendations,
+* 2 million batch predictions.
+
+Rolling the model back changes what happens to subsequent requests. It does not automatically reverse those previous decisions. This gives us two distinct problems:
+
+$$
+\text{system restoration}
+$$
+
+and
+
+$$
+\text{consequence repair}
+$$
+
+These must not be confused.
+
+For example:
+
+Bad recommendation model:
+
+$$
+R_{\text{bad}} \rightarrow \text{bad recommendations}
+$$
+
+Rollback fixes:
+
+$$
+R_{\text{good}} \rightarrow \text{future good recommendations}
+$$
+
+But recommendations already sent by email cannot be “un-sent.” Similarly, if a bad pricing model issued incorrect prices, restoring the model does not repair orders already executed at those prices. Therefore a complete incident response may require:
+
+$$
+\text{Containment}
+\rightarrow
+\text{Rollback}
+\rightarrow
+\text{Recovery}
+\rightarrow
+\text{Remediation}
+$$
+
+Rollback is only one stage. One of the most dangerous rollback mistakes is saying:
+
+“Roll back to model v17.”
+
+What exactly is model v17 compatible with? Imagine:
+
+### Release 17
+
+Model:
+
+$$
+M_{17}
+$$
+
+expects:
+
+$$
+F_{17} = [age, income, country]
+$$
+
+Then Release 18 changes feature construction:
+
+$$
+F_{18} = [age, log(income), country, deviceRisk]
+$$
+
+and deploys model $$M_{18}$$. If you simply replace $$M_{18}$$ with $$M_{17}$$ while keeping the v18 feature pipeline, you may get:
+
+* wrong feature ordering,
+* incompatible tensor dimensions,
+* incorrect transformations,
+* silent prediction corruption.
+
+So you want releases to be identified as **coherent bundles**.
+
+For example:
+
+```text
+release-2026-08-25-1431
+
+model:
+  artifact: fraud-model-17
+  sha256: ...
+
+features:
+  package: fraud-features-17
+
+runtime:
+  image: fraud-serving@sha256:...
+
+config:
+  threshold: 0.73
+
+schema:
+  input: fraud-request-v4
+  output: fraud-response-v3
+
+policy:
+  policy-version: 12
 ```
 
-Rollback restores enough of this path to produce safe future decisions. The exact boundary depends on what changed and which previous components remain compatible.
+The actual rollback target is this whole known-good release. A useful principle is:
 
-## What Rollback Can And Cannot Change
-<!-- section-summary: Rollback changes future execution after the cutover point, while earlier decisions and downstream effects require separate correction work. -->
+> **Never ask “Which model version was good?” when the real question is “Which complete release was good?”**
 
-A rollback controls work that reaches the restored path after cutover. New requests can use the stable endpoint. New batch partitions can use the approved model and feature snapshot. New automated decisions can follow the earlier policy.
+Consider two deployment styles. Mutable:
 
-The rollback cannot travel backward through actions that already happened. A notification may already have reached a customer. A recommendation may already have changed behavior. A fraud decision may have blocked a payment. A batch score may already have entered a warehouse table, queue, or external system.
-
-This creates two recovery tracks:
-
-- **Prospective recovery** restores safe decisions for new work.
-- **Retrospective repair** finds affected earlier decisions and applies the domain’s correction process.
-
-For example, routing traffic to the stable fraud service stops new decisions from the candidate. Previously blocked payments still need review through the payment system. Deleting prediction logs would erase evidence and leave the business effect unchanged.
-
-The cutover time matters. Record the first confirmed candidate exposure and the first confirmed stable decision after rollback. These two points define the interval for impact analysis. Prediction IDs, model versions, policy versions, and action IDs make that analysis possible.
-
-## Identify The Complete Release To Restore
-<!-- section-summary: A rollback target is a reviewed release bundle with immutable identities for every component that influences the decision. -->
-
-The “previous model” is an ambiguous target. It might mean the previous registry version, previous endpoint deployment, previous Git commit, or previous policy. A **release bundle** removes that ambiguity by recording the concrete identity of every relevant layer.
-
-The model should use an immutable registry version or artifact digest. The runtime should use an image digest. Feature transformations should use a code commit or feature-view version. Schemas, thresholds, fallbacks, and route configuration should carry their own versions. Batch jobs also need input snapshot and output-run identities.
-
-A compact release record can preserve this relationship:
-
-```yaml
-release_id: search-ranking-r43
-model_uri: models:/prod.search.ranker/43
-image: registry.example/ml/search@sha256:8f3a...
-feature_contract: search-features-v7
-policy_version: ranking-policy-v12
-api_schema: search-response-v4
-deployment_revision: search-api-6d49f
-previous_approved_release: search-ranking-r42
+```text
+fraud-model:production
 ```
 
-The release ID acts as the name of the whole decision path. The component fields explain what it contains. During an incident, the operator selects `search-ranking-r42` and verifies that its component versions are still available and compatible with current production inputs.
+Today that tag refers to v11. Tomorrow someone updates it to v12. After an incident, what did `production` contain before Maybe you can reconstruct it. Maybe not. An immutable reference instead looks like:
+
+```text
+fraud-serving@sha256:ab73...
+```
+
+or:
+
+```text
+model_id = 7c8f...
+```
+
+The principle is simple:
+
+$$
+\text{release identifier}
+\rightarrow
+\text{exact immutable artifacts}
+$$
+
+If identifiers can silently change meaning, reliable rollback becomes difficult. You therefore want to retain:
+
+* model artifacts,
+* container images,
+* configuration,
+* feature code,
+* dependency versions,
+* deployment manifests,
+* schemas,
+* policies,
+* metadata connecting all of them.
+
+Rollback requires **historical reproducibility**.
+
+## How Do Preplanned Triggers Distinguish Containment, Rollback, Recovery, and Roll-Forward?
+<!-- section-summary: Immutable releases, prepared procedures, and explicit triggers allow responders to choose containment, rollback, recovery, or forward repair according to evidence. -->
+
+That unit must exist immutably and the team must decide in advance which evidence triggers rollback versus another containment or forward fix.
+
+Rollback should not be invented during the incident. That is equivalent to designing an aircraft emergency procedure after an engine fails. Before release $$R_n$$, you should already know:
+
+$$
+R_n \rightarrow R_{n-1}
+$$
+
+is technically possible. This means verifying things such as:
+
+$$
+\text{Artifact}(R_{n-1}) \text{ still exists}
+$$
+
+$$
+\text{Runtime}(R_{n-1}) \text{ can still start}
+$$
+
+$$
+\text{Schema}_{n} \leftrightarrow \text{Schema}_{n-1}
+$$
+
+where compatibility is required. You also want the rollback operation to be boring and repeatable.
+
+For example:
+
+```text
+deploy release-173
+```
+
+is much safer during an incident than:
+
+```text
+find the old model
+edit the Kubernetes YAML
+remember the previous threshold
+change feature flags
+restart some pods
+hope everything agrees
+```
+
+Emergency operations should reduce the amount of human reasoning required under pressure. Suppose after deployment:
+
+$$
+\text{error rate} = 4.2\%
+$$
+
+Is that bad enough to rollback? Maybe. But during an incident people may disagree. One team watches latency. Another watches revenue. Another watches model accuracy. Another worries about customer harm. So releases should have predefined safety conditions.
+
+For example:
+
+$$
+\text{Rollback if p99 latency} > 300\text{ ms for 5 min}
+$$
+
+or:
+
+$$
+\text{Rollback if payment approval rate}
+<
+\text{baseline} - 8\%
+$$
+
+or:
+
+$$
+\text{Rollback immediately if malformed outputs occur}
+$$
+
+The logic is:
+
+$$
+\text{observable signal}
+\rightarrow
+\text{threshold}
+\rightarrow
+\text{authorized action}
+$$
+
+This avoids debating basic operating policy during the incident. Authorization also matters. If rollback requires approval from someone who cannot be reached, the technically perfect rollback mechanism is still operationally useless. These are often incorrectly treated as synonyms. A good mental sequence is:
+
+1. **Containment:** stop damage from growing—for example, halt rollout, disable a feature, route traffic away, or fall back to rules.
+2. **Rollback:** restore the previous known-good release or configuration.
+3. **Verification:** prove that infrastructure and product behavior have actually recovered.
+4. **Recovery:** restore normal capacity, traffic, queues, and dependent workflows.
+5. **Repair:** fix decisions, data, or side effects produced while the faulty release was active.
+6. **Reconciliation:** make Git, GitOps, registries, manifests, dashboards, and release records agree with reality.
+7. **Follow-up:** understand the failure and improve the release system.
+
+This separation matters because rollback itself may take time. Suppose the model is catastrophically rejecting all payments. You may first switch to:
+
+$$
+\text{model decision}
+\rightarrow
+\text{safe fallback policy}
+$$
+
+That is containment. Then deploy the previous release. That is rollback. Then drain queues and restore ordinary traffic. That is recovery. Suppose release $$R_{52}$$ contains a bug. You have two broad choices:
+
+$$
+R_{52} \rightarrow R_{51}
+$$
+
+or:
+
+$$
+R_{52} \rightarrow R_{53}
+$$
+
+where $$R_{53}$$ contains a fix. The first is **rollback**. The second is **roll-forward**. Rollback is attractive when $$R_{51}$$:
+
+* is known-good,
+* remains compatible,
+* can be restored quickly,
+* does not reintroduce a worse vulnerability or defect.
+
+Roll-forward may be better when rollback itself is unsafe. Imagine the new release introduced a database schema migration that cannot safely be reversed.
+
+Then:
+
+$$
+R_{52} \rightarrow R_{51}
+$$
+
+may break the older service. Or imagine $$R_{51}$$ contains a severe security vulnerability. Going backward would restore operational correctness but reintroduce security risk. The actual question is therefore:
+
+$$
+\text{Which available transition gives us the safest recovery?}
+$$
+
+not:
+
+$$
+\text{Can we technically deploy an older version?}
+$$
 
 ![A safe rollback from search-ranking-r43 to the complete known-good search-ranking-r42 release bundle, with separate prospective recovery and retrospective repair tracks.](/content-assets/articles/article-mlops-deployment-and-release-management-rolling-back-bad-model/complete-release-rollback-target.png)
 
 *Restoring the complete release preserves the compatible model, image, features, policy, API, deployment, and route while prior decisions remain a separate remediation workload.*
 
-An alias such as `Champion` or `production` is helpful for discovery, yet it is mutable. Incident records and prediction telemetry should preserve the concrete model version resolved from that alias. Otherwise the same alias can refer to different artifacts at different moments.
+## How Do Traffic, Registry, Workload, Compatibility, Data, Caches, In-Flight Work, State, and Batch Jobs Complicate Rollback?
+<!-- section-summary: Online traffic, registry labels, workloads, compatibility, migrations, caches, in-flight requests, stateful models, batch outputs, and historical reprocessing move on different timelines. -->
 
-## Prepare And Test Rollback Before Release
-<!-- section-summary: A usable rollback depends on retained artifacts, compatibility evidence, stable capacity, observability, and rehearsed authority established before deployment. -->
+Execution is difficult because traffic, control-plane records, runtime state, data, caches, and long-running work do not switch simultaneously.
 
-Rollback speed is mostly designed before the incident. An operator cannot restore an image that the registry removed, a model whose dependencies vanished, or a stable endpoint that lacks capacity.
+Imagine model servers:
 
-### Retain And Test The Known-Good Release
-
-Keep the previous approved model, image, feature code, policy, schema, and deployment declaration for the agreed recovery window. Load the complete bundle in staging or a shadow environment. Run a small set of contract and behavioral checks against current request shapes and representative features.
-
-The previous release also needs production capacity. A canary may send only a small share of traffic to stable or candidate workloads, depending on the rollout design. Confirm that the stable path can accept full load or scale quickly enough to meet the recovery objective.
-
-### Expose The Active Release Identity
-
-Every prediction record should carry the concrete model version, release ID, policy version, and feature contract. Service build information should expose the image or code revision. OpenTelemetry resource attributes, structured logs, and low-cardinality metrics can connect a request to the running release.
-
-A readiness probe proves that a process can receive traffic. Model identity requires separate evidence. Add a safe version endpoint, startup record, or prediction field that reports the concrete loaded identity.
-
-### Keep Rollback Authority And Access Ready
-
-The runbook should name who can freeze a rollout, shift traffic, disable automation, reassign a registry alias, approve a batch correction, and reconcile Git. Emergency credentials need regular validation. A command written in a document has little value if the on-call engineer lacks permission to run it.
-
-## Define Rollback Triggers And Authorized Actions
-<!-- section-summary: Predefined technical, model, and product guardrails should identify both the rollback condition and the person authorized to act. -->
-
-A rollback trigger is a condition that says the release has crossed an agreed risk boundary. Defining it before deployment removes a long debate while harm is growing.
-
-Technical triggers include error rate, timeout rate, latency, resource saturation, failed readiness, and cost spikes. Model triggers include invalid outputs, missing-feature rates, score-distribution shifts, uncertainty, calibration proxies, and slice-specific quality. Product triggers include complaints, unsafe actions, cancellations, manual-review overload, or delayed ground-truth degradation.
-
-Each trigger should state the measurement window, affected population, threshold, minimum sample, and action. A rare safety event may require immediate containment after one confirmed case. A noisy conversion metric may need a larger sample and statistical evidence. The trigger should match the severity and measurement delay of the risk.
-
-The action can differ by signal. A crashing candidate can trigger automatic traffic removal. A fairness concern may pause automation and require human review. A suspicious delayed label may freeze promotion while the team validates label freshness. Automation should act only where the signal is reliable and the response is safely reversible.
-
-## Use Separate Steps For Containment, Rollback, And Recovery
-<!-- section-summary: Containment limits exposure, rollback restores a target path, and recovery proves that the system and affected outcomes have stabilized. -->
-
-Rollback incidents involve immediate safety, technical restoration, and longer-term cleanup. Splitting that work into three phases helps the team say exactly what has been achieved and what remains open.
-
-The phases are containment, rollback, and recovery. They can overlap during a fast response, yet each one has a different completion condition.
-
-**Containment** reduces immediate harm. The team can freeze traffic expansion, set candidate weight to zero, disable an automated action, or use a deterministic fallback. Containment can happen before the exact root cause is known.
-
-**Rollback** applies a chosen known-good release bundle. It changes the serving or batch path that will process new work.
-
-**Recovery** proves that the restored path is active, customer behavior is improving, downstream effects are addressed, and declared configuration agrees with production.
-
-```mermaid
-flowchart TD
-    D["Guardrail or incident signal"] --> F["Freeze release expansion"]
-    F --> C["Contain immediate harm"]
-    C --> T["Select known-good target"]
-    T --> K{"Compatibility confirmed?"}
-    K -->|"Yes"| R["Execute rollback"]
-    K -->|"No"| X["Use fallback or forward fix"]
-    R --> V["Verify decision-path recovery"]
-    X --> V
-    V --> E["Repair earlier effects and reconcile state"]
+```text
+v10 instances
+v11 instances
 ```
 
-A successful command is only one step. If Kubernetes reports healthy Pods while the old candidate remains in a model cache, containment has failed. If new decisions recover while earlier automated actions remain queued, prospective recovery succeeded and retrospective repair remains open.
+Requests are routed according to:
 
-## Choose Between Rollback And A New Corrective Release
-<!-- section-summary: Rollback is favored when a compatible approved target is ready; a forward fix is safer when earlier components cannot operate with current state. -->
+$$
+P(v10) + P(v11) = 1
+$$
 
-A **forward fix** creates and deploys a new correction instead of restoring the previous release. Both paths can be valid. The safest choice depends on time to reduce harm, confidence in the target, and reversibility of recent changes.
+During a canary deployment:
 
-Rollback usually fits if the previous path is available, compatible, recently proven, and fast to activate. It reduces the number of new decisions made by an uncertain release and gives the team time for careful diagnosis.
+$$
+P(v11) = 0.05
+$$
 
-A forward fix may fit if a database or feature-schema migration is irreversible, the previous model cannot read current inputs, a security patch must remain, or the candidate wrote state the earlier runtime cannot understand. Even then, containment comes first: disable the risky action, route to manual review, or use a safe fallback while the fix is built and tested.
+$$
+P(v10) = 0.95
+$$
 
-Avoid editing the failing release directly under pressure without a reproducible build. That creates an untracked production version and weakens later verification. Build a new immutable release, record its relationship to the incident, and send it through the shortest approved emergency path.
+If v11 behaves badly, the fastest containment action may simply be:
 
-## Roll Back an Online Decision Service Safely
-<!-- section-summary: Online rollback freezes expansion, protects traffic, activates a compatible stable path, and confirms that new requests use it. -->
+$$
+P(v11) \rightarrow 0
+$$
 
-Online systems make decisions request by request. Their rollback path should prioritize fast containment while preserving enough evidence for diagnosis.
+rather than immediately deleting v11. This is why traffic management is often more important to rollback speed than deployment speed. You can conceptually separate:
 
-### Freeze Changes And Record The Live State
+$$
+\text{what exists}
+$$
 
-Stop progressive promotion, automated model deployment, and retraining promotion. Record current traffic weights, replica counts, endpoint revisions, registry alias, loaded model versions, feature contract, and policy version. This snapshot explains what users were receiving before the team changes production.
+from
 
-### Move New Traffic To A Safe Path
+$$
+\text{what receives traffic}
+$$
 
-If a pre-warmed stable deployment is healthy and compatible, route new traffic to it. Managed endpoints, service meshes, load balancers, and Argo Rollouts can change weights quickly. Watch capacity during the shift because a small stable pool may need to absorb the whole workload.
+A new model can remain deployed while receiving zero traffic. This can make recovery safer and debugging easier. This distinction causes many production mistakes. Suppose someone changes:
 
-Keep the candidate available for a short evidence window if policy allows, while its traffic remains zero. Abruptly deleting it can remove logs, loaded-version evidence, or the environment needed to reproduce the failure.
-
-### Update The Declared Production State
-
-Traffic removal contains the incident. The deployment declaration should then point to the stable image, model reference, feature configuration, and policy. Restart or reload replicas through the documented mechanism. Confirm that new requests contain the stable release ID.
-
-### Monitor The Traffic Cutover
-
-Requests already in flight may finish on the candidate after weights change. Long-lived connections and client-side caches can extend this tail. Track the final candidate prediction time and the first stable prediction time. Verification queries should filter by concrete release identity and decision time instead of relying only on the wall-clock command time.
-
-## Know Which Control Changes The Registry, Workload, Or Traffic
-<!-- section-summary: Registry aliases, deployment revisions, and traffic weights affect different layers, so operators must verify their effect on the loaded runtime. -->
-
-Production platforms offer several controls that can help reverse a release. Each control reaches a different layer. Operators need to know whether they changed a registry reference, the running workload, or request routing.
-
-Several of these controls are called “rollback,” although their effects are different. Combining them safely requires verification at the loaded runtime.
-
-### MLflow aliases select a registry version
-
-MLflow Model Registry aliases map a readable name to a concrete model version. Reassigning an alias can restore the registry reference:
-
-```python
-from mlflow import MlflowClient
-
-client = MlflowClient()
-client.set_registered_model_alias("prod.search.ranker", "Champion", 42)
-restored = client.get_model_version_by_alias("prod.search.ranker", "Champion")
-assert restored.version == "42"
+```text
+production-model -> v10
 ```
 
-This confirms registry state. A workload that loads `models:/prod.search.ranker@Champion` on its next execution resolves version 42. A long-running process that loaded the candidate at startup keeps its in-memory object until a reload or restart occurs. Loaded-version telemetry closes that gap.
+in the model registry. Does that mean all production requests are now using v10? Not necessarily. A running server might have loaded v11 into memory hours ago. So:
 
-Managed registries provide similar immutable versions and deployment references. The same rule applies: changing a catalog reference and changing the model inside running replicas are separate events.
+$$
+\text{Registry state} \neq \text{Runtime state}
+$$
 
-### Argo Rollouts can return traffic to stable
+Similarly, restarting workloads with v10 does not guarantee they receive traffic. Thus:
 
-Argo Rollouts keeps a stable ReplicaSet during progressive delivery. Its abort command scales the stable version and removes the candidate from service:
+$$
+\text{Runtime state} \neq \text{Traffic state}
+$$
 
-```bash
-kubectl argo rollouts abort search-api --namespace ml-serving
+You should think about three independent controls:
+
+$$
+\boxed{
+\text{Registry}
+\quad
+\text{Workload}
+\quad
+\text{Traffic}
+}
+$$
+
+The registry answers:
+
+Which artifact is designated as a particular release or alias
+
+The workload manager answers:
+
+Which version is actually running
+
+The traffic system answers:
+
+Which running version receives requests
+
+These may be controlled by completely different systems.
+
+For example:
+
+```text
+MLflow / model registry
+        ↓
+Kubernetes Deployment
+        ↓
+service mesh / gateway
+        ↓
+customer traffic
 ```
 
-The Rollout remains `Degraded` because desired state still names the candidate. Apply or commit the previous stable specification after containment so the controller has a healthy desired target.
+Changing one layer does not magically update the others. Suppose:
 
-### Kubernetes undo restores the Pod template
+$$
+\text{Client v3}
+\rightarrow
+\text{Model service v3}
+$$
 
-A Kubernetes Deployment records revisions after changes to its Pod template. `kubectl rollout undo` restores an earlier Pod template revision:
+Then release v4 changes the response from:
 
-```bash
-kubectl rollout history deployment/search-api --namespace ml-serving
-kubectl rollout undo deployment/search-api --to-revision=12 --namespace ml-serving
-kubectl rollout status deployment/search-api --namespace ml-serving
+```json
+{
+  "score": 0.78
+}
 ```
 
-This action covers the image and other fields inside the recorded Pod template. External ConfigMaps, registry aliases, feature tables, and database migrations remain unchanged. The release bundle shows which additional controls must move together.
+to:
+
+```json
+{
+  "probability": 0.78,
+  "reason_codes": [...]
+}
+```
+
+Downstream clients migrate to the new schema. Now you restore service v3. It returns:
+
+```json
+{
+  "score": 0.78
+}
+```
+
+The model may work perfectly. The system may still fail. This is why safe releases prefer backward-compatible changes. For example, instead of immediately removing:
+
+```json
+"score"
+```
+
+you temporarily provide both:
+
+```json
+{
+  "score": 0.78,
+  "probability": 0.78,
+  "reason_codes": [...]
+}
+```
+
+This creates an interval during which both old and new consumers work. The general principle is:
+
+$$
+\text{Rollbackability requires compatibility across time}
+$$
+
+This applies to:
+
+* API schemas,
+* feature schemas,
+* event formats,
+* databases,
+* policy rules,
+* model inputs,
+* model outputs.
+
+Suppose model v7 expects:
+
+```text
+customer_age
+annual_income
+credit_score
+```
+
+Release v8 replaces:
+
+```text
+annual_income
+```
+
+with:
+
+```text
+monthly_income
+```
+
+and deletes the old feature. If you later restore model v7:
+
+$$
+M_7(F_8)
+$$
+
+may be impossible. Therefore feature evolution should often use an **expand-and-contract** strategy. First expand:
+
+```text
+annual_income
+monthly_income
+```
+
+Both exist. Deploy consumers that understand the new representation. Only after rollback risk has disappeared do you remove the old field. The same concept applies to databases. Instead of:
+
+$$
+\text{old schema}
+\rightarrow
+\text{new incompatible schema}
+$$
+
+prefer:
+
+$$
+S_1
+\rightarrow
+S_{1+2}
+\rightarrow
+S_2
+$$
+
+where the middle state supports both versions. Rollback safety is largely a product of **temporal compatibility**. Suppose model v12 produces:
+
+```text
+user123 -> recommendation set A
+```
+
+and that result is cached for six hours. At 15:00 you roll back to model v11. But requests for `user123` continue receiving the cached v12 answer. So the actual system behaves like:
+
+$$
+\text{new requests}
+\rightarrow
+\begin{cases}
+\text{cached v12 result} \\
+\text{fresh v11 result}
+\end{cases}
+$$
+
+The model may have been rolled back while the **observable application behavior has not**. A useful technique is versioned cache keys:
+
+```text
+recommendations:v11:user123
+recommendations:v12:user123
+```
+
+rather than:
+
+```text
+recommendations:user123
+```
+
+Now switching releases naturally selects the appropriate cache namespace. This illustrates a broader principle:
+
+Anything derived from the release may need to be release-aware.
+
+Suppose an asynchronous system works like:
+
+```text
+request
+   ↓
+queue
+   ↓
+worker
+   ↓
+model
+   ↓
+result
+```
+
+At rollback time, 100,000 jobs may already be queued. Were those jobs created under assumptions belonging to v12? Will v11 understand them? What happens to workers already processing them? A rollback may therefore need:
+
+$$
+\text{stop intake}
+\rightarrow
+\text{classify queued work}
+\rightarrow
+\text{drain/cancel/replay}
+\rightarrow
+\text{restore service}
+$$
+
+Similarly, Kubernetes may terminate old pods gradually. During deployment:
+
+```text
+v11 pod
+v11 pod
+v12 pod
+v12 pod
+```
+
+During rollback:
+
+```text
+v12 pod terminating
+v11 pod starting
+v11 pod healthy
+```
+
+For some interval both versions can coexist. Your system therefore needs to tolerate **mixed-version operation**. Many models appear stateless:
+
+$$
+x \rightarrow f(x) \rightarrow y
+$$
+
+But the surrounding application may have state.
+
+For example:
+
+* conversation history,
+* recommendation history,
+* fraud counters,
+* embeddings,
+* user profiles,
+* online-learned parameters,
+* vector indexes,
+* session state.
+
+Suppose v12 stores:
+
+```text
+embedding_dimension = 1536
+```
+
+while v11 expects:
+
+```text
+embedding_dimension = 768
+```
+
+Rolling back the application without rolling back or converting the stored state may fail. The true release state therefore sometimes becomes:
+
+$$
+R =
+(\text{code},\text{model},\text{config},\text{persistent state})
+$$
+
+Persistent-state changes deserve especially careful design because code can be redeployed easily while data mutations are often irreversible. Consider a daily churn pipeline:
+
+```text
+customers
+   ↓
+features
+   ↓
+model
+   ↓
+churn_predictions.csv
+   ↓
+marketing campaign
+```
+
+Suppose Monday's model generated bad predictions. There may be no running service to “roll back.” Instead you need to recreate the previous output:
+
+$$
+D_t^{\text{bad}}
+\rightarrow
+D_t^{\text{corrected}}
+$$
+
+using an earlier model. For batch systems, **predictions themselves are data artifacts**. So instead of writing:
+
+```text
+/churn/latest/predictions.parquet
+```
+
+and overwriting it repeatedly, you might have:
+
+```text
+/churn/2026-08-30/model-v23/predictions.parquet
+/churn/2026-08-30/model-v24/predictions.parquet
+```
+
+Then downstream consumers can reference a specific prediction dataset. This creates lineage:
+
+$$
+\text{input data version}
++
+\text{feature version}
++
+\text{model version}
++
+\text{code version}
+\rightarrow
+\text{prediction dataset version}
+$$
+
+Without this lineage, reproducing a batch prediction can become nearly impossible. Suppose you rerun yesterday's predictions using model v11. Will you get the exact results v11 would have produced yesterday Only if you also reproduce yesterday's inputs. That requires:
+
+$$
+X_{\text{yesterday}}
+$$
+
+rather than today's mutated database state. For reproducibility:
+
+$$
+Y_t =
+f(
+X_t,
+F_v,
+M_v,
+C_v
+)
+$$
+
+If any input has changed, the output may change. So batch rollback often requires versioning not only models but:
+
+* source snapshots,
+* feature datasets,
+* configuration,
+* reference tables,
+* model artifacts,
+* software environment.
+
+This is one reason ML lineage is operationally important rather than merely administrative.
+
+## How Do You Verify the Rollback and Repair Decisions Made by the Bad Release?
+<!-- section-summary: Verification covers infrastructure, request path, behaviour, metrics, identity, and baseline, while remediation addresses decisions already made and records emergency drift. -->
+
+After routing changes, responders must prove the restored path at several layers and repair decisions the bad version already caused.
+
+Suppose the deployment system reports:
+
+```text
+Deployment successful
+```
+
+That tells you almost nothing about whether the incident is over. Verification should move outward through the system. At the lowest level:
+
+$$
+\text{Are healthy instances running?}
+$$
+
+Then:
+
+$$
+\text{Are they running the intended model version?}
+$$
+
+Then:
+
+$$
+\text{Are requests reaching those instances?}
+$$
+
+Then:
+
+$$
+\text{Are predictions technically valid?}
+$$
+
+Then:
+
+$$
+\text{Are business outcomes recovering?}
+$$
+
+For example:
+
+```text
+Pods healthy                     ✓
+Model v41 loaded                 ✓
+100% traffic on v41              ✓
+Error rate normal                ✓
+Latency normal                   ✓
+Prediction distribution normal   ✓
+Checkout conversion normal       ✓
+```
+
+This progression matters because an infrastructure recovery can hide a product failure. For an ML system, observability often needs to span:
+
+$$
+\text{Infrastructure}
+\rightarrow
+\text{Serving}
+\rightarrow
+\text{Model}
+\rightarrow
+\text{Business}
+$$
+
+Suppose model v12 passes offline evaluation:
+
+$$
+AUC_{v12} = 0.94
+$$
+
+while:
+
+$$
+AUC_{v11} = 0.92
+$$
+
+So v12 seems better. But after production deployment:
+
+$$
+p99\ latency = 2.5\text{ seconds}
+$$
+
+and conversion drops 15%. Which model is better? Operationally, v11 may be preferable. A deployed ML model is part of a product system, so release success is multidimensional:
+
+$$
+Q =
+f(
+\text{predictive quality},
+\text{latency},
+\text{reliability},
+\text{cost},
+\text{safety},
+\text{business outcome}
+)
+$$
+
+Rollback criteria should reflect the real objective function, not merely offline ML metrics. Suppose model v13 ran from 13:12 to 13:41. You should be able to answer:
+
+$$
+\text{Which decisions were produced by } v13
+$$
+
+If prediction logs record:
+
+```text
+request_id
+model_version
+feature_version
+timestamp
+prediction
+decision
+```
+
+then you can identify:
+
+$$
+D_{\text{affected}}
+=
+\{
+d : d.model = v13
+\land
+13{:}12 \le d.time \le 13{:}41
+\}
+$$
+
+Those decisions can then be reviewed or repaired. Examples include:
+
+* re-running fraud transactions,
+* recalculating prices,
+* retracting incorrect recommendations,
+* recomputing risk assessments,
+* refunding affected users,
+* re-running documents through an earlier model.
+
+Without model-version attribution, you may know that something went wrong but not know who or what was affected. So observability is also a **forensic requirement**. Suppose the normal deployment mechanism is GitOps:
+
+```text
+Git
+ ↓
+controller
+ ↓
+production
+```
+
+Git says:
+
+```text
+model: v12
+```
+
+During an emergency an operator manually changes production to:
+
+```text
+model: v11
+```
+
+Now:
+
+$$
+\text{Git state} \neq \text{production state}
+$$
+
+What might the GitOps controller do? It may helpfully change production straight back to v12. That is why emergency rollback procedures need to understand the deployment authority. You may need to:
+
+* pause reconciliation,
+* change Git itself,
+* execute the rollback through the standard release mechanism,
+* or immediately record the emergency state in Git.
+
+The important invariant is:
+
+$$
+\text{declared desired state}
+=
+\text{intended production state}
+$$
+
+once the emergency action has stabilized. After a rollback, the release system should not pretend the failed release never happened. Imagine history:
+
+```text
+v20 deployed
+v21 deployed
+v21 rolled back
+v20 restored
+```
+
+That is more informative than simply:
+
+```text
+production = v20
+```
+
+The first tells you:
+
+* v21 reached production,
+* it was considered unsafe,
+* when it happened,
+* what replaced it.
+
+The distinction matters for:
+
+* audits,
+* investigations,
+* compliance,
+* debugging,
+* future deployment decisions.
+
+You want deployment history to be append-only where practical:
+
+$$
+R_{20}
+\rightarrow
+R_{21}
+\rightarrow
+\text{rollback}(R_{21})
+\rightarrow
+R_{20}
+$$
+
+rather than erasing $$R_{21}$$ from history.
+
+## How Do Progressive Delivery, Blue-Green Capacity, Shadowing, and Statistics Make Rollback Cheaper?
+<!-- section-summary: Progressive exposure limits affected traffic, blue-green retains ready capacity, shadowing supplies comparison evidence, and statistical uncertainty influences trigger confidence. -->
+
+Progressive delivery and blue-green capacity reduce exposure and restoration time, while shadow evidence and uncertainty improve trigger decisions.
+
+Compare two releases. Immediate:
+
+$$
+0\% \rightarrow 100\%
+$$
+
+Progressive:
+
+$$
+0\%
+\rightarrow
+1\%
+\rightarrow
+5\%
+\rightarrow
+25\%
+\rightarrow
+50\%
+\rightarrow
+100\%
+$$
+
+Suppose failure probability is detected at 5%. Then the maximum affected population is approximately:
+
+$$
+0.05N
+$$
+
+rather than:
+
+$$
+N
+$$
+
+for $$N$$ requests or users during that interval. This is the principle behind:
+
+* canary deployments,
+* shadow deployments,
+* staged rollouts,
+* blue/green deployments,
+* feature flags.
+
+They do not eliminate failures. They reduce:
+
+$$
+\text{blast radius}
+$$
+
+and often make rollback faster. Imagine two complete environments:
+
+```text
+BLUE  = release v17
+GREEN = release v18
+```
+
+Traffic currently goes to BLUE. You deploy v18 to GREEN and test it.
+
+Then:
+
+$$
+Traffic:
+BLUE \rightarrow GREEN
+$$
+
+If something goes wrong:
+
+$$
+Traffic:
+GREEN \rightarrow BLUE
+$$
+
+The major advantage is that the old release is still intact. Rollback becomes primarily a routing operation. This illustrates a fundamental trade-off:
+
+$$
+\text{more redundancy}
+\rightarrow
+\text{faster rollback}
+$$
+
+but usually:
+
+$$
+\text{more redundancy}
+\rightarrow
+\text{higher infrastructure cost}
+$$
+
+Deployment architecture is partly about deciding how much you are willing to pay for recovery speed. With shadow deployment:
+
+$$
+\text{production request}
+\rightarrow
+\begin{cases}
+M_{\text{current}} \rightarrow \text{real decision}\\
+M_{\text{candidate}} \rightarrow \text{discarded decision}
+\end{cases}
+$$
+
+The candidate sees real traffic but does not affect users. This can expose problems such as:
+
+* unexpected input distributions,
+* runtime crashes,
+* extreme latency,
+* schema assumptions,
+* memory problems.
+
+Shadowing reduces the probability that rollback becomes necessary. But it cannot catch every issue because some failures arise only when predictions actually influence downstream behavior. Traditional software often fails conspicuously:
+
+```text
+HTTP 500
+process crash
+timeout
+```
+
+A bad ML release can remain technically healthy.
+
+For example:
+
+```text
+HTTP status: 200
+latency: 40 ms
+CPU: normal
+```
+
+while its predictions are systematically wrong. Suppose the normal score distribution is:
+
+$$
+Y \sim N(0.35, 0.08)
+$$
+
+and after deployment:
+
+$$
+Y \sim N(0.82, 0.04)
+$$
+
+Nothing crashed. Yet something may be badly wrong. ML rollback therefore requires monitoring signals like:
+
+* prediction distribution,
+* feature distribution,
+* confidence,
+* class balance,
+* abstention rate,
+* downstream outcomes,
+* calibration,
+* subgroup behavior.
+
+In other words:
+
+$$
+\text{health} \neq \text{availability only}
+$$
+
+For ML:
+
+$$
+\text{health}
+=
+\text{technical health}
++
+\text{behavioral health}
+$$
 
 ![A comparison of registry aliases, traffic controls, Kubernetes undo, batch correction runs, and GitOps commits showing what each rollback control changes and what must be verified next.](/content-assets/articles/article-mlops-deployment-and-release-management-rolling-back-bad-model/rollback-control-effects.png)
 
 *Each control changes one layer; recovery requires following declared state through the loaded runtime to the customer or business outcome.*
 
-## Check Feature, API, And Policy Compatibility Before Rollback
-<!-- section-summary: The previous model is safe only if current features, request schemas, outputs, and decision policies still satisfy its contract. -->
+## How Do Feature Dependencies, Release Atomicity, Practice, Recovery Time, and Data Loss Define Readiness?
+<!-- section-summary: Feature changes can defeat model-only rollback; complete release atomicity, drills, and explicit recovery-time and data-loss targets expose whether restoration is actually possible. -->
 
-Compatibility is the gate between selecting a target and activating it. The fact that a model performed well last week says little about whether it can consume today’s production contract.
+Rollback can still fail if features or schemas changed, which makes atomic releases, drills, and recovery objectives essential readiness evidence.
 
-### Feature compatibility
+Imagine yesterday:
 
-The stable model may expect `search-features-v6` while production now emits `v7`. A renamed column, changed category encoding, reordered tensor, new null policy, or unit conversion can cause a crash or silent prediction error. Validate the model signature and run representative records through the entire old feature transformation.
+$$
+\text{age feature} = 42
+$$
 
-If the current feature store keeps versioned views, bind the stable model to its approved feature definition. If only the new schema exists, use a tested compatibility adapter or choose a forward fix. Reconstructing old features from guesswork during an incident creates further uncertainty.
+Today a feature pipeline bug turns it into:
 
-### Request and response compatibility
+$$
+\text{age feature} = 420
+$$
 
-The old endpoint must understand current requests, and its response must satisfy current consumers. A field removed from the old response can break an application even if predictions are accurate. Contract tests should cover required fields, types, null behavior, ranges, and fallback semantics.
+You deploy model v12 at approximately the same time. Predictions go wrong. Someone concludes:
 
-### Policy compatibility
+“v12 caused the issue.”
 
-Models usually feed a threshold, ranking rule, eligibility policy, or human-review workflow. Rolling back the model while leaving a candidate threshold active produces a new untested combination. Store policy version with the model release and restore the approved pair unless the incident plan explicitly validates another combination.
+They roll back to v11. But v11 receives:
 
-## Include Caches, In-Flight Work, And State In Rollback
-<!-- section-summary: Cached artifacts, long-running requests, online-learning state, and downstream queues can keep candidate behavior alive after configuration changes. -->
+$$
+age = 420
+$$
 
-Production systems retain state in places that a deployment command cannot see. A model server may cache an artifact on local disk. A feature service may cache transformed values. An API gateway may cache responses. A stream processor may hold queued decisions. An online learner may update parameters or counters continuously.
+and also fails. The real dependency chain is:
 
-Cache keys should include the release components that affect their value, such as model version, feature contract, and policy version. During rollback, invalidate candidate entries or advance the cache namespace. A global cache flush can overload databases and feature stores, so the runbook should prefer targeted invalidation and plan for refill capacity.
+$$
+\text{prediction}
+=
+M(
+F(\text{raw inputs})
+)
+$$
 
-Stateful systems need a recovery point. If treatment updates an online model, bandit state, deduplication store, or aggregate feature, loading the old artifact leaves the mutated state in place. Recovery may restore an approved snapshot, replay events up to a safe offset, or launch a clean state namespace. The choice depends on data loss tolerance and replay semantics.
+A rollback strategy therefore needs to determine whether the fault lies in:
 
-Queues and streams require a boundary too. Pause consumers that create harmful actions, record the candidate offset or message interval, and resume with an idempotent correction plan. Reprocessing without idempotency can duplicate emails, charges, tickets, or inventory changes.
+$$
+M
+$$
 
-## Restore Batch Predictions As Versioned Data
-<!-- section-summary: Batch rollback creates a traceable replacement run and controls consumers, because changing the model cannot repair outputs already written. -->
+or:
 
-Batch inference produces versioned datasets on a schedule. A faulty run may write millions of scores before monitoring detects the issue. The recovery unit is therefore the output run and its consumers.
+$$
+F
+$$
 
-First pause future schedules and downstream jobs. Record the candidate run ID, model version, feature snapshot, input partitions, output table version, and consumer checkpoints. Quarantine the candidate output so new consumers cannot read it. Preserve it for investigation under the normal retention policy.
+or:
 
-Next create a correction run with the approved release bundle and the same reproducible input snapshot. Write the result under a new run identity with a `supersedes_run_id` relationship. This provides an audit trail and lets consumers select the current approved output without overwriting history.
+$$
+C
+$$
 
-For Delta Lake or Apache Iceberg tables in Databricks, table history records each modifying operation and supports time travel to a previous version. That can help inspect the pre-incident state or reproduce earlier outputs:
+or somewhere downstream. This is why release correlation and lineage matter so much. Ideally:
 
-```sql
-DESCRIBE HISTORY prod.daily_risk_scores;
+$$
+R_n
+=
+\{
+M_n,
+F_n,
+C_n,
+P_n
+\}
+$$
 
-SELECT *
-FROM prod.daily_risk_scores VERSION AS OF 418
-WHERE scoring_date = :affected_partition;
+and all elements transition atomically. Reality may look like:
+
+```text
+12:00 feature pipeline v7
+12:04 model v12
+12:07 threshold 0.68
+12:12 policy v9
 ```
 
-Table time travel cannot recall files already exported or actions already consumed. Resume each downstream consumer from a reviewed boundary, deduplicate by decision or action ID, and record whether it accepted the correction run.
+If the system breaks at 12:14, what exactly is “the previous version” There may be no single previous version. The production state evolved through:
 
-```mermaid
-flowchart TD
-    B["Bad batch run detected"] --> P["Pause schedule and consumers"]
-    P --> Q["Quarantine candidate output"]
-    Q --> S["Select approved model and input snapshot"]
-    S --> N["Write a new correction run"]
-    N --> V["Validate counts, schema, and score behavior"]
-    V --> C["Resume consumers from reviewed boundary"]
-    C --> A["Record superseded and accepted run IDs"]
+$$
+S_0
+\rightarrow
+S_1
+\rightarrow
+S_2
+\rightarrow
+S_3
+\rightarrow
+S_4
+$$
+
+This suggests an important release-engineering principle:
+
+Coordinate dependent changes into identifiable release units whenever possible.
+
+Where atomic deployment is impossible, maintain enough history to reconstruct each intermediate state. A rollback mechanism that has never been exercised is an assumption. A useful test is not merely:
+
+```text
+Can we deploy v11
 ```
 
-## Verify Recovery From Infrastructure To Product Outcome
-<!-- section-summary: Recovery verification follows the change from declared control state through loaded runtime, model behavior, and customer outcomes. -->
+but something closer to:
 
-Verification should answer a simple question: “Are new decisions safe again?” A green deployment status contributes one piece of evidence.
-
-### Verify Control State
-
-Confirm the intended registry version, traffic weights, deployment revision, feature configuration, policy version, scheduler state, and Git commit. This verifies that the requested controls moved.
-
-### Verify The Loaded Runtime
-
-Confirm healthy replicas and the concrete release ID loaded by each replica. Check errors, latency, saturation, cold-start behavior, and stable capacity. Query new prediction logs to prove that candidate traffic reached zero after the cutover tail.
-
-### Verify Model And Decision Behaviour
-
-Compare output distributions, missing-feature rates, thresholds, fallback frequency, and affected segments with the approved baseline. A service can be operationally healthy while returning harmful decisions, so model and policy guardrails stay active after rollback.
-
-### Verify Product Outcomes
-
-Review the user or business signal that triggered the incident. Complaints or manual-review volume may move quickly. Ground-truth quality, defaults, returns, or retention may arrive later. Use a named interim proxy for early confidence and keep the incident in monitoring until the final outcome window matures.
-
-```mermaid
-flowchart TD
-    A["Rollback action"] --> C["Control state matches target"]
-    C --> R["Replicas loaded the target release"]
-    R --> D["New decisions match safe behavior"]
-    D --> P["Customer or operational outcomes recover"]
-    P --> X{"Sustained across required window?"}
-    X -->|"Yes"| E["Exit recovery monitoring"]
-    X -->|"No"| I["Continue containment and investigate"]
+```text
+Deploy v12
+Generate representative traffic
+Trigger rollback procedure
+Restore v11
+Confirm routing
+Confirm caches
+Confirm schemas
+Confirm downstream services
+Confirm metrics
+Confirm GitOps state
+Confirm forensic records
 ```
 
-Every verification step needs an owner, query or dashboard, sample requirement, and time window. Save the evidence in the incident and release records so closure can be reviewed later.
+This exposes failures that documentation cannot.
 
-## Repair Decisions Made By The Bad Release
-<!-- section-summary: Downstream repair uses authoritative domain operations to find, review, reverse, or replace actions created during the unsafe interval. -->
+For example:
 
-Start from the candidate exposure interval and enumerate prediction IDs. Join them to policy decisions, queue messages, transactions, notifications, tickets, or other actions. This creates the actual blast radius.
+* old container image was deleted,
+* credentials expired,
+* rollback manifest no longer validates,
+* database schema is incompatible,
+* traffic controller still points to the new version,
+* alerting cannot distinguish releases.
 
-The correction belongs to the system that owns the business action. A payment service reverses or releases a payment hold. A messaging service suppresses queued notifications. A case-management system reopens affected cases. A ranking system can re-score unconsumed items. Human review may be the safest path for high-impact decisions.
+A rollback capability is therefore best understood as a **tested recovery path**. Two concepts borrowed from disaster recovery are useful.
 
-Use idempotent correction commands keyed by action ID. If a correction job retries, it should recognize completed repairs and avoid applying them twice. Preserve the original prediction, correction reason, approving person or policy, and final outcome.
+### Recovery Time Objective
 
-Some effects cannot be fully reversed. A user may already have seen harmful content or acted on a recommendation. Recovery then includes communication, support, reporting, and prevention. The incident can close only after the accountable owner accepts the residual risk.
+How quickly should service return to acceptable behavior?
 
-## Update GitOps And The Release Record After Emergency Rollback
-<!-- section-summary: Emergency production changes become durable only after Git, automation, registry references, and release records agree with the recovered state. -->
+$$
+RTO = \text{maximum acceptable recovery time}
+$$
 
-GitOps controllers continuously move live infrastructure toward the state declared in Git. An emergency command may protect users immediately while Git still names the candidate. Automated reconciliation can then reintroduce the unsafe release.
+For a payment fraud model, perhaps:
 
-Create a reviewed revert or recovery commit that restores the approved image, model reference, feature configuration, policy, and traffic declaration. Sync it through the normal controller, then confirm live state matches the commit. Record emergency commands separately in the incident timeline.
+$$
+RTO = 5\text{ minutes}
+$$
 
-Argo CD documents that application rollback is unavailable while automated sync is enabled. Teams using that history mechanism need an approved procedure for managing sync and must still update the owning Git declaration. ApplicationSet-managed applications require changes through their owning ApplicationSet because temporary child-application changes can be overwritten.
+For an offline reporting model:
 
-The release record should capture the failed release, rollback target, trigger, cutover interval, operator, compatibility evidence, verification results, affected decisions, and follow-up work. This history helps later incidents answer why a release moved and which path was proven safe.
+$$
+RTO = 6\text{ hours}
+$$
 
-## Practice The Complete Rollback Path
-<!-- section-summary: Rollback drills prove that artifacts, permissions, capacity, commands, verification, and downstream correction work under realistic conditions. -->
+Different RTOs justify different architectures.
 
-A runbook can look complete while its target image has expired, its alias points somewhere unexpected, or its operator lacks permission. Practice turns those hidden assumptions into evidence.
+### Recovery Point
 
-A rollback drill should activate a non-production or low-risk candidate, trigger containment, restore the approved release bundle, verify loaded versions, check cache behavior, and reconcile Git. Batch drills should produce a bad test run, quarantine it, create a correction run, and resume a test consumer without duplication.
+For stateful or batch systems, ask how much output may need to be discarded or recomputed. If you can reproduce data only from midnight:
 
-Measure time from detection to frozen promotion, safe traffic, confirmed stable decisions, durable desired state, and completed downstream repair. The slowest step tells the team where to improve automation or ownership.
+$$
+\text{maximum lost/reprocessed interval}
+=
+\text{time since midnight}
+$$
 
-Keep the previous release only as long as policy and recovery objectives require, while ensuring at least one tested compatible target remains. Retention without compatibility tests gives false confidence. Compatibility tests without retained artifacts give no executable recovery path.
+This encourages engineers to design checkpoints, dataset versions, and logs deliberately.
 
-## The Main Idea
-<!-- section-summary: Model rollback restores a compatible decision path, proves that new outcomes recovered, and repairs earlier decisions through their owning systems. -->
+## How Does a Rollback State Transition Work in a Concrete Example?
+<!-- section-summary: A rollback is a controlled state transition from bad release through containment and restored traffic to verification and historical repair. -->
 
-A production model is part of a larger decision path. Safe rollback identifies the complete previous release, confirms compatibility, contains harm, moves online traffic or batch work to the approved path, and verifies the concrete version that handled new decisions.
+The state-transition model and concrete example show containment, restoration, verification, and remediation as separate steps.
 
-The work continues after the serving change. Caches, state, queues, batch outputs, GitOps declarations, and already-consumed actions can preserve candidate effects. A mature recovery process gives each of those effects an owner and an evidence-based closure condition.
+The cleanest way to reason about rollback is to stop thinking in terms of files and instead think in terms of **system state**. Let:
 
-The most important skill is understanding what each control changes. A registry alias changes a reference. A traffic weight changes routing. A deployment revision changes a Pod template. A batch correction creates replacement data. Recovery is complete only after those controls combine into safe customer and business outcomes.
+$$
+S_t =
+(
+M_t,
+F_t,
+C_t,
+P_t,
+D_t,
+I_t,
+T_t
+)
+$$
+
+represent the production system at time $$t$$. A deployment performs:
+
+$$
+S_0 \rightarrow S_1
+$$
+
+You observe that:
+
+$$
+Safety(S_1) = false
+$$
+
+The recovery system needs to construct some state:
+
+$$
+S_r
+$$
+
+such that:
+
+$$
+Safety(S_r)=true
+$$
+
+Often:
+
+$$
+S_r \approx S_0
+$$
+
+but not necessarily. You might retain a new database schema while restoring the old model. You might keep new infrastructure but route traffic to an old model. You might apply a new emergency policy while restoring old model weights. Therefore:
+
+$$
+S_r \neq S_0
+$$
+
+can still be a perfectly successful rollback. The objective is **safe behavioral restoration**, not literal reversal of time. Imagine an online credit-risk service. Release 31 contains:
+
+```text
+Model:          credit-v31
+Feature code:   features-v14
+Threshold:      0.67
+Container:      serving-v19
+API schema:     v5
+Policy:         lending-policy-v8
+```
+
+The previous release was:
+
+```text
+Model:          credit-v30
+Feature code:   features-v13
+Threshold:      0.72
+Container:      serving-v18
+API schema:     v5
+Policy:         lending-policy-v8
+```
+
+Five percent of traffic is sent to Release 31. Monitoring finds:
+
+$$
+\text{approval rate}_{31}=71\%
+$$
+
+while the expected rate is:
+
+$$
+\approx 42\%
+$$
+
+Infrastructure metrics look normal. Because the release system records the entire release bundle, engineers know exactly what changed. They first set:
+
+$$
+Traffic(v31)=0
+$$
+
+This contains the problem immediately. Traffic continues through v30. Then they investigate and discover a feature transformation bug:
+
+$$
+annualIncome
+\rightarrow
+monthlyIncome
+$$
+
+was applied twice. The operational rollback is therefore not simply:
+
+$$
+M_{31}\rightarrow M_{30}
+$$
+
+Instead the system performs:
+
+$$
+Traffic(R_{31})\rightarrow0
+$$
+
+and restores:
+
+$$
+R_{30}
+=
+(M_{30},F_{13},C_{30},I_{18})
+$$
+
+Then engineers verify:
+
+$$
+\text{error rate}
+$$
+
+$$
+\text{prediction distribution}
+$$
+
+$$
+\text{approval rate}
+$$
+
+$$
+\text{latency}
+$$
+
+all return to expected ranges. Finally they identify every decision produced by v31:
+
+$$
+\{d : d.release=31\}
+$$
+
+and send those cases through a correction workflow. Only then is recovery complete.
+
+## What Final Principle Defines a Successful Model Rollback?
+<!-- section-summary: Success means known-good system behaviour is restored, attributable, verified, and followed by repair of any consequences the bad release already created. -->
+
+The final principle measures rollback by restored and verified behaviour rather than by which model filename is active.
+
+A production ML system is not:
+
+$$
+\boxed{\text{model}}
+$$
+
+It is:
+
+$$
+\boxed{
+\text{data}
++
+\text{features}
++
+\text{model}
++
+\text{runtime}
++
+\text{configuration}
++
+\text{policy}
++
+\text{state}
++
+\text{traffic}
++
+\text{downstream effects}
+}
+$$
+
+Therefore model rollback is not:
+
+$$
+\boxed{\text{load old weights}}
+$$
+
+It is:
+
+$$
+\boxed{
+\text{restore a known-safe operating state}
+}
+$$
+
+And good rollback engineering follows from one deeper principle:
+
+$$
+\boxed{
+\text{Design every release so failure is expected, observable, bounded, and reversible.}
+}
+$$
+
+If releases are immutable, compatibility is preserved, traffic can be redirected independently, every decision is attributable to a release, state is versioned where necessary, and the rollback path is regularly tested, then rollback becomes an ordinary operational procedure rather than an emergency improvisation.
 
 ![The complete online and batch model rollback path from containment and compatibility checks through execution, five recovery gates, durable-state reconciliation, and repair of earlier effects.](/content-assets/articles/article-mlops-deployment-and-release-management-rolling-back-bad-model/model-rollback-summary.png)
 
 *Online and batch paths converge at recovery verification; only written criteria can advance the response to durable state reconciliation and repair of earlier effects.*
 
-## References
+## Check Your Answers
 
-- [MLflow: Model Registry workflows and aliases](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
-- [Kubernetes: Rolling back a Deployment](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#rolling-back-a-deployment)
-- [Argo Rollouts: Aborting a rollout](https://argo-rollouts.readthedocs.io/en/stable/getting-started/#4-aborting-a-rollout)
-- [Argo Rollouts: Rollback windows](https://argo-rollouts.readthedocs.io/en/stable/features/rollback/)
-- [Argo CD: Automated sync policy](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/)
-- [Argo CD: Application rollback](https://argo-cd.readthedocs.io/en/stable/user-guide/commands/argocd_app_rollback/)
-- [Databricks: Table history and time travel](https://docs.databricks.com/aws/en/tables/history)
-- [OpenTelemetry: Semantic conventions](https://opentelemetry.io/docs/specs/semconv/)
-- [Google SRE: Managing incidents](https://sre.google/sre-book/managing-incidents/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Complete Known-Good Behaviour Must a Model Rollback Restore?]{kind="recap"}
+Rollback restores a complete previously known-good decision path, including model, features, preprocessing, runtime, configuration, policy, schemas, and dependent behaviour.
+:::
+
+:::expand[How Do Preplanned Triggers Distinguish Containment, Rollback, Recovery, and Roll-Forward?]{kind="recap"}
+Immutable releases, prepared procedures, and explicit triggers allow responders to choose containment, rollback, recovery, or forward repair according to evidence.
+:::
+
+:::expand[How Do Traffic, Registry, Workload, Compatibility, Data, Caches, In-Flight Work, State, and Batch Jobs Complicate Rollback?]{kind="recap"}
+Online traffic, registry labels, workloads, compatibility, migrations, caches, in-flight requests, stateful models, batch outputs, and historical reprocessing move on different timelines.
+:::
+
+:::expand[How Do You Verify the Rollback and Repair Decisions Made by the Bad Release?]{kind="recap"}
+Verification covers infrastructure, request path, behaviour, metrics, identity, and baseline, while remediation addresses decisions already made and records emergency drift.
+:::
+
+:::expand[How Do Progressive Delivery, Blue-Green Capacity, Shadowing, and Statistics Make Rollback Cheaper?]{kind="recap"}
+Progressive exposure limits affected traffic, blue-green retains ready capacity, shadowing supplies comparison evidence, and statistical uncertainty influences trigger confidence.
+:::
+
+:::expand[How Do Feature Dependencies, Release Atomicity, Practice, Recovery Time, and Data Loss Define Readiness?]{kind="recap"}
+Feature changes can defeat model-only rollback; complete release atomicity, drills, and explicit recovery-time and data-loss targets expose whether restoration is actually possible.
+:::
+
+:::expand[How Does a Rollback State Transition Work in a Concrete Example?]{kind="recap"}
+A rollback is a controlled state transition from bad release through containment and restored traffic to verification and historical repair.
+:::
+
+:::expand[What Final Principle Defines a Successful Model Rollback?]{kind="recap"}
+Success means known-good system behaviour is restored, attributable, verified, and followed by repair of any consequences the bad release already created.
+:::

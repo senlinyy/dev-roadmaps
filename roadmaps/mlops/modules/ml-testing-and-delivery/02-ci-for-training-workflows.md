@@ -13,339 +13,1806 @@ aliases:
 
 ## Table of Contents
 
-1. [What Training CI Can Prove](#what-training-ci-can-prove)
-2. [Choose CI Checks Based On What Changed](#choose-ci-checks-based-on-what-changed)
-3. [Tier 1: Run Fast Pull-Request Checks Without External Services](#tier-1-run-fast-pull-request-checks-without-external-services)
-4. [Tier 2: Build The Training Container](#tier-2-build-the-training-container)
-5. [Tier 3: Test Real Services In A Protected Environment](#tier-3-test-real-services-in-a-protected-environment)
-6. [Tier 4: Run Full Training And Evaluation](#tier-4-run-full-training-and-evaluation)
-7. [Choose What Starts CI And Which Jobs Need Approval](#choose-what-starts-ci-and-which-jobs-need-approval)
-8. [Separate Caches From Evidence](#separate-caches-from-evidence)
-9. [Link Training Evidence To The Pull Request And Release](#link-training-evidence-to-the-pull-request-and-release)
-10. [Make Failed CI Jobs Safe To Rerun](#make-failed-ci-jobs-safe-to-rerun)
-11. [The Main Idea](#the-main-idea)
-12. [References](#references)
+1. [What Evidence Must Training CI Collect for an ML Change?](#what-evidence-must-training-ci-collect-for-an-ml-change)
+2. [What Belongs in the Four Training CI Tiers?](#what-belongs-in-the-four-training-ci-tiers)
+3. [How Does Full Training Show Whether a Candidate Is Acceptable?](#how-does-full-training-show-whether-a-candidate-is-acceptable)
+4. [How Do Evidence, Provenance, and Artifact Identity Stay Connected?](#how-do-evidence-provenance-and-artifact-identity-stay-connected)
+5. [How Do Retries and Change Triggers Avoid Corrupting CI?](#how-do-retries-and-change-triggers-avoid-corrupting-ci)
+6. [How Does a Complete Training CI Flow Decide What to Run?](#how-does-a-complete-training-ci-flow-decide-what-to-run)
+7. [How Do Long-Running CI Jobs Stay Reproducible and Diagnosable?](#how-do-long-running-ci-jobs-stay-reproducible-and-diagnosable)
+8. [What Does a Green Training CI Result Actually Mean?](#what-does-a-green-training-ci-result-actually-mean)
+9. [Check Your Answers](#check-your-answers)
 
-## What Training CI Can Prove
-<!-- section-summary: Training CI proves that a change is mechanically sound and decides which costly or privileged checks should follow. -->
+A pull request changes one learning-rate value. Linting passes, unit tests pass, and the training container builds. Twelve hours later, the same code produces a model that performs much worse than the production baseline. Ordinary software CI did its job, but it never tested the new artifact created by training.
 
-A pull request may alter Python code, a feature definition, a dependency lockfile, a container image, or a training configuration. Sending every unreviewed change directly to an expensive shared training environment wastes compute and can publish misleading evidence. **Training continuous integration (CI)** is the automated review system that checks those changes before they reach that environment.
+**Training CI** extends continuous integration across the full model-producing computation. Code, data, configuration, dependencies, and the runtime environment can all change the result. The workflow therefore has to collect evidence in stages: first that local logic works, then that the real environment and integrations work, and finally that full training produces an identifiable model that meets the acceptance policy.
 
-The unusual part is cost. A web application can often build and run its main test suite in minutes. A training pipeline may need several hours of accelerator time, a large governed dataset, and permission to write model artifacts. Running that entire process for every edit would make feedback slow, expensive, and risky.
+The cost of those checks rises quickly, so the system also needs rules for which changes trigger them, how retries remain isolated, and how the exact tested artifact moves forward. Use these questions to follow one change from a pull request to trustworthy model evidence:
 
-Consider a pull request that changes the maximum tree depth in a fraud model. A short CI run can prove that the configuration parses, the training entrypoint starts, and a tiny fixture produces a model artifact. It cannot prove that the candidate improves fraud detection on representative data. That claim requires the full evaluation dataset, segment metrics, and the same release policy used for production candidates.
+1. **What Evidence Must Training CI Collect for an ML Change?**
+2. **What Belongs in the Four Training CI Tiers?**
+3. **How Does Full Training Show Whether a Candidate Is Acceptable?**
+4. **How Do Evidence, Provenance, and Artifact Identity Stay Connected?**
+5. **How Do Retries and Change Triggers Avoid Corrupting CI?**
+6. **How Does a Complete Training CI Flow Decide What to Run?**
+7. **How Do Long-Running CI Jobs Stay Reproducible and Diagnosable?**
+8. **What Does a Green Training CI Result Actually Mean?**
 
-This gives training CI two responsibilities:
+## What Evidence Must Training CI Collect for an ML Change?
+<!-- section-summary: Training CI gathers progressively stronger evidence about changes to code, data, configuration, dependencies, and infrastructure before trusting a new model. -->
 
-- give the author fast evidence about code, configuration, contracts, and packaging;
-- route costly or privileged work through the correct trigger, identity, and approval boundary.
+A passing unit test cannot answer whether a changed training recipe still produces an acceptable model. Training CI begins by defining the claims that need evidence.
 
-The test suite defines what each check proves. **Training CI governs execution policy**: which checks run, where they run, which identity they receive, and which evidence moves to the next stage.
+Training CI is the part of an ML engineering system that asks:
 
-```mermaid
-flowchart TD; A["Pull Request<br/>(untrusted change under review)"] --> B["Change Classification<br/>(affected paths and risk)"]; B --> C["Fast CI<br/>(hermetic checks and smoke run)"]; C --> D["Artifact Build<br/>(image and configuration identity)"]; D --> E["Protected Integration<br/>(sandbox access with short-lived identity)"]; E --> F["Full Training<br/>(representative data and compute)"]; F --> G["Candidate Evidence<br/>(metrics, lineage, and release result)"]
+> **When training code, data logic, dependencies, or infrastructure changes, what evidence do we need before trusting the resulting model?**
+
+Ordinary CI often answers a narrower question:
+
+“Does the software still build and pass its tests?”
+
+Training CI must answer more:
+
+```text
+Does the code work
+Does the training environment build
+Can it talk to the real infrastructure
+Can training complete
+Does it produce a valid model
+Is that model good enough
+Can we prove exactly what produced it
 ```
 
-The stages answer progressively larger questions. A failure near the top should be cheap and quick to repair. A job near the bottom receives more compute, data access, and responsibility.
+The important shift is that ML training is not just compilation or application startup. Training itself is a computation that produces a new software artifact:
+
+$$
+(\text{code},\text{data},\text{configuration},\text{environment})
+\xrightarrow{\text{training}}
+\text{model}
+$$
+
+So Training CI is best understood as a system for **collecting evidence about that computation before the result is trusted or released**. Suppose a pull request changes:
+
+```python
+learning_rate = 0.001
+```
+
+to:
+
+```python
+learning_rate = 0.01
+```
+
+The Python file may:
+
+```text
+parse successfully
+pass linting
+pass unit tests
+build into a container
+```
+
+and yet the resulting model may become much worse. Likewise, suppose someone changes:
+
+```python
+feature = log(income)
+```
+
+to:
+
+```python
+feature = income
+```
+
+Everything may execute successfully. But model quality could change dramatically. Therefore:
+
+$$
+\text{software correctness}
+\not\Rightarrow
+\text{model correctness}
+$$
+
+Training CI exists because ML systems need evidence at several levels. It helps to be precise. Training CI cannot prove:
+
+“This model will always work perfectly in production.”
+
+No finite test can establish that. What CI can establish is a collection of narrower claims.
+
+For example:
+
+```text
+Claim 1:
+The changed Python code passes unit tests.
+
+Claim 2:
+The training container can be built.
+
+Claim 3:
+The training job can authenticate to the feature store.
+
+Claim 4:
+The pipeline can train successfully on representative data.
+
+Claim 5:
+The resulting model exceeds minimum evaluation thresholds.
+
+Claim 6:
+The candidate has not regressed excessively versus the current model.
+
+Claim 7:
+The produced model can be traced back to the exact code, data,
+configuration, and environment used to create it.
+```
+
+Training CI is therefore not a binary concept of:
+
+```text
+tested / untested
+```
+
+It is more like an accumulating body of evidence. Suppose a change enters CI. At the beginning, confidence is low. You can run increasingly expensive tests:
+
+$$
+E_1 \rightarrow E_2 \rightarrow E_3 \rightarrow E_4
+$$
+
+where:
+
+```text
+E1 = cheap local software checks
+E2 = training environment / container check
+E3 = real infrastructure integration check
+E4 = full training and model evaluation
+```
+
+Each stage gives stronger evidence, but costs more.
+
+For example:
+
+| Stage           |    Time |   Cost | What it tells you                                      |
+| --------------- | ------: | -----: | ------------------------------------------------------ |
+| Unit tests      | seconds |   tiny | local logic works                                      |
+| Container build | minutes |    low | training environment is constructible                  |
+| Integration     | minutes | medium | real dependencies work                                 |
+| Full training   |   hours |   high | candidate model can actually be produced and evaluated |
+
+This suggests the central optimization problem of Training CI:
+
+$$
+\boxed{
+\text{maximize useful confidence while minimizing unnecessary compute}
+}
+$$
+
+You do not want every typo to launch a 64-GPU training job. But you also do not want serious training changes to merge after nothing more than linting. Suppose there are three pull requests.
+
+### Change A
+
+```text
+README typo
+```
+
+### Change B
+
+```text
+training container dependency upgraded
+```
+
+### Change C
+
+```text
+label-generation logic changed
+```
+
+These have very different risks. Running identical CI for all three is wasteful. A better mental model is:
+
+$$
+\text{required evidence}
+=
+f(\text{what changed}, \text{risk of change})
+$$
+
+For example:
+
+```text
+documentation only
+    ↓
+maybe no training CI
+
+unit-test-only utility code
+    ↓
+fast tests
+
+Dockerfile or dependency changes
+    ↓
+fast tests + container build
+
+feature pipeline changes
+    ↓
+fast tests + smoke training + possibly full evaluation
+
+training algorithm changes
+    ↓
+full training and evaluation
+
+deployment interface changes
+    ↓
+training + serialization + serving compatibility tests
+```
+
+This is sometimes called **change-aware CI**. The idea is simple:
+
+Spend expensive verification where the change could realistically invalidate expensive assumptions.
+
+## What Belongs in the Four Training CI Tiers?
+<!-- section-summary: The four tiers move from controlled local checks to the real environment, protected integrations, and full training on representative infrastructure. -->
+
+Those claims differ in cost and realism, so the workflow collects them through four progressively stronger tiers.
+
+The first tier should usually be runnable without expensive infrastructure. You want these checks to be:
+
+```text
+fast
+cheap
+deterministic
+parallelizable
+safe
+easy to reproduce locally
+```
+
+Typical checks include:
+
+```text
+linting
+type checking
+unit tests
+data transformation tests
+schema tests
+configuration validation
+pipeline graph validation
+tiny synthetic smoke tests
+```
+
+For example:
+
+```bash
+pytest tests/unit
+pytest tests/data_contracts
+python validate_pipeline.py
+```
+
+Ideally these do not require:
+
+```text
+production databases
+cloud GPUs
+real feature stores
+real model registries
+large datasets
+```
+
+Why? Because the first job of CI is to reject obviously broken changes quickly. If:
+
+```python
+normalize_age()
+```
+
+is broken, there is no reason to spend money building a large training cluster. So the ordering should generally be:
+
+$$
+\text{cheap failure detection}
+\rightarrow
+\text{expensive validation}
+$$
+
+External services introduce additional variables:
+
+```text
+network failures
+authentication failures
+quota failures
+service outages
+rate limits
+temporary latency
+environment drift
+```
+
+Suppose a unit test fails because a staging database is unavailable. Did your feature function break? Or did the network break You have contaminated a small test with unrelated failure modes. Therefore Tier 1 usually uses:
+
+```text
+mocks
+fakes
+local files
+in-memory databases
+synthetic test data
+```
+
+The goal is not to prove external integration yet. It is to answer:
+
+**Does our own code behave correctly under controlled conditions?**
+
+Passing Python tests does not prove that the production training environment can be created. Suppose training runs inside a container. Your actual training environment may depend on:
+
+```text
+Python version
+CUDA version
+OS libraries
+compiler versions
+system packages
+ML frameworks
+native extensions
+environment variables
+entrypoints
+```
+
+The repository may look fine while:
+
+```dockerfile
+RUN pip install some-library==7.2
+```
+
+fails. Or a new version of PyTorch may conflict with the installed CUDA version. So CI should often build the same artifact that training will actually use:
+
+```text
+source code
+   ↓
+Docker build
+   ↓
+training image
+```
+
+Conceptually:
+
+$$
+\text{source}
+\xrightarrow{\text{build}}
+I
+$$
+
+where $$I$$ is the immutable training image. Then later stages should ideally train using **that exact image**. This matters because otherwise you can accidentally test:
+
+```text
+environment A
+```
+
+and train with:
+
+```text
+environment B
+```
+
+which weakens the evidence. Suppose the CI system successfully creates:
+
+```text
+training-image:sha256:abc123...
+```
+
+That digest identifies the exact image contents. Now full training can consume:
+
+```text
+training-image@sha256:abc123...
+```
+
+instead of rebuilding something later. This has an important property:
+
+$$
+\text{artifact tested}
+=
+\text{artifact used}
+$$
+
+That is stronger than:
+
+```text
+“We tested something built from approximately the same source.”
+```
+
+The broader principle is:
+
+> **Promote tested artifacts forward; do not casually rebuild supposedly equivalent artifacts at every stage.**
+
+Mocks are useful, but they are not reality. Suppose your code says:
+
+```python
+feature_store.read_features(...)
+```
+
+A mock can prove:
+
+```text
+your code calls the expected method
+```
+
+But it cannot prove:
+
+```text
+credentials are valid
+network policy allows access
+the deployed schema matches your assumptions
+the installed client version works
+permissions are sufficient
+serialization formats match
+```
+
+Eventually you need tests against real systems. But ideally not against production. Use a protected test or staging environment such as:
+
+```text
+staging feature store
+sandbox object bucket
+temporary database
+test model registry
+isolated cloud project
+```
+
+Then test:
+
+```text
+Can the training job authenticate
+Can it read the required data
+Can it write artifacts
+Can it register a model
+Can downstream services consume the result
+```
+
+These are integration tests. A CI job is automated. Automation plus production credentials can be dangerous. Imagine a broken test that executes:
+
+```python
+delete_all_models()
+```
+
+against the production registry. Or:
+
+```python
+overwrite_training_dataset()
+```
+
+against the real dataset. A safer design gives CI credentials with narrowly scoped permissions.
+
+For example:
+
+```text
+read staging features
+write only to ci/<job-id>/
+register only under test namespace
+cannot modify production models
+cannot deploy production endpoints
+```
+
+This is an application of least privilege:
+
+$$
+\text{CI permissions}
+\subseteq
+\text{minimum permissions required by the test}
+$$
+
+The testing environment should assume that broken code will eventually run. Because it will. At some point, the strongest useful test may simply be:
+
+Run the real training process.
+
+For example:
+
+```text
+same training image
+same pipeline
+representative/full dataset
+real training hardware
+real hyperparameters
+real evaluation code
+```
+
+This answers questions lower tiers cannot. Such as:
+
+```text
+Does training converge
+Does it fit in GPU memory
+Does distributed training work
+Does the job finish
+Does checkpointing work
+Are model artifacts generated
+Does evaluation run
+```
+
+A tiny smoke test might pass while full training fails at epoch 30 because of:
+
+```text
+memory growth
+data corruption in later shards
+checkpointing bugs
+rare categories
+distributed synchronization
+```
+
+Therefore full training is qualitatively different from tiny CI tests.
 
 ![Four training CI tiers add cost and authority from fast pull-request checks through full training](/content-assets/articles/article-mlops-mlops-infrastructure-ci-for-training-workflows/training-ci-tiers.png)
 
 *Training CI spends more compute and grants more authority only when the change requires evidence from the next tier.*
 
-## Choose CI Checks Based On What Changed
-<!-- section-summary: A small classification job maps changed files to the CI stages that can answer the relevant risk. -->
+## How Does Full Training Show Whether a Candidate Is Acceptable?
+<!-- section-summary: A full run must preserve structured evidence and pass execution, quality, baseline, slice, and policy checks rather than merely exit successfully. -->
 
-A training repository contains files with very different consequences. Editing a README should not launch a GPU job. Changing a CUDA base image may deserve image validation and a scheduled accelerator test. Changing a feature transformation may require contract tests, a pipeline smoke run, and a fresh candidate evaluation.
+The final tier produces a real candidate, which means success must include both a completed computation and an acceptable evaluation result.
 
-**Change classification** is the small first job that turns those differences into an explicit plan. It answers one question: *what could this pull request break?* Later jobs read the result, which removes informal guesses from scattered workflow conditions.
+Suppose CI says:
 
-```mermaid
-flowchart TD; A["Changed Files<br/>(paths in the pull request)"] --> B{"Change Class<br/>(which responsibility moved?)"}; B -->|Documentation| C["Policy Result<br/>(no training work required)"]; B -->|Python Or Config| D["Fast Training Checks<br/>(contracts and smoke run)"]; B -->|Docker Or Lockfile| E["Image Build<br/>(dependency and entrypoint check)"]; B -->|Features Or Evaluation| F["Candidate Validation<br/>(protected data and quality evidence)"]
+```text
+FULL TRAINING: PASS
 ```
 
-GitHub Actions and GitLab CI both support path-based rules. Native path filters are useful for optional workflows, but they need care around branch protection. GitHub documents that a workflow skipped by a path filter can leave its required check in a pending state. A reliable design starts one small policy workflow on every pull request. That workflow reports a stable result such as `training-ci-policy`, then exposes outputs that enable or skip downstream jobs.
+That is not enough information. A useful training job should emit structured evidence such as:
 
-A small GitHub Actions classifier can expose path groups as outputs for later jobs. This workflow still starts for every pull request, including a documentation-only change:
+```text
+model artifact
+evaluation metrics
+training logs
+dataset version
+code commit SHA
+container digest
+hyperparameters
+random seed
+training duration
+hardware type
+evaluation dataset version
+```
+
+For example:
+
+```text
+commit:
+    89af31c
+
+container:
+    sha256:7bd...
+
+dataset:
+    customer_churn_v184
+
+training config:
+    lr=0.001
+    epochs=20
+    hidden_size=512
+
+metrics:
+    AUC=0.913
+    F1=0.842
+
+artifact:
+    model://candidate/89af31c
+```
+
+Now the CI result is auditable. Training might finish with:
+
+```text
+exit code 0
+```
+
+while producing a terrible model. So after:
+
+$$
+\text{train}(D,\theta) \rightarrow M
+$$
+
+you must evaluate:
+
+$$
+\text{evaluate}(M,D_{\text{eval}})
+\rightarrow
+\text{metrics}
+$$
+
+Then define acceptance criteria.
+
+For example:
+
+$$
+AUC \ge 0.90
+$$
+
+and perhaps:
+
+$$
+F1 \ge 0.80
+$$
+
+and:
+
+$$
+\text{inference latency} < 100ms
+$$
+
+depending on the system. The training job becomes a CI success only if both:
+
+$$
+\text{execution succeeds}
+$$
+
+and:
+
+$$
+\text{model satisfies release constraints}
+$$
+
+Absolute thresholds can be misleading. Suppose your requirement says:
+
+$$
+AUC \ge 0.80
+$$
+
+Production currently has:
+
+$$
+AUC = 0.94
+$$
+
+A candidate with:
+
+$$
+AUC = 0.81
+$$
+
+technically passes the absolute threshold but is probably a serious regression. So Training CI often compares:
+
+$$
+M_{\text{candidate}}
+\quad\text{vs}\quad
+M_{\text{baseline}}
+$$
+
+For example:
+
+$$
+AUC_{\text{candidate}}
+\ge
+AUC_{\text{baseline}} - 0.005
+$$
+
+You might also require:
+
+$$
+Latency_{\text{candidate}}
+\le
+Latency_{\text{baseline}} \times 1.10
+$$
+
+and:
+
+$$
+Size_{\text{candidate}}
+\le
+2\text{ GB}
+$$
+
+This creates a multi-dimensional release gate. Not every metric should necessarily block a pull request. Suppose:
+
+```text
+AUC changed from 0.912 to 0.911
+```
+
+Maybe that's acceptable. But:
+
+```text
+model artifact is missing
+```
+
+is clearly fatal. It is useful to separate:
+
+### Hard gates
+
+Failure means the candidate cannot proceed.
+
+For example:
+
+```text
+training crashed
+model cannot load
+AUC below minimum
+critical slice fails
+security scan fails
+```
+
+### Informational evidence
+
+Useful for review but not automatically blocking.
+
+For example:
+
+```text
+training time increased 4%
+model size increased 3%
+some secondary metric moved slightly
+```
+
+This prevents CI from becoming a fragile wall of arbitrary thresholds. CI can start because of different events:
+
+```text
+pull request opened
+new commit pushed
+branch merged
+scheduled nightly run
+new dataset version
+new base image
+dependency update
+manual release request
+```
+
+These events do not all need identical jobs.
+
+For example:
+
+```text
+pull request
+    ↓
+Tier 1 + Tier 2
+
+merge to main
+    ↓
+Tier 1 + Tier 2 + Tier 3
+
+nightly
+    ↓
+full training
+
+release candidate
+    ↓
+full training + evaluation + approval
+```
+
+Another system might do full training on every important PR. The exact policy depends on:
+
+$$
+\text{cost}
++
+\text{risk}
++
+\text{training duration}
++
+\text{team velocity}
+$$
+
+Some CI jobs should be automatic. Others may deserve explicit approval. Imagine a training job that costs £5,000 and uses 128 GPUs. You probably do not want any external contributor to trigger it by modifying a comment. So a workflow might be:
+
+```text
+PR opened
+   ↓
+cheap automatic checks
+   ↓
+maintainer reviews change
+   ↓
+approve expensive training
+   ↓
+full training
+   ↓
+metrics reviewed
+```
+
+Similarly, production release may require a stronger boundary:
+
+```text
+training succeeded
+        ↓
+evaluation passed
+        ↓
+human / policy approval
+        ↓
+model registered as production candidate
+```
+
+Approval is particularly useful where CI crosses a boundary involving:
+
+```text
+large cost
+sensitive data
+production access
+deployment
+regulatory evidence
+```
+
+## How Do Evidence, Provenance, and Artifact Identity Stay Connected?
+<!-- section-summary: Caches accelerate work, while immutable evidence links the exact code, data, environment, run, evaluation, and promoted model through one chain of custody. -->
+
+Evaluation is useful only when it remains attached to the exact artifact and the inputs that produced it, not to a mutable name or disposable cache.
+
+This distinction is subtle and extremely important. Suppose downloading the training dataset takes 20 minutes. You may cache it. Suppose installing dependencies takes 10 minutes. You may cache them. Caches accelerate computation. But a cache does **not** prove correctness. Consider:
+
+```text
+cache:
+    /home/runner/.cache/pip
+```
+
+You should think:
+
+“This makes the job faster.”
+
+Not:
+
+“This proves which environment trained the model.”
+
+Similarly:
+
+```text
+cached model checkpoint
+```
+
+may make a test faster, but it is not necessarily the model artifact that should be released. This gives an important separation:
+
+$$
+\text{cache} \neq \text{evidence artifact}
+$$
+
+Evidence is something you deliberately preserve because it proves what happened. Examples:
+
+```text
+container digest
+commit SHA
+dataset version
+training configuration
+evaluation report
+signed model artifact
+test logs
+provenance manifest
+```
+
+Caches are disposable. Evidence should be reproducible or traceable. You should be able to delete every cache and still understand:
+
+```text
+which model was trained
+from which source
+with which data
+using which environment
+and why it was accepted
+```
+
+A trained model does not come from one thing. It comes from a set of dependencies:
+
+```text
+source commit ──────────────┐
+                            │
+training container ─────────┤
+                            │
+dataset version ────────────┤
+                            ├──► training run ─► model
+configuration ──────────────┤
+                            │
+hyperparameters ────────────┤
+                            │
+hardware/runtime ───────────┘
+```
+
+We can express this abstractly as:
+
+$$
+M = T(C,D,E,H,S)
+$$
+
+where:
+
+* $$C$$ = code,
+* $$D$$ = data,
+* $$E$$ = environment,
+* $$H$$ = hyperparameters/configuration,
+* $$S$$ = stochastic state such as random seeds.
+
+A trustworthy training system should record these inputs. Otherwise the model becomes an orphan artifact:
+
+```text
+model.pkl
+```
+
+with no reliable explanation of where it came from. Suppose PR #482 changes feature engineering. Training CI produces:
+
+```text
+candidate model:
+churn-model/89af31c
+
+AUC:
+0.913
+
+baseline:
+0.909
+
+training run:
+run-78213
+```
+
+Those results should be visible from the pull request. A reviewer should not have to search through an unrelated ML platform to discover what happened.
+
+Conceptually:
+
+```text
+Pull Request
+    │
+    ├── code diff
+    ├── CI status
+    ├── training run
+    ├── evaluation report
+    └── candidate model
+```
+
+Now code review and model review are connected. That gives reviewers a much stronger question than:
+
+“Does this code look reasonable?”
+
+They can also ask:
+
+“What happened when we actually trained it?”
+
+Suppose the candidate model from the PR is approved. A weak release process might run training again:
+
+```text
+PR training
+     ↓
+looks good
+     ↓
+merge
+     ↓
+train completely new model
+     ↓
+deploy that instead
+```
+
+Now what did the reviewer actually approve Potentially not the model that went to production. A stronger process is:
+
+```text
+PR
+ │
+ ▼
+training run
+ │
+ ▼
+candidate model M
+ │
+ ▼
+evaluation passes
+ │
+ ▼
+M is approved
+ │
+ ▼
+same M promoted
+ │
+ ▼
+production
+```
+
+In other words:
+
+$$
+\boxed{
+\text{test once, promote the tested artifact}
+}
+$$
+
+rather than:
+
+$$
+\text{test one artifact, rebuild another, deploy the second}
+$$
+
+when the system allows artifact promotion. Imagine you produced:
+
+```text
+model digest:
+sha256:a9f1...
+```
+
+That exact model was evaluated. Release should ideally refer to:
+
+```text
+sha256:a9f1...
+```
+
+not:
+
+```text
+latest
+```
+
+Why? Because mutable names destroy certainty. Today:
+
+```text
+latest = sha256:a9f1
+```
+
+Tomorrow:
+
+```text
+latest = sha256:f72b
+```
+
+Now the release record says “latest,” but you no longer know what that meant. Immutable identifiers turn statements like:
+
+“This model passed CI.”
+
+into something verifiable.
+
+## How Do Retries and Change Triggers Avoid Corrupting CI?
+<!-- section-summary: Isolated attempts, retained diagnostics, explicit retry rules, and conservative change detection keep repeated or selectively triggered jobs trustworthy. -->
+
+Once CI preserves identity, it can retry failed infrastructure safely and decide which code, data, configuration, or dependency changes require expensive validation.
+
+CI systems fail for reasons unrelated to your code:
+
+```text
+runner crashed
+network timed out
+cloud API returned 503
+spot GPU disappeared
+registry briefly unavailable
+```
+
+You need to rerun jobs. Therefore good CI jobs should be **idempotent** where possible. Idempotent means approximately:
+
+$$
+f(f(x)) = f(x)
+$$
+
+Operationally:
+
+Running the same job twice should not create dangerous or contradictory side effects.
+
+Suppose a training job writes to:
+
+```text
+models/candidate/latest
+```
+
+and a rerun overwrites it. That may be risky. Instead, use a unique identity such as:
+
+```text
+models/candidates/
+    commit-89af31c/
+        run-001/
+```
+
+A rerun might create:
+
+```text
+run-002/
+```
+
+or safely overwrite only its own isolated temporary namespace. Every CI run should ideally know:
+
+```text
+repository
+commit
+PR
+workflow
+job
+attempt
+```
+
+Then resources can be namespaced.
+
+For example:
+
+```text
+s3://ml-ci/
+    pr-482/
+      commit-89af31c/
+        attempt-2/
+```
+
+The same principle can apply to:
+
+```text
+temporary database schemas
+feature-store namespaces
+model registry versions
+cloud jobs
+checkpoints
+logs
+```
+
+Now a failed attempt is much less likely to contaminate the next attempt. Suppose CI creates:
+
+```text
+temporary GPU job
+temporary bucket prefix
+staging database schema
+```
+
+After CI finishes, cleanup is sensible. But imagine cleanup executes before failure logs are preserved. Now your job says:
+
+```text
+FAILED
+```
+
+and all useful evidence is gone. A better pattern is:
+
+```text
+run job
+   ↓
+capture logs and evidence
+   ↓
+mark result
+   ↓
+clean disposable infrastructure
+```
+
+This reflects another useful distinction:
+
+```text
+temporary execution resources
+        ≠
+diagnostic evidence
+```
+
+The former can disappear. The latter may need retention. Suppose CI reaches:
+
+```text
+1. create staging dataset
+2. start training
+3. upload half a checkpoint
+4. fail
+```
+
+What happens when rerun begins? If it assumes step 1 has never happened, it may fail. If it treats the partial checkpoint as complete, worse problems can occur. Good jobs either:
+
+```text
+start from clean isolated resources
+```
+
+or:
+
+```text
+validate and resume explicitly from known checkpoints
+```
+
+They should not silently depend on accidental leftovers from a previous run. Suppose a job sometimes fails because:
+
+```text
+model evaluation intermittently returns NaN
+```
+
+Automatically retrying three times may turn:
+
+```text
+fail
+fail
+pass
+```
+
+into a green check. But the system is still unstable. Retries are appropriate for failures likely to be transient:
+
+```text
+HTTP 503
+temporary DNS failure
+preempted worker
+```
+
+They are dangerous when used to hide deterministic or stochastic correctness problems. A useful mental distinction is:
+
+$$
+\text{transient infrastructure failure}
+\Rightarrow
+\text{retry may help}
+$$
+
+whereas:
+
+$$
+\text{training correctness failure}
+\Rightarrow
+\text{retry may hide the bug}
+$$
+
+ML models can change even if the code does not. Suppose:
+
+```text
+code version = same
+training data = new
+```
+
+The resulting model may be different. Therefore CI may sometimes need to trigger on:
+
+```text
+new dataset version
+new labels
+new features
+new upstream data snapshot
+```
+
+Not only:
+
+```text
+git push
+```
+
+This is one of the biggest conceptual differences from ordinary CI. In software CI, source control changes are usually the primary cause of a new artifact. In ML:
+
+$$
+\text{new model}
+$$
+
+can be caused by:
+
+$$
+\text{new code}
+\quad\text{or}\quad
+\text{new data}
+\quad\text{or}\quad
+\text{new configuration}
+\quad\text{or}\quad
+\text{new environment}
+$$
+
+Therefore the triggering system may need to understand all four. Consider:
 
 ```yaml
-- uses: actions/checkout@v7
-- id: paths
-  uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
-  with:
-    filters: |
-      training: ['src/training/**', 'configs/**', 'tests/training/**']
-      image: ['docker/train.Dockerfile', 'pyproject.toml', 'uv.lock']
+learning_rate: 0.001
+batch_size: 128
+epochs: 20
 ```
 
-The names describe responsibilities, so individual test commands can evolve inside each group. The action exposes values such as `steps.paths.outputs.image`; the classifier job can map them to job outputs for a condition such as `if: needs.classify.outputs.image == 'true'`. The classifier should also fail safely. An unfamiliar path should select a broader tier or request review. Quietly selecting no work would hide a new risk from CI.
+This configuration can radically affect the resulting model. Yet teams sometimes treat YAML configuration as less important than Python code. From the training function:
 
-## Tier 1: Run Fast Pull-Request Checks Without External Services
-<!-- section-summary: The first tier runs untrusted code without cloud credentials, shared-state writes, or hidden dependencies. -->
+$$
+M=T(C,D,H,E)
+$$
 
-The first tier serves the developer who is waiting for feedback. It usually covers formatting, static analysis, unit tests, configuration contracts, and a small end-to-end training smoke run. A practical target is a result within a few minutes. Multi-hour validation belongs in a later tier.
+the configuration $$H$$ is one of the direct inputs to the model. So changes to:
 
-The important property is **hermeticity**. A hermetic check receives all of its required inputs from the repository, pinned dependencies, or controlled test fixtures. It does not depend on yesterday's files on a long-lived runner. It does not read the production warehouse. It does not write to a shared model registry. You can think of the job as a disposable room: the code enters, the declared inputs enter, the checks run, and the room is discarded.
-
-For example, a feature-normalization change can run against a small Parquet fixture committed for testing. The smoke run uses the real command-line entrypoint, limits training to a few iterations, and writes outputs to a temporary directory. The metric value is irrelevant at this stage. CI is checking that the components connect correctly and that the expected files and metadata appear.
-
-```yaml
-name: training-ci
-
-on: pull_request
-
-permissions:
-  contents: read
-
-concurrency:
-  group: training-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
-jobs:
-  fast-training-checks:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.12.1"
-          enable-cache: true
-      - run: uv sync --locked --all-extras --dev
-      - run: uv run pytest tests/unit tests/contracts tests/smoke -q
+```text
+hyperparameters
+feature flags
+dataset selectors
+architecture settings
+preprocessing options
 ```
 
-The committed `uv.lock` fixes the reviewed dependency resolution. `uv sync --locked` fails if project metadata requires a lockfile update, so CI does not silently select a different dependency set. The cache only speeds up installation; deleting it must leave the result unchanged.
+should often trigger appropriate CI. “Only config changed” does not imply “nothing important changed.” Suppose application code is unchanged, but:
 
-### Protect Secrets From Untrusted Pull-Request Code
-
-Code from a fork is **untrusted code**. The contributor may be helpful, but the repository owner has not yet approved the code that a runner will execute. A test command can run a modified build script, dependency hook, configuration loader, or Makefile. Any credential available to that job may therefore be read or misused by the pull-request code.
-
-GitHub's `pull_request` event addresses this boundary for forks with a read-only token, withheld secrets, and fork approval policies. Keep the fast tier inside that restricted environment. Avoid using `pull_request_target` to check out a fork's head and execute it with base-repository privileges. That arrangement joins untrusted code to secrets and write permissions in the same process.
-
-```mermaid
-flowchart TD; A["Fork Pull Request<br/>(code has no repository trust)"] --> B["Restricted Runner<br/>(read-only token and no cloud secrets)"]; B --> C["Hermetic Checks<br/>(fixtures, locked packages, and local outputs)"]; C --> D["Review Decision<br/>(maintainer examines code and evidence)"]; D --> E["Trusted Trigger<br/>(merge or protected manual action)"]; E --> F["Credentialed Job<br/>(sandbox role with narrow permissions)"]
+```text
+pytorch 2.x → 3.x
 ```
 
-An artifact uploaded by an untrusted job remains untrusted data. A later privileged workflow may inspect a test report, but it should not execute a binary, script, or container supplied by the fork. Build the release candidate again from the reviewed commit in a trusted workflow, or promote an artifact produced through a supply-chain process that verifies its source and builder.
+or:
 
-## Tier 2: Build The Training Container
-<!-- section-summary: The second tier packages reviewed code and configuration into immutable identities that later jobs can reuse. -->
-
-Most production training platforms run a container image. The image contains the training code, Python environment, native libraries, and entrypoint. CI should build it early enough to expose packaging failures before a remote training job starts.
-
-A useful image check runs the entrypoint with `--help` and executes the tiny smoke fixture inside the container. This catches a common class of failures: the Python tests passed on the CI runner, but the Dockerfile omitted a package or copied files into the wrong directory.
-
-The trusted build then pushes the image to an OCI registry and records its **digest**. A tag such as `candidate` is a movable label. A digest such as `sha256:…` identifies the exact image content. Later training and evaluation jobs should receive the digest.
-
-```mermaid
-flowchart TD; A["Reviewed Commit<br/>(source identity)"] --> B["Container Build<br/>(Dockerfile and locked dependencies)"]; B --> C["Image Smoke Run<br/>(real entrypoint on tiny data)"]; C --> D["OCI Registry<br/>(content-addressed image)"]; D --> E["Image Digest<br/>(immutable training input)"]; E --> F["Managed Training Job<br/>(same image selected by digest)"]
+```text
+CUDA version changes
 ```
 
-Docker maintains official GitHub Actions around BuildKit. The workflow below shows the responsibility without expanding into a complete delivery pipeline:
+or:
 
-```yaml
-- uses: docker/setup-buildx-action@v4
-
-- id: image
-  uses: docker/build-push-action@v7
-  with:
-    context: .
-    file: docker/train.Dockerfile
-    push: true
-    tags: registry.example.com/training:${{ github.sha }}
-    provenance: true
-
-- run: 'echo "Training image: ${{ steps.image.outputs.digest }}"'
+```text
+tokenizer library changes
 ```
 
-The workflow should also identify the training configuration. Teams commonly hash the normalized config or package it with the release artifact. Together, commit SHA, image digest, dependency lock, and configuration digest describe the executable candidate. This set prevents a later rerun from accidentally using a newer image under the same tag.
+That can alter:
 
-## Tier 3: Test Real Services In A Protected Environment
-<!-- section-summary: Protected integration jobs use short-lived identity to test governed systems in a sandbox. -->
+```text
+training behavior
+numerical results
+model serialization
+GPU compatibility
+runtime memory
+inference outputs
+```
 
-The third tier checks systems outside the disposable CI runner. A local fixture can imitate a table shape, yet it cannot prove that the sandbox role may read the governed warehouse or submit a managed job. Integration CI exercises those real boundaries after code review and inside a controlled environment.
-
-Common boundaries include warehouse schemas, object-storage prefixes, feature services, managed training APIs, and MLflow tracking servers. Each check should target one contract and leave a small, auditable footprint.
-
-A useful integration test stays narrow. A warehouse check can read table metadata and a bounded sample. An object-storage check can read one manifest and write a disposable object under a run-specific prefix. A registry check can create a temporary record and remove it. These tests verify contracts and permission paths. Full training remains a separate tier with representative data and compute.
-
-### Use Short-Lived Cloud Credentials In CI
-
-Older CI systems often stored a cloud access key as a repository secret. That key was a standing credential: it remained valid between runs and required manual rotation. Modern cloud integrations commonly use **OpenID Connect (OIDC)** federation instead.
-
-OIDC gives the cloud provider a signed statement about the workflow job. GitHub issues a JSON Web Token containing claims such as the repository, ref, workflow, environment, and audience. The cloud trust policy evaluates those claims. A matching job receives temporary credentials for a narrowly scoped role.
+So dependency manifests are part of the training input. This is why container-building and environment validation deserve their own CI tier.
 
 ![Trusted and untrusted CI lanes show how OIDC grants a temporary sandbox role without exposing cloud credentials to fork code](/content-assets/articles/article-mlops-mlops-infrastructure-ci-for-training-workflows/short-lived-identity-boundary.png)
 
 *The trust policy grants short-lived sandbox access to a reviewed workflow. Fork code remains in a restricted runner with no route to cloud credentials.*
 
-```mermaid
-flowchart TD; A["Protected Job<br/>(reviewed workflow requests identity)"] --> B["GitHub OIDC Token<br/>(signed repository and job claims)"]; B --> C["Cloud Trust Policy<br/>(allowed repository, ref, and environment)"]; C --> D["Temporary Role<br/>(short lifetime and least privilege)"]; D --> E["Sandbox Integration<br/>(bounded read and write checks)"]
+## How Does a Complete Training CI Flow Decide What to Run?
+<!-- section-summary: A change-aware decision tree selects proportionate checks and records exactly which model and evaluation evidence passed for each proposed change. -->
+
+Those policies combine into a decision tree that selects checks, publishes their evidence, and promotes the already-tested artifact.
+
+Consider a pull request that changes a feature transformation. A sophisticated CI system might do this:
+
+```text
+Developer opens PR
+        │
+        ▼
+Detect changed files
+        │
+        ▼
+Tier 1
+Unit + schema + DAG tests
+        │
+        ▼
+Tier 2
+Build training image
+        │
+        ▼
+Run tiny training smoke test
+        │
+        ▼
+Protected integration tests
+        │
+        ▼
+Human / policy approval if needed
+        │
+        ▼
+Full training
+        │
+        ▼
+Evaluate candidate
+        │
+        ├── compare to absolute thresholds
+        ├── compare to baseline
+        └── evaluate important slices
+        │
+        ▼
+Publish evaluation evidence to PR
+        │
+        ▼
+Reviewer approves
+        │
+        ▼
+Merge
+        │
+        ▼
+Promote already-tested model/image
 ```
 
-The GitHub permission below allows the job to request an OIDC token. It does not grant access to a cloud bucket or training service. The cloud role supplies those permissions after its trust policy accepts the token.
+Notice that the system does not ask one giant question. It asks a sequence of increasingly expensive questions. You can model it explicitly. Suppose:
 
-```yaml
-jobs:
-  training-integration:
-    runs-on: ubuntu-latest
-    environment: ml-integration
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v7
-      - name: Assume the AWS sandbox role through OIDC
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: arn:aws:iam::123456789012:role/ml-ci-integration
-          aws-region: us-east-1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-      - run: uv sync --locked --all-extras --dev
-      - run: uv run pytest tests/integration/training -q
+$$
+C = \text{class of change}
+$$
+
+Then:
+
+$$
+C \in
+\{
+\text{docs},
+\text{code},
+\text{data},
+\text{training},
+\text{infra}
+\}
+$$
+
+And define required checks:
+
+$$
+R(C)
+$$
+
+For example:
+
+$$
+R(\text{docs})
+=
+\{\text{lint}\}
+$$
+
+$$
+R(\text{code})
+=
+\{\text{unit},\text{contract},\text{container}\}
+$$
+
+$$
+R(\text{training})
+=
+\{\text{unit},\text{container},\text{smoke},\text{full train},\text{evaluation}\}
+$$
+
+$$
+R(\text{infra})
+=
+\{\text{container},\text{integration},\text{smoke}\}
+$$
+
+Real policies are more complicated, but this mental model is useful. Suppose `feature_utils.py` is shared by 20 models. Someone changes it. A naive rule might fail to notice that model 17 depends on it. Then Training CI skips model 17 even though its behavior changed. So:
+
+$$
+\text{change-aware CI}
+$$
+
+depends on having a reasonably accurate dependency graph. When uncertain, systems should generally err toward **more validation**, not less. Saving compute is useful. Silently missing important changes is worse. Suppose a dashboard says:
+
+```text
+AUC = 0.918
 ```
 
-This concrete example uses AWS, while Google Cloud Workload Identity Federation and Microsoft Entra workload identity federation follow the same exchange model. The cloud trust policy should restrict the repository and the protected environment or ref. The temporary role should reach development resources only. Production data writes and model promotion require separate identities.
+That number is nearly meaningless without context. You need to ask:
 
-GitHub environments can add required reviewers and branch restrictions. Environment secrets remain unavailable until the protection rules pass. The runner still needs isolation: an environment approval does not turn a reused self-hosted runner into a secure machine.
-
-## Tier 4: Run Full Training And Evaluation
-<!-- section-summary: Full training turns a trusted source snapshot into candidate evidence on representative data and compute. -->
-
-Full training answers the expensive question: *does this exact candidate meet the quality and operational policy for its intended use?* It uses representative data, the required compute class, and the complete evaluation suite. Managed services such as SageMaker AI, Gemini Enterprise Agent Platform (formerly Vertex AI), Azure Machine Learning, and Databricks are common execution targets. Some platform teams run the same responsibility on Kubernetes or Ray.
-
-This tier usually begins from a trusted `main` commit, a manual release request, or a schedule. Those triggers provide a stable source snapshot and keep unreviewed fork code away from training data and cloud permissions. They also avoid spending accelerator hours on every small correction to an open pull request.
-
-For example, a pull request may change tokenization for a text classifier. The PR smoke test trains on fifty rows and proves that token IDs reach the model with the expected shape. After merge, a managed GPU job trains the candidate from the recorded image digest and data snapshot. Evaluation then measures overall quality, rare-language segments, calibration, latency, and the release thresholds. Those two runs answer different questions and use different resources.
-
-```mermaid
-flowchart TD; A["Trusted Trigger<br/>(main, schedule, or approval)"] --> B["Input Manifest<br/>(commit, image, config, and data snapshot)"]; B --> C["Managed Training<br/>(representative data and compute)"]; C --> D["Model Candidate<br/>(immutable artifact or model ID)"]; D --> E["Evaluation Policy<br/>(overall and segment requirements)"]; E --> F["Candidate Evidence<br/>(metrics, lineage, cost, and result)"]
+```text
+For which model
+Generated from which commit
+Using which dataset
+Using which evaluation dataset
+Using which metric implementation
+Using which configuration
 ```
 
-MLflow Tracking or a managed experiment tracker can record parameters, metrics, dataset inputs, artifacts, and code versions. MLflow 3 can also give the logged model its own model ID. The CI evidence record should keep that external run or model ID. Detailed metrics stay in the tracking system built to query and compare them.
+A metric is evidence only when attached to identity. A useful evidence record might be modeled as:
 
-A managed training service introduces a second identity. The CI job needs permission to submit and inspect the job. The training job itself needs a runtime role for governed data and artifact storage. Separating those roles limits the damage from an overly broad CI credential and makes cloud audit records more useful.
+$$
+E =
+(M,C,D,E_v,H,V,R)
+$$
 
-## Choose What Starts CI And Which Jobs Need Approval
-<!-- section-summary: Triggers express why a job may start, while approvals and concurrency control authority and cost. -->
+where:
 
-A training workflow needs a clear answer to two questions: what event requested this work, and what authority does that event carry? The trigger records the reason for starting a job. Approvals decide whether that reason is sufficient for privileged access or significant compute spend. Concurrency decides how several valid requests share limited capacity.
+* $$M$$: model identity
+* $$C$$: code revision
+* $$D$$: training data version
+* $$E_v$$: evaluation data version
+* $$H$$: configuration
+* $$V$$: runtime/environment
+* $$R$$: evaluation result
 
-- `pull_request` gives authors quick, restricted feedback on proposed code.
-- `push` to `main` builds from reviewed source and can publish candidate artifacts.
-- `workflow_dispatch` supports a deliberate manual run with reviewed inputs.
-- `schedule` provides recurring full validation for dependency, data, or environment changes that occur without a code edit.
+Without those relationships, CI results can become misleading. There is a useful analogy to evidence handling. A model moves through:
 
-Approvals belong at the transition to privileged or expensive work. A protected environment can require a release owner before a large training job receives credentials. A low-cost sandbox integration job may run automatically after merge. The control should match the potential spend, data sensitivity, and side effects.
-
-**Concurrency** groups runs that should not overlap. Fast pull-request CI generally cancels an older run after a new commit arrives; its evidence has already become stale. Full training needs a deliberate policy. A newer commit may supersede an unstarted job, while an almost-complete training run may still provide useful evidence. Some teams queue one candidate per model; others deduplicate runs by a manifest key made from code, image, configuration, and data snapshot.
-
-```yaml
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-    inputs:
-      model_name:
-        description: "Model workflow to train"
-        required: true
-        type: string
-  schedule:
-    - cron: "17 3 * * 1-5"
-
-concurrency:
-  group: full-training-${{ inputs.model_name || 'scheduled' }}
-  cancel-in-progress: false
+```text
+training
+   ↓
+evaluation
+   ↓
+approval
+   ↓
+registry
+   ↓
+release
 ```
 
-Scheduled workflows can be delayed under load, so they should not serve as an exact clock for time-critical production work. A production retraining service may use a dedicated orchestrator or event trigger and use CI only to build and approve the executable artifact.
+At every step, you want to maintain identity. Suppose you evaluated:
 
-## Separate Caches From Evidence
-<!-- section-summary: A cache saves time, while an immutable artifact proves exactly what moved between stages. -->
-
-CI systems use the words *cache* and *artifact* for stored files, but the two stores make different promises. A cache promises faster future work and may disappear at any time. An evidence artifact preserves a result or identity that another stage needs to verify. Mixing the promises can make a release depend on an optimization that the CI platform is free to evict.
-
-A **cache** is a disposable optimization. It may contain downloaded Python wheels, compiler output, or Docker build layers. Its key usually includes the operating system and a lockfile hash. A cache miss should make the job slower, never change the intended result. GitHub also warns against storing credentials in caches because fork pull requests can read caches from the base branch.
-
-An **artifact** is an output that later work needs to identify or consume. A test report can explain why a check passed. An evaluation manifest can connect metrics to their inputs. An OCI image digest identifies the executable candidate, while a signed provenance statement records its source and builder. These outputs need retention, access policy, and integrity checks. GitHub's artifact actions produce a SHA-256 digest and validate it during download; OCI registries identify images by content digest.
-
-```mermaid
-flowchart TD; A["Dependency Lock<br/>(reviewed package resolution)"] --> B["Dependency Cache<br/>(disposable download acceleration)"]; B --> C["CI Execution<br/>(result must survive a cache miss)"]; C --> D["Evidence Artifact<br/>(test report and input manifest)"]; C --> E["OCI Image Digest<br/>(immutable executable identity)"]; D --> F["Release Record<br/>(durable review evidence)"]; E --> F
+```text
+model A
 ```
 
-Suppose a rerun restores an old wheel cache. The locked installation still verifies the declared versions, so the cache cannot silently select another package. Suppose an image tag later points at a newer build. The training manifest still references the original digest, so the rerun selects the original executable. These controls solve separate problems.
+but accidentally deploy:
 
-## Link Training Evidence To The Pull Request And Release
-<!-- section-summary: CI results need a stable route back to the change and to the candidate release decision. -->
+```text
+model B
+```
 
-Training evidence often finishes after the pull request has merged. The result still needs a clear home. Otherwise the training platform shows a successful job, the experiment tracker shows metrics, and the repository never records which change produced them.
+Then all evaluation evidence is irrelevant. So the chain should preserve:
 
-Start with a stable required check for the pull request. The check reports the change class, selected tiers, fast-test result, and links to focused reports. Branch protection can require that check before merge. Keep its job name unique and make it complete successfully for a legitimate docs-only change; a required workflow that never starts can block the pull request in a pending state.
+$$
+M_{\text{trained}}
+=
+M_{\text{evaluated}}
+=
+M_{\text{approved}}
+=
+M_{\text{released}}
+$$
 
-The trusted build adds an evidence manifest. A compact record might look like this:
+That equality is conceptually one of the strongest guarantees Training CI can provide.
 
-```json
-{
-  "source_commit": "4f3a91c...",
-  "change_class": ["runtime_image", "model_evidence"],
-  "lock_digest": "sha256:...",
-  "image_digest": "sha256:...",
-  "config_digest": "sha256:...",
-  "data_snapshot": "training_events@version-1842",
-  "training_job_id": "job-7f1...",
-  "mlflow_model_id": "m-2b8...",
-  "evaluation_policy": "fraud-release-v4",
-  "decision": "passed"
+## How Do Long-Running CI Jobs Stay Reproducible and Diagnosable?
+<!-- section-summary: Asynchronous orchestration should call independently runnable verification commands, localize failures, parallelize independent evidence, and justify expensive checks by risk. -->
+
+Because full training may run for hours on another platform, the CI architecture must preserve responsibility while keeping verification reproducible and failures easy to locate.
+
+Some training jobs take hours or days. So unlike ordinary CI:
+
+```text
+compile → test → done
+```
+
+Training CI may involve long-running compute jobs and external ML platforms. Architecturally, the CI system may do:
+
+```text
+CI
+ │
+ ├── submit training job
+ │
+ ▼
+training platform
+ │
+ ├── GPU cluster
+ ├── checkpoints
+ └── evaluation
+ │
+ ▼
+result returned to CI
+```
+
+The conceptual responsibility remains the same:
+
+CI owns the acceptance decision, even if another platform performs the training computation.
+
+GitHub Actions, GitLab CI, Jenkins, Buildkite, or another orchestrator may execute:
+
+```text
+train-model
+```
+
+But the correctness logic should live in independently runnable commands.
+
+For example:
+
+```bash
+make test-fast
+make build-training-image
+make test-integration
+make train
+make evaluate
+make compare-baseline
+```
+
+CI decides:
+
+```text
+when
+where
+under what credentials
+in what sequence
+```
+
+The repository defines:
+
+```text
+what these operations actually mean
+```
+
+That keeps the system reproducible outside CI. Imagine one gigantic job:
+
+```text
+train-and-release
+```
+
+It fails after four hours. The logs contain:
+
+```text
+ERROR
+```
+
+This is poor CI design. Better:
+
+```text
+unit-tests             PASS
+container-build        PASS
+feature-store-test     PASS
+smoke-training         PASS
+full-training          PASS
+evaluation             FAIL
+```
+
+Now the failure itself tells you something. The CI graph is not merely execution machinery. It is also a diagnostic structure. Not every CI stage must be sequential. Suppose after the training container builds, you can independently run:
+
+```text
+security scan
+integration tests
+serialization test
+dependency check
+```
+
+Then:
+
+```text
+             container build
+                 /   |   \
+                /    |    \
+       security   integration   serialization
+                \    |    /
+                 \   |   /
+                  full training
+```
+
+Parallelism reduces wall-clock time. But only parallelize checks that do not logically depend on one another. You should not run model-quality evaluation before a model exists. Imagine full training costs:
+
+$$
+\$500
+$$
+
+A certain class of changes has only a 0.01% chance of affecting training. Perhaps full training is unnecessary on every such change. But suppose label-generation code changes. The probability of affecting the model is nearly certain. Then skipping training would be hard to justify. You can think approximately in terms of:
+
+$$
+\text{run expensive check if}
+$$
+
+$$
+\text{expected risk reduction}
+
+\text{compute + delay cost}
+$$
+
+This is not usually computed numerically, but it is the correct underlying reasoning.
+
+## What Does a Green Training CI Result Actually Mean?
+<!-- section-summary: A green result means the checks required by a stated policy passed; trust depends on how relevant and strong that collected evidence actually is. -->
+
+The result is best understood as evidence gathered under a policy, rather than a badge that makes a universal claim about model safety.
+
+A green CI badge does not magically mean:
+
+```text
+model is safe
+```
+
+It means:
+
+All checks required by the current policy have passed.
+
+So trust depends on the quality of that policy. If CI only runs:
+
+```text
+flake8
+```
+
+then “CI passed” says almost nothing about an ML model. If CI runs:
+
+```text
+unit tests
+data contracts
+container validation
+staging integration
+full training
+quality regression
+slice evaluation
+artifact provenance
+```
+
+then the green result carries much more information. Thus:
+
+$$
+\text{confidence from CI}
+\propto
+\text{strength and relevance of evidence collected}
+$$
+
+not merely whether the badge is green. You can compress most Training CI systems into four questions.
+
+### Tier 1 — Is our code internally plausible
+
+```text
+unit tests
+contracts
+DAG checks
+small local smoke tests
+```
+
+Question:
+
+$$
+\boxed{\text{Did we break our own logic?}}
+$$
+
+### Tier 2 — Can we construct the real training environment
+
+```text
+container build
+dependency resolution
+runtime validation
+```
+
+Question:
+
+$$
+\boxed{\text{Can the software actually run where training runs?}}
+$$
+
+### Tier 3 — Can the training system interact with reality
+
+```text
+staging storage
+feature store
+registry
+cloud APIs
+credentials
+```
+
+Question:
+
+$$
+\boxed{\text{Do the boundaries between our code and infrastructure work?}}
+$$
+
+### Tier 4 — Does real training produce an acceptable model
+
+```text
+full training
+evaluation
+baseline comparison
+release gates
+```
+
+Question:
+
+$$
+\boxed{\text{Did the entire ML process produce something worth releasing?}}
+$$
+
+That is a much more useful model than simply thinking:
+
+```text
+CI = automated testing
+```
+
+Training CI is fundamentally a **progressive proof system for ML changes**. You begin with a proposed change:
+
+$$
+\Delta
+$$
+
+and progressively ask stronger questions:
+
+```text
+Does the local logic work
+        ↓
+Can the environment be built
+        ↓
+Can the code interact with real infrastructure
+        ↓
+Can full training complete
+        ↓
+Does the resulting model satisfy quality requirements
+        ↓
+Can we trace and promote exactly what passed
+```
+
+The ordering matters because cost and scope increase as you move downward. So a strong Training CI system generally follows:
+
+$$
+\boxed{
+\text{cheap evidence first}
+\rightarrow
+\text{expensive evidence later}
 }
-```
+$$
 
-The exact fields vary by platform, but the chain should answer four human questions: Which code ran? Which inputs did it use? Where is the candidate and its evaluation? Which policy produced the decision?
+while preserving the exact identity of:
 
-```mermaid
-flowchart TD; A["Pull Request<br/>(proposed source change)"] --> B["Required Check<br/>(classification and fast evidence)"]; B --> C["Reviewed Commit<br/>(merge identity)"]; C --> D["Training Run<br/>(managed job and tracker IDs)"]; D --> E["Evidence Manifest<br/>(immutable inputs and results)"]; E --> F["Release Record<br/>(approval, rejection, or investigation)"]; E --> G["Commit Summary<br/>(link back to completed evidence)"]
-```
+$$
+\boxed{
+\text{code}
++
+\text{data}
++
+\text{configuration}
++
+\text{environment}
++
+\text{model}
++
+\text{evaluation}
+}
+$$
 
-The workflow can attach the manifest to a commit check, deployment record, model version, or release system. It should link to detailed metrics in MLflow or the managed platform. That keeps the repository summary readable while preserving the complete evidence for reviewers.
+The most important practical principle is:
 
-## Make Failed CI Jobs Safe To Rerun
-<!-- section-summary: A useful failure identifies the failed tier, immutable inputs, observed evidence, and safe rerun route. -->
+**Training CI should not merely tell you that a job ran successfully. It should tell you exactly what was tested, what model was produced, what evidence justified accepting it, and ensure that the same accepted artifact is the one that eventually moves toward release.**
 
-A red CI badge only says that something stopped. Training CI should explain the failure in terms a developer or operator can act on.
-
-A useful report includes the failed tier, the command or managed job, the immutable input manifest, the expected condition, the observed result, and the owning team or runbook. For a schema failure, show the missing column and table snapshot. For an image failure, show the image digest and failing entrypoint. For a candidate-quality failure, link the affected metric segments and evaluation policy.
-
-Consider a full training job that loses its connection while uploading the model. A blind rerun using `latest` may select a new image or newer data and produce a different candidate. A safe rerun reads the original manifest, checks whether the model artifact already exists, and resumes or retries the upload under an idempotency key. If training itself must repeat, it uses the same image digest, config digest, and data snapshot, then records the new attempt beside the original job.
-
-```mermaid
-flowchart TD; A["Failed Training Run<br/>(tier and job ID recorded)"] --> B["Input Manifest<br/>(exact code, image, config, and data)"]; B --> C{"Side Effect Check<br/>(did the artifact already arrive?)"}; C -->|Yes| D["Resume Finalization<br/>(reuse verified existing output)"]; C -->|No| E["Controlled Rerun<br/>(same inputs and idempotency key)"]; D --> F["Attempt Record<br/>(original and recovery linked)"]; E --> F
-```
-
-Automatic retries are suitable for bounded transient failures such as a temporary registry timeout. Deterministic failures such as an invalid configuration should stop immediately. Repeated resource exhaustion calls for a reviewed compute change; an unlimited retry loop would only repeat the same expensive failure.
-
-## The Main Idea
-<!-- section-summary: Training CI is a staged trust and cost policy that connects a source change to reproducible candidate evidence. -->
-
-Training CI organizes work along two rising curves: cost and authority. A pull request receives restricted, hermetic checks first. Reviewed source produces an immutable image and configuration identity. Protected jobs use short-lived credentials for narrow integration checks. Full training runs from a trusted trigger and returns model evidence to the commit and release record.
-
-This structure gives beginners a practical way to reason about any CI step. Ask what question the step answers, which code it executes, which identity it receives, how much it can cost, and what evidence it leaves behind. A step that has no clear answer to those questions probably belongs in a different tier or needs a stronger contract.
+That is what turns CI from “automated commands after a Git push” into a trustworthy ML engineering system.
 
 ![The training CI journey links changed paths and fast checks to immutable inputs managed training and a reproducible release record](/content-assets/articles/article-mlops-mlops-infrastructure-ci-for-training-workflows/training-ci-evidence-summary.png)
 
 *A durable evidence chain ties the release decision to the reviewed commit, exact image and configuration, data snapshot, training job, and model identity. A controlled rerun starts from that same manifest.*
 
-## References
+## Check Your Answers
 
-- [GitHub Actions workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
-- [Securely using `pull_request_target`](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target)
-- [GitHub Actions secure use reference](https://docs.github.com/en/actions/reference/security/secure-use)
-- [OpenID Connect reference](https://docs.github.com/en/actions/reference/security/oidc)
-- [Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
-- [Concurrency in GitHub Actions](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)
-- [Dependency caching reference](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)
-- [Store and share data with workflow artifacts](https://docs.github.com/en/actions/tutorials/store-and-share-data)
-- [About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
-- [Using uv in GitHub Actions](https://docs.astral.sh/uv/guides/integration/github/)
-- [Paths Filter for GitHub Actions](https://github.com/dorny/paths-filter)
-- [Docker Build GitHub Actions](https://docs.docker.com/build/ci/github-actions/)
-- [Configure AWS Credentials for GitHub Actions](https://github.com/aws-actions/configure-aws-credentials)
-- [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/)
-- [MLflow model evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Evidence Must Training CI Collect for an ML Change?]{kind="recap"}
+Training CI gathers progressively stronger evidence about changes to code, data, configuration, dependencies, and infrastructure before trusting a new model.
+:::
+
+:::expand[What Belongs in the Four Training CI Tiers?]{kind="recap"}
+The four tiers move from controlled local checks to the real environment, protected integrations, and full training on representative infrastructure.
+:::
+
+:::expand[How Does Full Training Show Whether a Candidate Is Acceptable?]{kind="recap"}
+A full run must preserve structured evidence and pass execution, quality, baseline, slice, and policy checks rather than merely exit successfully.
+:::
+
+:::expand[How Do Evidence, Provenance, and Artifact Identity Stay Connected?]{kind="recap"}
+Caches accelerate work, while immutable evidence links the exact code, data, environment, run, evaluation, and promoted model through one chain of custody.
+:::
+
+:::expand[How Do Retries and Change Triggers Avoid Corrupting CI?]{kind="recap"}
+Isolated attempts, retained diagnostics, explicit retry rules, and conservative change detection keep repeated or selectively triggered jobs trustworthy.
+:::
+
+:::expand[How Does a Complete Training CI Flow Decide What to Run?]{kind="recap"}
+A change-aware decision tree selects proportionate checks and records exactly which model and evaluation evidence passed for each proposed change.
+:::
+
+:::expand[How Do Long-Running CI Jobs Stay Reproducible and Diagnosable?]{kind="recap"}
+Asynchronous orchestration should call independently runnable verification commands, localize failures, parallelize independent evidence, and justify expensive checks by risk.
+:::
+
+:::expand[What Does a Green Training CI Result Actually Mean?]{kind="recap"}
+A green result means the checks required by a stated policy passed; trust depends on how relevant and strong that collected evidence actually is.
+:::

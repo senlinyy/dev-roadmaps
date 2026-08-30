@@ -1,17 +1,17 @@
 ---
-title: "Everything Is a File"
-sectionSlug: virtual-filesystems-live-views-from-the-kernel
+title: "Inspect the Live System"
+sectionSlug: how-do-virtual-filesystems-expose-live-kernel-state
 order: 3
+revision: 2
 ---
 
-In Linux, even hardware info and running processes are exposed as ordinary files you can read with `cat`. The `/proc` and `/sys` directories are **virtual filesystems** generated live by the kernel. Nothing is stored on disk.
+The `orders-api` process is running as PID `4242`, but the deployment record does not say what it launched or which release directory it uses. The kernel exposes those answers through virtual filesystem paths.
 
 You start in `/home/dev`. Your job:
 
-1. **Read `/proc/cpuinfo`** to see the CPU details.
-2. **Read `/proc/meminfo`** to check memory statistics.
-3. **Read `/proc/version`** to see the kernel version.
-4. **Count the lines** in `/proc/cpuinfo` using `wc`.
-5. As your final command, **read `/proc/loadavg`** to see the current system load.
+1. **Identify the command line** that launched PID `4242`.
+2. **Resolve the process working-directory entry** to its release path.
+3. **Inspect the process environment** and find its `APP_ENV` value.
+4. **Check whether block device `vdb` reports rotational storage** through `/sys`.
 
-The grader checks that you used `cat` and `wc`, and that your last output contains the load average.
+The grader checks the process, environment, path, and device evidence.

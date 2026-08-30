@@ -1,0 +1,23 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/report.txt": { "type": "file", "content": "release approved\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/home/dev/report-backup.txt": {
+        "type": "file",
+        "contentContains": "reviewed",
+        "sameInodeAs": "/home/dev/report.txt"
+      },
+      "/home/dev/report.txt": {
+        "type": "file",
+        "contentContains": "reviewed"
+      }
+    },
+    "requireCommands": ["ln", "stat", "echo", "cat"]
+  }
+}

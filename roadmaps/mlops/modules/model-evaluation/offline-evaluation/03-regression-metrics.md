@@ -9,400 +9,1951 @@ id: "article-mlops-model-evaluation-regression-metrics"
 
 ## Table of Contents
 
-1. [Regression Predicts a Number](#regression-predicts-a-number)
-2. [A Residual Shows How Far And In Which Direction A Prediction Missed](#a-residual-shows-how-far-and-in-which-direction-a-prediction-missed)
-3. [Use MAE And Median Absolute Error To Describe Typical Misses](#use-mae-and-median-absolute-error-to-describe-typical-misses)
-4. [MSE And RMSE Penalize Large Errors More Heavily](#mse-and-rmse-penalize-large-errors-more-heavily)
-5. [R-Squared and Explained Variance Need Context](#r-squared-and-explained-variance-need-context)
-6. [Percentage Error Can Distort Small Targets](#percentage-error-can-distort-small-targets)
-7. [Use Quantile Loss When Underprediction And Overprediction Have Different Costs](#use-quantile-loss-when-underprediction-and-overprediction-have-different-costs)
-8. [Check Error Distributions And Segments For Concentrated Harm](#check-error-distributions-and-segments-for-concentrated-harm)
-9. [Set Release Limits That Match The Cost Of Regression Errors](#set-release-limits-that-match-the-cost-of-regression-errors)
-10. [The Main Idea](#the-main-idea)
-11. [References](#references)
+1. [What Does a Regression Error Measure?](#what-does-a-regression-error-measure)
+2. [How Do MAE, Median Absolute Error, MSE, and RMSE Value Large Mistakes?](#how-do-mae-median-absolute-error-mse-and-rmse-value-large-mistakes)
+3. [What Do R-Squared and Explained Variance Compare Against?](#what-do-r-squared-and-explained-variance-compare-against)
+4. [When Do Relative and Asymmetric Error Metrics Match the Real Cost?](#when-do-relative-and-asymmetric-error-metrics-match-the-real-cost)
+5. [How Do Intervals, Residuals, Tails, and Segments Reveal Hidden Failure?](#how-do-intervals-residuals-tails-and-segments-reveal-hidden-failure)
+6. [How Do Baselines, Deployment Data, and Paired Uncertainty Support Release Decisions?](#how-do-baselines-deployment-data-and-paired-uncertainty-support-release-decisions)
+7. [What Should a Repeatable Regression Report and Evaluation Specification Contain?](#what-should-a-repeatable-regression-report-and-evaluation-specification-contain)
+8. [How Do You Choose the Metric Closest to the Real Cost Function?](#how-do-you-choose-the-metric-closest-to-the-real-cost-function)
+9. [Check Your Answers](#check-your-answers)
 
-## Regression Predicts a Number
-<!-- section-summary: Regression models predict numeric quantities, and evaluation connects the distance between each prediction and outcome to the consequence experienced by the product. -->
+A delivery-time model is wrong by ten minutes on average. That statement does not reveal whether most predictions miss by ten minutes, whether a few deliveries miss by hours, or whether the model consistently promises arrivals too early. Each pattern creates a different operational problem.
 
-A **regression model** predicts a number. The output might be delivery time in minutes, electricity demand in megawatts, a house price in pounds, or the number of units a warehouse will need tomorrow.
+A **regression metric** summarizes errors between predicted and observed numbers. MAE, RMSE, relative error, quantile loss, and R-squared answer different questions because they weight size, direction, scale, and baseline performance differently. The right evidence also includes residual distributions, tails, segments, and uncertainty.
 
-The prediction and the observed outcome live on a numeric scale. A forecast of 42 minutes can miss an actual delivery time of 45 minutes by three minutes. A demand forecast of 42 units can miss the actual demand of 45 units by three units. The arithmetic looks the same, yet the operational consequences differ.
+The questions below build that evaluation from one residual to a production release rule:
 
-A delivery estimate that misses by two minutes and one that misses by two hours are both wrong, yet the product experiences them very differently. **Regression evaluation measures the distance between predictions and observed outcomes, then decides how different distances should count.** The team defines the target and its unit, the direction and cost of error, and the aggregation rule that combines thousands of individual misses into release evidence.
+1. **What Does a Regression Error Measure?**
+2. **How Do MAE, Median Absolute Error, MSE, and RMSE Value Large Mistakes?**
+3. **What Do R-Squared and Explained Variance Compare Against?**
+4. **When Do Relative and Asymmetric Error Metrics Match the Real Cost?**
+5. **How Do Intervals, Residuals, Tails, and Segments Reveal Hidden Failure?**
+6. **How Do Baselines, Deployment Data, and Paired Uncertainty Support Release Decisions?**
+7. **What Should a Repeatable Regression Report and Evaluation Specification Contain?**
+8. **How Do You Choose the Metric Closest to the Real Cost Function?**
 
-You can think of the metric choice through five questions:
+## What Does a Regression Error Measure?
+<!-- section-summary: Regression begins with the signed residual between a numeric prediction and its target, while evaluation usually summarizes the magnitude or cost of those residuals. -->
 
-1. **Target:** Which numeric quantity and prediction horizon does the product consume?
-2. **Unit:** Should reviewers read the error in minutes, pounds, megawatts, units, or a relative scale?
-3. **Consequence:** Do ordinary misses, rare large misses, underprediction, or overprediction create the main cost?
-4. **Aggregation:** Should every row contribute linearly, should large errors receive extra weight, or should the median describe a typical row?
-5. **Evidence:** Which residual plots, target ranges, segments, baselines, and uncertainty checks limit the release claim?
+A numeric prediction is rarely exact, so regression evaluation starts by defining the error for each example.
 
-```mermaid
-flowchart TD
-    T["Numeric target<br/>quantity, unit, horizon"] --> P["Prediction and observed outcome"] --> E["Residual and absolute error"] --> C["Product consequence<br/>ordinary, large, under, or over"] --> M["Metric family"] --> S["Distribution and segment checks"] --> G["Candidate-versus-production gate"]
-    class T,P context
-    class E,C,M mechanism
-    class S,G decision
-```
+Regression is the problem of predicting a **number**. Examples:
 
-Units come before formulas. A model trained on standardized targets may report a small training loss that has no product meaning. The release evaluation should transform predictions back to the product scale. A log-price model should be inverse-transformed before reviewers read errors in currency. A multi-horizon demand model should report each horizon because an error tomorrow and an error twelve weeks ahead support different decisions.
+$$
+\text{house price}=£425{,}000
+$$
 
-The label policy also needs a precise meaning. Delivery time might start at checkout, dispatch, or pickup. Energy demand might mean gross load or load after local generation. Two teams can calculate identical MAE code over targets that describe different events. A trustworthy report pins the target definition and unit beside every result. It also records the horizon and eligible population. Label maturity and any target transformation complete the comparison contract.
+$$
+\text{delivery time}=37\text{ minutes}
+$$
 
-## A Residual Shows How Far And In Which Direction A Prediction Missed
-<!-- section-summary: A residual records the signed gap between an observed value and its prediction, while absolute and squared errors transform that gap for different metric families. -->
+$$
+\text{tomorrow's demand}=12{,}400\text{ units}
+$$
 
-Every aggregate regression metric starts from row-level error. The most informative first object is the **residual**. It preserves the gap for one prediction before an average hides its direction or size.
+$$
+\text{customer lifetime value}=£780
+$$
 
-### Choose And Record One Residual Sign Convention
+Unlike classification, where a prediction may be right or wrong, regression predictions are usually wrong by **some amount**. If the true value is:
 
-The calculations below use one explicit convention:
+$$
+y=100
+$$
 
-`residual = observed outcome - prediction`
+then predictions of:
 
-A positive residual means the model predicted too low. A negative residual means it predicted too high. Some tools use the opposite sign, so the report should state the convention.
+$$
+99,\quad 90,\quad 40
+$$
 
-Suppose an order arrives in 50 minutes after a prediction of 42 minutes. Its residual is `50 - 42 = +8 minutes`. The positive sign says the model underestimated the time. A second order arrives in 34 minutes after the same 42-minute prediction. Its residual is `34 - 42 = -8 minutes`, which says the model overestimated.
+are all technically incorrect. But clearly they are not equally bad. Regression metrics exist to answer:
 
-Both rows have an **absolute error** of eight minutes:
+$$
+\boxed{\text{How bad are the model's numerical mistakes?}}
+$$
 
-`absolute error = |observed outcome - prediction|`
+The difficulty is that "bad" can mean different things. A £10 mistake may matter differently from a £1,000 mistake. Underprediction may be more costly than overprediction. A few catastrophic errors may matter more than typical errors. So there is no universally best regression metric. Suppose we observe an input:
 
-Absolute error removes direction and preserves distance. **Squared error** also removes direction, then squares the distance:
+$$
+x_i
+$$
 
-`squared error = (observed outcome - prediction)²`
+with true target:
 
-The two eight-minute misses each have squared error `64 minutes²`. Squaring makes a 40-minute miss contribute 25 times as much as an eight-minute miss because `40² / 8² = 25`.
+$$
+y_i
+$$
 
-```mermaid
-flowchart TD
-    O["Observed outcome"] --> R["Residual<br/>observed minus prediction"]
-    P["Prediction"] --> R
-    R --> D["Signed residual<br/>direction and bias"]
-    R --> A["Absolute error<br/>distance in target units"]
-    R --> Q["Squared error<br/>large misses amplified"]
-    class O,P input
-    class R base
-    class D,A,Q transform
-```
+and the model predicts:
 
-Signed residuals reveal systematic bias. If the average residual is `+4 megawatts`, the energy forecast usually runs four megawatts below observed load. Positive and negative residuals can cancel, so a mean residual near zero never proves that the predictions are close. A model that alternates between `+50` and `-50` has zero mean residual and severe error.
+$$
+\hat y_i
+$$
 
-The raw residual distribution should remain in the report. Useful summaries include the mean and median signed residual, median absolute error, MAE, upper quantiles of absolute error, and the largest reviewed errors. A histogram or empirical distribution shows whether the aggregate comes from many moderate misses or a small heavy tail.
+The basic quantity from which regression metrics are built is the **residual**:
 
-### Investigate extreme residuals
+$$
+e_i=y_i-\hat y_i
+$$
 
-Individual residuals also expose data problems. A 20,000-minute delivery error may represent a real operational failure, a timestamp bug, or a cancelled order that violates the label policy. The team should investigate the row before excluding it. Removing genuine hard cases narrows the evaluation population and overstates expected production quality.
+Suppose:
 
-## Use MAE And Median Absolute Error To Describe Typical Misses
-<!-- section-summary: MAE averages absolute errors in product units, while median absolute error describes the middle miss and resists the influence of a small number of extreme values. -->
+$$
+y_i=120
+$$
 
-**Mean absolute error (MAE)** adds the absolute errors and divides by the number of examples. It answers how far a prediction misses on average in the same unit as the target.
+and:
 
-`MAE = mean(|observed - predicted|)`
+$$
+\hat y_i=100
+$$
 
-If a delivery model has MAE of six minutes, its absolute miss is six minutes on average over the evaluation rows. The metric keeps the target unit, which makes it easy to connect to product tolerance.
+Then:
 
-MAE gives each extra unit of error the same incremental weight. A miss growing from two to three minutes adds one unit of loss. A miss growing from forty to forty-one minutes also adds one unit. This linear treatment fits products where cost grows roughly with distance.
+$$
+e_i=120-100=20
+$$
 
-**Median absolute error (MedAE)** sorts the absolute errors and takes the middle value.
+The model underpredicted by 20. If instead:
 
-`MedAE = median(|observed - predicted|)`
+$$
+\hat y_i=135
+$$
 
-MedAE describes the typical middle case and is robust to outliers. Consider five absolute errors: `2, 3, 3, 4, 38`. The median absolute error is three. MAE is ten because the 38-unit miss still contributes to the average.
+then:
 
-```mermaid
-flowchart TD
-    E["Absolute-error family"] --> M["MAE<br/>average distance, linear weight"]
-    E --> D["Median absolute error<br/>middle distance, outlier resistant"]
-    M --> C["Read together"]
-    D --> C
-    C --> G["Add signed bias, upper quantiles,<br/>segments, and support"]
-    class E source
-    class M,D metric
-    class C,G evidence
-```
+$$
+e_i=120-135=-15
+$$
 
-The difference between MAE and MedAE is evidence. Similar values suggest a relatively compact distribution. A much larger MAE suggests that large errors pull the average upward. The team then inspects p90 or p95 absolute error, a histogram, and the responsible examples.
+The model overpredicted by 15. So the sign contains useful information:
 
-Median absolute error should not be confused with median signed residual. The first describes the middle distance from the outcome. The second describes the middle direction of error. A model can have median residual near zero and large median absolute error.
+$$
+e>0
+\Rightarrow
+\text{underprediction}
+$$
 
-MAE also connects to the statistical target. Minimizing expected absolute error estimates the conditional median of the outcome. That is sensible for a central delivery estimate or a typical property price. A product that needs the expected demand for total inventory may prefer a mean-targeting loss such as squared error.
+$$
+e<0
+\Rightarrow
+\text{overprediction}
+$$
 
-Neither MAE nor MedAE should stand alone as a release gate. MAE can hide a dangerous tail. MedAE can remain excellent while a substantial minority receives severe errors. The primary metric should travel with bias, tail, coverage, and segment guardrails.
+and the magnitude:
 
-## MSE And RMSE Penalize Large Errors More Heavily
-<!-- section-summary: MSE squares every residual and RMSE returns the square root to the target unit, so both react strongly to large errors. -->
+$$
+|e|
+$$
 
-**Mean squared error (MSE)** averages squared residuals. Squaring changes the influence of every row, so the metric gives large misses far more weight than small misses.
+tells us how far away the prediction was. That gives us the foundation of regression evaluation. Suppose a model makes these errors:
 
-`MSE = mean((observed - predicted)²)`
+$$
++10,\quad -10,\quad +20,\quad -20
+$$
 
-Squaring increases the influence of large errors. For the five absolute errors `2, 3, 3, 4, 38`, MSE is `296.4`. Its unit is squared, such as minutes squared, which is hard to explain to a product owner.
+The average residual is:
 
-**Root mean squared error (RMSE)** takes the square root of MSE.
+$$
+\frac{10-10+20-20}{4}=0
+$$
 
-`RMSE = √MSE`
+It appears perfect. But the model did not predict anything perfectly. Positive and negative errors cancelled each other. So:
 
-The same example has RMSE about `17.2`, back in the original unit. RMSE remains much larger than MAE of ten because the 38-unit miss receives extra weight.
+$$
+\frac{1}{n}\sum_i e_i
+$$
 
-```mermaid
-flowchart TD
-    E1["Error = 4"] --> A1["Absolute contribution = 4"]
-    E1 --> S1["Squared contribution = 16"]
-    E2["Error = 40"] --> A2["Absolute contribution = 40"]
-    E2 --> S2["Squared contribution = 1,600"]
-    A1 --> MAE["MAE grows linearly"]
-    A2 --> MAE
-    S1 --> RMSE["MSE and RMSE amplify large misses"]
-    S2 --> RMSE
-    class E1,E2 error
-    class A1,A2,S1,S2 transform
-    class MAE,RMSE result
-```
+is useful for detecting **systematic directional bias**, but not for measuring total error. A mean residual near zero tells us:
 
-RMSE deserves attention in systems where one very large miss creates disproportionate cost. Underestimating a peak electricity load can trigger expensive emergency purchases. A severe arrival-time error may cause a customer to miss a connection. A large demand miss can create a stockout across an entire region.
+The model does not systematically overpredict or underpredict on average.
 
-Outlier sensitivity carries a trade-off. A data-entry error can dominate RMSE and produce a false model comparison. A genuine rare event can dominate RMSE and reveal exactly the risk the product needs to control. The evaluation pipeline should validate data integrity, retain a traceable exclusion policy, and publish metrics before and after any approved correction.
+It does **not** tell us:
 
-Squared error targets the conditional mean. This makes MSE or RMSE aligned with forecasts used for expected totals. MAE targets the conditional median. On a skewed demand distribution, the mean can sit above the median. Two models may therefore optimize different numeric quantities even though both produce one number.
+The model is accurate.
 
-The report should explain that target choice. Selecting RMSE solely because it punishes outliers can distort a product that cares linearly about every unit. Selecting MAE solely because its unit is familiar can understate catastrophic tails. Product cost determines the loss shape.
+We therefore need transformations that prevent positive and negative errors from cancelling. Two natural choices are:
+
+$$
+|e|
+$$
+
+and:
+
+$$
+e^2
+$$
+
+Those lead to the two most important families of regression metrics. Mean Absolute Error is:
+
+$$
+MAE
+=
+\frac{1}{n}\sum_{i=1}^n|y_i-\hat y_i|
+$$
+
+Consider errors:
+
+$$
+-3,\quad 7,\quad -4,\quad 2
+$$
+
+Their absolute errors are:
+
+$$
+3,\quad7,\quad4,\quad2
+$$
+
+Therefore:
+
+$$
+MAE
+=
+\frac{3+7+4+2}{4}
+=
+4
+$$
+
+The interpretation is straightforward:
+
+Predictions miss the true value by about 4 units on average.
+
+If the target is measured in minutes:
+
+$$
+MAE=4\text{ minutes}
+$$
+
+If it is measured in pounds:
+
+$$
+MAE=£4
+$$
+
+If it is measured in degrees Celsius:
+
+$$
+MAE=4^\circ C
+$$
+
+This interpretability is one of MAE's greatest advantages. Suppose one prediction is wrong by:
+
+$$
+10
+$$
+
+and another by:
+
+$$
+20
+$$
+
+Under absolute error:
+
+$$
+|10|=10
+$$
+
+$$
+|20|=20
+$$
+
+So doubling the error doubles the penalty. Likewise:
+
+$$
+|100|=100
+$$
+
+There is no extra punishment simply because the error became large. The cost grows linearly:
+
+$$
+L(e)=|e|
+$$
+
+Conceptually:
+
+$$
+1\text{ extra unit of error}
+$$
+
+always adds:
+
+$$
+1\text{ extra unit of loss}
+$$
+
+regardless of whether we were already wrong by 5 or by 500. So MAE implicitly says:
+
+$$
+\boxed{\text{Error cost grows approximately linearly with error magnitude.}}
+$$
+
+That assumption may or may not match the real problem.
+
+## How Do MAE, Median Absolute Error, MSE, and RMSE Value Large Mistakes?
+<!-- section-summary: Absolute, median, squared, and root-squared errors differ mainly in how strongly they weight unusually large mistakes and which central estimate they reward. -->
+
+Averaging those residuals can cancel opposite mistakes; magnitude-based metrics avoid that cancellation in different ways.
+
+Instead of taking the mean of absolute errors, we can take their median. Suppose absolute errors are:
+
+$$
+1,\quad2,\quad2,\quad3,\quad100
+$$
+
+The MAE is:
+
+$$
+\frac{1+2+2+3+100}{5}
+=
+21.6
+$$
+
+But the median absolute error is:
+
+$$
+2
+$$
+
+Those numbers tell very different stories. The MAE tells us that the large error contributes substantially to overall average loss. The median tells us:
+
+Half of predictions have absolute error at or below 2.
+
+This makes median absolute error robust to extreme outliers. But that robustness is a tradeoff. If the error of 100 is catastrophic, a metric that largely ignores its magnitude may be inappropriate. So:
+
+$$
+\boxed{\text{Robustness to outliers is good only when outliers should have limited influence.}}
+$$
+
+Mean Squared Error is:
+
+$$
+MSE
+=
+\frac{1}{n}
+\sum_{i=1}^n
+(y_i-\hat y_i)^2
+$$
+
+Suppose errors are:
+
+$$
+1,\quad2,\quad5,\quad10
+$$
+
+Their squared errors are:
+
+$$
+1,\quad4,\quad25,\quad100
+$$
+
+Notice what happened. The 10-unit error is only twice the size of the 5-unit error:
+
+$$
+10=2(5)
+$$
+
+but its squared penalty is four times larger:
+
+$$
+100=4(25)
+$$
+
+In general:
+
+$$
+(ke)^2=k^2e^2
+$$
+
+So doubling an error quadruples its contribution. Tripling it multiplies the contribution by nine. This is the defining property of MSE. Imagine two models.
+
+### Model A errors
+
+$$
+5,\quad5,\quad5,\quad5
+$$
+
+### Model B errors
+
+$$
+0,\quad0,\quad0,\quad20
+$$
+
+Their MAEs are equal:
+
+$$
+MAE_A=5
+$$
+
+$$
+MAE_B=5
+$$
+
+From the perspective of total absolute error, they are tied. But their MSEs differ dramatically. For A:
+
+$$
+MSE_A
+=
+\frac{25+25+25+25}{4}
+=
+25
+$$
+
+For B:
+
+$$
+MSE_B
+=
+\frac{0+0+0+400}{4}
+=
+100
+$$
+
+MSE strongly prefers Model A. Why? Because Model B occasionally makes a very large mistake. Thus MSE effectively says:
+
+$$
+\boxed{\text{Large errors deserve disproportionately large penalties.}}
+$$
+
+MSE has an interpretation problem. If the target is measured in minutes, MSE is measured in:
+
+$$
+\text{minutes}^2
+$$
+
+That is awkward. So we often take its square root:
+
+$$
+RMSE
+=
+\sqrt{
+\frac{1}{n}
+\sum_i
+(y_i-\hat y_i)^2
+}
+$$
+
+Now RMSE is measured in the original units. If:
+
+$$
+RMSE=12\text{ minutes}
+$$
+
+we can interpret it much more naturally. Importantly, taking the square root does **not** undo MSE's extra sensitivity to large errors. The squaring still happened before aggregation. People sometimes ask:
+
+"Should I use MAE or RMSE?"
+
+A better question is:
+
+**How should the cost of a prediction error grow as the error becomes larger?**
+
+If approximate cost is:
+
+$$
+C(e)\propto|e|
+$$
+
+then MAE naturally matches that structure. If large deviations become disproportionately harmful, something like:
+
+$$
+C(e)\propto e^2
+$$
+
+may make RMSE/MSE more appropriate. For example, suppose a delivery estimate is wrong by 5 minutes. That may be mildly inconvenient. A 30-minute error may be considerably worse. A 5-hour error might cause cascading operational failure. If harm increases faster than linearly, squared-error evaluation may better reflect what matters. There is a deeper mathematical connection. Suppose you knew nothing about a case except the distribution of possible target values. What single prediction should you make? If you minimize expected squared error:
+
+$$
+E[(Y-\hat y)^2]
+$$
+
+the optimal prediction is the conditional mean:
+
+$$
+\hat y^*=E[Y\mid X]
+$$
+
+If you minimize expected absolute error:
+
+$$
+E[|Y-\hat y|]
+$$
+
+the optimal prediction is the conditional median:
+
+$$
+\hat y^*=\operatorname{Median}(Y\mid X)
+$$
+
+This is profound. Choosing a loss function does more than determine how you **score** predictions. It determines what kind of quantity the model is encouraged to predict. Roughly:
+
+$$
+\boxed{
+\text{Squared error}
+\rightarrow
+\text{conditional mean}
+}
+$$
+
+$$
+\boxed{
+\text{Absolute error}
+\rightarrow
+\text{conditional median}
+}
+$$
+
+And, as we will see:
+
+$$
+\boxed{
+\text{Quantile loss}
+\rightarrow
+\text{conditional quantile}
+}
+$$
+
+A model might be trained using MSE because it gives convenient optimization properties, while being evaluated primarily with MAE because MAE better represents business costs. That is allowed. But you should understand the mismatch. If training optimizes:
+
+$$
+\text{MSE}
+$$
+
+while deployment cares about:
+
+$$
+\text{MAE}
+$$
+
+then the optimizer is being directly rewarded for something slightly different from the final objective. Sometimes that works well. Sometimes designing training more directly around the deployment objective improves results. So always distinguish:
+
+$$
+\boxed{\text{training objective}}
+$$
+
+from:
+
+$$
+\boxed{\text{evaluation metric}}
+$$
+
+from:
+
+$$
+\boxed{\text{real-world objective}}
+$$
+
+Ideally, they are strongly aligned.
 
 ![Five absolute errors produce very different median absolute error, MAE, and RMSE summaries](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/error-metric-tail-comparison.png)
 
 *The middle error stays at three minutes, while one 38-minute miss pulls MAE to ten and RMSE to about 17.2 minutes.*
 
-## R-Squared and Explained Variance Need Context
-<!-- section-summary: R-squared and explained variance compare error with target variation, producing scale-free scores that still need unit-based errors, baselines, and bias checks. -->
+## What Do R-Squared and Explained Variance Compare Against?
+<!-- section-summary: R-squared and explained variance compare errors with population variation or a baseline, but neither represents percentage accuracy. -->
 
-**R-squared (R²)** compares the model's squared error with a constant baseline that predicts the mean observed target on the evaluation set.
+Error in target units is useful, but teams also ask whether the model improves on a simple population baseline.
 
-`R² = 1 - model squared error / mean-baseline squared error`
+Another common regression metric is:
 
-An R² of `1.0` represents perfect predictions. A score of `0.0` matches the mean baseline. A negative score is possible and means the model performs worse than that baseline on the evaluated data.
+$$
+R^2
+$$
 
-```mermaid
-flowchart TD
-    Y["Observed target variation"] --> B["Mean-target baseline error"]
-    P["Model predictions"] --> E["Model squared error"]
-    B --> R["R² compares model error<br/>with baseline error"]
-    E --> R
-    R --> U["Keep MAE, RMSE, bias,<br/>and segment errors beside it"]
-    class Y,P input
-    class B,E,R comparison
-    class U evidence
-```
+Rather than directly measuring errors in target units, $$R^2$$ asks something like:
 
-R² has no target unit. That makes it convenient for a statistical comparison and weak for explaining product impact. An R² of `0.90` cannot tell a dispatcher whether the average ETA miss is three minutes or thirty minutes.
+How much better are our predictions than simply predicting the mean target every time
 
-The score also depends on target variation. A model may receive high R² on a nationwide price dataset with a wide price range and lower R² within one narrow neighborhood, even with similar currency error. Compare candidate and production on the same rows and preserve MAE or RMSE in the product unit.
+Its common definition is:
 
-Constant targets need special care. R² is mathematically non-finite if every observed target is the same. Scikit-learn uses `force_finite=True` by default and replaces those cases with `1.0` for perfect predictions or `0.0` otherwise. A segment containing one constant target can therefore produce a convenient score that hides the underlying edge case. Report support, target variance, and unit-based error for each segment.
+$$
+R^2
+=
+1-
+\frac{
+\sum_i(y_i-\hat y_i)^2
+}{
+\sum_i(y_i-\bar y)^2
+}
+$$
 
-**Explained variance** compares the variance of residuals with the variance of the target. Its best value is `1.0`. It ignores systematic offsets in the predictions. A model that adds ten units to every prediction can preserve explained variance while creating a serious bias.
+where:
 
-Scikit-learn notes that R² and explained variance are identical if residuals have zero mean. R² usually provides the stronger default because it accounts for systematic offset. Mean residual remains visible because neither scale-free summary replaces a bias check.
+$$
+\bar y
+$$
 
-## Percentage Error Can Distort Small Targets
-<!-- section-summary: MAPE scales each absolute error by the observed value, which helps compare target sizes and creates unstable or misleading results near zero. -->
+is the mean true target. The numerator is the model's squared error. The denominator is the squared error from using the mean as a baseline. Suppose:
 
-**Mean absolute percentage error (MAPE)** divides each absolute error by the magnitude of its observed target, then averages the ratios.
+$$
+R^2=0
+$$
 
-`MAPE = mean(|observed - predicted| / |observed|)`
+Then the model's squared error is roughly as large as the mean-prediction baseline. If:
 
-A five-unit error against an observed value of 100 contributes five percent. The same five-unit error against an observed value of ten contributes fifty percent. This relative scale can help compare demand across large and small stores.
+$$
+R^2=1
+$$
 
-The denominator creates the main problem. An observed value of zero makes the ordinary ratio undefined. A value close to zero creates an enormous contribution. Scikit-learn divides by a very small positive number and returns a large finite value in the zero case. One zero-demand row can dominate the report.
+then:
 
-```mermaid
-flowchart TD
-    E["Same absolute error = 5 units"] --> L["Observed target = 100<br/>relative error = 5%"]
-    E --> S["Observed target = 10<br/>relative error = 50%"]
-    E --> Z["Observed target = 0<br/>ordinary percentage undefined"]
-    L --> C["MAPE weights rows by target size"]
-    S --> C
-    Z --> G["Zero and near-zero policy required"]
-    class E source
-    class L,S,C case
-    class Z,G warning
-```
+$$
+y_i=\hat y_i
+$$
 
-The library returns a relative value. A result of `0.18` represents 18 percent, so reports that display a percent multiply it by 100. Failing to record this convention can create a hundredfold reporting error.
+for every observation, meaning perfect prediction. If:
 
-MAPE also shifts influence toward low-target rows. A store selling one item and missing by one receives 100 percent error. A store selling one thousand items and missing by one hundred receives ten percent. That weighting may fit equal store-level service. It may conflict with inventory cost, where the second miss loses far more units.
+$$
+R^2=0.7
+$$
 
-Negative targets make percentage meaning harder to defend. Price changes, profit, and energy export can cross zero. The absolute denominator keeps the calculation finite away from zero, yet “percentage error” may no longer match the product's interpretation.
+we commonly say the model explains about 70% of the variance in the target relative to this baseline. And importantly:
 
-Teams can use unit-based MAE by target band, scale errors by a meaningful capacity or business baseline, or calculate an aggregate ratio such as total absolute error divided by total actual volume for non-negative targets. Every alternative changes the weighting. The report should state the denominator, zero policy, aggregation level, and segments.
+$$
+R^2<0
+$$
 
-## Use Quantile Loss When Underprediction And Overprediction Have Different Costs
-<!-- section-summary: Pinball loss evaluates a chosen conditional quantile and assigns different penalties to underprediction and overprediction. -->
+is possible.
 
-Many products experience underprediction and overprediction differently. Underforecasting demand can cause a stockout. Overforecasting can create holding cost and waste. An ETA that is too optimistic frustrates a waiting customer, while a slightly conservative ETA may be acceptable.
+For example:
 
-A single symmetric point metric gives equal loss to equal-sized misses in both directions. **Quantile regression** targets a chosen percentile of the outcome distribution. **Pinball loss**, also called quantile loss, evaluates that target with asymmetric weights.
+$$
+R^2=-0.4
+$$
 
-For residual `e = observed - predicted`:
+means the model has greater squared error than simply predicting the mean on that evaluation dataset. Negative $$R^2$$ is not a mathematical bug. It can be a warning that the model is performing worse than a very simple baseline. This is a frequent misunderstanding. Suppose:
 
-- underprediction has `e > 0` and receives loss `alpha × e`;
-- overprediction has `e < 0` and receives loss `(1 - alpha) × |e|`.
+$$
+R^2=0.85
+$$
 
-At `alpha = 0.90`, an equal-sized underprediction receives nine times the loss of an overprediction. The metric is minimized by a model that estimates the conditional 90th percentile.
+That does **not** mean:
 
-```mermaid
-flowchart TD
-    C["Choose product consequence"] --> M["Median forecast<br/>balanced under and over"] --> A["alpha = 0.50"]
-    C --> H["High-demand or late-time forecast<br/>underprediction costs more"] --> Q["alpha above 0.50"]
-    C --> L["Low-demand bound<br/>overprediction costs more"] --> D["alpha below 0.50"]
-    A --> P["Evaluate with matching pinball loss"]
-    Q --> P
-    D --> P
-    class C context
-    class M,H,L,A,Q,D target
-    class P evidence
-```
+"The model is 85% accurate."
 
-`alpha = 0.50` treats both directions equally and targets the conditional median, the same central target associated with absolute-error optimization. A 90th-percentile model needs `mean_pinball_loss(..., alpha=0.90)`. Evaluating it with ordinary MAE asks whether it predicts the median well, which is a different question.
+Regression generally has no direct equivalent of classification accuracy. $$R^2$$ is fundamentally a **relative variance/error measure**. A model could have high $$R^2$$ and still make errors that are operationally unacceptable. For example, if house prices vary enormously, a model could explain most of that variation while still having:
 
-Quantiles can also form an interval. A 10th- and 90th-percentile pair describes a central 80 percent range. Coverage and interval width then need evaluation across the full population and important segments. A very wide interval can achieve high coverage and offer little operational value.
+$$
+MAE=£50{,}000
+$$
 
-The chosen quantile should trace to a product decision. A warehouse may stock to a high demand quantile because the cost of running out exceeds holding cost. A conservative capacity planner may use the upper load quantile. A price estimate shown as the most typical transaction may stay near the median.
+Whether £50,000 is acceptable depends on the application. So a regression report should rarely rely on $$R^2$$ alone. Consider the same model evaluated on two datasets. Dataset A contains houses priced between:
 
-## Check Error Distributions And Segments For Concentrated Harm
-<!-- section-summary: Residual plots, target bands, time slices, and product segments expose bias, heavy tails, changing variance, and failures hidden by one aggregate metric. -->
+$$
+£200{,}000
+$$
 
-An aggregate metric compresses many rows into one number. The compression can hide systematic bias, heavy tails, and failures concentrated in one part of production.
+and:
 
-Residual analysis opens that summary again. The team reads the distribution, error direction, target range, and product segments together. The expected result is a map of where the candidate improves, where it regresses, and which examples explain the difference.
+$$
+£220{,}000
+$$
 
-Several shapes deserve explicit review:
+Dataset B contains houses priced between:
 
-- **Bias:** residuals sit mainly above or below zero.
-- **Heavy tails:** most predictions are close, while a small group has severe misses.
-- **Changing variance:** error spread grows with the target, horizon, or forecast value.
-- **Multimodality:** several operating regimes produce distinct error clusters.
-- **Segment concentration:** one region, device, supplier, route, or time window carries most of the harm.
+$$
+£100{,}000
+$$
 
-```mermaid
-flowchart TD
-    R["Row-level residuals"] --> D["Distribution<br/>median, MAE, RMSE, p90, p95"] --> F["Find tails and outliers"] --> E["Release evidence and failed examples"]
-    R --> V["Direction<br/>mean and median residual"]
-    R --> T["Target and prediction bands"]
-    R --> S["Predefined product segments"]
-    V --> B["Find systematic bias"]
-    T --> H["Find changing error scale"]
-    S --> G["Find concentrated regressions"]
-    B --> E
-    H --> E
-    G --> E
-    class R input
-    class D,V,T,S,F,B,H,G analysis
-    class E result
-```
+and:
 
-Plot residuals against predictions, observed targets, and time. A widening fan shape suggests that large targets carry larger error variance. A wave pattern over time may reveal seasonality. A cluster of positive residuals during peak hours indicates systematic underprediction.
+$$
+£5{,}000{,}000
+$$
 
-Segments should follow the intended use and known failure modes. Delivery-time evaluation may slice by route length, weather, city, and hour. Demand evaluation may slice by store size, category, promotion, and stockout history. Price evaluation may slice by geography, property type, and price band.
+The variance of $$y$$ is vastly different. Because $$R^2$$ compares model error with target variation, its value can change substantially even if the model's absolute errors are similar. This means:
 
-Aggregation changes conclusions. Suppose 90,000 common cases improve from MAE `5.0` to `4.5`, while 10,000 high-impact cases worsen from `8.0` to `11.0`. Overall MAE improves from `5.3` to `5.15`. The high-impact segment still adds three units of error per case. A single average rewards the larger easy group.
+$$
+R^2
+$$
 
-Every segment row should include support, candidate and production values, coverage, target range, and uncertainty. Sparse rows narrow the claim. Missing predictions or labels create a coverage failure; dropping them from the denominator can make the metric look better.
+cannot be interpreted independently of the target distribution. Explained variance asks how much of the variability in outcomes remains unexplained by the residuals. One common form is:
+
+$$
+\text{Explained Variance}
+=
+1-
+\frac{\operatorname{Var}(Y-\hat Y)}
+{\operatorname{Var}(Y)}
+$$
+
+It resembles $$R^2$$, but there is a subtle difference. Suppose every prediction is exactly 20 units too high:
+
+$$
+\hat y=y+20
+$$
+
+The residual is always:
+
+$$
+-20
+$$
+
+so residual variance is:
+
+$$
+0
+$$
+
+The model preserves the variation perfectly—it is just systematically shifted. Explained variance can therefore look excellent even though the predictions have strong bias. $$R^2$$, because it uses squared errors directly, penalizes that offset. This illustrates why diagnostics such as mean residual are still useful.
+
+## When Do Relative and Asymmetric Error Metrics Match the Real Cost?
+<!-- section-summary: Scale-relative and asymmetric losses can better match business costs, provided zeros, asymmetry, and the intended interpretation are handled explicitly. -->
+
+Comparing datasets or uneven costs may require relative or asymmetric errors rather than the same penalty for every unit.
+
+Suppose:
+
+$$
+MAE=10
+$$
+
+Is that good? If you predict daily temperature in Celsius:
+
+$$
+10^\circ C
+$$
+
+is enormous. If you predict annual company revenue in millions:
+
+$$
+£10
+$$
+
+may be negligible depending on the units. MAE and RMSE inherit the scale of the target. That gives them interpretability within one problem, but it makes comparisons across differently scaled problems difficult. You should therefore interpret:
+
+$$
+MAE,\ RMSE
+$$
+
+relative to:
+
+* the target's typical magnitude,
+* a baseline,
+* business tolerance,
+* target variability.
+
+A number without context tells very little. Suppose the true value is:
+
+$$
+100
+$$
+
+and prediction is:
+
+$$
+90
+$$
+
+The absolute error is:
+
+$$
+10
+$$
+
+The relative error is:
+
+$$
+\frac{10}{100}=10\%
+$$
+
+This motivates percentage-based metrics. A famous one is Mean Absolute Percentage Error:
+
+$$
+MAPE
+=
+\frac{100\%}{n}
+\sum_i
+\left|
+\frac{y_i-\hat y_i}{y_i}
+\right|
+$$
+
+Its attraction is obvious:
+
+Predictions are wrong by about 8% on average.
+
+That is often easier to communicate than an error in obscure target units. But MAPE has serious problems. Suppose the true value is:
+
+$$
+y=100
+$$
+
+and error is:
+
+$$
+10
+$$
+
+Percentage error:
+
+$$
+10\%
+$$
+
+Now suppose:
+
+$$
+y=1
+$$
+
+with the same 10-unit error. Percentage error:
+
+$$
+1000\%
+$$
+
+If:
+
+$$
+y=0.01
+$$
+
+then:
+
+$$
+\frac{10}{0.01}\times100\%
+=
+100{,}000\%
+$$
+
+And if:
+
+$$
+y=0
+$$
+
+then the denominator is zero and ordinary MAPE is undefined. So MAPE can behave disastrously whenever targets can be zero or close to zero. Suppose the true value is:
+
+$$
+100
+$$
+
+Predict:
+
+$$
+50
+$$
+
+The percentage error is:
+
+$$
+50\%
+$$
+
+Now imagine the true value is:
+
+$$
+50
+$$
+
+and we predict:
+
+$$
+100
+$$
+
+The absolute numerical error is still:
+
+$$
+50
+$$
+
+but percentage error is:
+
+$$
+100\%
+$$
+
+The denominator being the actual value creates asymmetrical behavior. Thus percentage metrics encode more assumptions than their intuitive appearance suggests. They should not be chosen merely because stakeholders like seeing "%". Sometimes we genuinely want to know performance relative to the scale of the problem. Instead of blindly using MAPE, alternatives include comparing against a baseline or normalizing by an appropriate scale.
+
+For example:
+
+$$
+\frac{MAE_{\text{model}}}{MAE_{\text{baseline}}}
+$$
+
+If this equals:
+
+$$
+0.70
+$$
+
+then the model has about 70% of the baseline's absolute error. That comparison is often easier to interpret than arbitrary scale normalization. The general principle is:
+
+$$
+\boxed{\text{Normalize by something with meaningful semantics.}}
+$$
+
+MAE and MSE are symmetric. An error of:
+
+$$
++20
+$$
+
+and:
+
+$$
+-20
+$$
+
+receive the same penalty. For MAE:
+
+$$
+|20|=|-20|=20
+$$
+
+For MSE:
+
+$$
+20^2=(-20)^2=400
+$$
+
+But many real systems are asymmetric. Consider inventory forecasting. Underpredict demand by 100 units:
+
+$$
+\rightarrow
+\text{stockout}
+$$
+
+$$
+\rightarrow
+\text{lost sales}
+$$
+
+Overpredict demand by 100 units:
+
+$$
+\rightarrow
+\text{excess inventory}
+$$
+
+$$
+\rightarrow
+\text{storage cost}
+$$
+
+Those two consequences may not cost the same amount. A symmetric metric cannot represent that asymmetry. Quantile regression predicts a chosen conditional quantile rather than necessarily the mean. Suppose we choose quantile:
+
+$$
+\tau=0.9
+$$
+
+The model tries to estimate the 90th percentile:
+
+$$
+Q_{0.9}(Y\mid X)
+$$
+
+Instead of asking:
+
+What is the average likely value
+
+we are asking roughly:
+
+What value should about 90% of outcomes fall below
+
+The corresponding quantile or pinball loss assigns different penalties depending on whether the prediction is above or below the actual value. For residual:
+
+$$
+u=y-\hat y
+$$
+
+one formulation is:
+
+$$
+L_\tau(u)
+=
+\begin{cases}
+\tau u  u\ge0\\
+(\tau-1)u  u<0
+\end{cases}
+$$
+
+At:
+
+$$
+\tau=0.9
+$$
+
+underprediction receives much more weight than overprediction. Suppose a hospital predicts how long patients will stay. A point estimate of:
+
+$$
+4\text{ days}
+$$
+
+may describe the centre of the distribution. But administrators planning bed capacity may care more about:
+
+$$
+Q_{0.9}=8\text{ days}
+$$
+
+because they want enough capacity for most plausible outcomes. Likewise:
+
+* logistics may need a 95th-percentile delivery time,
+* cloud systems may need high-percentile demand forecasts,
+* inventory planning may need an upper demand quantile,
+* financial systems may care about downside quantiles.
+
+Regression need not answer only:
+
+$$
+\boxed{\text{"What number is most typical?"}}
+$$
+
+It can answer:
+
+$$
+\boxed{\text{"What does the distribution of plausible outcomes look like?"}}
+$$
+
+## How Do Intervals, Residuals, Tails, and Segments Reveal Hidden Failure?
+<!-- section-summary: Prediction intervals, residual plots, tail distributions, bias, and segments reveal structure that a single average error cannot show. -->
+
+Even a well-chosen scalar can hide bias, tail risk, or poorly covered uncertainty, so diagnostics must examine the error distribution.
+
+Suppose two customers both receive:
+
+$$
+\hat y=£1{,}000
+$$
+
+for future spending. For Customer A, plausible outcomes might be tightly concentrated:
+
+$$
+£950-£1{,}050
+$$
+
+For Customer B, they might range from:
+
+$$
+£100-£3{,}000
+$$
+
+The point prediction is identical. The uncertainty is not. A point-error metric such as MAE does not reveal this distinction. For systems where uncertainty matters, you may need **probabilistic regression** and evaluate prediction intervals or full predictive distributions. Suppose a model produces a nominal:
+
+$$
+90\%
+$$
+
+prediction interval:
+
+$$
+[L(x),U(x)]
+$$
+
+A basic requirement is **coverage**. Across many cases, roughly:
+
+$$
+90\%
+$$
+
+of true outcomes should fall inside the intervals. But perfect coverage alone is not enough. A model could return:
+
+$$
+[-10^{100},10^{100}]
+$$
+
+for every case and achieve almost perfect coverage. The intervals would be useless. So we need both:
+
+$$
+\boxed{\text{coverage}}
+$$
+
+and:
+
+$$
+\boxed{\text{sharpness / interval width}}
+$$
+
+A useful uncertainty model produces intervals that are **as narrow as reasonably possible while maintaining appropriate coverage**. Suppose two models both have:
+
+$$
+MAE=10
+$$
+
+Model A might make errors consistently around:
+
+$$
+8-12
+$$
+
+Model B might make:
+
+* almost zero error 90% of the time,
+* enormous errors 10% of the time.
+
+Same MAE. Very different behavior. So regression evaluation should examine the **distribution of residuals**, not just its average. Useful questions include:
+
+* What is the median error
+* What is the 90th percentile absolute error
+* What is the 99th percentile
+* Are there extreme outliers
+* Is the residual distribution skewed
+* Are errors centred near zero
+
+For example:
+
+$$
+P_{50}(|e|)=3
+$$
+
+$$
+P_{95}(|e|)=28
+$$
+
+$$
+P_{99}(|e|)=150
+$$
+
+tells us much more than:
+
+$$
+MAE=8
+$$
+
+alone. Suppose an estimated delivery time has:
+
+$$
+MAE=6\text{ minutes}
+$$
+
+This sounds excellent. But perhaps:
+
+$$
+P_{99}(|e|)=180\text{ minutes}
+$$
+
+If those rare three-hour misses destroy customer trust or break downstream logistics, the model may still be unacceptable. A release requirement might therefore be:
+
+$$
+MAE<8\text{ minutes}
+$$
+
+**and**
+
+$$
+P_{99}(|e|)<60\text{ minutes}
+$$
+
+This illustrates a general pattern:
+
+$$
+\boxed{
+\text{optimize typical performance}
++
+\text{constrain dangerous tail behavior}
+}
+$$
+
+Recall that:
+
+$$
+e_i=y_i-\hat y_i
+$$
+
+If:
+
+$$
+E[e]\approx0
+$$
+
+the model may be approximately unbiased overall. But suppose:
+
+$$
+E[e]=+15
+$$
+
+Then, under this sign convention, the model tends to underpredict by about 15 units. This may be hidden inside MAE or RMSE. For example, two models may both have:
+
+$$
+MAE=20
+$$
+
+while one has approximately balanced positive and negative residuals and another systematically underpredicts. If one direction of error creates operational problems, the distinction matters. A good model does not merely have a low average residual. We also want to ask whether residuals have structure. Suppose errors look like this:
+
+$$
+\text{small values} \rightarrow \text{overprediction}
+$$
+
+$$
+\text{large values} \rightarrow \text{underprediction}
+$$
+
+Then the model may be regressing excessively toward the centre. Or perhaps:
+
+$$
+|e|
+$$
+
+grows dramatically as:
+
+$$
+\hat y
+$$
+
+increases. This indicates **heteroscedasticity**: error variance changes across the prediction range. A single global MAE can hide such behavior. Residual plots are therefore not decorative—they can reveal assumptions that scalar metrics cannot. Suppose overall:
+
+$$
+MAE=£900
+$$
+
+But segment-level evaluation shows:
+
+| Customer segment |    MAE |
+| ---------------- | -----: |
+| Small business   |   £350 |
+| Medium business  |   £800 |
+| Large business   | £8,200 |
+
+The global number hides where the errors are concentrated. Similarly, you might inspect performance by:
+
+* geography,
+* product category,
+* time period,
+* target range,
+* customer type,
+* device,
+* forecasting horizon,
+* data quality level.
+
+The key question is:
+
+$$
+\boxed{\text{Where does the model fail?}}
+$$
+
+not merely:
+
+$$
+\boxed{\text{What is its average error?}}
+$$
+
+Suppose:
+
+| Segment | Typical target |  MAE |
+| ------- | -------------: | ---: |
+| A       |           £100 |  £10 |
+| B       |       £100,000 | £100 |
+
+Raw MAE is ten times worse for B:
+
+$$
+100>10
+$$
+
+Yet relative to target magnitude:
+
+$$
+\frac{10}{100}=10\%
+$$
+
+while:
+
+$$
+\frac{100}{100000}=0.1\%
+$$
+
+Depending on the application, B may actually have much better practical performance. So segment comparisons should consider both:
+
+$$
+\boxed{\text{absolute error}}
+$$
+
+and, when meaningful:
+
+$$
+\boxed{\text{error relative to segment scale}}
+$$
 
 ![A smaller high-impact segment gets worse even though overall regression MAE improves](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/residual-segment-gates.png)
 
 *The 90,000 common cases improve enough to lower overall MAE, but the 10,000 high-impact cases fail their required segment check.*
 
-Segment searches also need discipline. Predefine important slices from product boundaries, domain risk, and incident history. Exploratory slices can reveal hypotheses. Confirm a newly discovered problem with appropriate fresh evidence before granting or denying broad authority.
+## How Do Baselines, Deployment Data, and Paired Uncertainty Support Release Decisions?
+<!-- section-summary: Release evidence should use representative deployment data, simple baselines, paired candidate comparisons, uncertainty, and cost-relevant guardrails. -->
 
-## Set Release Limits That Match The Cost Of Regression Errors
-<!-- section-summary: A regression release gate compares candidate and production on identical rows, combines one primary product metric with bias, tail, segment, and coverage guardrails, and records the supported scope. -->
+Those diagnostics support a release only when the data represents deployment and the candidate is compared on the same cases with uncertainty.
 
-Release limits for a regression model should start from the product cost of error. Delivery-time promises may use MAE as the primary metric, with underprediction bias and p95 absolute error as safety limits. Energy planning may use RMSE or high-quantile pinball loss because peak misses carry disproportionate cost. Property estimates may use median absolute error, MAE by price band, and a relative metric with an explicit denominator policy.
+Suppose a forecasting model achieves:
 
-The candidate and production paths need the same eligible rows, labels, target transformation, horizon, and sample weights. A candidate evaluated only on rows where it returned a prediction can gain an unfair advantage. Join coverage and null-prediction rate belong in the gate.
+$$
+MAE=14.2
+$$
 
-The focused example below expects one scored table containing the observed demand, production point forecast, candidate point forecast, and a candidate 90th-percentile forecast. It rejects small targets before calculating MAPE, preserves signed residual summaries, and reports several scikit-learn metrics. The visible result is a pair of comparable dictionaries over the same rows.
+Is that good? We cannot know yet. Perhaps predicting yesterday's value gives:
 
-```python
-import numpy as np
-from sklearn import metrics
+$$
+MAE=30.0
+$$
 
-required = [
-    "actual_units", "production_units",
-    "candidate_units", "candidate_q90_units",
-]
-frame = eval_df[required].dropna()
-if len(frame) != len(eval_df):
-    raise ValueError("missing labels or predictions")
+Then the model adds substantial value. But perhaps simply predicting the same weekday from last week gives:
 
-y_true = frame["actual_units"].to_numpy()
-if np.any(np.abs(y_true) < 10):
-    raise ValueError("MAPE policy excludes targets below 10 units")
+$$
+MAE=11.7
+$$
 
-def summarize(prediction):
-    residual = y_true - prediction
-    absolute = np.abs(residual)
-    return {
-        "mean_residual": float(np.mean(residual)),
-        "median_residual": float(np.median(residual)),
-        "p95_absolute_error": float(np.quantile(absolute, 0.95)),
-        "mae": metrics.mean_absolute_error(y_true, prediction),
-        "median_absolute_error": metrics.median_absolute_error(y_true, prediction),
-        "rmse": metrics.root_mean_squared_error(y_true, prediction),
-        "r2": metrics.r2_score(y_true, prediction),
-        "explained_variance": metrics.explained_variance_score(y_true, prediction),
-        "mape_percent": 100 * metrics.mean_absolute_percentage_error(y_true, prediction),
-    }
+Then the sophisticated model is worse than a trivial heuristic. Typical regression baselines include:
 
-report = {
-    "production": summarize(frame["production_units"].to_numpy()),
-    "candidate": summarize(frame["candidate_units"].to_numpy()),
-    "candidate_q90_pinball": metrics.mean_pinball_loss(
-        y_true, frame["candidate_q90_units"], alpha=0.90
-    ),
+* global mean,
+* global median,
+* previous observation,
+* seasonal historical value,
+* simple linear regression,
+* current production model.
+
+Every evaluation should answer:
+
+$$
+\boxed{\text{"Better than what?"}}
+$$
+
+Suppose:
+
+$$
+MAE_{\text{baseline}}=20
+$$
+
+and:
+
+$$
+MAE_{\text{model}}=15
+$$
+
+Then error reduction is:
+
+$$
+\frac{20-15}{20}
+=
+25\%
+$$
+
+So you can say:
+
+The model reduces MAE by 25% relative to the baseline.
+
+That is often more informative than reporting 15 in isolation. But even relative improvement needs a business interpretation. A 25% reduction may be enormously valuable—or irrelevant—depending on what one unit of error costs. Suppose a demand model is evaluated on ordinary weeks. It performs extremely well. Then it is deployed during:
+
+* Christmas,
+* promotions,
+* supply disruptions,
+* extreme weather.
+
+Performance collapses. The problem is not necessarily the metric. The evaluation distribution did not represent production. Formally, evaluation assumes something like:
+
+$$
+P_{\text{test}}(X,Y)
+\approx
+P_{\text{production}}(X,Y)
+$$
+
+If that is false, a beautifully measured test metric may tell us little about deployment. For time-dependent regression, this is especially important. Training on future information and testing on the past can produce unrealistically optimistic results. Chronological splitting is often essential. For time-series regression, prediction difficulty often increases with horizon. Perhaps:
+
+$$
+MAE_{1\text{ day}}=4
+$$
+
+$$
+MAE_{7\text{ days}}=11
+$$
+
+$$
+MAE_{30\text{ days}}=35
+$$
+
+Reporting only an average MAE across all horizons can hide this pattern. If different horizons drive different decisions, evaluate them separately. The same principle applies whenever prediction difficulty changes systematically across operating conditions. Suppose predictions and actual values have very high correlation:
+
+$$
+\rho(Y,\hat Y)=0.99
+$$
+
+That does not guarantee low prediction error. Imagine:
+
+$$
+\hat y=2y
+$$
+
+Predictions track the true values perfectly in ordering and linear association. But every nonzero prediction is systematically scaled incorrectly. Correlation can remain extremely high. Thus correlation answers approximately:
+
+Do the variables move together
+
+It does not answer:
+
+Are predictions numerically close to reality
+
+For ordinary regression evaluation, MAE, RMSE, calibration/bias diagnostics, and related metrics are usually more directly relevant. Imagine predicting warehouse demand. Perhaps the organization determines that:
+
+* average errors above 200 units create expensive inefficiency,
+* underprediction above 500 units creates serious stockouts,
+* errors for the largest warehouses are particularly costly.
+
+A release specification could say:
+
+$$
+MAE<200
+$$
+
+$$
+P_{95}(\text{underprediction})<500
+$$
+
+and:
+
+$$
+MAE_{\text{largest warehouses}}<300
+$$
+
+This is much more meaningful than:
+
+"Deploy if $$R^2>0.9$$."
+
+The release gate now reflects what operational failure actually means. Regression systems frequently have multiple concerns.
+
+For example:
+
+Minimize typical delivery-time error.
+
+A primary metric could therefore be:
+
+$$
+MAE
+$$
+
+But you might impose guardrails:
+
+$$
+P_{99}(|e|)<90\text{ min}
+$$
+
+$$
+|\text{mean residual}|<2\text{ min}
+$$
+
+$$
+MAE_{\text{critical region}}<15\text{ min}
+$$
+
+This produces a clean optimization structure:
+
+$$
+\boxed{\text{minimize primary error}}
+$$
+
+subject to:
+
+$$
+\boxed{\text{limits on unacceptable failure modes}}
+$$
+
+That is often more interpretable than averaging every concern into one arbitrary composite score. Suppose:
+
+$$
+MAE_A=10.4
+$$
+
+and:
+
+$$
+MAE_B=10.2
+$$
+
+Is Model B definitely better? Not necessarily. The test dataset is itself a sample. A different sample might reverse the result.
+
+Conceptually:
+
+$$
+\text{observed metric}
+=
+\text{true expected performance}
++
+\text{sampling variation}
+$$
+
+You may therefore use:
+
+* bootstrap confidence intervals,
+* repeated evaluation,
+* paired comparison of per-example losses,
+* confidence intervals on metric differences.
+
+For example:
+
+$$
+\Delta MAE=-0.2
+$$
+
+with a 95% confidence interval:
+
+$$
+[-0.8,+0.4]
+$$
+
+does not provide strong evidence that the models differ in expected MAE. Suppose Model A and Model B are tested on the same cases. For each case $$i$$, calculate:
+
+$$
+d_i=
+L(y_i,\hat y_{B,i})
+-
+L(y_i,\hat y_{A,i})
+$$
+
+Then inspect the distribution of:
+
+$$
+d_i
+$$
+
+This is often more informative than separately looking at two aggregate scores. You can discover that:
+
+* B improves almost every case slightly,
+* B dramatically improves one segment,
+* B wins on average only because of three extreme observations,
+* B improves common cases but worsens critical rare cases.
+
+A single difference in MAE cannot tell you this.
+
+## What Should a Repeatable Regression Report and Evaluation Specification Contain?
+<!-- section-summary: A worked example and versioned report record metric definitions, distributions, segments, baselines, uncertainty, and the production operating condition. -->
+
+The concrete example shows how to collect those measurements into a stable report and release specification.
+
+Suppose we predict delivery times for five packages. Actual times:
+
+$$
+y=[20,30,40,50,100]
+$$
+
+Predictions:
+
+$$
+\hat y=[22,25,38,60,70]
+$$
+
+Residuals:
+
+$$
+e=y-\hat y
+$$
+
+are:
+
+$$
+[-2,5,2,-10,30]
+$$
+
+Absolute errors:
+
+$$
+[2,5,2,10,30]
+$$
+
+Squared errors:
+
+$$
+[4,25,4,100,900]
+$$
+
+### MAE
+
+$$
+MAE
+=
+\frac{2+5+2+10+30}{5}
+=
+9.8
+$$
+
+Interpretation:
+
+Predictions miss delivery time by 9.8 minutes on average.
+
+### Median absolute error
+
+Sort:
+
+$$
+[2,2,5,10,30]
+$$
+
+Median:
+
+$$
+5
+$$
+
+Interpretation:
+
+The typical middle absolute error is only 5 minutes.
+
+Notice how the 30-minute miss increases MAE considerably.
+
+### MSE
+
+$$
+MSE
+=
+\frac{4+25+4+100+900}{5}
+=
+206.6
+$$
+
+### RMSE
+
+$$
+RMSE
+=
+\sqrt{206.6}
+\approx14.37
+$$
+
+So:
+
+$$
+RMSE>MAE
+$$
+
+because the large 30-minute error receives substantial influence under squared loss. The metrics are not disagreeing. They are describing different properties of the same error distribution. Because RMSE gives more influence to large residuals, a large gap such as:
+
+$$
+MAE=5
+$$
+
+$$
+RMSE=25
+$$
+
+can suggest that the model has some very large errors. If instead:
+
+$$
+MAE=5
+$$
+
+$$
+RMSE=5.5
+$$
+
+errors may be more consistently sized. This is only a diagnostic hint—not a complete characterization—but comparing several metrics can reveal error structure that one number misses. Rather than asking for "the regression metric," separate the questions.
+
+### Typical magnitude of error
+
+Use metrics such as:
+
+$$
+MAE
+$$
+
+or median absolute error.
+
+### Sensitivity to large errors
+
+Use:
+
+$$
+RMSE
+$$
+
+or examine high error percentiles directly.
+
+### Performance relative to a simple baseline
+
+Use:
+
+$$
+R^2
+$$
+
+or explicit baseline error reduction.
+
+### Relative-to-scale error
+
+Use a carefully chosen relative or normalized metric when meaningful.
+
+### Directional bias
+
+Inspect:
+
+$$
+E[y-\hat y]
+$$
+
+and residual distributions.
+
+### Asymmetric error costs
+
+Use:
+
+$$
+\text{quantile loss}
+$$
+
+or, better still, a domain-specific cost function.
+
+### Uncertainty quality
+
+Evaluate:
+
+* interval coverage,
+* interval width,
+* probabilistic scoring rules.
+
+### Reliability across the population
+
+Evaluate the above by important segments, target ranges, and time periods. A serious regression evaluation might look something like this:
+
+| Evaluation question           | Measurement                |
+| ----------------------------- | -------------------------- |
+| Typical error                 | MAE                        |
+| Typical robust error          | Median absolute error      |
+| Large-error sensitivity       | RMSE                       |
+| Tail risk                     | p95 / p99 absolute error   |
+| Systematic bias               | Mean residual              |
+| Relative baseline performance | Improvement over baseline  |
+| Variance explained            | $$R^2$$                    |
+| Asymmetric risk               | Quantile loss              |
+| Segment reliability           | Metrics by important slice |
+| Uncertainty                   | Confidence intervals       |
+| Production relevance          | Domain-specific cost       |
+
+You do not need every metric for every model. The purpose is to cover the failure modes that actually matter. Before comparing candidate models, you might write:
+
+**Target:** delivery time in minutes
+**Primary metric:** MAE
+**Baseline:** current production model
+**Tail guardrail:** 99th-percentile absolute error below 60 minutes
+**Bias guardrail:** absolute mean residual below 2 minutes
+**Segments:** region, carrier, service level, weekday/weekend
+**Forecast horizons:** evaluated separately
+**Test data:** latest untouched chronological period
+**Uncertainty:** bootstrap confidence interval for change in MAE
+**Release rule:** new model must improve MAE without violating any guardrail
+
+This is much stronger than trying several models and deciding afterward which metric makes the preferred model look best.
+
+## How Do You Choose the Metric Closest to the Real Cost Function?
+<!-- section-summary: The strongest metric approximates the real consequence of over- and underprediction while remaining measurable, reproducible, and interpretable. -->
+
+The final choice returns to the real cost of an error and selects the simplest metric that represents it faithfully.
+
+Most regression metrics can be understood through a **loss function**:
+
+$$
+L(y,\hat y)
+$$
+
+For each prediction, the loss specifies how costly its error is. Then the evaluation metric aggregates loss over the population:
+
+$$
+\frac{1}{n}\sum_iL(y_i,\hat y_i)
+$$
+
+Different losses encode different beliefs. For absolute loss:
+
+$$
+L(e)=|e|
+$$
+
+we are saying:
+
+Cost grows linearly with distance from truth.
+
+For squared loss:
+
+$$
+L(e)=e^2
+$$
+
+we are saying:
+
+Larger deviations should become disproportionately more expensive.
+
+For asymmetric quantile loss:
+
+$$
+L_\tau(e)
+$$
+
+we are saying:
+
+Errors in one direction matter more than errors in the other.
+
+So choosing a regression metric is ultimately choosing a **mathematical representation of the consequences of being wrong**. Suppose a prediction error of $$e$$ creates actual business cost:
+
+$$
+C(e)
+$$
+
+If you can estimate that cost reliably, then the most principled evaluation is:
+
+$$
+\text{Expected Cost}
+=
+\frac{1}{n}
+\sum_i C(y_i-\hat y_i)
+$$
+
+Maybe the cost looks approximately linear. Then MAE is a reasonable proxy. Maybe it grows sharply for large misses. Then RMSE may be closer. Maybe underprediction costs three times as much as overprediction. Then neither ordinary MAE nor MSE exactly represents the problem. This produces the first-principles chain:
+
+$$
+\boxed{
+\text{Prediction error}
+\rightarrow
+\text{real consequence}
+\rightarrow
+\text{cost function}
+\rightarrow
+\text{evaluation metric}
 }
-print(report)
-```
+$$
 
-The input contract makes the comparison fair. `residual = actual - prediction` keeps positive values aligned with underforecasting. MAE, MedAE, RMSE, and residual quantiles stay in demand units. MAPE is labelled as a percent after multiplying scikit-learn's relative output by 100. The 90th-percentile forecast receives a matching pinball loss.
+Ask yourself these questions. **Do I want the average magnitude of an error in understandable units?** Use:
 
-The same job should repeat the metrics for predefined target bands and product segments. It should save residual distributions, the largest reviewed errors, coverage counts, model and dataset identities, library versions, and the gate configuration. MLflow can store these artifacts beside the candidate run; the metric meaning should remain readable without the tracking interface.
+$$
+\boxed{MAE}
+$$
 
-A practical gate might require:
+**Do I care particularly strongly about occasional large errors?** Consider:
 
-- candidate MAE to improve over production by a meaningful margin;
-- p95 absolute error and underprediction bias to remain inside product limits;
-- no required segment to exceed its MAE, RMSE, or quantile-loss floor;
-- prediction and label coverage to meet the declared minimum;
-- the largest errors to pass data-integrity review;
-- the supported release population to match the evaluated population.
+$$
+\boxed{RMSE}
+$$
 
-The candidate-versus-production difference comes from a finite sample. Report the paired change and an interval that respects the sampling unit, such as store-day or route-day. The interval shows whether the observed improvement is precise enough for the release claim. It should stay beside the practical margin; a tiny precise gain may still lack product value.
+and explicitly report tail errors. **Are extreme observations noisy and not especially important?** Consider:
 
-The gate output should state the approved scope. A candidate may improve common demand while failing promoted items. The deployment can retain production for promotions and authorize the candidate elsewhere. Monitoring then uses the same residual sign, target bands, segments, and label policy as the release report.
+$$
+\boxed{\text{Median Absolute Error}}
+$$
 
-## The Main Idea
-<!-- section-summary: Regression metrics translate numeric misses into evidence by preserving units, direction, error-cost shape, residual distribution, and population scope. -->
+**Do I want a comparison with predicting the target mean?** Use:
 
-Regression predicts a number. Each prediction creates a residual whose sign shows direction and whose magnitude shows distance from the observed outcome.
+$$
+\boxed{R^2}
+$$
 
-MAE expresses average distance in the target unit. Median absolute error describes the middle miss and resists extreme rows. MSE and RMSE give large errors more influence. R² and explained variance compare error with target variation, while unit-based metrics and bias preserve product meaning. MAPE introduces a relative scale and needs an explicit policy for zero and small targets. Pinball loss represents asymmetric costs through a chosen quantile.
+alongside an absolute-error metric. **Do errors need to be expressed relative to target magnitude?** Consider a scale-relative metric—but be very careful with MAPE when targets can be small or zero. **Is underprediction more costly than overprediction, or vice versa?** Use:
 
-A production decision uses the full distribution. It compares candidate and production on the same rows, examines bias and tails, repeats the metrics across target bands and product segments, and encodes practical limits with coverage and uncertainty. The result explains who benefits, where error grows, and which traffic the evidence supports.
+$$
+\boxed{\text{Quantile loss or a domain-specific asymmetric loss}}
+$$
+
+**Do decisions depend on uncertainty rather than just one estimate?** Evaluate:
+
+$$
+\boxed{\text{prediction intervals or predictive distributions}}
+$$
+
+Regression evaluation begins with one primitive quantity:
+
+$$
+\boxed{e=y-\hat y}
+$$
+
+But there is no universally correct way to turn those residuals into one score. MAE says:
+
+$$
+\boxed{\text{Every additional unit of error costs roughly the same.}}
+$$
+
+RMSE says:
+
+$$
+\boxed{\text{Large mistakes deserve disproportionately more attention.}}
+$$
+
+Median absolute error says:
+
+$$
+\boxed{\text{I care strongly about typical error and less about extreme observations.}}
+$$
+
+$$R^2$$ says:
+
+$$
+\boxed{\text{How much better are we than a simple mean-based reference?}}
+$$
+
+Percentage metrics say:
+
+$$
+\boxed{\text{Error should be interpreted relative to target magnitude.}}
+$$
+
+Quantile loss says:
+
+$$
+\boxed{\text{The direction of the error matters.}}
+$$
+
+And tail or segment metrics say:
+
+$$
+\boxed{\text{A good average is not enough if important cases fail badly.}}
+$$
+
+The most important lesson is therefore:
+
+$$
+\boxed{
+\text{A regression metric is a statement about which numerical mistakes you consider costly.}
+}
+$$
+
+So don't start by asking:
+
+**"Should I use MAE, RMSE, or $$R^2$$?"**
+
+Start with:
+
+**"If the model is wrong by 1, 10, or 100 units—and if it is wrong above versus below the truth—what actually happens?"**
+
+Once you understand that cost structure, metric selection becomes much less arbitrary:
+
+$$
+\boxed{
+\text{real-world consequence}
+\rightarrow
+\text{cost of error}
+\rightarrow
+\text{appropriate metric}
+}
+$$
 
 ![Regression release evidence flows from pinned rows through error views, segment checks, uncertainty, and a scoped decision](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/regression-release-packet.png)
 
 *A regression release packet preserves the inputs, residual meaning, metric family, location of error, paired comparison, and exact population the decision supports.*
 
-## References
+## Check Your Answers
 
-- [scikit-learn: Metrics and scoring](https://scikit-learn.org/stable/modules/model_evaluation.html) - Official regression metric definitions and guidance connecting the predicted functional to its scoring rule.
-- [scikit-learn: mean_absolute_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_absolute_error.html) - Official API reference for MAE and multi-output aggregation.
-- [scikit-learn: median_absolute_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.median_absolute_error.html) - Official definition of the outlier-resistant median absolute error.
-- [scikit-learn: root_mean_squared_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.root_mean_squared_error.html) - Official API reference for RMSE in the target unit.
-- [scikit-learn: r2_score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.r2_score.html) - Official interpretation of R², negative scores, constant-target behavior, and `force_finite`.
-- [scikit-learn: explained_variance_score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.explained_variance_score.html) - Official explanation of systematic-offset limitations and the relationship to R².
-- [scikit-learn: mean_absolute_percentage_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_absolute_percentage_error.html) - Official MAPE scaling and zero or near-zero target behavior.
-- [scikit-learn: mean_pinball_loss](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_pinball_loss.html) - Official pinball-loss API and quantile interpretation.
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Does a Regression Error Measure?]{kind="recap"}
+Regression begins with the signed residual between a numeric prediction and its target, while evaluation usually summarizes the magnitude or cost of those residuals.
+:::
+
+:::expand[How Do MAE, Median Absolute Error, MSE, and RMSE Value Large Mistakes?]{kind="recap"}
+Absolute, median, squared, and root-squared errors differ mainly in how strongly they weight unusually large mistakes and which central estimate they reward.
+:::
+
+:::expand[What Do R-Squared and Explained Variance Compare Against?]{kind="recap"}
+R-squared and explained variance compare errors with population variation or a baseline, but neither represents percentage accuracy.
+:::
+
+:::expand[When Do Relative and Asymmetric Error Metrics Match the Real Cost?]{kind="recap"}
+Scale-relative and asymmetric losses can better match business costs, provided zeros, asymmetry, and the intended interpretation are handled explicitly.
+:::
+
+:::expand[How Do Intervals, Residuals, Tails, and Segments Reveal Hidden Failure?]{kind="recap"}
+Prediction intervals, residual plots, tail distributions, bias, and segments reveal structure that a single average error cannot show.
+:::
+
+:::expand[How Do Baselines, Deployment Data, and Paired Uncertainty Support Release Decisions?]{kind="recap"}
+Release evidence should use representative deployment data, simple baselines, paired candidate comparisons, uncertainty, and cost-relevant guardrails.
+:::
+
+:::expand[What Should a Repeatable Regression Report and Evaluation Specification Contain?]{kind="recap"}
+A worked example and versioned report record metric definitions, distributions, segments, baselines, uncertainty, and the production operating condition.
+:::
+
+:::expand[How Do You Choose the Metric Closest to the Real Cost Function?]{kind="recap"}
+The strongest metric approximates the real consequence of over- and underprediction while remaining measurable, reproducible, and interpretable.
+:::

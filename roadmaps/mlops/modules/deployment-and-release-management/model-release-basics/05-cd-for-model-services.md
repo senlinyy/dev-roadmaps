@@ -14,662 +14,1923 @@ aliases:
 
 ## Table of Contents
 
-1. [What Continuous Delivery Means For An ML Service](#what-continuous-delivery-means-for-an-ml-service)
-2. [CI, Continuous Delivery, And Continuous Deployment](#ci-continuous-delivery-and-continuous-deployment)
-3. [What Can Start A Delivery Pipeline](#what-can-start-a-delivery-pipeline)
-4. [How Training And Delivery Work Together](#how-training-and-delivery-work-together)
-5. [How The Delivery Pipeline Tests A Release In Stages](#how-the-delivery-pipeline-tests-a-release-in-stages)
-6. [Build One Immutable Release Package](#build-one-immutable-release-package)
-7. [Check Software, API Contracts, And Build Security](#check-software-api-contracts-and-build-security)
-8. [Check Model Quality And Prediction Behaviour](#check-model-quality-and-prediction-behaviour)
-9. [Test The Complete Release In Staging](#test-the-complete-release-in-staging)
-10. [Require Approval Before Production](#require-approval-before-production)
-11. [Limit The First Production Exposure](#limit-the-first-production-exposure)
-12. [Model Quality May Take Longer To Confirm](#model-quality-may-take-longer-to-confirm)
-13. [Verify That Production Matches The Approved Release](#verify-that-production-matches-the-approved-release)
-14. [Restore The Complete Previous Release](#restore-the-complete-previous-release)
-15. [Choose Delivery Tools For The Deployment Target](#choose-delivery-tools-for-the-deployment-target)
-16. [A Focused GitHub Actions Delivery Workflow](#a-focused-github-actions-delivery-workflow)
-17. [What The Release Record Must Capture](#what-the-release-record-must-capture)
-18. [Test The Delivery Pipeline And Recovery Path](#test-the-delivery-pipeline-and-recovery-path)
-19. [The Main Idea](#the-main-idea)
-20. [References](#references)
+1. [What Complete Release Does Model-Service CD Control?](#what-complete-release-does-model-service-cd-control)
+2. [Which Software, Contract, Security, Model, Behaviour, Edge-Case, and Latency Gates Run before Staging?](#which-software-contract-security-model-behaviour-edge-case-and-latency-gates-run-before-staging)
+3. [How Do Staging, Recovery, Observability, and Approval Produce Delivery Evidence?](#how-do-staging-recovery-observability-and-approval-produce-delivery-evidence)
+4. [Why Must Deployment and Traffic Exposure Use Layered Production Evidence?](#why-must-deployment-and-traffic-exposure-use-layered-production-evidence)
+5. [How Do Identity, Prediction Attribution, Release Records, Retention, and Rollback Preserve Control?](#how-do-identity-prediction-attribution-release-records-retention-and-rollback-preserve-control)
+6. [How Do Explicit States, Tool Boundaries, Training Separation, and Environment Promotion Shape the Workflow?](#how-do-explicit-states-tool-boundaries-training-separation-and-environment-promotion-shape-the-workflow)
+7. [How Does a Full Release and Failed Canary Demonstrate CD's Recovery Path?](#how-does-a-full-release-and-failed-canary-demonstrate-cds-recovery-path)
+8. [What Final Principle Makes Model-Service CD More than Pipeline Plumbing?](#what-final-principle-makes-model-service-cd-more-than-pipeline-plumbing)
+9. [Check Your Answers](#check-your-answers)
 
-## What Continuous Delivery Means For An ML Service
-<!-- section-summary: Continuous delivery automates the path from a reviewed change to a production-ready model release while preserving evidence and production control. -->
+A new model passes training and evaluation, but production also needs an API-compatible service image, feature contract, configuration, security checks, observability, capacity, and a complete rollback candidate. Deploying only the model leaves the release undefined.
 
-A model change should not need an improvised sequence of copying files and rerunning checks before every release. **Continuous delivery provides a repeatable path that keeps a tested release ready for production.** Automated checks gather evidence, the same immutable release moves through staging, and production waits behind a controlled decision.
+**Model-service continuous delivery** builds one complete release and moves it through evidence-producing stages. Continuous delivery may stop at approval; continuous deployment can continue automatically. In either case, deployment and traffic exposure remain separate controls, and the exact tested release is promoted rather than rebuilt.
 
-The word *continuous* describes readiness and repeatability. Production release frequency can still match the product's risk. A team may deliver several low-risk internal services each day and release a regulated decision model less often. Both can use continuous delivery if every candidate follows the same automated path and remains ready for an authorized release decision.
+Use these questions to follow the release through gates, staging, approval, progressive exposure, verification, and rollback:
 
-An ordinary web service often centres its release on one container image. An ML service carries a wider set of dependencies. Its behaviour can depend on:
+1. **What Complete Release Does Model-Service CD Control?**
+2. **Which Software, Contract, Security, Model, Behaviour, Edge-Case, and Latency Gates Run before Staging?**
+3. **How Do Staging, Recovery, Observability, and Approval Produce Delivery Evidence?**
+4. **Why Must Deployment and Traffic Exposure Use Layered Production Evidence?**
+5. **How Do Identity, Prediction Attribution, Release Records, Retention, and Rollback Preserve Control?**
+6. **How Do Explicit States, Tool Boundaries, Training Separation, and Environment Promotion Shape the Workflow?**
+7. **How Does a Full Release and Failed Canary Demonstrate CD's Recovery Path?**
+8. **What Final Principle Makes Model-Service CD More than Pipeline Plumbing?**
 
-- a registered model version and model signature;
-- preprocessing code, tokenizer, or feature contract;
-- serving code, runtime libraries, and container image;
-- thresholds, calibration, fallbacks, and other decision policy;
-- offline evaluation, segment results, security evidence, and approval scope.
+## What Complete Release Does Model-Service CD Control?
+<!-- section-summary: CD controls a complete release of model, service, runtime, features, configuration, policy, and infrastructure, built once and triggered by code, model, or dependency changes. -->
 
-This extra evidence exists because a model service can fail in two directions. The service can fail operationally by returning errors, timing out, or exhausting memory. It can also remain fast and available while its predictions are unsuitable for a segment, incompatible with current features, or attached to the wrong decision threshold.
+A delivery pipeline must control the same complete decision system that production will run, not a model file in isolation.
 
-Continuous delivery automates the repeatable work around both directions. It builds and identifies artifacts, runs tests, verifies evidence, deploys to staging, requests approval, admits limited production traffic, checks real runtime identity, and starts rollback if a stop condition fires.
+A model service is not just a model file. It is a production capability such as:
 
-```mermaid
-flowchart TD
-    A["Reviewed change or approved model candidate"] --> B["Build one immutable release"]
-    B --> C["Software, model, contract, and security gates"]
-    C --> D["Deploy the same release to staging"]
-    D --> E["Production-like verification"]
-    E --> F["Approval for a defined scope"]
-    F --> G["Admit controlled production traffic"]
-    G --> H["Verify runtime, health, and outcomes"]
-    H --> I{"Release remains within policy?"}
-    I -->|"Yes"| J["Continue toward approved traffic"]
-    I -->|"No"| K["Restore retained release"]
+$$
+\text{request}
+\rightarrow
+\text{features}
+\rightarrow
+\text{model}
+\rightarrow
+\text{policy}
+\rightarrow
+\text{decision}
+$$
 
-    class A trigger
-    class B,C,D,E,G,H work
-    class F,I gate
-    class J,K outcome
+When any important part changes, we need a reliable way to answer:
+
+**Can this exact new version safely replace the version currently serving production?**
+
+That is the problem **Continuous Delivery (CD)** solves. The central idea is:
+
+$$
+\boxed{
+\text{Change}
+\rightarrow
+\text{Build one release}
+\rightarrow
+\text{collect evidence}
+\rightarrow
+\text{approve}
+\rightarrow
+\text{controlled production release}
+}
+$$
+
+The word **continuous** does not mean "deploy every second." It means the process for making a release production-ready is repeatable, automated, and available whenever a valid change occurs. Imagine a fraud service currently runs:
+
+```text
+Release R102
+
+model: fraud-v7
+service: v21
+features: v12
+policy: v5
 ```
 
-The pipeline is therefore more than a script that calls a deployment API. It is the control system that connects an approved release identity to evidence, authority, real production state, and recovery.
+A new model is trained:
 
-## CI, Continuous Delivery, And Continuous Deployment
-<!-- section-summary: Continuous integration proves a change can join the shared branch, continuous delivery proves a release is ready, and continuous deployment sends every passing release to production automatically. -->
-
-The abbreviations *CI* and *CD* are often combined, though they describe different decisions. CI answers whether a change can join shared work. Delivery answers whether an identified release is ready for production. Deployment decides whether that ready release enters production automatically.
-
-**Continuous integration (CI)** checks whether a source change can safely join the shared branch. A pull request or merge request triggers fast feedback such as unit tests, type checks, linting, contract tests, dependency checks, and a build. CI ends with evidence about the change and may produce an immutable artifact.
-
-**Continuous delivery** takes an identified release through the checks required for production readiness. It deploys to pre-production environments, verifies the complete service, gathers approval evidence, and waits for production authority. The final production decision is explicit.
-
-**Continuous deployment** removes that final manual decision. Every release that satisfies the automated policy proceeds into production. Teams sometimes call this approach “fully automated CD.”
-
-```mermaid
-flowchart TD
-    A["Change enters version control"] --> B["Continuous integration"]
-    B --> C["Build and test the change"]
-    C --> D["Continuous delivery"]
-    D --> E["Verify a production-ready release"]
-    E --> F{"How is production authorized?"}
-    F -->|"Human or change-management approval"| G["Continuous delivery to production"]
-    F -->|"Automated policy grants authority"| H["Continuous deployment"]
-
-    class A source
-    class B,C,D,E phase
-    class F choice
-    class G,H release
+```text
+fraud-v8
 ```
 
-Many ML teams choose continuous delivery with a production approval gate. Offline evaluation has uncertainty, labels may mature slowly, and a threshold change can affect real people or operational queues. A reviewer can examine segment results, intended use, rollback readiness, and the exact traffic scope before granting authority.
+You could manually copy it onto the production machine. But then many questions appear:
+
+- Was the model evaluated?
+- Is its feature contract compatible?
+- Can the service actually load it?
+- Did the container include the expected libraries?
+- Is the API still compatible with callers?
+- Did somebody accidentally package the wrong model?
+- Will it meet production latency requirements?
+- Can we restore R102?
+
+The purpose of CD is to turn those questions into a controlled pipeline. Instead of:
+
+```text
+new model
+↓
+someone deploys it
+```
+
+we create:
+
+```text
+new model/change
+      ↓
+candidate release
+      ↓
+automated evidence
+      ↓
+production-like validation
+      ↓
+approval policy
+      ↓
+controlled exposure
+      ↓
+production verification
+```
+
+That is Model Service CD. These terms are closely related but answer different questions.
+
+### Continuous Integration — CI
+
+CI asks:
+
+Does this change integrate correctly with the rest of the system
+
+Suppose an engineer changes:
+
+```text
+feature preprocessing
+```
+
+CI may run:
+
+```text
+unit tests
+contract tests
+static checks
+build checks
+```
+
+Conceptually:
+
+$$
+Change
+\rightarrow
+CI
+\rightarrow
+\text{technically valid candidate}
+$$
+
+CI primarily protects the shared codebase.
+
+### Continuous Delivery — CD
+
+Continuous Delivery goes farther. It asks:
+
+Can we repeatedly take an accepted change and produce a release that is ready for production
+
+Conceptually:
+
+```text
+Candidate
+   ↓
+Build
+   ↓
+Validate
+   ↓
+Package
+   ↓
+Staging
+   ↓
+Approval
+   ↓
+Production-ready
+```
+
+Production may still require an explicit decision. So continuous delivery does **not** necessarily mean automatic production deployment.
+
+### Continuous Deployment
+
+Continuous Deployment removes that final manual promotion decision. If every required gate passes:
+
+```text
+tests pass
+↓
+evaluation passes
+↓
+staging passes
+↓
+policy passes
+↓
+automatically release
+```
+
+So roughly:
+
+$$
+CI
+\subset
+Continuous\ Delivery
+$$
+
+and:
+
+$$
+Continuous\ Deployment
+=
+Continuous\ Delivery
++
+\text{automatic production promotion}
+$$
+
+The appropriate choice depends on risk. An internal recommendation model may tolerate greater automation than a model controlling high-impact financial decisions. A common misunderstanding is:
+
+CD means automation that copies files to production.
+
+That is too narrow. A good CD pipeline is better understood as:
+
+> **A machine for accumulating evidence about one immutable candidate.**
+
+Suppose:
+
+```text
+candidate = R103
+```
+
+The pipeline gradually establishes facts:
+
+```text
+R103 builds correctly
+        ↓
+R103 passes software tests
+        ↓
+R103 passes model tests
+        ↓
+R103 passes security requirements
+        ↓
+R103 works with dependencies
+        ↓
+R103 behaves correctly in staging
+        ↓
+R103 is approved for production
+```
+
+The candidate gains trust. The artifact itself should not change. Traditional software CD is often triggered by:
+
+```text
+code merged to main
+```
+
+ML systems have more possible sources of behavioral change. A delivery pipeline might begin because:
+
+```text
+serving code changed
+model version changed
+feature contract changed
+preprocessing changed
+policy/threshold changed
+runtime changed
+approved retraining produced a new model
+security rebuild produced a new container
+```
+
+The deeper principle is:
+
+If a change can alter production decisions or the reliability of the prediction path, it may deserve a new release and delivery cycle.
+
+For example, changing:
+
+$$
+threshold:0.80\rightarrow0.65
+$$
+
+can alter more customer outcomes than some source-code changes, even though the model weights are identical. This distinction is especially important in ML. Training answers:
+
+Can we create a candidate model
+
+Delivery answers:
+
+Can this candidate safely operate as part of the production service
+
+Think of them as two connected systems.
+
+```text
+                TRAINING
+
+Data
+ +
+Training Code
+ +
+Training Configuration
+       ↓
+Training Job
+       ↓
+Candidate Model
+       ↓
+Model Evaluation
+       ↓
+Model Registry
+       │
+       │ approved candidate
+       ▼
+
+                DELIVERY
+
+Model
+ +
+Serving Code
+ +
+Feature Contract
+ +
+Policy
+ +
+Runtime
+       ↓
+Release R103
+       ↓
+Delivery Pipeline
+       ↓
+Production
+```
+
+Training ending successfully does not imply that deployment is safe. A training job may know:
+
+```text
+ROC-AUC = 0.95
+```
+
+but know nothing about:
+
+```text
+container startup
+API compatibility
+feature-store permissions
+latency under serving load
+rollback
+```
+
+Those belong to delivery. Suppose your service code remains:
+
+```text
+commit ABC
+```
+
+but the registry receives:
+
+```text
+fraud-model-v8
+```
+
+The delivery pipeline can create:
+
+```text
+R103:
+service = ABC
+model = v8
+```
+
+while R102 was:
+
+```text
+R102:
+service = ABC
+model = v7
+```
+
+So:
+
+$$
+Code_{102}=Code_{103}
+$$
+
+but:
+
+$$
+Model_{102}\neq Model_{103}
+$$
+
+and therefore production behavior can change. This is why a model registry event can legitimately start CD. Suppose you independently deploy:
+
+```text
+model
+preprocessing
+policy
+service
+```
+
+You can accidentally create untested combinations.
+
+For example:
+
+```text
+model v8
+preprocessing v13
+policy v5
+service v20
+```
+
+even though testing validated:
+
+```text
+model v8
+preprocessing v14
+policy v6
+service v21
+```
+
+A stronger design creates one manifest:
+
+```text
+Release R103
+
+model:          fraud-v8
+preprocessing:  v14
+features:       v13
+policy:         v6
+service:        v21
+runtime:        image SHA256:ABC...
+```
+
+Then CD operates on:
+
+$$
+R103
+$$
+
+as one unit. This is one of the strongest CD invariants. Suppose you build one package for staging:
+
+$$
+A_{stage}
+$$
+
+and then build another for production:
+
+$$
+A_{prod}
+$$
+
+Even from identical source:
+
+$$
+A_{stage}
+\neq A_{prod}
+$$
+
+is possible because dependencies, build tools, base images, or external downloads may have changed.
+
+Instead:
+
+```text
+source + model + release definition
+            ↓
+         BUILD ONCE
+            ↓
+          R103
+      /      |       \
+   test    staging   production
+```
+
+The same immutable object moves forward. Therefore:
+
+$$
+Hash(R103_{tested})
+=
+Hash(R103_{production})
+$$
+
+This lets testing evidence actually mean something.
+
+## Which Software, Contract, Security, Model, Behaviour, Edge-Case, and Latency Gates Run before Staging?
+<!-- section-summary: Fast software and contract checks precede build security and ML-specific quality, baseline, behaviour, slice, latency, and compatibility gates. -->
+
+Once the release unit is immutable, increasingly ML-specific gates can reject defects before expensive staging and production work.
+
+An ML service is still software. Before worrying about model accuracy, the pipeline should establish basic engineering correctness.
+
+For example:
+
+```text
+Can the code compile/import
+Can the service start
+Can the model load
+Are dependencies resolvable
+Do unit tests pass
+Do request validators work
+Are API responses valid
+```
+
+A model with outstanding statistical performance is irrelevant if:
+
+```text
+POST /predict
+```
+
+returns HTTP 500 for every request. Suppose the previous service accepted:
+
+```json
+{
+  "amount": 450,
+  "country": "GB"
+}
+```
+
+A new version suddenly requires:
+
+```json
+{
+  "amount": 450,
+  "country": "GB",
+  "device_fingerprint": "..."
+}
+```
+
+Existing callers may break. CD should test the contract between:
+
+$$
+Caller \leftrightarrow ModelService
+$$
+
+and between:
+
+$$
+ModelService \leftrightarrow Dependencies
+$$
+
+This includes the prediction response. Perhaps callers expect:
+
+```json
+{
+  "score": 0.82,
+  "decision": "BLOCK"
+}
+```
+
+but the new service accidentally returns:
+
+```json
+{
+  "probability": 0.82
+}
+```
+
+The model may be correct while the product is broken. Suppose model v8 expects:
+
+```text
+amount
+account_age_days
+transactions_last_hour
+merchant_risk
+```
+
+The delivery pipeline should verify that the deployed feature path supplies exactly the expected schema and semantics.
+
+For example:
+
+```text
+model-v8 requires feature-schema-v13
+```
+
+If staging provides:
+
+```text
+feature-schema-v12
+```
+
+the release should fail. Prefer:
+
+```text
+deployment rejected
+```
+
+over:
+
+```text
+service starts and quietly makes nonsense predictions
+```
+
+A model-serving artifact can contain vulnerabilities just like any other production application. The delivery process may inspect:
+
+```text
+base runtime
+application dependencies
+artifact provenance
+container contents
+secrets accidentally packaged into image
+approved package sources
+```
+
+The exact controls differ by organization. The first-principles point is:
+
+Security evidence belongs to the same candidate identity as functional and model evidence.
+
+If:
+
+```text
+R103
+```
+
+passed validation but someone later rebuilds it differently, the earlier security evidence no longer proves anything about the new bytes. Software tests answer:
+
+Does the service work as software
+
+ML tests answer:
+
+Does the model behave acceptably
+
+Those are different dimensions. Suppose R103 has:
+
+```text
+0 runtime errors
+20 ms latency
+perfect API compatibility
+```
+
+but its fraud model became much worse. Technically healthy. Functionally unacceptable. So CD needs a model validation stage. Suppose model v8 reports:
+
+$$
+Precision=0.84
+$$
+
+$$
+Recall=0.89
+$$
+
+$$
+ROC\text{-}AUC=0.95
+$$
+
+Those metrics might be compared against:
+
+```text
+minimum required quality
+previous production model
+risk limits
+slice-specific requirements
+```
+
+For example:
+
+$$
+Recall_{v8}
+\ge
+Recall_{v7}-\epsilon
+$$
+
+or:
+
+$$
+FalsePositiveRate_{v8}<2\%
+$$
+
+The exact criterion is application-specific. The important thing is that promotion uses an explicit policy rather than:
+
+This model looks pretty good.
+
+Absolute thresholds are often not enough. Suppose:
+
+```text
+production model v7 accuracy = 94%
+candidate v8 accuracy = 92%
+```
+
+Even if policy says:
+
+```text
+minimum accuracy = 90%
+```
+
+v8 has apparently regressed. A useful delivery test is therefore:
+
+$$
+Candidate
+\quad versus \quad
+CurrentProduction
+$$
+
+on the same approved evaluation set.
+
+For example:
+
+```text
+v7:
+precision 0.84
+recall    0.88
+
+v8:
+precision 0.86
+recall    0.91
+```
+
+Now the release decision has comparative evidence. Suppose model v8 has almost identical overall accuracy to v7. But for certain important requests:
+
+```text
+v7 → APPROVE
+v8 → BLOCK
+```
+
+Those disagreements may matter. So you can maintain representative or "golden" cases.
+
+For example:
+
+```text
+case A:
+expected score range 0.00–0.20
+
+case B:
+must not produce BLOCK
+
+case C:
+missing field must produce controlled failure
+```
+
+This tests model behavior at the decision level rather than only overall statistics. Production will eventually see inputs that were rare in training. Examples include:
+
+```text
+missing features
+extreme numeric values
+unseen categories
+empty text
+very long text
+malformed requests
+NaN/Infinity
+out-of-range values
+```
+
+The delivery pipeline should determine the intended behavior.
+
+For example:
+
+$$
+missing(feature)
+\rightarrow
+reject
+$$
+
+or:
+
+$$
+missing(feature)
+\rightarrow
+fallback
+$$
+
+but not:
+
+$$
+missing(feature)
+\rightarrow
+undefined\ behavior
+$$
+
+Suppose v8 is more accurate than v7:
+
+$$
+Accuracy_{v8}>Accuracy_{v7}
+$$
+
+but inference latency changes:
+
+```text
+v7 p95 = 45 ms
+v8 p95 = 950 ms
+```
+
+If the product requires a decision within 100 ms, v8 is not production-ready. Production ML quality therefore includes:
+
+$$
+Quality =
+f(
+predictive\ quality,
+latency,
+reliability,
+resource\ cost,
+safety
+)
+$$
+
+not merely accuracy.
 
 ![Continuous integration and continuous delivery compared by their questions and outcomes, followed by human-approved delivery or policy-authorized continuous deployment](/content-assets/articles/article-mlops-mlops-infrastructure-cd-for-model-services/ci-delivery-deployment.png)
 
 *CI integrates a change, continuous delivery proves that an exact release is production-ready, and continuous deployment automates the final production authority decision.*
 
-Full continuous deployment still has a place. A low-consequence internal ranking model with strong automated tests and rapid outcome feedback may justify it. The choice should follow the harm and reversibility of a wrong decision. The initials *CD* alone never answer that risk question.
+## How Do Staging, Recovery, Observability, and Approval Produce Delivery Evidence?
+<!-- section-summary: Staging tests deployment, request paths, recovery, and observability; approval is the policy boundary at which continuous delivery may stop. -->
 
-## What Can Start A Delivery Pipeline
-<!-- section-summary: A release trigger names the reviewed change and determines which artifacts and evidence need to be rebuilt. -->
+Passing component gates permits a full staging deployment where recovery and observability become part of the evidence and approval decision.
 
-A pipeline needs a precise answer to “What changed?” That answer determines which work is required and prevents automation from creating an accidental release.
+Passing isolated software and model checks still doesn't prove the complete production path works. Staging should exercise:
 
-Four triggers are common in model services.
-
-### Serving Code Changes
-
-API code, preprocessing code, a base image, or a dependency lock changed. The pipeline builds a new serving image, runs software and model compatibility tests, and creates a new release identity. The approved model version may stay fixed.
-
-A security patch is a good example. The model weights remain version 27, while the patched image receives a new digest. Production behaviour still needs verification because library and runtime changes can alter loading, preprocessing, numerical output, or performance.
-
-### An Approved Model
-
-A training pipeline registered a new concrete model version and attached its evaluation evidence. Approval of that candidate can emit an event that starts delivery. The serving source may stay fixed, while the release pins the new model version and verifies compatibility with the existing image and feature contract.
-
-Amazon SageMaker projects can trigger deployment from an approved Model Registry version. Other platforms implement the same boundary through registry webhooks, event buses, or an explicit workflow dispatch.
-
-### Feature Or Decision-Policy Changes
-
-A feature definition, threshold, calibration map, fallback rule, or routing policy changed. Some changes require a new model candidate because the input meaning changed. Others create a new policy version around the existing model.
-
-Suppose a threshold moves from `0.80` to `0.85`. No retraining is required by default. The release still needs a new identity and policy evidence because the change alters action rates and potentially segment outcomes.
-
-### Environment Configuration Changes
-
-Replica count, region, endpoint capacity, maintenance window, or a secret reference changed. These values may create a new deployment revision without changing the model release itself.
-
-The boundary deserves care. Increasing replicas preserves behaviour and belongs to desired state. Changing an environment variable that contains a prediction threshold changes behaviour and belongs in a new release. A clear configuration schema prevents behavioural settings from hiding among infrastructure values.
-
-```mermaid
-flowchart TD
-    A["Detected change"] --> B{"Which boundary changed?"}
-    B -->|"Serving code or dependency"| C["Build a new image and release"]
-    B -->|"Approved model version"| D["Create a release with the new model identity"]
-    B -->|"Feature semantics or decision policy"| E["Assess retraining and create reviewed identities"]
-    B -->|"Capacity or endpoint placement"| F["Update environment desired state"]
-    C --> G["Run relevant delivery gates"]
-    D --> G
-    E --> G
-    F --> H["Verify operational effect"]
-
-    class A trigger
-    class B choice
-    class C,D,E,F release
-    class G,H verify
+```text
+Request
+   ↓
+Gateway
+   ↓
+Service
+   ↓
+Feature Store
+   ↓
+Preprocessing
+   ↓
+Model
+   ↓
+Policy
+   ↓
+Response
 ```
+
+using R103 exactly as production would. This is where many integration errors appear. Ask whether R103 can:
+
+```text
+be pulled from artifact storage
+start successfully
+load its model
+retrieve secrets
+reach dependencies
+pass readiness checks
+receive traffic
+emit metrics
+restart cleanly
+scale
+shut down correctly
+```
+
+These are all part of "the model service works." A test such as:
+
+```python
+model.predict(x)
+```
+
+proves almost none of them. Suppose the feature store is unavailable. What happens?
+
+```text
+Request
+   ↓
+Feature Store
+   X
+```
+
+Possible intentional responses might be:
+
+```text
+return controlled error
+use cached features
+invoke fallback model
+use business-rule fallback
+```
+
+CD should test whichever behavior the system claims to support. The pipeline should not validate only the happy path. The delivery pipeline should confirm that R103 exposes enough information to operate it. For example, can operators observe:
+
+```text
+release identity
+model identity
+request rate
+errors
+latency
+feature failures
+prediction distribution
+resource usage
+```
+
+A model service that works but cannot be diagnosed is difficult to operate safely. After automated and staging evidence is collected, some systems require explicit production approval.
+
+Conceptually:
+
+```text
+R103
+ │
+ ├── software checks PASS
+ ├── security checks PASS
+ ├── model checks PASS
+ ├── staging checks PASS
+ │
+ ▼
+PRODUCTION APPROVAL
+```
+
+Approval should attach to:
+
+$$
+R103
+$$
+
+not to:
+
+whatever happens to be the latest version later.
+
+If R103 changes, it should acquire a new identity and require appropriate new evidence. This is why **continuous delivery** and **continuous deployment** are not identical. At this point R103 may be:
+
+```text
+production-ready
+```
+
+but not yet:
+
+```text
+production-live
+```
+
+A human or release policy can decide when to expose it. That lets organizations automate nearly all verification while retaining deliberate control over real-world impact.
+
+## Why Must Deployment and Traffic Exposure Use Layered Production Evidence?
+<!-- section-summary: Production deployment creates capacity, while shadow and canary exposure collect operational proxies and later model outcomes before full authority. -->
+
+Production still separates deploying capacity from granting traffic and decision authority because true outcome evidence arrives at different speeds.
+
+Suppose R103 receives:
+
+$$
+100\%
+$$
+
+of traffic immediately. Any defect gets the maximum possible blast radius. A safer strategy is:
+
+```text
+R102 → 99%
+R103 → 1%
+```
+
+Then inspect evidence. If healthy:
+
+```text
+1%
+↓
+5%
+↓
+20%
+↓
+50%
+↓
+100%
+```
+
+The principle is:
+
+Increase exposure only as confidence increases.
+
+This is progressive delivery. You can have:
+
+```text
+R103 deployed in production
+```
+
+while:
+
+```text
+R103 traffic = 0%
+```
+
+That can be useful. You can first verify:
+
+```text
+service starts
+model loads
+dependencies reachable
+health checks pass
+```
+
+Then begin traffic. Therefore:
+
+$$
+Deployment \neq Release
+$$
+
+and CD can control both independently. For some models, you can send real production requests to both versions:
+
+```text
+                     ┌→ R102 → real decision
+Request ─────────────┤
+                     └→ R103 → result recorded only
+```
+
+R103 gets realistic production input, but its decisions do not affect users. You can compare:
+
+$$
+Prediction_{102}(x)
+$$
+
+with:
+
+$$
+Prediction_{103}(x)
+$$
+
+before assigning decision authority. This can be particularly valuable when staging data cannot perfectly reproduce production. After releasing R103 to 1%, you may quickly know:
+
+```text
+service error rate
+latency
+CPU/GPU use
+timeouts
+feature failures
+memory consumption
+```
+
+These signals arrive almost immediately. So CD can often decide quickly whether the release is operationally healthy. But ML introduces another complication. Suppose a churn model predicts:
+
+```text
+customer will churn within 60 days
+```
+
+You cannot know today whether today's prediction was correct. Likewise:
+
+```text
+fraud chargeback
+loan default
+customer lifetime value
+medical outcome
+```
+
+may have delayed ground truth. So:
+
+$$
+Time(system\ health)
+\ll
+Time(model\ ground\ truth)
+$$
+
+This makes ML delivery different from many ordinary services. Immediately after release, you may know:
+
+```text
+service is healthy
+```
+
+Soon afterward:
+
+```text
+input distributions look normal
+prediction distributions look normal
+```
+
+Later:
+
+```text
+actual model accuracy/business outcomes are acceptable
+```
+
+So a release might be operationally promoted before all long-term model evidence is available. That does not mean long-term evaluation disappears. It means it becomes part of ongoing production model monitoring. Suppose actual fraud confirmation arrives weeks later. Immediately, you might still inspect:
+
+```text
+fraction blocked
+fraction reviewed
+score distribution
+model disagreement with previous version
+manual-review outcomes
+```
+
+These can reveal suspicious behavior.
+
+For example:
+
+```text
+R102 block rate = 2%
+R103 block rate = 41%
+```
+
+Even before ground truth arrives, something likely deserves investigation. But:
+
+Prediction distributions are warning signals, not substitutes for eventual real outcome measurements.
+
+## How Do Identity, Prediction Attribution, Release Records, Retention, and Rollback Preserve Control?
+<!-- section-summary: Immutable identities and per-prediction release attribution feed a durable release record, while retention and tested complete rollback preserve recovery. -->
+
+That layered exposure remains trustworthy only when every prediction and state transition refers to immutable release identity and a retained rollback unit.
+
+The pipeline says:
+
+```text
+deploy R103
+```
+
+but that does not prove production actually runs R103. You need to compare:
+
+$$
+DesiredState
+$$
+
+with:
+
+$$
+ObservedState
+$$
+
+Suppose:
+
+```text
+Desired:
+all new instances = R103
+```
+
+but production reports:
+
+```text
+server A → R103
+server B → R103
+server C → R102
+```
+
+The rollout is incomplete. Do not rely exclusively on:
+
+```text
+image: fraud-service:latest
+```
+
+or even:
+
+```text
+image: fraud-service:v8
+```
+
+if tags can move. A stronger check is:
+
+```text
+expected container digest:
+SHA256:AAA
+
+observed container digest:
+SHA256:AAA
+```
+
+and:
+
+```text
+expected model digest:
+SHA256:BBB
+
+observed model digest:
+SHA256:BBB
+```
+
+Then the production evidence is tied to exact content. A production response or internal trace might carry:
+
+```text
+release_id = R103
+model_version = fraud-v8
+```
+
+Then monitoring can compare:
+
+$$
+Metrics(R102)
+$$
+
+against:
+
+$$
+Metrics(R103)
+$$
+
+during canary rollout. And if someone asks:
+
+Why did request `abc123` receive this decision
+
+you can identify the exact release involved. A release record should make it possible to reconstruct what happened.
+
+Conceptually:
+
+```text
+Release R103
+
+source revision:      abc123...
+model:                fraud-v8
+model digest:         ...
+container digest:     ...
+feature contract:     v13
+policy:               v6
+build record:         ...
+evaluation record:    ...
+security result:      ...
+staging result:       ...
+production approval:  ...
+deployment history:   ...
+previous release:     R102
+```
+
+The goal is not bureaucracy. The goal is answering:
+
+Exactly what did we release, why was it allowed, and what can we restore
+
+Suppose R103 is:
+
+```text
+model v8
+features v13
+policy v6
+service v22
+```
+
+and R102 was:
+
+```text
+model v7
+features v12
+policy v5
+service v21
+```
+
+If R103 fails, changing only:
+
+```text
+model v8 → model v7
+```
+
+leaves:
+
+```text
+features v13
+policy v6
+service v22
+```
+
+That combination may never have been tested. Rollback should instead be:
+
+$$
+R103\rightarrow R102
+$$
+
+as a complete release. A pipeline should already know:
+
+```text
+current = R102
+candidate = R103
+rollback target = R102
+```
+
+before R103 receives production traffic. That is much safer than discovering during an incident that nobody remembers which prior state was compatible. Rollback requires the old release to remain available. That means retaining enough of:
+
+```text
+container
+model artifact
+preprocessing assets
+release manifest
+configuration version
+dependencies
+compatibility support
+```
+
+to actually run R102 again. Merely keeping:
+
+```text
+fraud-v7.pkl
+```
+
+does not necessarily make R102 recoverable. One of the most valuable pipeline tests is:
+
+```text
+deploy R102
+↓
+upgrade to R103
+↓
+verify R103
+↓
+restore R102
+↓
+verify R102
+```
+
+in a safe environment. This catches issues like:
+
+```text
+database change prevents downgrade
+feature schema removed
+old artifact missing
+old runtime unsupported
+configuration incompatible
+```
+
+A rollback plan is much more trustworthy if it has been executed. People often test the application but assume the pipeline works. The delivery mechanism can fail too. You should know what happens if:
+
+```text
+artifact upload fails
+registry update fails
+staging deploy partially succeeds
+approval metadata is missing
+production rollout stalls halfway
+verification fails
+rollback command fails
+```
+
+The delivery pipeline is itself production software. It deserves testing, observability, version control, and recovery design.
 
 ![Serving-code, model-version, feature-or-policy, and capacity changes routed to different release and desired-state work](/content-assets/articles/article-mlops-mlops-infrastructure-cd-for-model-services/change-to-delivery-path.png)
 
 *The changed boundary determines whether delivery builds a new image, pins a new model, reviews a new behavioural identity, or updates only environment desired state.*
 
-## How Training And Delivery Work Together
-<!-- section-summary: Training and delivery are separate control paths so production receives the exact model that earned evaluation and approval. -->
-
-A training pipeline searches, fits, evaluates, and registers model candidates. A delivery pipeline consumes one approved candidate. Keeping those responsibilities separate protects a crucial promise: the model sent to production is the model that reviewers evaluated.
-
-Quiet retraining inside deployment breaks that promise. Random initialization, changing data, updated dependencies, and nondeterministic compute can produce different weights. Even a highly reproducible training process creates a new artifact identity that needs its own evidence.
-
-Consider a deployment job that receives `risk.score` version 27, reruns training from the associated source, and deploys the result. The registry evidence describes version 27. Production now serves an unregistered model produced later. The pipeline may report success, while the approved and deployed subjects have diverged.
-
-The workflow uses this boundary:
-
-1. The training pipeline creates and registers a concrete model candidate.
-2. Evaluation jobs attach offline, segment, robustness, and lineage evidence to that candidate.
-3. Approval names the candidate's immutable identity.
-4. The delivery pipeline retrieves and verifies those exact bytes.
-5. Staging and production reuse the same model identity.
-
-A feature-semantic change may require retraining. In that case, the change returns to the training path and produces a new candidate. A dependency patch in serving code usually builds a new image around the same model. A replica change updates desired state. CD should encode these routes explicitly instead of running training “just in case.”
-
-## How The Delivery Pipeline Tests A Release In Stages
-<!-- section-summary: Each delivery stage answers a different question and passes the same immutable release to the next trust boundary. -->
-
-The delivery pipeline tests a release in stages because each environment exposes a different class of failure. Early checks are fast and isolated. Later checks are slower and closer to real consequence. Every stage keeps the same release identity.
-
-**Build and package** asks whether the reviewed source and approved model identities can produce one immutable release. **Fast tests** check the software in isolation and prove that the model and contracts load together. **Supply-chain verification** connects artifact digests to reviewed inputs and trusted automation.
-
-**Staging deployment** asks whether the exact release can run inside production-like infrastructure and communicate with its real boundaries. Representative requests, load, dependency failures, feature lookups, telemetry, and a rollback drill add evidence about the complete system.
-
-**Approval** grants the exact release authority for a defined environment and traffic scope. **Production admission** applies that bounded scope to real traffic. **Post-deploy verification** then proves that the platform loaded the approved model, image, feature contract, and policy.
-
-**Rollback** answers the recovery question. The controller must restore the retained release and prove recovery through runtime and user-facing signals.
-
-These questions create an evidence chain. A later stage uses earlier evidence and adds a new kind. Staging never substitutes a fresh build, and a production approval never floats with a mutable alias.
-
-## Build One Immutable Release Package
-<!-- section-summary: Build automation creates content-addressed model and runtime artifacts, then records them together as one release. -->
-
-The build stage turns reviewed inputs into immutable assets. For a custom model service, the main runtime asset is usually an OCI container image. The image includes serving code, system packages, language dependencies, health endpoints, and telemetry libraries.
-
-The model can travel in two common ways.
-
-**Bundled model:** The image contains the model artifact. One image digest identifies the runtime and model bytes together. This is operationally convenient for modest artifacts and tightly coupled preprocessing.
-
-**External registered model:** The image loads a concrete model version from MLflow, Databricks Unity Catalog, SageMaker Model Registry, Model Registry on Gemini Enterprise Agent Platform, Azure Machine Learning, or another governed store. The release pins both the image digest and model identity. Readiness should fail if the downloaded artifact has the wrong digest or signature.
-
-Neither shape changes the single-build rule. CI builds the image, pushes it to an OCI registry, records the resulting digest, and attaches provenance or an attestation. Staging and production select that digest. A tag such as `candidate` can help people find it, while the release identity uses `image@sha256:...`.
-
-The release record then joins:
-
-- source commit and dependency-lock digest;
-- OCI image digest and build provenance;
-- concrete registered-model version and model digest;
-- signature, preprocessing, and feature-contract versions;
-- decision-policy version;
-- evaluation and approval references;
-- compatible rollback release.
-
-CD uses this bundle as its unit of movement. If any behavioural identity changes, the pipeline creates a new release and reruns the relevant gates.
-
-## Check Software, API Contracts, And Build Security
-<!-- section-summary: General delivery gates prove that the service is correct, compatible, buildable from trusted inputs, and safe to operate. -->
-
-Software gates cover familiar engineering failures. Unit tests exercise request validation, preprocessing helpers, post-processing, policy code, and fallback paths. Integration tests load the packaged model and call the service through its actual interface. Contract tests verify that callers and the service agree on fields, types, status codes, and response meaning.
-
-Imagine a serving change that renames `account_age_days` to `account_age`. The model signature may still expect the original column. A normal API smoke test can return HTTP 200 if a default silently fills the missing value. A contract fixture that asserts the prepared model input catches the semantic error before staging.
-
-Supply-chain gates ask a different set of questions:
-
-- Does the image use an approved base and pass vulnerability policy?
-- Does the dependency lock match the installed environment?
-- Does the image digest match the release record?
-- Does build provenance connect the digest to the reviewed source and trusted runner?
-- Does the workload use approved identities, network paths, and secret references?
-
-GitHub Actions can generate artifact attestations for container images. Cosign can sign and verify images by digest. SLSA provenance provides a common way to describe build inputs and process. These controls establish trust in the runtime package; model evaluation still owns predictive quality.
-
-Infrastructure changes need review too. Terraform or Pulumi can define endpoints, networks, IAM, monitoring, and cluster resources. The delivery gate should inspect a plan or preview before applying a production infrastructure change. A model release that only updates an existing endpoint may avoid a full infrastructure apply.
-
-## Check Model Quality And Prediction Behaviour
-<!-- section-summary: Model gates test quality, feature meaning, training-serving parity, policy behaviour, performance, and limitations that software tests cannot cover. -->
-
-Model-service delivery needs evidence beyond “the endpoint returned a valid response.” A valid response proves that one request completed. Model gates ask whether the release preserves predictive quality, feature meaning, policy behaviour, and safe operating limits across the intended population.
-
-### Check Overall And Segment Quality
-
-The candidate is compared with the current production baseline on a frozen evaluation protocol. Metrics should reflect the product task, such as precision and recall, ranking quality, calibration, forecast error, or task-specific safety measures.
-
-Aggregate improvement cannot hide a serious segment regression. If overall recall rises while recall for a high-consequence region drops sharply, the segment gate can block release. The gate records sample size and uncertainty so a tiny group avoids creating false confidence.
-
-### Check Data And Feature Compatibility
-
-The service checks whether the candidate's expected fields exist in the live feature contract. Types, units, category vocabularies, tensor shapes, null rules, point-in-time semantics, and freshness expectations all matter.
-
-Suppose training used account balance in dollars while the online feature producer now emits cents. Both values are numeric and pass a type check. A contract fixture with known input and expected transformed value reveals the unit mismatch. Feature compatibility therefore includes meaning, not just schema.
-
-### Check Training And Serving Produce The Same Inputs
-
-Parity checks compare the transformations used during training with the path used during inference. Representative records should produce equivalent feature vectors and model-ready tensors in both paths.
-
-Packaging fitted preprocessing with the model reduces one class of mismatch. Shared feature systems still need offline/online consistency checks. A small golden dataset can exercise timestamps, missing values, rare categories, text normalization, and boundary cases.
-
-### Check The Model Signature And Output Meaning
-
-The model signature defines inputs, outputs, and supported inference parameters. The service should validate representative requests against that signature and confirm the output's interpretation.
-
-A field called `score` can mean a probability, an uncalibrated margin, or an anomaly value whose direction is reversed. Contract tests should assert class order, score range, calibration version, and response mapping where relevant.
-
-### Check Decision-Policy Boundaries
-
-Thresholds and guardrails turn scores into actions. Small tests around every important boundary provide strong evidence. If manual review starts at `0.82`, fixtures producing `0.819` and `0.821` should follow different expected paths.
-
-Policy tests also cover fallbacks, abstention, caps, blocked segments, and human-review routing. A model can pass offline metrics while an incorrect threshold doubles the queue handled by operations.
-
-### Check Latency, Capacity, And Cost
-
-Model versions can change memory use, accelerator requirements, batch size, token generation, and latency. A staging load test should use production-like payload sizes and concurrency. It measures end-to-end latency, queueing, throughput, memory, accelerator utilization, fallback rate, and cost drivers.
-
-An LLM endpoint needs token-aware capacity evidence because one request can contain vastly more work than another. A vision service may need image-size bands. A batch model needs completion time and record coverage against its deadline.
-
-### Check Security And Misuse Risks
-
-The service image receives ordinary vulnerability and configuration checks. The model path may also need adversarial inputs, prompt-injection tests, unsafe-output checks, sensitive-data controls, or abuse-rate limits. The required evidence follows the model's capability and product consequence.
-
-Each gate should name its owner, input evidence, pass rule, and failure action. A failing segment gate cannot be outweighed by a passing image scan. They protect different risks.
-
-## Test The Complete Release In Staging
-<!-- section-summary: Staging verifies the exact release against realistic infrastructure, dependencies, traffic shapes, and failure paths. -->
-
-Staging answers a larger question than “Can the container start?” It asks whether the exact release works as a system inside a production-like boundary.
-
-The deployment uses the same model and image digests planned for production. Environment-specific values can differ: endpoint names, secrets, replicas, and isolated datasets belong to staging. Behavioural values such as feature semantics and decision policy stay pinned to the release.
-
-Verification starts close to the process and moves outward:
-
-1. The image pulls by digest and the process starts.
-2. Readiness confirms the exact model, feature contract, and policy loaded.
-3. Golden requests exercise normal, edge, and malformed inputs.
-4. The service reaches its feature, policy, registry, and telemetry dependencies.
-5. Load tests exercise realistic payloads, concurrency, and resource limits.
-6. Failure tests cover timeouts, stale features, unavailable dependencies, and fallback.
-7. A rollback drill restores the retained release and checks its identity.
-
-The order helps diagnosis. A load failure has little meaning if half the replicas loaded the wrong model. Identity and contract checks establish the subject before performance testing.
-
-Staging still has limits. It cannot reproduce every production input, traffic surge, or social effect. It also cannot manufacture labels that naturally arrive later. Its job is to remove known integration uncertainty and provide credible evidence for a controlled production admission.
-
-## Require Approval Before Production
-<!-- section-summary: Approval grants a named immutable release permission to enter a defined production scope. -->
-
-An approval is a decision about consequence. It should name the exact release, target environment, permitted traffic scope, important exclusions, expiry or review conditions, and rollback target.
-
-Approving “the latest model” creates moving authority. If an alias changes after review, the approval can silently cover a different model. Approving release `risk-score/r42` with concrete model and image digests binds the decision to one subject.
-
-The amount of separation should match risk.
-
-For a low-consequence internal helper, automated policy plus an owning engineer may be enough. A customer-facing recommendation system may require the service owner and model owner.
-
-High-consequence decisions need stronger separation. Credit, healthcare, employment, or safety use may require an independent risk reviewer and a change-management record. The person who trained the model should have different authority from the person who approves production.
-
-GitHub environments can require reviewers and prevent self-review for deployment jobs. GitLab protected environments can restrict deployers and require deployment approvals. Jenkins Pipeline can pause for input, though teams must design its permissions and audit boundaries themselves.
-
-The emergency path deserves the same design effort. It should be predefined, narrowly scoped, time-limited, and auditable. Typical emergency actions restore a retained release, disable a candidate route, or switch to a reviewed fallback. Emergency authority should never permit an unregistered model from a laptop to enter production.
-
-## Limit The First Production Exposure
-<!-- section-summary: Production admission gives an approved release a bounded amount of real traffic under explicit stop conditions. -->
-
-Passing staging gives the release permission to face reality in a limited way. **Production admission** is the stage that assigns a bounded traffic share or population to the candidate and watches immediate evidence.
-
-The approval record states the ceiling. It may allow a small percentage of requests, one internal user group, one region, or mirrored traffic that cannot affect responses. The deployment controller or managed endpoint enforces that scope.
-
-Immediate stop conditions usually cover:
-
-- runtime identity mismatch;
-- elevated errors, timeouts, or fallback;
-- latency, queue, memory, accelerator, or cost pressure;
-- invalid prediction distributions or action-rate jumps;
-- feature freshness and contract failures;
-- safety or business guardrail breaches.
-
-Shadow, canary, and blue-green strategies provide different ways to admit traffic. CD focuses on the common control boundary: apply the approved scope, observe the defined signals, prevent unauthorized expansion, and retain a tested recovery path.
-
-## Model Quality May Take Longer To Confirm
-<!-- section-summary: Immediate deployment evidence proves operational safety and input plausibility, while delayed labels are needed for real prediction-quality conclusions. -->
-
-Traditional service health appears within seconds or minutes. True model outcomes may take hours, days, or weeks. A loan can be served successfully today while its repayment label will not exist for months.
-
-This delay changes what the pipeline can claim. Successful readiness, low latency, valid feature distributions, and stable action rates show that the release is operating as designed. They cannot prove final predictive quality on live traffic.
-
-Teams handle the gap in layers:
-
-1. Offline evaluation provides quality evidence before release.
-2. Staging proves contracts, parity, performance, and recovery.
-3. Early production checks watch service health, features, score distributions, actions, and safety guardrails.
-4. Mature-label jobs later compare outcomes by release and segment.
-5. Traffic expansion pauses at the approved boundary if high-consequence evidence is still pending.
-
-For a fraud model, investigators may confirm labels several weeks after a transaction. The candidate can enter a limited canary with strong offline evidence. The team watches score and manual-review rates immediately, then evaluates confirmed fraud outcomes after labels mature. The evidence record should say “live quality pending” during the gap instead of treating absence of failures as proof of accuracy.
-
-## Verify That Production Matches The Approved Release
-<!-- section-summary: Post-deploy verification proves that the platform loaded the approved release and that real traffic reaches it within health policy. -->
-
-A successful deployment API call means the control plane accepted a request. Production can still contain stale replicas, cached aliases, failed model downloads, traffic misrouting, or an unexpected fallback.
-
-Post-deploy verification compares three identities:
-
-- **Approved identity** names the release and scope authorized by the gate.
-- **Desired identity** names the release the deployment controller intends to run.
-- **Observed identity** comes from ready replicas and prediction events.
-
-All three should agree. Each service instance can expose a protected version endpoint with its `release_id`, image digest, model version, feature contract, and policy version. Prediction logs carry the same compact identities for real requests.
-
-```mermaid
-flowchart TD
-    A["Approval: release r42, limited scope"] --> D["Compare identities"]
-    B["Desired state: release r42"] --> D
-    C["Runtime and prediction records"] --> D
-    D --> E{"All identities and scope agree?"}
-    E -->|"Yes"| F["Continue observation"]
-    E -->|"No"| G["Stop traffic expansion"]
-    G --> H["Reconcile or roll back"]
-
-    class A,B,C evidence
-    class D,E check
-    class F pass
-    class G,H stop
+## How Do Explicit States, Tool Boundaries, Training Separation, and Environment Promotion Shape the Workflow?
+<!-- section-summary: An explicit state machine prevents invalid transitions; CI/CD coordinates independently runnable work while training and delivery remain distinct pipelines across environments. -->
+
+Explicit delivery states and tool boundaries keep coordination separate from verification and keep training from being accidentally rebuilt inside deployment.
+
+A release may move through states such as:
+
+```text
+CREATED
+   ↓
+BUILT
+   ↓
+VALIDATED
+   ↓
+STAGING_VERIFIED
+   ↓
+PRODUCTION_APPROVED
+   ↓
+CANARY
+   ↓
+PRODUCTION
 ```
 
-Verification also checks end-to-end health. It confirms readiness, request success, latency objectives, traffic share, feature freshness, fallback use, queue pressure, and cost signals. A synthetic prediction can verify a known path where privacy and product rules allow it.
+If something fails:
 
-The pipeline records a durable result. “Deployment command exited zero” is weak evidence. “Every ready replica reported r42, observed traffic stayed within the approved share, no stop condition breached, and the rollback target remained healthy” is an operational conclusion.
+```text
+CANARY
+   ↓
+ROLLED_BACK
+```
 
-## Restore The Complete Previous Release
-<!-- section-summary: Delivery rollback reapplies a retained release and verifies that production traffic and user-facing health have recovered. -->
+This state machine makes the lifecycle explicit.
 
-A model-service rollback restores more than weights. It restores the compatible serving image, model version, preprocessing, feature contract, decision policy, and environment desired state represented by the retained release.
+For example:
 
-Suppose the new image contains faulty text normalization. Moving a registry alias to the old model leaves the faulty image in place. Suppose the new feature contract changed units. Restoring only the image can load values with the wrong meaning. The rollback target needs the whole compatible bundle.
+$$
+VALIDATED \not\rightarrow PRODUCTION
+$$
 
-The recovery path has a clear shape:
+might be forbidden if policy requires staging first. Suppose R103 fails model validation. A fragile process says:
 
-1. Stop traffic expansion and preserve incident evidence.
-2. Select the retained rollback release named in the manifest.
-3. Reapply its desired state through the same trusted deployment controller.
-4. Verify loaded identities across every ready replica.
-5. Confirm traffic, latency, errors, fallbacks, and product guardrails recover.
-6. Keep the failed release and its evidence for investigation.
+Please don't deploy it.
 
-Managed endpoints, Kubernetes Deployments, Argo Rollouts, and cloud traffic routers provide useful rollback mechanisms. The CD system still owns the product-safe target and the recovery proof. A platform controller cannot infer whether an older model remains compatible with a new feature producer.
+A strong pipeline encodes:
 
-## Choose Delivery Tools For The Deployment Target
-<!-- section-summary: Industrial delivery stacks combine a CI orchestrator, governed registries, a deployment controller, infrastructure as code, and observability according to the target platform. -->
+```text
+model_validation = FAILED
+```
 
-The tools fit into a small set of responsibilities. A CI orchestrator runs the workflow. Registries hold immutable model and image identities. A deployment controller changes desired state. Infrastructure as code manages durable platform resources. Observability supplies production evidence.
+therefore:
 
-### Use CI Orchestrators To Coordinate Checks And Approvals
+$$
+PromoteToProduction(R103)=DENIED
+$$
 
-GitHub Actions is a practical default for repositories already hosted on GitHub. Its environments can protect production jobs, withhold environment secrets until approval, and integrate artifact attestations. GitLab CI/CD offers protected environments and deployment approvals inside GitLab. Jenkins remains common in established enterprises that need self-managed runners, extensive integrations, or existing shared pipeline libraries.
+This is a major purpose of CD automation. Safety rules become enforced constraints instead of institutional memory. "Which CD tool should we use?" is usually the wrong first question. Start with:
 
-These systems should orchestrate purpose-built checks. They should not replace the model registry, invent model lineage from file names, or hold a floating `latest` reference as the release identity.
+What must we deploy, and what controls must the target platform support
 
-### Start With Managed ML Deployment
+If your release is a container deployed to a container orchestration platform, the delivery system needs to manage:
 
-Managed endpoints reduce infrastructure work and integrate model identities, IAM, autoscaling, monitoring, and deployment APIs.
+```text
+container identity
+deployment manifests
+health verification
+traffic rollout
+rollback
+```
 
-SageMaker Model Registry can associate versions with artifacts, inference images, metrics, lineage, and approval status. Approved versions can trigger deployment automation to SageMaker endpoints. Model Registry on Gemini Enterprise Agent Platform separates registered model versions from models deployed on Gemini Enterprise Agent Platform Endpoints. Azure Machine Learning managed online endpoints support multiple deployments, traffic allocation, mirroring, and Azure Monitor integration. Databricks Model Serving deploys registered MLflow models from Unity Catalog or the workspace registry behind managed endpoints.
+If inference is serverless:
 
-The provider-specific object names differ. The delivery logic stays recognizable: resolve a concrete model version, create or update a candidate deployment, verify it without broad traffic, apply the approved traffic scope, and observe the result.
+```text
+function/service revision
+configuration
+traffic split
+```
 
-### Use Kubernetes And GitOps For Platform-Level Requirements
+If inference is batch:
 
-Kubernetes can be justified by shared platform investment, custom networking, specialized GPU scheduling, sidecars, portable serving runtimes, or multi-model operational requirements. KServe can provide model-serving abstractions. A service mesh or gateway can control traffic. Prometheus and OpenTelemetry can supply evidence.
+```text
+job image
+schedule
+input/output contracts
+job rollback/re-run semantics
+```
 
-Argo CD and Flux add a GitOps control loop. CI updates the desired release in a reviewed Git repository; the in-cluster controller reconciles the cluster to that commit. This shape reduces direct cluster credentials in CI and creates a visible desired-state history.
+If a managed model-serving platform is used:
 
-GitOps adds operational responsibility too. Teams must govern the manifest repository and controller permissions. They also own reconciliation, secrets, drift, and rollback interactions. A managed endpoint is usually a better first choice for a team that only needs to serve several models reliably.
+```text
+model registry version
+endpoint configuration
+deployment revision
+traffic routing
+```
 
-### Use Infrastructure As Code For Durable Foundations
+The delivery architecture follows the serving architecture. A system such as GitHub Actions can orchestrate:
 
-Terraform or Pulumi can create networks, IAM roles, registries, endpoints, clusters, observability resources, and policy boundaries. Plans or previews expose infrastructure changes for review.
+```text
+build
+tests
+artifact publication
+model checks
+release manifest creation
+staging deployment
+approval gate
+production deployment
+verification
+```
 
-Per-release automation should update the smallest required resource. A new model version may update a managed endpoint deployment without recreating the network. Separating platform lifecycle from model-release lifecycle keeps delivery faster and reduces infrastructure blast radius.
+but it does not have to be the system actually serving the model.
 
-## A Focused GitHub Actions Delivery Workflow
-<!-- section-summary: A compact workflow can verify an approved model, build and attest one image, deploy the same release to staging, and protect production through an environment gate. -->
+Conceptually:
 
-The workflow here illustrates the control boundaries with GitHub Actions, an MLflow-compatible registry, an OCI registry, and a managed endpoint. The repository owns the small `delivery` commands because model gates and provider deployment calls depend on the service.
+```text
+Git / Registry Event
+       ↓
+CD Orchestrator
+       ↓
+Artifact Registry
+       ↓
+Deployment Platform
+       ↓
+Model Service
+```
 
-The input requires a concrete registry version such as `models:/risk.score/27`. The package job verifies that candidate, builds one image, attests its digest, and writes the release manifest. Staging and production download that same manifest. Before staging deploys, it reads the exact `image@sha256:...` reference from the manifest and verifies its GitHub provenance against the expected source repository.
+Keeping those responsibilities distinct makes the architecture easier to reason about. Conceptually, a model-service workflow could look like this:
 
 ```yaml
-name: Deliver model service
+name: model-service-delivery
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_id:
-        type: string
-        required: true
-        description: Immutable release ID
-      model_uri:
-        type: string
-        required: true
-        description: Concrete registry URI, never an alias
+  push-to-main-or-approved-model-event
 
 jobs:
-  package:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-      artifact-metadata: write
-    outputs:
-      image_digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Verify model evidence and release contracts
-        run: |
-          ./delivery verify-candidate "$MODEL_URI"
-          ./delivery test-release "$MODEL_URI"
-        env:
-          MODEL_URI: ${{ inputs.model_uri }}
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          push: true
-          tags: ghcr.io/example/model-service:${{ github.sha }}
-      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ghcr.io/example/model-service
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-      - name: Write immutable release manifest
-        run: |
-          ./delivery create-release --release "$RELEASE_ID" --model "$MODEL_URI" --image "ghcr.io/example/model-service@$IMAGE_DIGEST"
-        env:
-          RELEASE_ID: ${{ inputs.release_id }}
-          MODEL_URI: ${{ inputs.model_uri }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-manifest
-          path: release.json
+
+  build:
+    - resolve exact source revision
+    - resolve exact model version
+    - build immutable service image
+    - calculate artifact digests
+    - create release manifest
+
+  software-validation:
+    needs: build
+    - run unit tests
+    - run API contract tests
+    - run feature contract tests
+    - run security/build checks
+
+  model-validation:
+    needs: build
+    - evaluate candidate model
+    - compare with current production model
+    - run golden prediction cases
+    - verify latency/resource limits
 
   staging:
-    needs: package
-    runs-on: ubuntu-latest
-    environment: staging
-    permissions:
-      contents: read
-      packages: read
-      attestations: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-manifest
-      - name: Verify the image provenance at its exact digest
-        run: |
-          echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          IMAGE_AT_DIGEST="$(jq -er '.image | select(type == "string" and test("@sha256:[0-9a-f]{64}$"))' release.json)"
-          gh attestation verify "oci://$IMAGE_AT_DIGEST" --repo "$GITHUB_REPOSITORY"
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - run: ./delivery deploy staging release.json
-      - run: ./delivery verify-environment staging release.json
+    needs:
+      - software-validation
+      - model-validation
+    - deploy exact release artifact
+    - verify artifact identities
+    - run integration tests
+    - run end-to-end tests
+    - test observability
+    - test failure behavior
 
-  production:
+  production-approval:
     needs: staging
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-manifest
-      - run: ./delivery deploy production release.json --traffic-scope initial
-      - run: ./delivery verify-environment production release.json
+    - require production authorization
+
+  canary:
+    needs: production-approval
+    - deploy exact approved release
+    - verify release identity
+    - send small traffic percentage
+    - evaluate operational metrics
+
+  promote:
+    needs: canary
+    - increase traffic gradually
+    - record production release
+
+  rollback:
+    - restore retained previous release
 ```
 
-The package job alone can push packages, create attestations, and write linked-artifact metadata. Staging receives read access for the private image and its attestation. Production receives source read access and OpenID Connect authority for the provider deployment path.
+The syntax is intentionally secondary. What matters is the dependency graph:
 
-The `uses` entries are pinned to full commit SHAs because action code executes with the job's credentials. The version comments keep the reviewed releases visible to people and to dependency-update tooling. Dependabot or Renovate should propose later action releases through reviewed pull requests instead of allowing a movable major-version tag to change a production workflow without review.
+$$
+Build
+\rightarrow
+Validate
+\rightarrow
+Stage
+\rightarrow
+Approve
+\rightarrow
+Canary
+\rightarrow
+Promote
+$$
 
-Each checkout also sets `persist-credentials: false`. These jobs need the repository files, but they never push a later Git change. Removing the checkout token from Git configuration keeps subsequent build, verification, and deployment commands from reaching a credential they do not need. That boundary is especially important in the production job, where the deploy command already receives its narrowly scoped provider identity through OpenID Connect.
+Every arrow should preserve the exact candidate identity. It should not conceptually do:
 
-The staging verification extracts the full image reference from `release.json`. Its regular expression requires a SHA-256 digest, and GitHub CLI verifies the provenance subject plus the signing repository. Authentication to GHCR lets the CLI retrieve a private image manifest. A missing digest, invalid attestation, or repository mismatch stops the job before the deploy command.
+```text
+build staging artifact
+↓
+approve
+↓
+rebuild production artifact
+```
 
-The production environment is configured in GitHub with required reviewers, restricted branches, and provider authentication. OpenID Connect is preferable to long-lived cloud keys where the provider supports it. The workflow receives production credentials only after the environment gate passes.
+because the production object would no longer be exactly the object that passed validation. It should do:
 
-The important detail is identity flow. `model_uri` identifies an already approved candidate. `steps.build.outputs.digest` identifies the image built by CI. `release.json` joins those identities. Every later job consumes that file instead of rebuilding or resolving a movable alias.
+```text
+build R103
+      ↓
+test R103
+      ↓
+stage R103
+      ↓
+approve R103
+      ↓
+deploy R103
+```
 
-The team-owned commands should return non-zero status for policy failures and store evidence outside the runner. For example, `verify-candidate` can require a model signature, an approved evaluation record, segment results, and an allowed-use tag. `verify-environment` can compare the release manifest with runtime metadata and recent prediction records.
+That distinction is one of the foundations of trustworthy CD. You could build one giant workflow:
 
-## What The Release Record Must Capture
-<!-- section-summary: A delivery record binds gate results, approval scope, observed production state, and rollback readiness to one immutable release. -->
+```text
+collect data
+↓
+train model
+↓
+evaluate model
+↓
+package
+↓
+stage
+↓
+deploy
+```
 
-The workflow log helps diagnose one automation run. A durable release record preserves the decision in a stable, queryable form after the temporary runner logs expire.
+Sometimes that is appropriate. But conceptually it is often cleaner to separate:
 
-```json
-{
-  "release_id": "risk-score/r42",
-  "subject": {
-    "model_uri": "models:/risk.score/27",
-    "model_digest": "sha256:2a91...",
-    "image_digest": "sha256:7c44...",
-    "feature_contract": "risk-features/v8",
-    "policy_version": "risk-policy/v12"
-  },
-  "gates": {
-    "software": "passed",
-    "model_quality": "passed",
-    "segment_quality": "passed",
-    "serving_compatibility": "passed",
-    "security": "passed"
-  },
-  "approval": {
-    "environment": "production",
-    "traffic_scope": "initial",
-    "decision": "approved"
-  },
-  "observed": {
-    "runtime_identity_match": true,
-    "stop_conditions": []
-  },
-  "live_quality": "pending_mature_labels",
-  "rollback_release": "risk-score/r41"
+```text
+Training Pipeline
+        ↓
+approved model candidate
+        ↓
+Delivery Pipeline
+```
+
+Why? Because training and serving releases have different responsibilities. Training is concerned with:
+
+$$
+Data\rightarrow Model
+$$
+
+Delivery is concerned with:
+
+$$
+Model+Software\rightarrow ReliableProductionCapability
+$$
+
+They can evolve independently while still being linked through lineage. Suppose:
+
+```text
+model-v8
+```
+
+remains unchanged. You discover a serving bug and update the API implementation.
+
+Then:
+
+```text
+R103:
+model v8
+service v21
+```
+
+becomes:
+
+```text
+R104:
+model v8
+service v22
+```
+
+No retraining occurred. Yet a new delivery pipeline run is necessary. Likewise, a model change can require a new delivery run without source-code modification. This is why model version and release version are separate concepts. The desired lifecycle is:
+
+```text
+R103
+ │
+ ├── test
+ │
+ ├── staging
+ │
+ └── production
+```
+
+rather than:
+
+```text
+R103-dev
+R103-stage
+R103-prod
+```
+
+if those represent separately rebuilt artifacts. Environment configuration can differ, but release identity remains stable. This preserves traceability:
+
+$$
+SameRelease
++
+DifferentEnvironmentBinding
+$$
+
+## How Does a Full Release and Failed Canary Demonstrate CD's Recovery Path?
+<!-- section-summary: The full example promotes one release, pauses or rolls back a failed canary, and keeps the incident response routine and traceable. -->
+
+The complete flow shows the normal path and a failed canary using the same evidence and state model.
+
+Suppose production currently uses:
+
+```text
+R102
+model v7
+```
+
+Training creates:
+
+```text
+model v8
+```
+
+The model registry marks it as an approved delivery candidate. The CD pipeline resolves:
+
+```text
+source commit = ABC
+model = v8
+features = v13
+policy = v6
+```
+
+and builds:
+
+```text
+R103
+```
+
+with immutable digests. Software tests pass. Model validation compares v8 with v7. Staging deploys the exact R103. A synthetic request travels through:
+
+```text
+API
+↓
+feature service
+↓
+preprocessing
+↓
+model v8
+↓
+policy v6
+↓
+decision
+```
+
+The expected answer appears. Staging verifies:
+
+```text
+release_id = R103
+```
+
+Production approval is attached to R103. Production deployment starts R103 with zero traffic. Health checks pass. Traffic becomes:
+
+```text
+R102 99%
+R103  1%
+```
+
+Operational metrics remain normal. Traffic moves:
+
+```text
+5%
+20%
+50%
+100%
+```
+
+Every production prediction records:
+
+```text
+release = R103
+model = v8
+```
+
+Weeks later, delayed labels confirm that model quality also improved. That entire automated progression is Model Service CD. Imagine at 5% traffic:
+
+```text
+R102 block rate = 2.4%
+R103 block rate = 26%
+```
+
+even though:
+
+```text
+error rate = normal
+latency = normal
+```
+
+The service works technically. Its behavior is suspicious. The CD/release system stops promotion:
+
+```text
+R103 5%
+↓
+R103 0%
+```
+
+and restores:
+
+```text
+R102 100%
+```
+
+The failed candidate remains preserved for diagnosis. You do **not** modify R103 in place. A corrected change produces:
+
+```text
+R104
+```
+
+which goes through the pipeline again. This is a useful design objective. A failed candidate should look like:
+
+```text
+R103 failed gate
+↓
+promotion stopped
+↓
+R102 remains/restored
+↓
+diagnose
+↓
+produce R104
+```
+
+not:
+
+```text
+everyone joins emergency call
+↓
+SSH to production
+↓
+edit files manually
+↓
+try random model versions
+↓
+hope service recovers
+```
+
+Good CD converts risky operational improvisation into routine controlled transitions. Every new release introduces uncertainty. Before testing:
+
+$$
+U_0 = high
+$$
+
+After build verification:
+
+$$
+U_1 < U_0
+$$
+
+After model validation:
+
+$$
+U_2 < U_1
+$$
+
+After staging:
+
+$$
+U_3 < U_2
+$$
+
+After canary production traffic:
+
+$$
+U_4 < U_3
+$$
+
+You never reduce uncertainty to exactly zero. Instead CD progressively reduces uncertainty while progressively increasing exposure. That gives us a fundamental relationship:
+
+$$
+\boxed{
+\text{Exposure should grow as evidence grows}
 }
+$$
+
+This is the deeper logic behind staged delivery. Tools such as workflow runners, container registries, deployment platforms, and model registries are implementation mechanisms. The real system is a chain of controlled assertions:
+
+```text
+This is exactly R103.
+        ↓
+R103 passed software validation.
+        ↓
+R103 passed model validation.
+        ↓
+R103 passed staging.
+        ↓
+R103 was authorized.
+        ↓
+Exactly R103 entered production.
+        ↓
+Only a small fraction saw it first.
+        ↓
+Production confirmed acceptable behavior.
 ```
 
-The `subject` prevents evidence from floating to another build. The gate states show which failure boundaries were checked. Approval limits authority. Observed state proves what production loaded. The live-quality field communicates the delayed-label limitation directly.
+That chain is the essence of CD.
 
-Every transition should append an authenticated event: who or which policy created the release, attached evidence, approved scope, changed traffic, invoked an emergency action, or restored the rollback target. Lineage explains how the artifact was produced. The audit trail explains how it gained production authority.
+## What Final Principle Makes Model-Service CD More than Pipeline Plumbing?
+<!-- section-summary: Model-service CD manages uncertainty by accumulating evidence, limiting exposure, preserving identity, and making recovery a normal state transition. -->
 
-## Test The Delivery Pipeline And Recovery Path
-<!-- section-summary: A reliable CD pipeline is tested with rejected releases, stale identities, failed dependencies, unauthorized transitions, and real rollback drills. -->
+The final principle treats CD as controlled uncertainty reduction rather than automation for its own sake.
 
-Delivery automation can fail like any other production system. A green path proves too little. The pipeline needs tests for rejection and recovery.
+A concise mental model is:
 
-The test suite should exercise these cases:
+```text
+       MODEL SERVICE CONTINUOUS DELIVERY
 
-1. A model alias is supplied instead of a concrete version, so intake rejects it.
-2. The model digest differs from the registry record, so packaging stops.
-3. A required segment metric is missing, so production approval remains unavailable.
-4. The image attestation fails verification, so staging never receives the release.
-5. One replica reports another model version, so traffic expansion stops.
-6. Requested traffic exceeds approval scope, so the transition is denied.
-7. Outcome labels are immature, so live quality stays pending.
-8. The rollback artifact is missing, so release readiness fails before production.
-9. The rollback drill restores the declared release and telemetry confirms recovery.
+Change / New Model
+        ↓
+Resolve exact inputs
+        ↓
+BUILD ONCE
+        ↓
+Immutable Release R103
+        ↓
+Software + Contract + Security Checks
+        ↓
+Model + Prediction Behaviour Checks
+        ↓
+Production-like Staging
+        ↓
+Approval
+        ↓
+Deploy exact R103
+        ↓
+Verify exact R103
+        ↓
+Small Production Exposure
+        ↓
+Observe
+    ┌───────┴────────┐
+    │                │
+healthy            problem
+    │                │
+    ▼                ▼
+more traffic     restore R102
+    │
+    ▼
+  100%
+```
 
-Teams should also rehearse CI-provider and deployment-provider outages. A release may need to pause safely with staging active and production unchanged. Emergency recovery should remain available through a controlled path even if the normal orchestration service is unavailable.
+The definition is:
 
-Pipeline metrics complete the operational view. Track lead time, gate failures by category, approval wait, deployment duration, rollback frequency, false stop conditions, identity mismatches, and time to verified recovery. These measures reveal where delivery is slow or unsafe without rewarding teams for pushing traffic before evidence is ready.
+**Model Service Continuous Delivery is the repeatable process that takes a precisely identified model-service change, builds one immutable release from it, accumulates software, ML, security, integration, and operational evidence about that exact release, and makes it safely eligible for controlled production use while preserving a tested recovery path.**
 
-## The Main Idea
-<!-- section-summary: Continuous delivery turns a reviewed model candidate and serving change into an immutable, evidenced, authorized, observable, and recoverable production release. -->
+The deepest invariant is:
 
-Continuous delivery for an ML service automates repeatable evidence gathering and deployment work. It preserves human or policy control over production consequence.
+$$
+\boxed{
+\text{Built Release}
+=
+\text{Tested Release}
+=
+\text{Approved Release}
+=
+\text{Deployed Release}
+}
+$$
 
-The training path creates a concrete model candidate. The delivery path combines that candidate with one image, feature contract, policy, and evidence record. CI proves the change can integrate. Staging proves the release works as a system. Approval grants bounded authority. Production admission limits exposure. Runtime verification proves what users reached. Rollback restores the complete retained release.
+And the operational principle is:
 
-The standard is practical: every production prediction should trace to the exact release that earned its evidence and authority, and the team should be able to restore a known-good release through the same trusted control path.
+$$
+\boxed{
+\text{Automate evidence collection}
+\;+\;
+\text{preserve artifact identity}
+\;+\;
+\text{increase exposure gradually}
+\;+\;
+\text{keep rollback ready}
+}
+$$
+
+That is what makes CD valuable for ML: it turns deploying a new model from a one-off operational event into a **controlled, repeatable, evidence-based state transition**.
 
 ![A model service delivery loop from intake and immutable packaging through staging proof, scoped authority, controlled admission, immediate and delayed evidence, and complete-release recovery](/content-assets/articles/article-mlops-mlops-infrastructure-cd-for-model-services/model-service-cd-summary.png)
 
 *Delivery uses immediate operational evidence and later mature-label evidence to govern expansion while the complete retained release remains available for recovery.*
 
-## References
+## Check Your Answers
 
-- [AWS: What is continuous delivery?](https://aws.amazon.com/devops/continuous-delivery/)
-- [GitHub Actions: Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
-- [GitHub Actions: Artifact attestations for build provenance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
-- [GitHub Actions: Secure use reference](https://docs.github.com/en/actions/reference/security/secure-use)
-- [GitLab CI/CD protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-- [GitLab deployment safety](https://docs.gitlab.com/ci/environments/deployment_safety/)
-- [Jenkins Pipeline](https://www.jenkins.io/doc/book/pipeline/)
-- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
-- [Amazon SageMaker Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html)
-- [Amazon SageMaker: Deploy a model from the registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-deploy.html)
-- [Model Registry on Gemini Enterprise Agent Platform: Model Version Aliases](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/model-alias)
-- [Google Cloud CLI: Gemini Enterprise Agent Platform Endpoints](https://docs.cloud.google.com/sdk/gcloud/reference/ai/endpoints)
-- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
-- [Azure Machine Learning online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online?view=azureml-api-2)
-- [Databricks Model Serving](https://docs.databricks.com/aws/en/machine-learning/model-serving)
-- [Kubernetes: Update a Deployment and roll back](https://kubernetes.io/docs/tasks/run-application/update-deployment-rolling/)
-- [Argo CD automated sync policy](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/)
-- [Flux image update automation](https://fluxcd.io/flux/guides/image-update/)
-- [Terraform core workflow](https://developer.hashicorp.com/terraform/intro/core-workflow)
-- [Pulumi infrastructure as code](https://www.pulumi.com/docs/iac/)
-- [Open Container Initiative image descriptor](https://github.com/opencontainers/image-spec/blob/main/descriptor.md)
-- [Sigstore Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/)
-- [SLSA provenance](https://slsa.dev/spec/v1.2/provenance)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Complete Release Does Model-Service CD Control?]{kind="recap"}
+CD controls a complete release of model, service, runtime, features, configuration, policy, and infrastructure, built once and triggered by code, model, or dependency changes.
+:::
+
+:::expand[Which Software, Contract, Security, Model, Behaviour, Edge-Case, and Latency Gates Run before Staging?]{kind="recap"}
+Fast software and contract checks precede build security and ML-specific quality, baseline, behaviour, slice, latency, and compatibility gates.
+:::
+
+:::expand[How Do Staging, Recovery, Observability, and Approval Produce Delivery Evidence?]{kind="recap"}
+Staging tests deployment, request paths, recovery, and observability; approval is the policy boundary at which continuous delivery may stop.
+:::
+
+:::expand[Why Must Deployment and Traffic Exposure Use Layered Production Evidence?]{kind="recap"}
+Production deployment creates capacity, while shadow and canary exposure collect operational proxies and later model outcomes before full authority.
+:::
+
+:::expand[How Do Identity, Prediction Attribution, Release Records, Retention, and Rollback Preserve Control?]{kind="recap"}
+Immutable identities and per-prediction release attribution feed a durable release record, while retention and tested complete rollback preserve recovery.
+:::
+
+:::expand[How Do Explicit States, Tool Boundaries, Training Separation, and Environment Promotion Shape the Workflow?]{kind="recap"}
+An explicit state machine prevents invalid transitions; CI/CD coordinates independently runnable work while training and delivery remain distinct pipelines across environments.
+:::
+
+:::expand[How Does a Full Release and Failed Canary Demonstrate CD's Recovery Path?]{kind="recap"}
+The full example promotes one release, pauses or rolls back a failed canary, and keeps the incident response routine and traceable.
+:::
+
+:::expand[What Final Principle Makes Model-Service CD More than Pipeline Plumbing?]{kind="recap"}
+Model-service CD manages uncertainty by accumulating evidence, limiting exposure, preserving identity, and making recovery a normal state transition.
+:::

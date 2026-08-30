@@ -11,856 +11,2025 @@ aliases:
 
 ## Table of Contents
 
-1. [One Offline Score Is An Estimate](#one-offline-score-is-an-estimate)
-2. [Separate Sample Variation From Broken Or Biased Evidence](#separate-sample-variation-from-broken-or-biased-evidence)
-3. [Define The Exact Quantity And Difference You Want To Measure](#define-the-exact-quantity-and-difference-you-want-to-measure)
-4. [Compare Candidate And Baseline On The Same Units](#compare-candidate-and-baseline-on-the-same-units)
-5. [Understand Confidence Intervals Through Repeated Samples](#understand-confidence-intervals-through-repeated-samples)
-6. [How A Paired Bootstrap Estimates The Range Of Effects](#how-a-paired-bootstrap-estimates-the-range-of-effects)
-7. [What A Paired Permutation Test Can Tell You](#what-a-paired-permutation-test-can-tell-you)
-8. [Resample Whole Users, Sessions, Or Sites When Rows Are Related](#resample-whole-users-sessions-or-sites-when-rows-are-related)
-9. [Sample Important Rare Groups Deliberately](#sample-important-rare-groups-deliberately)
-10. [Separate Practical Importance From Statistical Evidence](#separate-practical-importance-from-statistical-evidence)
-11. [Account For The Extra False Alarms Created By Many Comparisons](#account-for-the-extra-false-alarms-created-by-many-comparisons)
-12. [Record Everything Needed To Reproduce The Comparison](#record-everything-needed-to-reproduce-the-comparison)
-13. [Use Uncertainty To Pass, Fail, Or Delay A Release](#use-uncertainty-to-pass-fail-or-delay-a-release)
-14. [The Main Idea](#the-main-idea)
-15. [References](#references)
+1. [Why Is Every Offline Score an Estimate?](#why-is-every-offline-score-an-estimate)
+2. [Why Should Candidate and Baseline Models Be Compared on the Same Examples?](#why-should-candidate-and-baseline-models-be-compared-on-the-same-examples)
+3. [How Do Paired Bootstrap and Permutation Tests Measure a Difference?](#how-do-paired-bootstrap-and-permutation-tests-measure-a-difference)
+4. [How Do Effect Size, Non-Inferiority, and the Correct Sampling Unit Guide Decisions?](#how-do-effect-size-non-inferiority-and-the-correct-sampling-unit-guide-decisions)
+5. [How Do Rare Groups, Repeated Comparisons, and Test Reuse Distort Certainty?](#how-do-rare-groups-repeated-comparisons-and-test-reuse-distort-certainty)
+6. [How Should Release Rules Use Intervals, Guardrails, Power, and Segment Uncertainty?](#how-should-release-rules-use-intervals-guardrails-power-and-segment-uncertainty)
+7. [What Other Uncertainty Sources Must a Reproducible Comparison Record?](#what-other-uncertainty-sources-must-a-reproducible-comparison-record)
+8. [How Do You Report a Paired Model Comparison Without Overclaiming?](#how-do-you-report-a-paired-model-comparison-without-overclaiming)
+9. [Check Your Answers](#check-your-answers)
 
-## One Offline Score Is An Estimate
-<!-- section-summary: An offline metric estimates behaviour in a target population from a finite evaluation sample, so another valid sample can produce a different value. -->
+Two classifiers score 91.2% and 91.6% on the same test set. The four-tenths difference looks precise, but a different sample of users might reverse it. The release decision needs to know not only which number is larger, but how stable the difference is and whether it is large enough to matter.
 
-A holdout score such as 0.842 looks exact, although another valid sample may produce 0.835 for the same model. **Statistical uncertainty describes how much an evaluation result can vary because the team observed a sample instead of every future case.**
-A model may have an accuracy of 0.842 on one valid holdout and 0.835 on another.
-The model did not necessarily change.
-The two samples contained different cases.
+**Statistical uncertainty** describes what the available sample can and cannot establish about a target population. Because both models can score the same examples, paired comparisons preserve case-level information that independent averages throw away. Bootstrap intervals, permutation tests, practical margins, and the correct sampling unit then support a more honest decision.
 
-An offline score therefore has two roles.
-It summarizes what happened in the evaluation data, and it estimates what might happen in the
-target production population.
-The first role is exact: 842 of 1,000 labelled examples were correct.
-The second role is uncertain: future traffic will contain another mixture of easy, difficult,
-common, and rare cases.
+Use these questions to move from two point estimates to a reproducible comparison with explicit uncertainty:
 
-Imagine repeatedly drawing evaluation samples from the same production population.
-Every sample is prepared with the same eligibility rules, label definition, and metric code.
-The model receives a slightly different set of cases each time, so the score moves.
-That pattern of possible scores is the **sampling distribution**.
+1. **Why Is Every Offline Score an Estimate?**
+2. **Why Should Candidate and Baseline Models Be Compared on the Same Examples?**
+3. **How Do Paired Bootstrap and Permutation Tests Measure a Difference?**
+4. **How Do Effect Size, Non-Inferiority, and the Correct Sampling Unit Guide Decisions?**
+5. **How Do Rare Groups, Repeated Comparisons, and Test Reuse Distort Certainty?**
+6. **How Should Release Rules Use Intervals, Guardrails, Power, and Segment Uncertainty?**
+7. **What Other Uncertainty Sources Must a Reproducible Comparison Record?**
+8. **How Do You Report a Paired Model Comparison Without Overclaiming?**
 
-```mermaid
-flowchart TD
-    A["Target production population<br/>all eligible future cases"] --> B["Evaluation sample A"]
-    A --> C["Evaluation sample B"]
-    A --> D["Evaluation sample C"]
-    B --> E["Metric = 0.842"]
-    C --> F["Metric = 0.835"]
-    D --> G["Metric = 0.848"]
-    E --> H["Sampling distribution<br/>of the metric estimate"]
-    F --> H
-    G --> H
+## Why Is Every Offline Score an Estimate?
+<!-- section-summary: An offline score estimates performance for a target population and varies with the sampled cases even when the model stays fixed. -->
 
-    class A population
-    class B,C,D sample
-    class E,F,G score
-    class H distribution
-```
+A small observed improvement may reflect the sampled cases rather than a reliable population difference, so evaluation begins by treating scores as estimates.
 
-Production review usually compares two systems.
-A candidate may improve recall by 0.7 percentage points over the current model.
-That observed difference is also an estimate.
-Another representative sample might show 0.2 points, 1.1 points, or a small regression.
-
-The release question is therefore larger than “Which score is higher?”
-Reviewers need the estimated change, the precision of that estimate, the assumptions behind it,
-and the amount of change that matters to the product.
-
-## Separate Sample Variation From Broken Or Biased Evidence
-<!-- section-summary: Resampling quantifies variation from finite sampling, while label errors, leakage, stale data, and unrepresentative coverage require evidence repair. -->
-
-Uncertainty is a broad word.
-Several problems can make an evaluation result doubtful, and a confidence interval handles only
-part of that doubt.
-
-**Sampling uncertainty** comes from observing a finite set of evaluation units.
-A valid random or representative sample still contains chance variation.
-Bootstrap intervals and other inferential methods are designed to describe this source.
-
-### Fix Label, Data, And Measurement Problems Before Calculating Uncertainty
-
-**Label uncertainty** comes from imperfect ground truth.
-A fraud label may arrive late.
-Two human assessors may disagree about document relevance.
-A medical outcome may be missing for patients treated outside the observed network.
-Repeated resampling preserves those label problems because it keeps drawing from the same
-recorded evidence.
-
-**Data and measurement uncertainty** includes broken joins, missing predictions, stale features,
-duplicate requests, changing schemas, and incorrect timestamps.
-An interval calculated from a biased join can be impressively narrow and completely misleading.
-
-**Population uncertainty** appears if the evaluation set represents a different population from
-the release scope.
-A model tested on one language, device type, or season has weak evidence for unobserved groups.
-More bootstrap repetitions cannot create those missing groups.
-
-```mermaid
-flowchart TD
-    A["An evaluation result is uncertain"] --> B{"What is the source?"}
-    B -->|"Finite representative sample"| C["Sampling uncertainty"]
-    B -->|"Wrong, missing, or immature outcomes"| D["Label uncertainty"]
-    B -->|"Broken joins, leakage, stale features"| E["Data and measurement uncertainty"]
-    B -->|"Release population is missing"| F["Coverage and population uncertainty"]
-    C --> G["Estimate with an interval<br/>or registered test"]
-    D --> H["Repair labels and maturity rules"]
-    E --> I["Repair the evidence pipeline"]
-    F --> J["Collect representative evidence<br/>or narrow the release scope"]
-
-    class A,B question
-    class C,D,E,F source
-    class G statistical
-    class H,I,J repair
-```
-
-Suppose an outcome table joins to only 62 percent of predictions.
-A paired bootstrap can accurately describe variation inside that joined subset.
-It says nothing reliable about the missing 38 percent unless the missingness process is
-understood.
-The first action is to repair or characterize the join.
-
-This separation prevents statistical machinery from giving a data-quality failure the appearance
-of scientific confidence.
-Evidence validity comes first.
-Sampling uncertainty is measured after the dataset, labels, and release population pass their
-own checks.
-
-## Define The Exact Quantity And Difference You Want To Measure
-<!-- section-summary: The estimand names the exact production quantity under study, and the effect size measures how much the candidate changes it relative to the baseline. -->
-
-Before calculating uncertainty, the team needs to state the exact quantity it wants to learn
-about. Statisticians call that quantity the **estimand**.
-
-An estimand joins the metric to a population and an operating policy.
-“Candidate recall” is incomplete.
-“Candidate minus baseline recall for eligible transactions, at a threshold that sends 2 percent
-of cases to review, under the current label policy” is far more precise.
-
-The **effect size** is the measured size of the candidate's change.
-For a higher-is-better metric, a common definition is:
+Suppose two models are evaluated on the same test set:
 
 $$
-\widehat{\Delta}=\widehat{M}_{candidate}-\widehat{M}_{baseline}
+\text{Model A accuracy}=91.2\%
 $$
 
-For an error or loss where lower is better, teams often reverse the subtraction:
-
 $$
-\widehat{\Delta}=\widehat{L}_{baseline}-\widehat{L}_{candidate}
+\text{Model B accuracy}=91.6\%
 $$
 
-Both conventions make a positive value mean improvement.
-The report should state the direction so a sign error cannot change the release decision.
-
-A useful estimand contract can be short:
-
-```yaml
-estimand:
-  population: "eligible completed delivery requests"
-  metric: "mean absolute arrival-time error"
-  operating_policy: "current clipping and fallback rules"
-  effect: "baseline_mae - candidate_mae"
-  unit: "minutes"
-  weighting: "one completed request, one vote"
-  label_maturity: "actual arrival recorded and quality-checked"
-```
-
-This contract prevents several common switches.
-The team cannot quietly move from MAE to RMSE after seeing a favourable result.
-It cannot compare raw model outputs in one report and policy-adjusted customer estimates in
-another.
-It cannot claim evidence for all requests from a sample restricted to completed deliveries.
-
-Effect size also keeps the result understandable.
-An MAE improvement of 0.4 minutes has a product meaning.
-A recall improvement of 0.8 percentage points can be translated into additional positive cases
-found per week.
-Statistical evidence describes the precision of that effect; product owners decide whether its
-size justifies cost and risk.
-
-## Compare Candidate And Baseline On The Same Units
-<!-- section-summary: Pairing keeps each candidate result attached to the baseline result for the same case, preserving shared difficulty and producing a direct replacement effect. -->
-
-A candidate replaces or modifies a running system.
-The fairest offline comparison gives both systems the same examples, labels, eligibility rules,
-and policy boundary.
-This creates a **paired comparison**.
-
-Suppose four requests have per-request absolute errors:
-
-| Request | Baseline error | Candidate error | Improvement |
-|---|---:|---:|---:|
-| 1 | 2 min | 1 min | +1 min |
-| 2 | 18 min | 16 min | +2 min |
-| 3 | 4 min | 6 min | -2 min |
-| 4 | 10 min | 7 min | +3 min |
-
-Request 2 is difficult for both models.
-Pairing keeps that shared difficulty inside one comparison: the candidate reduced its error by 2
-minutes.
-Drawing unrelated baseline and candidate samples would mix model change with differences in
-request difficulty.
-
-```mermaid
-flowchart TD
-    A["Evaluation unit 1"] --> B["Baseline result 1"]
-    A --> C["Candidate result 1"]
-    B --> D["Paired difference 1"]
-    C --> D
-
-    E["Evaluation unit 2"] --> F["Baseline result 2"]
-    E --> G["Candidate result 2"]
-    F --> H["Paired difference 2"]
-    G --> H
-
-    I["All paired differences"] --> J["Candidate replacement effect"]
-    D --> I
-    H --> I
-
-    class A,E unit
-    class B,C,F,G model
-    class D,H,I difference
-    class J effect
-```
-
-The pair can be a row, query, patient, user, session, store-day, or another valid evaluation
-unit.
-Its identifier must be unique at the chosen level.
-The evaluation job checks that both systems have a result for every included pair.
-
-Missing candidate predictions need explicit treatment.
-Dropping candidate failures from the joined table rewards the candidate for failing.
-The protocol may count failures as the worst valid outcome, apply the production fallback, or
-fail an operational guardrail.
-The same rule must represent the release behaviour.
-
-Pairing still applies to metrics such as AUC, F1, and NDCG that cannot be reduced to a simple
-average of row-level differences.
-Each resample keeps the same labels and units for both systems, recalculates both complete
-metrics, and then subtracts them.
-
-## Understand Confidence Intervals Through Repeated Samples
-<!-- section-summary: A confidence interval comes from a procedure designed to cover the fixed target effect at a stated rate across repeated valid samples. -->
-
-A **confidence interval** gives a range around the estimated effect.
-Its width reflects how precisely the evaluation procedure has estimated the target quantity from
-the available sample.
-
-The repeated-sample picture gives the clearest interpretation.
-Imagine drawing many valid evaluation samples from the same target population.
-For every sample, run the same pairing, metric, and interval procedure.
-The resulting intervals differ because the samples differ.
-
-For a 95 percent confidence procedure, about 95 percent of those intervals would contain the
-fixed target effect under the method's assumptions.
-The interval computed from the current sample either covers that target or it does not.
-Frequentist confidence does not assign a 95 percent probability to the fixed target after the
-interval has been observed.
-
-```mermaid
-flowchart TD
-    A["Repeated valid samples<br/>from the same target population"] --> B["Sample 1 interval<br/>covers target effect"]
-    A --> C["Sample 2 interval<br/>covers target effect"]
-    A --> D["Sample 3 interval<br/>misses target effect"]
-    A --> E["Many more intervals"]
-    B --> F["Long-run coverage<br/>approximately 95%"]
-    C --> F
-    D --> F
-    E --> F
-
-    class A samples
-    class B,C,E cover
-    class D miss
-    class F result
-```
-
-Suppose candidate minus baseline recall is estimated at `+0.009`, with a 95 percent interval
-from `+0.003` to `+0.015`.
-The point estimate says the candidate found 0.9 percentage points more positives in the sample.
-The interval shows that the data and registered procedure support effects ranging from a small
-positive gain to a larger one.
-
-The confidence level is only one input.
-The interval also depends on the sampling design, resampling unit, statistic, label quality, and
-population coverage.
-A narrow interval from duplicated users or leaked labels is weak evidence.
-
-One-sided intervals can support a predeclared lower-bound decision, such as showing that a
-regression is no worse than an approved margin.
-Two-sided intervals show plausible movement in both directions.
-The choice belongs in the evaluation plan before candidate results are reviewed.
-
-## How A Paired Bootstrap Estimates The Range Of Effects
-<!-- section-summary: A paired bootstrap repeatedly samples evaluation units with replacement, applies the same indices to both systems, and recalculates the effect. -->
-
-The **bootstrap** approximates the sampling distribution by resampling the observed evaluation
-units with replacement.
-Some units appear several times in a bootstrap sample, while others do not appear.
-Each resample has the same number of units as the original sample.
-
-A paired bootstrap follows five steps:
-
-1. Start with `n` evaluation units containing baseline and candidate results.
-2. Draw `n` unit indices with replacement.
-3. Apply those same indices to both systems, preserving every pair.
-4. Recalculate the baseline metric, candidate metric, and effect.
-5. Repeat many times and form an interval from the bootstrap effect distribution.
-
-For arrival-time predictions, absolute error provides a focused example.
-Positive improvement means the candidate reduced mean absolute error:
-
-```python
-import numpy as np
-from scipy.stats import bootstrap
-
-baseline_loss = np.abs(actual_minutes - baseline_prediction)
-candidate_loss = np.abs(actual_minutes - candidate_prediction)
-
-def mean_improvement(baseline_loss, candidate_loss, axis=-1):
-    return np.mean(baseline_loss - candidate_loss, axis=axis)
-
-result = bootstrap(
-    data=(baseline_loss, candidate_loss),
-    statistic=mean_improvement,
-    paired=True,
-    vectorized=True,
-    n_resamples=20_000,
-    confidence_level=0.95,
-    method="BCa",
-    rng=np.random.default_rng(42),
-)
-
-effect = mean_improvement(baseline_loss, candidate_loss)
-interval = result.confidence_interval
-```
-
-SciPy's `paired=True` applies the same resampled indices to both arrays.
-Its BCa method adjusts interval endpoints for estimated bias and skew.
-Percentile and basic intervals are also available.
-The method choice and library version belong in the evaluation configuration because interval
-methods can differ.
-
-### Recalculate The Entire Metric Inside Every Resample
-
-For recall, F1, AUC, or NDCG, the statistic should receive labels and both prediction sets.
-It recalculates each whole metric inside every resample.
-Reusing a formula designed for mean row losses can give the wrong uncertainty for a
-non-decomposable metric.
-
-The number of resamples controls Monte Carlo noise in the computation.
-Increasing 2,000 resamples to 20,000 can stabilize the estimated endpoints.
-It does not add independent users, positive labels, sites, or time periods to the evaluation
-evidence.
-
-Bootstrap intervals also rely on the observed sample representing the target population and on
-an appropriate resampling scheme.
-Small samples, rare outcomes, boundary statistics, and very few independent clusters deserve
-extra statistical review.
-The bootstrap is a method with assumptions, not a certificate attached to any metric.
-
-## What A Paired Permutation Test Can Tell You
-<!-- section-summary: A paired permutation test measures how unusual the observed effect would be under a registered exchangeability null, while an interval estimates effect size and precision. -->
-
-A confidence interval and a paired permutation test use the same paired evidence to answer
-different questions.
-Keeping those questions separate prevents a p-value from replacing the effect size, its
-precision, and the product decision.
-
-The interval asks: **What range of candidate effects is compatible with this sample and
-procedure?**
-It keeps effect size visible.
-
-A paired permutation or randomization test asks: **How extreme would the observed statistic look
-if baseline and candidate assignments were exchangeable within each pair under the null
-hypothesis?**
-For two systems, the procedure randomly swaps their values inside each pair and recalculates the
-statistic.
-
-```mermaid
-flowchart TD
-    A["Observed paired data"] --> B["Confidence interval"]
-    A --> C["Paired permutation test"]
-    B --> D["Estimate effect range<br/>and precision"]
-    C --> E["Generate a null distribution<br/>by within-pair swaps"]
-    D --> F["Supports practical and<br/>safety boundary decisions"]
-    E --> G["Measures extremeness<br/>under the registered null"]
-
-    class A data
-    class B,C method
-    class D,E answer
-    class F,G use
-```
-
-SciPy represents this paired assignment question with `permutation_type="samples"`:
-
-```python
-from scipy.stats import permutation_test
-
-test = permutation_test(
-    data=(baseline_loss, candidate_loss),
-    statistic=mean_improvement,
-    permutation_type="samples",
-    alternative="two-sided",
-    n_resamples=20_000,
-    rng=np.random.default_rng(42),
-)
-```
-
-The p-value is the proportion of null-distribution statistics at least as extreme as the
-observed statistic, using the implementation's stated convention.
-It is not the probability that the null hypothesis is true.
-It is not the probability that the candidate will succeed in production.
-It also says little about whether the effect is large enough to matter.
-
-A huge evaluation set can produce a small p-value for a tiny effect.
-A confidence interval plus a practical threshold communicates that situation more directly.
-A predeclared permutation test can still serve as a useful consistency check or support a formal
-hypothesis-testing policy.
-
-The exchangeability assumption matters.
-Within-pair swaps should represent the null assignment mechanism.
-Clustered or time-dependent data may require cluster-level swaps or another design-specific
-procedure.
-
-## Resample Whole Users, Sessions, Or Sites When Rows Are Related
-<!-- section-summary: The resampling unit should match the source of independent variation so repeated users, sessions, sites, and nearby time periods remain together. -->
-
-Ordinary row bootstrap treats rows as independent draws.
-Production data often violates that picture.
-The resulting interval can look far more precise than the evidence supports.
-
-One user can create hundreds of requests.
-Requests inside a session share intent and device conditions.
-Predictions from the same store-day share staffing and inventory.
-Traffic from nearby hours shares campaigns, weather, and outages.
-Treating those related rows as hundreds of independent facts usually makes an interval too
-narrow.
-
-The resampling unit should carry the dependence.
-For repeated users, sample users with replacement and include all selected users' rows.
-For session-level dependence, sample sessions.
-For a site-day effect, sample site-day clusters.
-For serial dependence, resample contiguous time blocks long enough to preserve the relevant
-correlation.
-
-```mermaid
-flowchart TD
-    A["Rows in the evaluation set"] --> B{"What creates shared variation?"}
-    B -->|"Repeated activity by one person"| C["User cluster"]
-    B -->|"Several requests in one task"| D["Session cluster"]
-    B -->|"Shared site operations"| E["Site-day cluster"]
-    B -->|"Nearby observations move together"| F["Contiguous time block"]
-    C --> G["Sample clusters with replacement<br/>and keep all paired rows together"]
-    D --> G
-    E --> G
-    F --> G
-
-    class A rows
-    class B question
-    class C,D,E,F cluster
-    class G action
-```
-
-### How Cluster Bootstrap Keeps Related Rows Together
-
-This is a **cluster bootstrap**.
-It preserves dependence inside each sampled cluster while treating clusters as the independent
-units represented by the evaluation design.
-Candidate and baseline results stay paired inside every cluster.
-
-Cluster choice also changes the estimand's weighting.
-If users are sampled and every request is concatenated, users with more requests still
-contribute more to a request-weighted metric.
-If each user should receive one vote, calculate a user-level effect first and resample those
-user effects.
-The evaluation contract must say whether it estimates an average request, average user, average
-site, or another target.
-
-### Few clusters still mean limited evidence
-
-Nested and crossed dependence can need more specialised methods.
-Sessions may sit inside users, while requests also share calendar-day conditions.
-A subject-matter expert and statistician should choose a design that reflects the dominant
-source or uses an appropriate multi-level method.
-
-Very few clusters limit what resampling can learn.
-Ten thousand rows from six sites still provide only six site-level units.
-More resamples repeat those six sites in different combinations.
-Additional sites, longer time coverage, or a narrower release claim supplies stronger evidence.
+It is tempting to conclude:
+
+$$
+\boxed{\text{B is better}}
+$$
+
+But the observed difference is only:
+
+$$
+0.4\text{ percentage points}
+$$
+
+Would B still win if we happened to receive a slightly different sample of users, transactions, queries, or patients? That is the problem of **statistical uncertainty**. An offline evaluation score is not usually the model's exact performance in the world. It is an estimate based on a finite sample. The first-principles picture is:
+
+$$
+\boxed{
+\text{Observed model difference}
+=
+\text{real difference}
++
+\text{sampling variation}
+}
+$$
+
+Statistical comparison tries to determine how much of the observed difference could plausibly come from sampling variation. Suppose the real deployment population contains millions of possible examples. Ideally, we would like to know:
+
+$$
+\mu = E[L(Y,f(X))]
+$$
+
+where $$L$$ measures prediction loss. This is the model's expected performance over the population we care about. But we cannot evaluate every possible future example. Instead we have a test sample:
+
+$$
+D=\{(x_1,y_1),\ldots,(x_n,y_n)\}
+$$
+
+and calculate:
+
+$$
+\hat\mu
+=
+\frac1n\sum_{i=1}^{n}L(y_i,f(x_i))
+$$
+
+The important distinction is:
+
+$$
+\boxed{\mu=\text{population quantity we want}}
+$$
+
+while:
+
+$$
+\boxed{\hat\mu=\text{quantity we observed on our sample}}
+$$
+
+Usually:
+
+$$
+\hat\mu\neq\mu
+$$
+
+exactly. The question is how uncertain $$\hat\mu$$ is as an estimate of $$\mu$$. Imagine evaluating a fraud classifier on 10,000 transactions. You obtain:
+
+$$
+Recall=84.1\%
+$$
+
+Now imagine history had unfolded slightly differently and your test set contained another 10,000 representative transactions. Perhaps you would get:
+
+$$
+83.5\%
+$$
+
+Or:
+
+$$
+84.8\%
+$$
+
+Or:
+
+$$
+82.9\%
+$$
+
+The model has not changed. The population has not necessarily changed. Only the particular finite sample changed. This is **sampling variation**.
+
+Conceptually:
+
+$$
+D_1\rightarrow\hat\mu_1
+$$
+
+$$
+D_2\rightarrow\hat\mu_2
+$$
+
+$$
+D_3\rightarrow\hat\mu_3
+$$
+
+Different representative datasets produce slightly different measured scores. Statistical uncertainty describes this instability. Suppose true classification accuracy is somewhere near 90%. If you evaluate only:
+
+$$
+n=20
+$$
+
+examples, the measured accuracy can jump substantially depending on which examples you happen to sample. With:
+
+$$
+n=1{,}000{,}000
+$$
+
+the estimate will usually be much more stable. Very roughly, many standard errors shrink proportional to:
+
+$$
+\frac{1}{\sqrt n}
+$$
+
+This has an important consequence. To cut sampling uncertainty approximately in half, you often need around:
+
+$$
+4\times
+$$
+
+as many independent observations. So collecting twice as much data does not generally halve uncertainty. This distinction is fundamental. Suppose your confidence interval is extremely narrow:
+
+$$
+[91.47\%,91.53\%]
+$$
+
+That tells you the metric was measured very precisely **under the assumptions of the evaluation design**. It does not prove that the number represents production. For example, the test data might:
+
+* come from the wrong population,
+* contain data leakage,
+* contain systematically incorrect labels,
+* omit important users,
+* use future information,
+* be months out of date.
+
+Then you can obtain:
+
+$$
+\boxed{\text{a very precise estimate of the wrong thing}}
+$$
+
+More data fixes sampling noise. It does not automatically fix bias. A useful mental decomposition is:
+
+$$
+\text{Evaluation error}
+\approx
+\text{sampling variation}
++
+\text{systematic bias}
+$$
+
+### Sampling variation
+
+Arises because we observed only a finite sample. Methods such as confidence intervals, bootstrap procedures, and hypothesis tests can help quantify it.
+
+### Systematic bias
+
+Arises because the evaluation process itself does not represent the target problem. Examples:
+
+* selection bias,
+* label bias,
+* temporal leakage,
+* missing populations,
+* inappropriate metrics,
+* deployment distribution shift.
+
+A confidence interval usually does **not** protect you from these problems. This is why statistical sophistication cannot rescue a badly constructed evaluation set. Before calculating uncertainty, ask:
+
+What exactly is the population quantity we care about
+
+This is sometimes called the **estimand**. Suppose you are measuring error. Possible estimands include:
+
+$$
+E[\text{absolute error}]
+$$
+
+$$
+E[\text{absolute error}\mid\text{new customers}]
+$$
+
+$$
+P(\text{correct classification})
+$$
+
+$$
+Recall
+$$
+
+$$
+NDCG@10
+$$
+
+$$
+P_{99}(\text{latency})
+$$
+
+These are different population quantities. Likewise, "Model B improves over Model A" needs a precise definition. For a loss metric, perhaps:
+
+$$
+\Delta
+=
+E[L_B-L_A]
+$$
+
+For an accuracy-like metric where larger is better:
+
+$$
+\Delta
+=
+E[M_B-M_A]
+$$
+
+Until $$\Delta$$ is clearly defined, there is nothing precise for a statistical test or confidence interval to estimate.
+
+## Why Should Candidate and Baseline Models Be Compared on the Same Examples?
+<!-- section-summary: The release quantity is usually the candidate-minus-baseline difference, and paired evaluation removes variation shared by both models on the same cases. -->
+
+Because release decisions compare systems, the relevant estimate is their difference on the same examples rather than two isolated scores.
+
+Suppose:
+
+$$
+MAE_A=10.4
+$$
+
+and:
+
+$$
+MAE_B=10.1
+$$
+
+You could separately calculate uncertainty around each score. But the actual release question is usually:
+
+$$
+\boxed{\text{How much better or worse is B than A?}}
+$$
+
+Define:
+
+$$
+\Delta=MAE_B-MAE_A
+$$
+
+Then:
+
+$$
+\Delta=-0.3
+$$
+
+Since lower MAE is better, negative values favor B. The quantity you should estimate uncertainty around is often:
+
+$$
+\boxed{\Delta}
+$$
+
+rather than the two scores independently. Suppose Model A and Model B are evaluated on exactly the same $$n$$ examples. For example $$i$$, calculate:
+
+$$
+L_{A,i}
+$$
+
+and:
+
+$$
+L_{B,i}
+$$
+
+Then define a per-example difference:
+
+$$
+d_i=L_{B,i}-L_{A,i}
+$$
+
+Now the overall difference is:
+
+$$
+\bar d
+=
+\frac1n\sum_i d_i
+$$
+
+This is a **paired comparison**. Why is pairing powerful? Because each model faced the same example. If example 17 was extremely difficult, it probably hurt both models. The comparison directly asks:
+
+$$
+\boxed{\text{On this same case, which model did better?}}
+$$
+
+rather than letting variation in example difficulty contaminate the comparison. Imagine two models are evaluated on different datasets. Model A receives mostly easy cases. Model B receives mostly difficult cases. Their score difference reflects both:
+
+$$
+\text{model quality}
+$$
+
+and:
+
+$$
+\text{dataset difficulty}
+$$
+
+With paired evaluation:
+
+$$
+(x_i,y_i)
+$$
+
+is identical for both models. So much of the variation caused by example difficulty cancels when we compute:
+
+$$
+d_i=L_{B,i}-L_{A,i}
+$$
+
+This often makes paired comparisons considerably more statistically efficient. Hence the general rule:
+
+$$
+\boxed{
+\text{When possible, compare candidate and baseline on exactly the same evaluation units.}
+}
+$$
+
+Suppose absolute errors are:
+
+| Example | Model A | Model B | $$B-A$$ |
+| ------: | ------: | ------: | ------: |
+|       1 |      10 |       8 |      -2 |
+|       2 |      30 |      29 |      -1 |
+|       3 |       5 |       6 |      +1 |
+|       4 |      20 |      15 |      -5 |
+|       5 |       8 |       7 |      -1 |
+
+The differences are:
+
+$$
+[-2,-1,+1,-5,-1]
+$$
+
+Average:
+
+$$
+\bar d
+=
+\frac{-8}{5}
+=
+-1.6
+$$
+
+So B reduces absolute error by:
+
+$$
+1.6
+$$
+
+units on average. But the paired differences show more than the aggregate MAE values. We see that B improves four examples and worsens one. This per-unit comparison is the raw material for many statistical procedures. Suppose we estimate:
+
+$$
+\Delta=-1.6
+$$
+
+with a 95% confidence interval:
+
+$$
+[-2.4,-0.8]
+$$
+
+The interval represents uncertainty in our estimate of the population effect. The precise frequentist interpretation is:
+
+If we repeatedly sampled new datasets from the same population and constructed intervals using this procedure, approximately 95% of those intervals would contain the true population difference.
+
+It is common informally to say:
+
+"The plausible range is roughly -2.4 to -0.8."
+
+That can be useful intuition. But a classical 95% confidence interval does not literally mean that the already-fixed unknown parameter has a 95% probability of lying inside this particular realized interval. Confidence intervals become easier to understand through an imaginary experiment. Suppose the true difference is:
+
+$$
+\Delta^*
+$$
+
+Repeatedly:
+
+1. sample a new evaluation dataset,
+2. evaluate A and B,
+3. calculate $$\hat\Delta$$,
+4. construct a 95% confidence interval.
+
+You obtain:
+
+$$
+CI_1,\ CI_2,\ CI_3,\ldots
+$$
+
+About:
+
+$$
+95\%
+$$
+
+of those intervals should contain:
+
+$$
+\Delta^*
+$$
+
+if the statistical assumptions and interval procedure are appropriate. You usually only have one real test set. Resampling methods try to approximate aspects of this repeated-sampling behavior using the data you have. Consider:
+
+$$
+\Delta=+0.8
+$$
+
+with interval:
+
+$$
+[+0.7,+0.9]
+$$
+
+The effect is estimated fairly precisely. Compare:
+
+$$
+\Delta=+0.8
+$$
+
+with:
+
+$$
+[-1.2,+2.8]
+$$
+
+The point estimate is identical. But the second experiment contains much less information about the true difference. A confidence interval communicates two things at once:
+
+$$
+\boxed{\text{estimated effect size}}
+$$
+
+and:
+
+$$
+\boxed{\text{precision of that estimate}}
+$$
+
+That is usually much more informative than reporting a point estimate alone.
 
 ![Paired bootstrap resamples the same request indices for baseline and candidate and lifts related rows into whole clusters](/content-assets/articles/article-mlops-model-evaluation-statistical-uncertainty-paired-comparisons/paired-resampling.png)
 
 *Pairing preserves the replacement comparison, while the resampling unit preserves the users, sessions, sites, or time blocks that share variation.*
 
-## Sample Important Rare Groups Deliberately
-<!-- section-summary: Stratified evaluation preserves important population groups, while weighting and segment-specific reports keep oversampling from distorting the overall effect. -->
+## How Do Paired Bootstrap and Permutation Tests Measure a Difference?
+<!-- section-summary: A paired bootstrap estimates the distribution of metric differences, while a paired permutation test examines whether labels A and B are exchangeable under no effect. -->
 
-An evaluation sample can be representative overall and still contain too little evidence for an
-important rare segment.
-A language group may account for 1 percent of traffic.
-A severe positive outcome may occur in 0.2 percent of cases.
-Random sampling alone can leave only a handful of examples.
+That paired structure supports resampling and randomization methods that quantify or test the observed difference.
 
-**Stratification** divides the population into declared groups and samples within each group.
-It can ensure that every important region, language, outcome class, or device type appears in
-the evaluation set.
-Resampling then occurs within those strata so the bootstrap respects the sampling design.
+Many model metrics have complicated sampling distributions. Examples include:
 
-Oversampling a rare segment changes its share in the evaluation data.
-The overall estimate should use weights that restore the intended production population.
-The segment report can present the segment's own unweighted effect and interval.
-The sampling manifest records both the selection probability and the target weight.
+* F1,
+* NDCG,
+* MAP,
+* median error,
+* differences between nonlinear metrics.
 
-```mermaid
-flowchart TD
-    A["Target population"] --> B["Common segment"]
-    A --> C["Rare safety segment"]
-    B --> D["Sample enough common units"]
-    C --> E["Oversample rare units<br/>for direct evaluation"]
-    D --> F["Weight overall estimate<br/>back to target population"]
-    E --> F
-    E --> G["Report rare segment separately<br/>with support and interval"]
+The bootstrap provides a flexible way to estimate uncertainty without deriving a custom analytic formula for each metric. Suppose the evaluation set has:
 
-    class A population
-    class B,C segment
-    class D,E sample
-    class F,G report
-```
+$$
+N
+$$
 
-Duplicating the same rare rows creates no new independent evidence.
-It may make a naive row count look large while preserving the same few people or events.
-The report needs unique-unit counts, positive-label counts, cluster counts, and label coverage.
+independent units. The paired bootstrap works roughly like this.
 
-Rare-segment intervals can remain wide even after careful sampling.
-That result is informative.
-The team can collect more evidence, narrow the initial release scope, retain a fallback for that
-segment, or require human review.
-An unstable segment estimate should remain visible instead of disappearing inside a strong
-overall average.
+### Step 1
 
-## Separate Practical Importance From Statistical Evidence
-<!-- section-summary: Statistical evidence describes precision and compatibility, while practical thresholds define the amount of benefit or harm that matters to the product. -->
+Evaluate both models on every unit.
 
-**Statistical significance** concerns how compatible the observed result is with a formal null
-hypothesis under a chosen procedure.
-**Practical significance** asks whether the effect is large enough to change a product or
-operational decision.
+### Step 2
 
-With millions of independent requests, an improvement of 0.01 percentage points may have a tiny
-p-value and a very narrow interval.
-The change may still be too small to justify a slower model, migration risk, additional GPUs, or
-retraining cost.
+Sample:
 
-The reverse situation also occurs.
-A candidate may show a meaningful 4-point improvement for a rare high-risk segment, with a wide
-interval because only a small number of mature outcomes exist.
-The right action may be more targeted evidence or a guarded pilot.
-Calling the result “no effect” would ignore its practical size and uncertainty.
+$$
+N
+$$
 
-A release policy can use two product boundaries:
+units **with replacement** from the original evaluation set. For example, one bootstrap sample might contain:
 
-- The **minimum useful effect** is the smallest gain that justifies the change.
-- The **non-inferiority or safety margin** is the largest regression the product can tolerate for a protected outcome.
+$$
+[3,7,7,1,9,3,\ldots]
+$$
 
-Assume the effect is defined so positive values mean improvement.
-Set the unacceptable-harm boundary at `-0.2` minutes and the minimum useful improvement at `+0.5`
-minutes.
-These boundaries create four decisions.
+Some original units appear multiple times. Others do not appear at all.
 
-An interval of `[-1.1, -0.4]` lies wholly below the safety boundary.
-It supports an unacceptable regression and fails the gate.
+### Step 3
 
-An interval of `[-0.5, +0.8]` crosses the safety boundary.
-Useful improvement remains possible, but the interval also includes unacceptable harm.
-The evaluation cannot rule out that harm, so the team restricts exposure or collects more
-evidence.
+For that bootstrap sample, compute both model metrics:
 
-An interval of `[0.0, +0.3]` lies entirely above the safety boundary and entirely below the
-minimum useful effect.
-It supports safety at the registered margin, while the gain is too small for the benefit gate.
-An interval of `[-0.1, +1.1]` also clears the safety boundary, yet its lower bound does not clear
-the useful-effect floor.
-That wider result leaves the amount of benefit unresolved.
+$$
+M_A^{(b)}
+$$
 
-Only an interval whose lower bound exceeds `+0.5` supports the benefit gate.
-For example, `[+0.7, +1.4]` shows that even the lower endpoint exceeds the minimum useful
-improvement.
+and:
+
+$$
+M_B^{(b)}
+$$
+
+and their difference:
+
+$$
+\Delta^{(b)}
+=
+M_B^{(b)}-M_A^{(b)}
+$$
+
+### Step 4
+
+Repeat many times:
+
+$$
+b=1,\ldots,B
+$$
+
+producing:
+
+$$
+\Delta^{(1)},\Delta^{(2)},\ldots,\Delta^{(B)}
+$$
+
+This approximates the sampling distribution of the difference. Suppose you bootstrap Model A's examples independently from Model B's examples. You destroy the relationship:
+
+$$
+\text{A and B evaluated the same case}
+$$
+
+Instead, each bootstrap draw should select a unit and bring along **both models' outcomes for that unit**. If unit 17 is drawn three times, then:
+
+$$
+(A_{17},B_{17})
+$$
+
+appears three times. That preserves the paired experiment. Formally:
+
+$$
+\boxed{
+\text{resample evaluation units, not model results independently}
+}
+$$
+
+Suppose 10,000 bootstrap repetitions produce:
+
+$$
+\Delta^{(1)},\ldots,\Delta^{(10000)}
+$$
+
+A simple percentile interval uses the:
+
+$$
+2.5\text{th percentile}
+$$
+
+and:
+
+$$
+97.5\text{th percentile}
+$$
+
+For example:
+
+$$
+95\%\,CI=[0.3,0.9]
+$$
+
+for an accuracy improvement measured in percentage points. That means the resampling procedure suggests uncertainty roughly within that range. More sophisticated bootstrap intervals exist, but the core idea remains:
+
+$$
+\boxed{
+\text{simulate plausible resamples}
+\rightarrow
+\text{observe how the model difference varies}
+}
+$$
+
+This limitation is critical. Suppose your test set contains only desktop users but production is 80% mobile. Bootstrapping the desktop users 100,000 times does not create mobile users. Likewise, bootstrapping cannot fix:
+
+* systematic label errors,
+* temporal leakage,
+* missing rare cases,
+* dataset shift,
+* incorrect metric definitions.
+
+The bootstrap estimates uncertainty around the empirical population represented by your data. It does not magically make the underlying evidence valid. A confidence interval estimates an effect and its uncertainty. A hypothesis test typically asks whether the observed effect would be surprising under some null hypothesis. For a paired comparison, imagine the null hypothesis says that A and B are exchangeable for each evaluation unit. For each unit, we have:
+
+$$
+(A_i,B_i)
+$$
+
+Under the null, we may randomly swap:
+
+$$
+A_i\leftrightarrow B_i
+$$
+
+Then recalculate the difference. Repeat this many times. This generates a **null distribution**:
+
+$$
+\Delta_{\text{null}}^{(1)},
+\ldots,
+\Delta_{\text{null}}^{(B)}
+$$
+
+The question becomes:
+
+If A and B really had no relevant systematic difference under this null, how often would random swapping produce a difference at least as extreme as the one we observed
+
+Suppose B wins on almost every example. Observed differences might be:
+
+$$
+[-2,-4,-1,-3,-5,-2,\ldots]
+$$
+
+where negative means B has lower loss. If A and B were genuinely exchangeable, randomly swapping their labels within each pair would cause positive and negative differences to appear much more symmetrically. Obtaining an overwhelmingly one-sided result would then be unusual. Permutation testing formalizes that intuition. The important advantage is that the pairing structure is preserved. Suppose a paired permutation test gives:
+
+$$
+p=0.003
+$$
+
+Roughly speaking, under the specified null hypothesis and randomization assumptions, results this extreme would be unusual. It does **not** mean:
+
+$$
+P(\text{null is true})=0.003
+$$
+
+And it does not tell you whether the difference is useful.
+
+For example:
+
+$$
+\Delta=0.001\%
+$$
+
+could become statistically detectable with an enormous dataset. That may have no practical importance. So:
+
+$$
+\boxed{
+\text{statistical evidence}
+\neq
+\text{practical importance}
+}
+$$
+
+## How Do Effect Size, Non-Inferiority, and the Correct Sampling Unit Guide Decisions?
+<!-- section-summary: Practical effect size and non-inferiority margins belong before significance, and resampling must preserve the genuinely independent user, query, patient, or time unit. -->
+
+Statistical machinery becomes useful only after the team states how large a change matters and identifies the unit that can be sampled independently.
+
+Suppose B improves accuracy by:
+
+$$
+0.02\text{ percentage points}
+$$
+
+with:
+
+$$
+p<10^{-8}
+$$
+
+The evidence that the difference is nonzero may be extremely strong. But perhaps deployment costs:
+
+$$
+£3\,\text{million}
+$$
+
+and the improvement has negligible value. Contrast that with:
+
+$$
++4\text{ percentage points}
+$$
+
+with a wide interval because the test sample is small. The second effect may be practically important even though the evidence is still uncertain. A good evaluation therefore reports:
+
+$$
+\boxed{\text{effect size}}
+$$
+
+$$
+\boxed{\text{confidence interval}}
+$$
+
+and, where useful:
+
+$$
+\boxed{\text{hypothesis-test result}}
+$$
+
+rather than treating a p-value as the central answer. Suppose the organization decides that switching models is worthwhile only if recall improves by at least:
+
+$$
+2\text{ percentage points}
+$$
+
+Define:
+
+$$
+\delta_{\min}=2
+$$
+
+Now the question is no longer merely:
+
+$$
+H_0:\Delta=0
+$$
+
+Instead, the decision concerns:
+
+$$
+\boxed{\Delta\ge\delta_{\min}}
+$$
+
+This distinction is powerful. A model can be statistically better than baseline while still failing to be sufficiently better to justify deployment. Suppose larger values are better and the minimum useful improvement is:
+
+$$
+\delta_{\min}=1
+$$
+
+percentage point.
+
+### Case A
+
+$$
+\hat\Delta=2.0
+$$
+
+$$
+95\%\,CI=[1.4,2.6]
+$$
+
+The entire interval lies above the required improvement:
+
+$$
+1.4>1
+$$
+
+Evidence strongly supports an improvement large enough to matter.
+
+### Case B
+
+$$
+\hat\Delta=2.0
+$$
+
+$$
+95\%\,CI=[-0.5,4.5]
+$$
+
+The point estimate looks promising, but the evidence is highly uncertain.
+
+### Case C
+
+$$
+\hat\Delta=0.4
+$$
+
+$$
+95\%\,CI=[0.2,0.6]
+$$
+
+There is strong evidence that B improves the metric, but also strong evidence that the gain is smaller than the required:
+
+$$
+1
+$$
+
+percentage point. These are three very different situations. Sometimes a new model is desirable for another reason:
+
+* much lower latency,
+* lower cost,
+* smaller memory footprint,
+* easier operation.
+
+You may not need it to improve predictive quality. Instead you might require that it not worsen quality by more than an acceptable margin. Suppose:
+
+$$
+\delta=0.5\%
+$$
+
+is the maximum acceptable accuracy reduction. Then you might ask whether the evidence supports:
+
+$$
+\Delta>-0.5\%
+$$
+
+rather than:
+
+$$
+\Delta>0
+$$
+
+This is a **non-inferiority** style question. Again, the statistical hypothesis should match the actual decision. Many simple statistical procedures implicitly imagine observations like:
+
+$$
+Z_1,Z_2,\ldots,Z_n
+$$
+
+are approximately independent. But production datasets often violate this. Suppose one user generates:
+
+$$
+100
+$$
+
+rows. Those 100 observations may be highly correlated. Treating them as 100 independent users exaggerates how much information you have. Similarly:
+
+* several page views belong to one session,
+* multiple scans belong to one patient,
+* many transactions belong to one merchant,
+* multiple measurements belong to one site,
+* several queries belong to one user.
+
+This is called **clustered** or hierarchical data. Suppose evaluation data looks like:
+
+$$
+\text{user}
+\rightarrow
+\text{sessions}
+\rightarrow
+\text{requests}
+$$
+
+If the deployment question concerns performance across users and requests from the same user are correlated, a sensible bootstrap may resample:
+
+$$
+\boxed{\text{whole users}}
+$$
+
+not individual requests. When a user is selected, include that user's relevant rows together. Similarly:
+
+$$
+\text{hospital}
+\rightarrow
+\text{patients}
+$$
+
+might require resampling hospitals if hospital-level dependence is important. The core rule is:
+
+$$
+\boxed{
+\text{Resample at the level corresponding to the independent sampling process you want to generalize over.}
+}
+$$
+
+Imagine:
+
+$$
+100
+$$
+
+users each generate:
+
+$$
+1000
+$$
+
+events. There are:
+
+$$
+100{,}000
+$$
+
+rows. A naïve analysis might behave as if:
+
+$$
+n=100{,}000
+$$
+
+independent observations exist. But if events from each user are extremely similar, the effective information may be much closer to:
+
+$$
+100
+$$
+
+independent units than 100,000. Using individual rows can therefore produce confidence intervals that are far too narrow. The result looks highly precise only because dependence was ignored. Suppose a forecasting model predicts hourly electricity demand. Errors at:
+
+$$
+10{:}00,\ 11{:}00,\ 12{:}00
+$$
+
+are likely correlated. Randomly resampling individual hours may destroy the temporal dependence structure. Possible approaches include resampling larger temporal blocks:
+
+$$
+\boxed{\text{days, weeks, or contiguous blocks}}
+$$
+
+depending on the process. The principle remains the same:
+
+Preserve the important dependence structure during uncertainty estimation.
+
+## How Do Rare Groups, Repeated Comparisons, and Test Reuse Distort Certainty?
+<!-- section-summary: Rare groups need targeted data, repeated comparisons need multiplicity control, and reused test sets can become adaptively overfit. -->
+
+Real evaluation sets add rare groups, repeated experiments, and test reuse, all of which can make apparently precise evidence misleading.
+
+Suppose:
+
+$$
+99.8\%
+$$
+
+of traffic belongs to common cases and only:
+
+$$
+0.2\%
+$$
+
+belongs to an important rare category. A purely random evaluation sample of:
+
+$$
+10{,}000
+$$
+
+examples might contain only about:
+
+$$
+20
+$$
+
+rare examples on average. That is usually far too little for precise segment-level evaluation. The overall sample can be large while uncertainty for the rare group remains enormous. If a rare segment is operationally important, deliberately collect more cases from it. Instead of accepting:
+
+$$
+20
+$$
+
+examples, perhaps construct an evaluation set containing:
+
+$$
+1{,}000
+$$
+
+rare examples. Now segment metrics can be estimated much more precisely. But there is an important distinction. If your goal is the **segment-specific metric**:
+
+$$
+M_{\text{rare}}
+$$
+
+oversampling is fine. If you want an **overall production metric**, the artificial sampling proportions must usually be accounted for with appropriate weighting. Otherwise the test-set metric describes the oversampled test population rather than real traffic. Suppose production traffic is:
+
+$$
+95\%\text{ group A}
+$$
+
+and:
+
+$$
+5\%\text{ group B}
+$$
+
+But the evaluation set intentionally uses:
+
+$$
+50\%-50\%
+$$
+
+sampling. An unweighted test-set average gives both groups equal importance. That answers:
+
+How does performance look in an equally weighted two-group population
+
+It does not answer:
+
+What is expected performance under production traffic
+
+For production-weighted performance, you might need:
+
+$$
+M
+=
+0.95M_A+0.05M_B
+$$
+
+Both evaluations can be useful. They simply estimate different things. Suppose certain segments are known to differ strongly. Rather than drawing a simple random sample, you can deliberately sample within strata:
+
+$$
+S_1,S_2,\ldots,S_K
+$$
+
+For example:
+
+* geography,
+* rare event type,
+* customer category,
+* target range.
+
+Then calculate segment-specific estimates and appropriately combine them. This can give much more useful information than allowing common easy cases to consume nearly the entire evaluation budget. Evaluation-set design is therefore part of statistical efficiency. Suppose the baseline and one candidate are equally good. You perform one statistical test at:
+
+$$
+\alpha=0.05
+$$
+
+There is some controlled chance of a false positive under the test's assumptions. Now imagine evaluating:
+
+$$
+100
+$$
+
+candidate models and selecting whichever appears best. Even if none is truly better, some candidates may look impressive purely because of random variation. This is the **multiple comparisons** problem. More generally:
+
+$$
+\boxed{
+\text{The more opportunities you give noise to look interesting, the more often it will.}
+}
+$$
+
+Suppose you evaluate one model using:
+
+* accuracy,
+* precision,
+* recall,
+* F1,
+* ROC-AUC,
+* PR-AUC,
+
+across:
+
+* 12 segments,
+
+at:
+
+* 5 thresholds.
+
+That creates many possible comparisons. If you look through all results and announce whichever one happened to improve, your evidence is much weaker than the final number suggests. This is why defining:
+
+* primary metric,
+* key segments,
+* thresholds,
+* release rule,
+
+**before** examining results is valuable. Pre-specification reduces accidental cherry-picking. Suppose your team evaluates Model 1 on the test set. Then uses its failures to build Model 2. Then examines Model 2 on the same test set. Then builds Model 3 based on those results. Eventually, the "test set" is influencing model development. Even if nobody directly trains on its labels, repeated adaptive decisions leak information from the test set into the modeling process.
+
+Conceptually:
+
+$$
+\text{test results}
+\rightarrow
+\text{development choices}
+\rightarrow
+\text{new model}
+$$
+
+The test set is no longer completely independent of model selection. This can make final performance estimates overly optimistic. A genuinely untouched final evaluation set remains valuable. Different methods address different settings. A simple conservative method is **Bonferroni correction**. If you want an overall error rate around:
+
+$$
+\alpha=0.05
+$$
+
+across:
+
+$$
+m
+$$
+
+tests, test each one against roughly:
+
+$$
+\frac{\alpha}{m}
+$$
+
+For:
+
+$$
+m=10
+$$
+
+that gives:
+
+$$
+0.005
+$$
+
+Other procedures, such as Holm's method or false-discovery-rate approaches, can be less conservative depending on the goal. But the deeper principle matters more than memorizing procedures:
+
+$$
+\boxed{
+\text{Your uncertainty calculation should account for how many chances you gave yourself to discover an apparent win.}
+}
+$$
+
+Suppose the true improvement is tiny:
+
+$$
+\Delta=0.0001
+$$
+
+With an enormous dataset, you may detect it with extremely strong statistical evidence. Conversely, a substantial real improvement may fail to reach a conventional significance threshold with a very small dataset. So:
+
+$$
+\boxed{
+\text{“statistically significant” does not mean “large”}
+}
+$$
+
+and:
+
+$$
+\boxed{
+\text{“not statistically significant” does not prove “no difference”}
+}
+$$
+
+A nonsignificant result may simply mean the experiment lacked enough information to distinguish plausible effects. Confidence intervals make this much easier to see. Suppose larger metric values are better. You can often classify evidence into three conceptual zones.
+
+### Clear useful improvement
+
+For example:
+
+$$
+95\%\,CI=[+2.0,+3.5]
+$$
+
+and the minimum meaningful improvement is:
+
+$$
++1
+$$
+
+The plausible effects all comfortably exceed the practical threshold.
+
+### Clearly insufficient improvement
+
+For example:
+
+$$
+95\%\,CI=[+0.1,+0.5]
+$$
+
+The effect may be positive, but it is smaller than what matters.
+
+### Uncertain
+
+For example:
+
+$$
+95\%\,CI=[-1,+4]
+$$
+
+The data are compatible with meaningful harm and meaningful benefit. These distinctions are often much more useful for engineering decisions than simply dividing results into:
+
+$$
+p<0.05
+$$
+
+versus:
+
+$$
+p\ge0.05
+$$
 
 ![Four confidence intervals lead to fail, inconclusive, safe-but-too-small, and pass decisions against declared product boundaries](/content-assets/articles/article-mlops-model-evaluation-statistical-uncertainty-paired-comparisons/interval-product-boundaries.png)
 
 *The interval supports a decision only after the safety boundary and minimum useful benefit are declared on the effect scale.*
 
-```mermaid
-flowchart TD
-    A["Effect interval [L, H]<br/>S = safety boundary<br/>B = useful-benefit floor"] --> B{"Does upper endpoint H<br/>fall below S?"}
-    B -->|"Yes"| C["Whole interval supports<br/>unacceptable harm<br/>Fail"]
-    B -->|"No"| D{"Does lower endpoint L<br/>touch or fall below S?"}
-    D -->|"Yes"| E["Unacceptable harm remains possible<br/>Restrict or collect evidence"]
-    D -->|"No"| F{"Does lower endpoint L<br/>exceed B?"}
-    F -->|"Yes"| G["Safety and benefit gates pass"]
-    F -->|"No"| H["Safety boundary cleared<br/>Useful benefit not established<br/>Hold, stage, or collect evidence"]
+## How Should Release Rules Use Intervals, Guardrails, Power, and Segment Uncertainty?
+<!-- section-summary: Release rules should combine effect intervals with practical margins, guardrails, sample power, and segment-specific uncertainty. -->
 
-    class A evidence
-    class B,D,F decision
-    class C,E stop
-    class G,H proceed
-```
+Release gates therefore need intervals and practical zones for both the main objective and the important guardrails and segments.
 
-The exact decisions depend on risk.
-A safety-critical guardrail may require a one-sided non-inferiority bound.
-A low-risk ranking improvement may proceed to a small online experiment after clearing a looser
-offline screen.
-The thresholds should be declared before the final holdout result appears.
+Suppose the main metric improves. But a safety-related error rate changes from:
 
-## Account For The Extra False Alarms Created By Many Comparisons
-<!-- section-summary: Predeclared comparison families and appropriate multiplicity control reduce the chance of selecting an attractive result from many noisy tests. -->
+$$
+0.10\%
+$$
 
-Every additional metric, threshold, time window, and segment creates another opportunity for a
-chance extreme result.
-If a team tries twenty independent null tests at the 5 percent level, the chance of at least one
-false rejection is much larger than 5 percent.
-This is the **multiple-comparisons problem**.
+to:
 
-### Group The Planned Comparisons Before Applying A Correction
+$$
+0.13\%
+$$
 
-Beginners do not need a catalogue of correction formulas to make a sound release review.
-They need a clear comparison hierarchy:
+Is that a real regression? Rare-event guardrails often have substantial statistical uncertainty. So you might calculate an interval for:
 
-1. Declare one primary effect that can support the main positive claim.
-2. Declare protected guardrails and safety segments with explicit failure boundaries.
-3. Mark extra slices and diagnostics as exploratory.
-4. Report the complete family, including weak and inconvenient results.
+$$
+\Delta_{\text{guardrail}}
+$$
 
-Formal control depends on the decision.
-The Holm procedure controls the family-wise error rate across a set of tests and works as a
-strong default for a small safety family.
-The Benjamini-Hochberg procedure controls the false discovery rate under its assumptions and may
-fit large exploratory screening families.
-Statsmodels exposes both through `statsmodels.stats.multitest.multipletests`.
+as well. This leads to a release framework such as:
 
-```mermaid
-flowchart TD
-    A["All planned comparisons"] --> B["Primary effect<br/>one main claim"]
-    A --> C["Safety family<br/>guardrails and protected segments"]
-    A --> D["Exploratory family<br/>hypothesis generation"]
-    B --> E["Effect interval and<br/>practical threshold"]
-    C --> F["Family-wise procedure<br/>or simultaneous bounds"]
-    D --> G["False-discovery procedure<br/>or descriptive intervals"]
-    E --> H["Release evidence"]
-    F --> H
-    G --> I["Investigation and<br/>future evaluation plan"]
+$$
+\text{primary metric improvement sufficiently supported}
+$$
 
-    class A family
-    class B,C,D group
-    class E,F,G method
-    class H,I result
-```
+and:
 
-### A Statistical Correction Cannot Repair Weak Or Cherry-Picked Evidence
+$$
+\text{no evidence compatible with unacceptable guardrail harm}
+$$
 
-Multiplicity control does not repair post-hoc metric shopping.
-A team that tests hundreds of unrecorded variants and presents one adjusted result has hidden
-the real search process.
-Candidate generation, threshold tuning, segment discovery, and final evaluation need separate
-data or a method that accounts for the full selection procedure.
+The precise decision rule should be defined before seeing candidate results whenever practical. Suppose larger is better. Let:
 
-Support still matters after adjustment.
-A corrected p-value cannot make five positive cases represent a stable segment.
-Every segment report needs support counts beside its effect and interval.
-Include the number of units, clusters, and outcomes.
-The report also states the comparison family.
+$$
+\Delta=M_{\text{candidate}}-M_{\text{baseline}}
+$$
 
-## Record Everything Needed To Reproduce The Comparison
-<!-- section-summary: A reproducible uncertainty report versions the dataset, labels, models, estimand, resampling procedure, code, and query-level or unit-level artifacts. -->
+Suppose the minimum worthwhile improvement is:
 
-Another engineer needs the full evaluation setup to reproduce a statistical comparison.
-The same predictions can produce different conclusions after a label revision, threshold change,
-weighting rule, cluster definition, or interval method.
+$$
+\delta=0.5
+$$
 
-The evaluation run should identify:
+A conservative promotion criterion could require:
 
-- candidate and baseline model versions;
-- feature, preprocessing, threshold, fallback, and policy versions;
-- dataset source, immutable snapshot, and content digest;
-- label definition, maturity window, and join coverage;
-- estimand, weighting, and effect direction;
-- resampling unit, strata, interval method, resample count, and random seed;
-- primary, guardrail, and exploratory comparison families;
-- code revision and locked dependency environment;
-- per-unit results, segment reports, intervals, and gate outcome.
+$$
+CI_{\text{lower}}(\Delta)>\delta
+$$
 
-MLflow Tracking can store the compact identity, metrics, and review artifacts.
-Dataset tracking can record source and digest metadata while governed storage retains sensitive
-row-level evidence.
+For a guardrail where regression greater than $$r$$ is unacceptable:
 
-```python
-import mlflow
+$$
+CI_{\text{lower}}(\Delta_{\text{guardrail}})>-r
+$$
 
-with mlflow.start_run(run_name="paired-candidate-evaluation"):
-    mlflow.log_params({
-        "candidate_model": candidate_version,
-        "baseline_model": baseline_version,
-        "estimand": "baseline_mae_minus_candidate_mae",
-        "resampling_unit": "user_id",
-        "interval_method": "paired_cluster_bootstrap_bca",
-        "confidence_level": 0.95,
-    })
-    mlflow.log_metrics({
-        "effect": effect,
-        "ci_low": ci_low,
-        "ci_high": ci_high,
-        "label_join_coverage": label_join_coverage,
-    })
-    mlflow.log_table(segment_results, "evaluation/segments.json")
-    mlflow.log_table(worst_pairs, "evaluation/worst_pairs.json")
-```
+The point is not that every organization must use exactly these rules. The important principle is:
 
-The run record should point to the exact evaluation manifest and release candidate.
-Mutable labels such as `candidate` or `champion` help discovery, while the decision record needs
-immutable versions or digests.
+$$
+\boxed{
+\text{Translate uncertainty into an explicit decision rule before looking at results.}
+}
+$$
 
-Random seeds support replay of an approximate resampling run.
-Reproducibility also requires the same row ordering, statistic implementation, library version,
-and missing-data policy.
-Two matching seeds cannot reconcile different datasets.
+Suppose an example is extremely easy. Both models get it right. Another example is extremely difficult. Both get it wrong. Their performances move together because they face the same examples. Thus:
 
-Security and privacy boundaries remain active.
-Per-user paired results and worst-case examples may contain sensitive identifiers or outcomes.
-Store detailed artifacts in governed locations and log access-controlled references where
-appropriate.
+$$
+M_A
+$$
 
-## Use Uncertainty To Pass, Fail, Or Delay A Release
-<!-- section-summary: An uncertainty-aware gate checks evidence validity, paired effects, practical bounds, protected segments, operational readiness, and rollback before authorizing a scope. -->
+and:
 
-A production gate converts uncertainty into an action.
-It needs at least three outcomes: pass, fail, and inconclusive.
-The inconclusive state protects teams from forcing weak evidence into a confident decision.
+$$
+M_B
+$$
 
-A versioned gate might look like:
+are correlated. If you separately calculate uncertainty for A and B and then treat them as independent, you can misestimate uncertainty in:
 
-```yaml
-paired_release_gate:
-  identity:
-    baseline_model: "arrival-model-v17"
-    candidate_model: "arrival-model-v18"
-    evaluation_manifest: "arrival-eval-v9@sha256:..."
+$$
+M_B-M_A
+$$
 
-  evidence:
-    label_join_coverage_min: 0.98
-    labels_mature: true
-    minimum_independent_clusters: 200
+Paired methods directly estimate the difference and naturally exploit this correlation. This is why paired evaluation is generally preferable when the models can be run on the same cases. Some metrics are calculated per request rather than per row. For ranking evaluation, for example:
 
-  primary:
-    estimand: "baseline_mae_minus_candidate_mae_minutes"
-    resampling_unit: "user_id"
-    confidence_level: 0.95
-    lower_bound_min: 0.5
+$$
+NDCG_i(A)
+$$
 
-  guardrails:
-    p95_absolute_error_regression_max: 0.2
-    protected_segment_method: "holm"
-    minimum_segment_outcomes: 100
+and:
 
-  rollout:
-    initial_traffic_percent: 5
-    rollback_model: "arrival-model-v17"
-    stop_on_label_or_join_failure: true
-```
+$$
+NDCG_i(B)
+$$
 
-The sample values illustrate the contract.
-Production thresholds come from user value, risk, operating cost, baseline variation, and the
-amount of exposure a canary can safely contain.
+can be computed for query $$i$$. Then define:
 
-The gate evaluates evidence in order:
+$$
+d_i
+=
+NDCG_i(B)-NDCG_i(A)
+$$
 
-```mermaid
-flowchart TD
-    A["Candidate evaluation starts"] --> B{"Evidence fresh, mature,<br/>complete, and comparable?"}
-    B -->|"No"| C["Block decision<br/>repair evidence"]
-    B -->|"Yes"| D{"Primary interval clears<br/>practical boundary?"}
-    D -->|"No, clear harm or tiny value"| E["Fail or hold"]
-    D -->|"Uncertain"| F["Collect evidence or<br/>authorize narrower study"]
-    D -->|"Yes"| G{"Segments and guardrails pass?"}
-    G -->|"No"| H["Investigate, repair,<br/>or restrict scope"]
-    G -->|"Yes"| I["Eligible for staged rollout"]
-    I --> J["Verify live identity, outcomes,<br/>stop signals, and rollback"]
+and bootstrap queries. For users:
 
-    class A start
-    class B,D,G gate
-    class C,E,H stop
-    class F,I,J proceed
-```
+$$
+M_u(A),\quad M_u(B)
+$$
 
-An unexpectedly wide interval starts an investigation.
-Check the number of independent clusters, outcome prevalence, label maturity, missing
-predictions, weighting, threshold stability, and population mixture.
-Increasing the resample count only reduces simulation noise.
-Additional representative units improve the evidence.
+can be paired by user. The central concept is not "pair individual rows." It is:
 
-A surprising disagreement between row-level and cluster-level intervals points to shared user,
-site, session, or time conditions.
-The cluster-aware result should drive a gate designed around that dependence.
-The gap itself is useful diagnostic evidence.
+$$
+\boxed{\text{pair the models on the same meaningful evaluation unit}}
+$$
 
-Passing an offline uncertainty gate usually authorizes the next evidence stage.
-Shadow traffic checks feature, latency, scoring, and identity behaviour.
-A limited canary tests outcomes under current production conditions.
-Live evidence can still reveal feedback effects, changed traffic, dependency failures, or
-label-pipeline problems.
+Suppose you're comparing F1 scores. F1 is:
 
-Rollback restores the complete retained decision path.
-That path can include the baseline model, feature definitions, preprocessing image, threshold
-policy, and fallback.
-The release record names the rollback identity and stop signals before traffic moves.
+$$
+F_1
+=
+2\frac{PR}{P+R}
+$$
 
-## The Main Idea
-<!-- section-summary: Reliable model comparison combines a precise effect, same-unit pairing, valid resampling, practical boundaries, and an explicit action for uncertainty. -->
+It is nonlinear. You generally should not compute a per-example "F1 difference" because F1 is defined from aggregate counts. Instead, for each bootstrap sample:
 
-One offline score is an estimate from a finite sample.
-Its uncertainty deserves measurement only after labels, joins, time boundaries, and population
-coverage are trustworthy.
+1. select the paired evaluation units,
+2. reconstruct A's predictions on that sample,
+3. calculate $$F1_A^{(b)}$$,
+4. calculate $$F1_B^{(b)}$$,
+5. calculate:
 
-The estimand defines the exact production quantity under study.
-The effect size says how much the candidate changes it.
-Pairing gives candidate and baseline the same cases, which isolates the replacement effect from
-shared case difficulty.
+$$
+\Delta^{(b)}
+=
+F1_B^{(b)}-F1_A^{(b)}
+$$
 
-A confidence interval describes effect precision through a repeated-sample procedure.
-A paired bootstrap estimates that interval by applying the same resampled units to both systems.
-A paired permutation test answers a registered null question through within-pair swaps.
-The interval and test serve different purposes.
+This is one reason the bootstrap is useful: the metric itself can be arbitrarily complicated. Suppose you evaluate false-negative rate for an event occurring:
 
-Users, sessions, sites, and time blocks can carry dependence.
-Cluster-aware and stratified resampling preserve that design.
-Rare segments retain their own support counts and uncertainty.
-Practical thresholds keep tiny statistical effects from controlling product decisions, while
-multiplicity rules keep large comparison families honest.
+$$
+0.01\%
+$$
 
-The final gate can pass, fail, or remain inconclusive.
-It connects immutable evidence to a staged release, investigation path, and complete rollback
-identity.
-That structure lets a team say what the evaluation supports, what it cannot yet support, and
-what evidence should come next.
+of the time. A dataset containing:
+
+$$
+100{,}000
+$$
+
+rows sounds large. But expected positive cases are only:
+
+$$
+10
+$$
+
+Your uncertainty about false-negative behavior will be enormous. For metrics conditional on a rare event, the relevant effective sample size is often closer to:
+
+$$
+\text{number of relevant events}
+$$
+
+than:
+
+$$
+\text{total number of rows}
+$$
+
+This is why "our test set has a million rows" can be a misleading claim of statistical power. Suppose your release decision requires detecting a:
+
+$$
+1\%
+$$
+
+improvement. An evaluation set should ideally contain enough independent evidence to distinguish an effect of that size from noise with reasonable reliability. This is the motivation behind **power analysis** and sample-size planning. The important first-principles question is:
+
+How much evidence do we need to reliably distinguish practically important effects from sampling variation
+
+This should ideally be considered when constructing the evaluation, not only after observing the results. Suppose:
+
+$$
+\Delta_{\text{overall}}=+2.1
+$$
+
+But for an important segment:
+
+$$
+\Delta_{\text{segment}}=-3
+$$
+
+If the segment has only 25 examples, perhaps the interval is:
+
+$$
+[-12,+6]
+$$
+
+The point estimate looks concerning, but the evidence is extremely uncertain. You should not pretend either:
+
+"The model definitely harms this segment."
+
+or:
+
+"The segment is fine because the result isn't significant."
+
+The scientifically accurate conclusion is:
+
+$$
+\boxed{\text{The current evidence is compatible with a wide range of effects.}}
+$$
+
+That uncertainty itself is useful information. Suppose:
+
+$$
+p=0.4
+$$
+
+for a test of:
+
+$$
+H_0:\Delta=0
+$$
+
+That does not prove:
+
+$$
+\Delta=0
+$$
+
+Perhaps the confidence interval is:
+
+$$
+[-10,+12]
+$$
+
+The models could differ enormously; the evaluation just cannot tell. To establish approximate equivalence, you need an acceptable equivalence margin.
+
+For example:
+
+$$
+-0.5<\Delta<0.5
+$$
+
+and an appropriate equivalence procedure or sufficiently tight interval supporting that claim. This distinction prevents a very common mistake:
+
+$$
+\boxed{\text{failure to detect a difference}\neq\text{evidence of equality}}
+$$
+
+Suppose production operates six months in the future. You have ten million examples from two years ago. The sampling confidence interval might be microscopic. But if user behavior has shifted considerably, the relevant uncertainty may be dominated by:
+
+$$
+\text{distribution shift}
+$$
+
+rather than:
+
+$$
+\text{finite-sample noise}
+$$
+
+The statistical interval answers:
+
+How precisely did we measure performance on the population represented by this sample
+
+It does not necessarily answer:
+
+How certain are we about future deployment performance
+
+Those are different questions.
+
+## What Other Uncertainty Sources Must a Reproducible Comparison Record?
+<!-- section-summary: Dataset bias, retraining variability, metric implementation, model identities, and evaluation versions remain distinct uncertainty and reproducibility concerns. -->
+
+Sampling uncertainty is only one source of variation; reproducibility also requires tracking data, training, metrics, and model identities.
+
+It helps to distinguish them.
+
+### Sampling uncertainty
+
+Which finite examples happened to be observed?
+
+### Label uncertainty
+
+How reliable is the ground truth?
+
+### Model stochasticity
+
+Does retraining with another seed or sample change the model?
+
+### Population uncertainty
+
+Will future traffic resemble the evaluation distribution
+
+### Measurement uncertainty
+
+Are features, outcomes, or logs measured reliably?
+
+### Policy uncertainty
+
+Will deployment change user behavior and therefore the data distribution A bootstrap over test examples usually addresses primarily the first category. A mature evaluation should not let one narrow statistical interval create false confidence about all the others. Suppose a neural model trained with different random seeds produces:
+
+$$
+84.0,\ 84.7,\ 83.8,\ 85.1,\ 84.3
+$$
+
+accuracy. If you compare only one trained checkpoint against baseline, your conclusion may partly reflect training randomness. Depending on the application, evaluation may need to consider variation across:
+
+* random initialization,
+* training-data samples,
+* optimization randomness.
+
+This is a distinct source of uncertainty from finite-test-set uncertainty.
+
+Conceptually:
+
+$$
+\text{total observed variability}
+$$
+
+may include:
+
+$$
+\text{training variability}
++
+\text{evaluation-sample variability}
+$$
+
+A result such as:
+
+$$
+\Delta NDCG@10=+0.012
+$$
+
+$$
+95\%\,CI=[+0.004,+0.020]
+$$
+
+is not fully reproducible without context. Record things such as:
+
+* baseline model version,
+* candidate model version,
+* evaluation dataset version,
+* evaluation-unit definition,
+* sampling procedure,
+* clustering level,
+* metric definition,
+* segment definitions,
+* weighting scheme,
+* bootstrap method,
+* number of bootstrap replications,
+* confidence level,
+* permutation procedure if used,
+* random seed where relevant,
+* multiple-comparison correction,
+* exclusion rules,
+* practical-effect threshold.
+
+Statistical evaluation is part of the experiment and should be versioned like other parts of the modeling pipeline. Suppose a search team compares two rerankers on:
+
+$$
+5{,}000
+$$
+
+queries. For each query, it computes:
+
+$$
+NDCG@10
+$$
+
+Results:
+
+$$
+M_A=0.742
+$$
+
+$$
+M_B=0.751
+$$
+
+Observed improvement:
+
+$$
+\hat\Delta=0.009
+$$
+
+or:
+
+$$
++0.9\text{ percentage points}
+$$
+
+A paired bootstrap over queries produces:
+
+$$
+95\%\,CI=[0.003,0.015]
+$$
+
+What can we say? First:
+
+$$
+0\notin[0.003,0.015]
+$$
+
+so the evidence suggests the average NDCG difference is positive under the evaluation design. But now suppose the team has previously decided that deployment complexity is justified only by an improvement of at least:
+
+$$
+0.005
+$$
+
+The interval includes values below:
+
+$$
+0.005
+$$
+
+So while the evidence favors B over A, the evidence is not as strong that B exceeds the team's predeclared practical threshold. That distinction disappears if we report only:
+
+"B is statistically significant."
+
+Suppose:
+
+$$
+\Delta=+0.0002
+$$
+
+and because the dataset contains 50 million independent requests:
+
+$$
+95\%\,CI=[0.00018,0.00022]
+$$
+
+The estimate is extraordinarily precise. There is almost no sampling uncertainty about the tiny positive difference. But suppose deployment requires twice the compute cost. Then statistical uncertainty is not the remaining question. The question is whether:
+
+$$
+0.0002
+$$
+
+is worth the operational cost. Statistics can tell us:
+
+$$
+\text{the tiny effect is probably real}
+$$
+
+It cannot tell us:
+
+$$
+\text{the tiny effect is worth paying for}
+$$
+
+without a utility or cost model. Suppose:
+
+$$
+\Delta=+5\%
+$$
+
+with:
+
+$$
+95\%\,CI=[-2\%,+12\%]
+$$
+
+The observed improvement is potentially very valuable. But the dataset contains too little information to distinguish:
+
+* meaningful harm,
+* no change,
+* large improvement.
+
+The correct interpretation is not:
+
+"The model doesn't work because the result isn't statistically significant."
+
+It is:
+
+$$
+\boxed{\text{The estimate is promising but too imprecise to establish the direction or size reliably.}}
+$$
+
+The width of the interval is the key information. A disciplined comparison can be organized as:
+
+### Define the population
+
+What future users, requests, transactions, patients, or time periods do we want to generalize to?
+
+### Define the metric
+
+For example:
+
+$$
+MAE,\quad Recall,\quad NDCG@10
+$$
+
+### Define the effect
+
+For example:
+
+$$
+\Delta=M_B-M_A
+$$
+
+and establish which direction means improvement.
+
+### Define practical importance
+
+For example:
+
+$$
+\delta_{\min}=1\%
+$$
+
+### Define the independent evaluation unit
+
+Examples:
+
+* user,
+* query,
+* session,
+* site,
+* day.
+
+### Evaluate both models on the same units
+
+Preserve pairing.
+
+### Calculate the observed difference
+
+$$
+\hat\Delta
+$$
+
+### Quantify uncertainty
+
+For example with a paired bootstrap.
+
+### Examine relevant segments and guardrails
+
+Including uncertainty where appropriate.
+
+### Apply the predeclared decision rule
+
+Do not move the goalposts after seeing results.
+
+## How Do You Report a Paired Model Comparison Without Overclaiming?
+<!-- section-summary: A sound report states the estimate, interval, practical threshold, sampling unit, assumptions, segment results, and unresolved uncertainty without treating no detection as equivalence. -->
+
+The final workflow reports what the comparison supports, what it rules out, and which uncertainties remain unresolved.
+
+For each evaluation unit $$i$$, imagine two potential losses:
+
+$$
+L_i(A)
+$$
+
+and:
+
+$$
+L_i(B)
+$$
+
+The quantity we ultimately care about might be:
+
+$$
+\Delta
+=
+E[L(B)-L(A)]
+$$
+
+But we observe only a finite sample:
+
+$$
+d_1,d_2,\ldots,d_n
+$$
+
+where:
+
+$$
+d_i=L_i(B)-L_i(A)
+$$
+
+Our estimate is:
+
+$$
+\hat\Delta
+=
+\frac1n\sum_i d_i
+$$
+
+The statistical problem is:
+
+$$
+\boxed{
+\text{Use finite } \{d_i\}
+\text{ to learn about population }E[d]
+}
+$$
+
+Everything else—confidence intervals, bootstrap procedures, permutation tests—is machinery for reasoning about that gap between:
+
+$$
+\boxed{\text{sample}}
+$$
+
+and:
+
+$$
+\boxed{\text{population}}
+$$
+
+It is helpful not to blur them together.
+
+### Paired bootstrap
+
+Primarily asks:
+
+How much might our estimated effect vary if we observed another comparable sample
+
+It is especially useful for:
+
+* confidence intervals,
+* standard errors,
+* sampling distributions.
+
+### Paired permutation test
+
+Primarily asks:
+
+Under a particular no-difference/exchangeability null, how surprising is an effect this extreme
+
+It is especially useful for:
+
+* hypothesis testing,
+* obtaining a null distribution.
+
+They are related resampling techniques, but their logical purposes differ. Several mistakes occur repeatedly.
+
+### Reporting only point estimates
+
+$$
+A=91.2,\quad B=91.6
+$$
+
+does not tell us whether the difference is stable.
+
+### Treating models as independent when evaluated on the same data
+
+This throws away the paired structure.
+
+### Bootstrapping rows when users are the independent unit
+
+This can make intervals falsely narrow.
+
+### Treating $$p>0.05$$ as proof of equality
+
+Failure to detect a difference is not evidence that there is no meaningful difference.
+
+### Treating $$p<0.05$$ as proof of usefulness
+
+Statistical detectability and practical value are separate.
+
+### Ignoring multiple comparisons
+
+Trying enough models, metrics, segments, and thresholds makes accidental wins increasingly likely.
+
+### Using confidence intervals to excuse biased evidence
+
+Narrow sampling uncertainty does not fix bad labels, leakage, or distribution mismatch. A comparison report might contain:
+
+| Question             | Report                                 |
+| -------------------- | -------------------------------------- |
+| What population     | Defined target population/time period  |
+| What metric         | Primary metric and guardrails          |
+| What baseline       | Exact baseline version                 |
+| What candidate      | Exact candidate version                |
+| What is the effect  | $$M_B-M_A$$                            |
+| How large is it     | Point estimate                         |
+| How uncertain       | Confidence interval                    |
+| How tested          | Paired bootstrap/permutation           |
+| What is independent | User/query/session/site                |
+| Rare segments       | Oversampled and appropriately weighted |
+| Practical threshold | Minimum useful improvement             |
+| Multiple testing    | Correction/pre-specification           |
+| Segment behavior    | Effect + uncertainty by key segment    |
+| Reproducibility     | Dataset/code/model versions            |
+
+This turns "Model B scored higher" into an actual statistical comparison. A model evaluation score is not the truth. It is an estimate:
+
+$$
+\boxed{
+\text{finite sample}
+\rightarrow
+\text{observed score}
+\rightarrow
+\text{uncertain estimate of population performance}
+}
+$$
+
+When comparing two models, the most useful quantity is usually their paired difference:
+
+$$
+\boxed{
+\Delta
+=
+\text{candidate performance}
+-
+\text{baseline performance}
+}
+$$
+
+Evaluate both models on the **same meaningful units**, because this removes much irrelevant variation. Then distinguish three separate questions:
+
+$$
+\boxed{\text{How large is the observed effect?}}
+$$
+
+$$
+\boxed{\text{How uncertain is that estimate?}}
+$$
+
+$$
+\boxed{\text{Is an effect of that size practically important?}}
+$$
+
+A paired bootstrap helps answer:
+
+$$
+\text{"What range of effects is compatible with finite-sample variation?"}
+$$
+
+A paired permutation test helps answer:
+
+$$
+\text{"Would a difference this extreme be unusual under a suitable no-difference null?"}
+$$
+
+Neither protects against:
+
+$$
+\text{bad data}
+$$
+
+$$
+\text{wrong populations}
+$$
+
+$$
+\text{leakage}
+$$
+
+$$
+\text{poor labels}
+$$
+
+$$
+\text{metric mismatch}
+$$
+
+Neither can decide whether an effect is worth deploying without knowing its real-world value. The final evidence chain is:
+
+$$
+\boxed{
+\text{Population we care about}
+\rightarrow
+\text{representative evaluation units}
+\rightarrow
+\text{paired model difference}
+\rightarrow
+\text{sampling uncertainty}
+\rightarrow
+\text{practical threshold}
+\rightarrow
+\text{release decision}
+}
+$$
+
+The goal of statistical uncertainty is therefore **not to produce a ritual p-value**. It is to prevent us from confusing:
+
+$$
+\boxed{\text{a difference we happened to observe}}
+$$
+
+with:
+
+$$
+\boxed{\text{a difference we have good evidence will persist in the population that matters.}}
+$$
 
 ![Uncertainty-aware comparison connects valid evidence, a precise estimand, pairing, resampling, product boundaries, and three release outcomes](/content-assets/articles/article-mlops-model-evaluation-statistical-uncertainty-paired-comparisons/uncertainty-release-evidence.png)
 
 *An uncertainty-aware gate can pass, fail, or remain inconclusive, and every outcome keeps the evidence and rollback identity reproducible.*
 
-## References
+## Check Your Answers
 
-- [SciPy: Bootstrap confidence intervals](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.bootstrap.html)
-- [SciPy: Permutation tests](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.permutation_test.html)
-- [NIST/SEMATECH: What are confidence intervals?](https://www.itl.nist.gov/div898/handbook/prc/section1/prc14.htm)
-- [NIST/SEMATECH: Bootstrap plots and uncertainty estimates](https://www.itl.nist.gov/div898/handbook/eda/section3/bootplot.htm)
-- [Cheng, Yu, and Huang: Cluster bootstrap consistency in generalized estimating equations](https://doi.org/10.1016/j.jmva.2012.09.003)
-- [statsmodels: Multiple-testing corrections](https://www.statsmodels.org/stable/generated/statsmodels.stats.multitest.multipletests.html)
-- [MLflow: Experiment tracking](https://mlflow.org/docs/latest/tracking/)
-- [MLflow: Dataset tracking](https://mlflow.org/docs/latest/dataset/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Why Is Every Offline Score an Estimate?]{kind="recap"}
+An offline score estimates performance for a target population and varies with the sampled cases even when the model stays fixed.
+:::
+
+:::expand[Why Should Candidate and Baseline Models Be Compared on the Same Examples?]{kind="recap"}
+The release quantity is usually the candidate-minus-baseline difference, and paired evaluation removes variation shared by both models on the same cases.
+:::
+
+:::expand[How Do Paired Bootstrap and Permutation Tests Measure a Difference?]{kind="recap"}
+A paired bootstrap estimates the distribution of metric differences, while a paired permutation test examines whether labels A and B are exchangeable under no effect.
+:::
+
+:::expand[How Do Effect Size, Non-Inferiority, and the Correct Sampling Unit Guide Decisions?]{kind="recap"}
+Practical effect size and non-inferiority margins belong before significance, and resampling must preserve the genuinely independent user, query, patient, or time unit.
+:::
+
+:::expand[How Do Rare Groups, Repeated Comparisons, and Test Reuse Distort Certainty?]{kind="recap"}
+Rare groups need targeted data, repeated comparisons need multiplicity control, and reused test sets can become adaptively overfit.
+:::
+
+:::expand[How Should Release Rules Use Intervals, Guardrails, Power, and Segment Uncertainty?]{kind="recap"}
+Release rules should combine effect intervals with practical margins, guardrails, sample power, and segment-specific uncertainty.
+:::
+
+:::expand[What Other Uncertainty Sources Must a Reproducible Comparison Record?]{kind="recap"}
+Dataset bias, retraining variability, metric implementation, model identities, and evaluation versions remain distinct uncertainty and reproducibility concerns.
+:::
+
+:::expand[How Do You Report a Paired Model Comparison Without Overclaiming?]{kind="recap"}
+A sound report states the estimate, interval, practical threshold, sampling unit, assumptions, segment results, and unresolved uncertainty without treating no detection as equivalence.
+:::

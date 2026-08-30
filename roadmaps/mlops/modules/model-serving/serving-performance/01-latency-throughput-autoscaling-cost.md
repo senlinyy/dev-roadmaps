@@ -9,529 +9,1989 @@ id: "article-mlops-model-serving-latency-throughput-autoscaling-cost"
 
 ## Table of Contents
 
-1. [What Inference Cost And Scale Mean](#what-inference-cost-and-scale-mean)
-2. [Understand The Metrics That Describe Capacity](#understand-the-metrics-that-describe-capacity)
-3. [Measure The Full Request Path](#measure-the-full-request-path)
-4. [Read Percentiles And Histograms Carefully](#read-percentiles-and-histograms-carefully)
-5. [Describe Traffic And Request Work Before Load Testing](#describe-traffic-and-request-work-before-load-testing)
-6. [Use Little's Law To Check Concurrency Estimates](#use-littles-law-to-check-concurrency-estimates)
-7. [Set A Safe Concurrency Limit](#set-a-safe-concurrency-limit)
-8. [Control Overload With Bounded Queues And Backpressure](#control-overload-with-bounded-queues-and-backpressure)
-9. [Use Batching To Improve Efficiency Within The Latency Limit](#use-batching-to-improve-efficiency-within-the-latency-limit)
-10. [Understand Why Autoscaling Reacts With A Delay](#understand-why-autoscaling-reacts-with-a-delay)
-11. [Choose An Autoscaler From Its Signal And Serving Platform](#choose-an-autoscaler-from-its-signal-and-serving-platform)
-12. [Plan For Cold Starts And Scale To Zero](#plan-for-cold-starts-and-scale-to-zero)
-13. [Build A Capacity Plan From Measurements](#build-a-capacity-plan-from-measurements)
-14. [Calculate Cost Per Accepted Result](#calculate-cost-per-accepted-result)
-15. [Use Load Tests To Prove Safe Operating Limits](#use-load-tests-to-prove-safe-operating-limits)
-16. [Release And Recover Capacity Changes Safely](#release-and-recover-capacity-changes-safely)
-17. [The Main Idea](#the-main-idea)
-18. [References](#references)
+1. [What Work and Metrics Define Inference Cost and Scale?](#what-work-and-metrics-define-inference-cost-and-scale)
+2. [Why Does Latency Rise near Capacity, and How Should the Full Path Be Measured?](#why-does-latency-rise-near-capacity-and-how-should-the-full-path-be-measured)
+3. [How Do Concurrency, Bounded Queues, Backpressure, Retries, Batching, and Memory Interact?](#how-do-concurrency-bounded-queues-backpressure-retries-batching-and-memory-interact)
+4. [How Do Autoscaling, Headroom, Cold Starts, Resilience, and Workload Classes Shape Capacity?](#how-do-autoscaling-headroom-cold-starts-resilience-and-workload-classes-shape-capacity)
+5. [How Do You Measure Cost per Accepted Result?](#how-do-you-measure-cost-per-accepted-result)
+6. [How Do Open-Loop and Closed-Loop Tests Find Sustainable Throughput?](#how-do-open-loop-and-closed-loop-tests-find-sustainable-throughput)
+7. [How Should Capacity Regressions and Releases Be Controlled?](#how-should-capacity-regressions-and-releases-be-controlled)
+8. [Which Curves Explain Inference Capacity as a Budget?](#which-curves-explain-inference-capacity-as-a-budget)
+9. [Check Your Answers](#check-your-answers)
 
-## What Inference Cost And Scale Mean
-<!-- section-summary: Inference cost and scale describe how a production service turns finite compute capacity into timely accepted predictions under changing demand. -->
+A service handles 100 requests per second comfortably and appears to need only 20% more hardware for 120. Instead, latency rises sharply, retries add traffic, and the queue grows without bound. The system crossed its sustainable capacity knee.
 
-An endpoint may answer quickly during normal traffic and form a long queue after a launch multiplies demand. Keeping extra replicas ready can protect latency, although idle capacity still costs money. **Inference scale** is the ability to keep serving predictions as demand changes, and **inference cost** is the money spent to produce those usable results. Teams must manage them together because either extreme can damage the product.
+Inference capacity is the rate at which finite resources complete useful work under a latency and reliability objective. Concurrency, batching, queues, memory, autoscaling, cold starts, and request size all change that rate. Cost is meaningful only when attached to an accepted result, not merely an allocated machine.
 
-Imagine a product-ranking endpoint with four ready model replicas. During ordinary traffic, requests arrive steadily and each replica has time to process them. A promotion suddenly doubles the arrival rate. Requests now reach the service faster than the replicas can finish them. A queue grows, response time rises, clients retry, and the retries add more traffic. The model itself may still take the same 30 milliseconds to calculate a ranking. The production system around it has run out of timely capacity.
+Use these questions to build a measured capacity plan from the request path to progressive release control:
 
-This is the central problem of inference performance: demand arrives over time, each request consumes finite service capacity, and users care about the total wait for a successful result. Capacity engineering decides how much work each replica can safely carry, how the service responds to excess demand, how quickly new capacity arrives, and what that capability costs.
+1. **What Work and Metrics Define Inference Cost and Scale?**
+2. **Why Does Latency Rise near Capacity, and How Should the Full Path Be Measured?**
+3. **How Do Concurrency, Bounded Queues, Backpressure, Retries, Batching, and Memory Interact?**
+4. **How Do Autoscaling, Headroom, Cold Starts, Resilience, and Workload Classes Shape Capacity?**
+5. **How Do You Measure Cost per Accepted Result?**
+6. **How Do Open-Loop and Closed-Loop Tests Find Sustainable Throughput?**
+7. **How Should Capacity Regressions and Releases Be Controlled?**
+8. **Which Curves Explain Inference Capacity as a Budget?**
 
-```mermaid
-flowchart TD
-    A["Incoming Demand<br/>(requests arrive with different shapes and rates)"] --> B["Admission Control<br/>(accept defer or reject work)"]
-    B --> C["Bounded Queue<br/>(hold a limited amount of waiting work)"]
-    C --> D["Ready Replicas<br/>(process requests at measured capacity)"]
-    D --> E["Accepted Results<br/>(finish inside quality and latency limits)"]
-    C --> F["Capacity Signals<br/>(queue concurrency and saturation)"]
-    D --> F
-    F --> G["Scaling Decision<br/>(change replicas within platform limits)"]
-    G --> D
-    E --> H["Unit Cost<br/>(spend divided by accepted results)"]
+## What Work and Metrics Define Inference Cost and Scale?
+<!-- section-summary: Serving converts arriving work into accepted results with finite compute, memory, bandwidth, time, and money, measured through rates, latency, queueing, and errors. -->
 
-    class A demand; class B,C,D system; class F,G control; class E,H result
+Capacity planning starts with the work each request consumes and the rate at which finite resources can finish it.
+
+The easiest way to understand model serving is to ignore GPUs, Kubernetes, autoscalers, and dashboards for a moment. At the most basic level, a serving system does this:
+
+$$
+\text{incoming requests} \rightarrow \text{finite resources} \rightarrow \text{results}
+$$
+
+Every request consumes some amount of **work**. The serving system has a finite rate at which it can perform that work. If requests arrive faster than work can be completed, unfinished work accumulates somewhere—usually in a queue—and latency rises. Almost everything about inference capacity, scaling, batching, concurrency, overload, and cost follows from that fact. Suppose requests arrive at rate
+
+$$
+\lambda = 100 \text{ requests/second}
+$$
+
+and one machine can sustainably process
+
+$$
+\mu = 25 \text{ requests/second}.
+$$
+
+Four machines theoretically provide:
+
+$$
+4 \times 25 = 100 \text{ requests/second}.
+$$
+
+That looks sufficient. But it usually isn't. At exactly 100% utilization, any randomness causes requests to accumulate:
+
+* some requests are bigger than others;
+* hardware occasionally stalls;
+* batches aren't perfectly full;
+* network latency fluctuates;
+* garbage collection or kernel scheduling introduces pauses;
+* model outputs have variable length;
+* traffic arrives in bursts rather than perfectly evenly.
+
+So a production system needs:
+
+$$
+\text{available capacity} > \text{expected demand}.
+$$
+
+This excess is **headroom**. A useful capacity model is:
+
+$$
+\boxed{
+\text{Demand} = \text{arrival rate} \times \text{work per request}
+}
+$$
+
+and
+
+$$
+\boxed{
+\text{Supply} = \text{number of replicas} \times \text{safe work rate per replica}
+}
+$$
+
+You need demand to remain comfortably below supply. That is the core of inference scaling. People often say:
+
+"This model costs $X per request."
+
+But a request isn't a fundamental unit of computation. Compare two LLM requests:
+
+**Request A**
+
+* 100 input tokens
+* 20 output tokens
+
+**Request B**
+
+* 20,000 input tokens
+* 2,000 output tokens
+
+Counting both as "one request" hides an enormous difference in work. For other models, request complexity might depend on:
+
+* image resolution;
+* number of images;
+* audio duration;
+* sequence length;
+* number of retrieved documents;
+* model size;
+* number of diffusion steps;
+* beam-search width.
+
+So fundamentally:
+
+$$
+\text{Cost per request}
+=
+\text{resources consumed by that request}
+\times
+\text{resource price}.
+$$
+
+For a self-hosted model, a simplified version is:
+
+$$
+\text{Cost}
+\approx
+\text{GPU seconds}
++
+\text{CPU seconds}
++
+\text{memory}
++
+\text{network}
++
+\text{storage}
++
+\text{idle capacity}.
+$$
+
+Idle capacity matters enormously. If an $3/hour GPU handles 100 requests/hour, its infrastructure cost is:
+
+$$
+\$3 / 100 = \$0.03
+$$
+
+per request. If the same GPU handles 100,000 requests/hour:
+
+$$
+\$3 / 100000 = \$0.00003.
+$$
+
+Same hardware. Same hourly cost. A **1000× difference in cost/request** simply because utilization is different. So inference economics are fundamentally about converting purchased resource-seconds into useful completed work. Scale is not simply "how many requests can the system handle?" A better definition is:
+
+**How much useful workload can the system sustainably serve while satisfying its latency, reliability, and quality requirements?**
+
+Imagine a server reaches:
+
+* 200 req/s with p99 latency = 30 seconds;
+* 160 req/s with p99 latency = 700 ms.
+
+If your service-level objective is:
+
+$$
+p99 < 1\text{ second},
+$$
+
+your practical capacity is closer to 160 req/s, not 200. Therefore:
+
+$$
+\boxed{\text{Capacity is constrained throughput, not maximum throughput.}}
+$$
+
+A common mistake is:
+
+"We expect 10,000 requests per second. How many GPUs?"
+
+You're missing the workload. You first need to know what a request looks like. For an LLM, at minimum you might measure distributions of:
+
+$$
+T_{in} = \text{input tokens}
+$$
+
+and
+
+$$
+T_{out} = \text{generated tokens}.
+$$
+
+A rough work model could be:
+
+$$
+W = aT_{in}+bT_{out}+c.
+$$
+
+The constants $$a$$, $$b$$, and $$c$$ should ultimately come from measurements rather than theory. Why distinguish input and output tokens? Because transformer inference has two rather different stages.
+
+### Prefill
+
+The prompt is processed. For a 4,000-token prompt, many prompt-token operations can be executed in parallel.
+
+### Decode
+
+Tokens are generated sequentially:
+
+$$
+y_1 \rightarrow y_2 \rightarrow y_3 \rightarrow \cdots
+$$
+
+You cannot normally generate token 100 before token 99 exists. So 1,000 input tokens and 1,000 output tokens generally don't impose identical serving costs. This is why **requests/sec alone can be a terrible capacity metric for generative models**. There are several quantities that people frequently mix together.
+
+### Throughput
+
+How much completed work leaves the system per unit time. Examples:
+
+$$
+120\text{ requests/sec}
+$$
+
+or
+
+$$
+18,000\text{ tokens/sec}.
+$$
+
+Throughput measures flow.
+
+### Latency
+
+How long an individual request takes. For ordinary inference:
+
+$$
+L =
+t_{\text{response}}
+-
+t_{\text{request}}.
+$$
+
+For streaming LLMs you usually care about several latency metrics:
+
+**Time to first token (TTFT)**
+
+$$
+TTFT =
+t_{\text{first token}}
+-
+t_{\text{request}}.
+$$
+
+**Inter-token latency** or **time per output token** How quickly subsequent tokens arrive. **End-to-end latency**
+
+$$
+t_{\text{last token}}
+-
+t_{\text{request}}.
+$$
+
+Users can tolerate a 10-second total generation much better when the first token arrives after 300 ms than when nothing appears for 9 seconds.
+
+### Concurrency
+
+How many requests are currently inside some part of the system.
+
+For example:
+
+$$
+C=80
+$$
+
+means 80 requests are simultaneously in flight. Concurrency is a quantity of outstanding work, whereas throughput is a rate of completed work.
+
+### Utilization
+
+The fraction of some resource's capacity currently being used.
+
+For example:
+
+$$
+GPU\ utilization = 72\%.
+$$
+
+Be careful with this metric. A GPU is composed of multiple constrained resources:
+
+* arithmetic units;
+* HBM capacity;
+* memory bandwidth;
+* communication bandwidth;
+* tensor cores;
+* caches.
+
+"GPU utilization = 90%" does not automatically mean you're extracting 90% of theoretical useful inference capacity.
+
+### Saturation
+
+Saturation is more useful conceptually:
+
+Has some required resource become sufficiently constrained that additional demand mainly creates waiting
+
+A server may become saturated because of:
+
+* GPU compute;
+* GPU memory;
+* memory bandwidth;
+* KV-cache capacity;
+* CPU preprocessing;
+* network bandwidth;
+* batch scheduler limits;
+* concurrent request limits.
+
+At saturation, latency generally begins increasing much faster than throughput.
+
+## Why Does Latency Rise near Capacity, and How Should the Full Path Be Measured?
+<!-- section-summary: Capacity has a knee where queues grow rapidly; end-to-end histograms, percentiles, traffic distributions, and Little's Law explain the complete path. -->
+
+As utilization approaches the limit, queueing dominates latency, which makes whole-path distributions and rate relationships essential.
+
+Imagine increasing load against one replica.
+
+| Offered load | Completed throughput | p99 latency |
+| -----------: | -------------------: | ----------: |
+|     20 req/s |                   20 |      150 ms |
+|           40 |                   40 |      170 ms |
+|           60 |                   60 |      220 ms |
+|           80 |                   80 |      400 ms |
+|           90 |                   90 |      900 ms |
+|          100 |                   95 |       4 sec |
+|          110 |                   95 |      15 sec |
+
+Something interesting happens around 80–95 req/s. Before that point, increasing demand mostly produces more throughput. After that point, increasing demand mostly produces **more waiting**. Graphically:
+
+```text
+Latency
+   ^
+   |                         /
+   |                      /
+   |                   /
+   |                /
+   |            ___/
+   |___________/
+   +------------------------> Load
+                  ^
+                knee
 ```
 
-Autoscaling is one control inside this system. It adds or removes replicas after observing a signal. It still depends on accurate metrics, available nodes, startup time, readiness, queue bounds, and a safe per-replica operating point. Those foundations come first.
+The knee matters more than the theoretical maximum. A safe operating point might therefore be 70–80 req/s even though the machine can briefly complete 95 req/s. Consider a single worker whose mean service rate is:
 
-## Understand The Metrics That Describe Capacity
-<!-- section-summary: Latency, throughput, concurrency, queueing, saturation, utilization, and unit cost describe different parts of the same serving system. -->
+$$
+\mu=100\text{ requests/sec}.
+$$
 
-Several performance terms sound interchangeable at first. A service can have high throughput and poor latency, high utilization and spare request capacity, or low cost per attempt and high cost per successful result. The terms below separate those conditions so teams can respond to the actual problem.
+If traffic arrives at:
 
-**Latency** is the time one request spends from the chosen start boundary to the chosen finish boundary. End-to-end latency usually starts as the service receives a request and ends after it returns a usable response. A stage can have its own latency too, such as queue wait or model execution.
+$$
+\lambda=50,
+$$
 
-**Throughput** is completed work per unit of time, often accepted predictions per second or generated tokens per second. Completed work matters because offered requests can include timeouts, rejected requests, and failed attempts.
+there is lots of spare capacity. Utilization is:
 
-**Concurrency** is the number of requests currently inside a defined part of the system. It may mean requests active in the whole service, requests executing inside one model server, or sequences occupying an LLM engine. The boundary should always be named.
+$$
+\rho = \frac{\lambda}{\mu}=0.5.
+$$
 
-**Queueing** is the waiting that occurs before a constrained resource can start work. A short queue can absorb small timing differences. A growing queue shows that arrival rate has exceeded completion rate for a sustained period.
+Now increase traffic:
 
-**Saturation** means a limiting resource has little useful headroom. The resource might be CPU, GPU compute, device memory, memory bandwidth, model-server workers, a connection pool, or a remote feature service. Saturation belongs to that specific constraint, so no universal percentage describes every service.
+$$
+\lambda=99.
+$$
 
-**Utilization** is the share of a resource observed as busy over a period. It helps explain saturation. User latency and accepted throughput require their own measurements. A GPU can report high activity while requests wait too long, and a CPU can report moderate use while one serialized thread limits the service.
+Then:
 
-**Cost per accepted result** divides the relevant serving spend by results that met the product contract. Failed work, late responses, duplicate retries, and idle reserve still contribute to spend.
+$$
+\rho=0.99.
+$$
 
-These signals form a causal path. Demand raises concurrency. Concurrency occupies workers and memory. As the limiting resource approaches saturation, queue time grows. Queue time raises tail latency and can trigger timeouts or retries. More capacity can reduce the pressure, with a financial cost and a startup delay.
+The worker technically still has enough average capacity. But suppose several unusually slow requests arrive together. There is almost no spare capacity available to catch up. A simplified queueing model illustrates the effect. For an M/M/1 queue:
 
-```mermaid
-flowchart TD
-    A["Arrival Rate<br/>(new work entering each second)"] --> B["Concurrency<br/>(work currently inside the system)"]
-    B --> C["Resource Demand<br/>(CPU GPU memory or dependency use)"]
-    C --> D{"Saturation Level<br/>(remaining useful headroom)"}
-    D -->|"Headroom remains"| E["Stable Throughput<br/>(work completes near the expected rate)"]
-    D -->|"Capacity is tight"| F["Queue Growth<br/>(work waits before execution)"]
-    F --> G["Tail Latency<br/>(slow requests approach the deadline)"]
-    G --> H["Rejected Or Late Work<br/>(results miss the service contract)"]
-    E --> I["Accepted Throughput<br/>(usable results per second)"]
-    H --> J["Higher Unit Cost<br/>(spend includes wasted attempts)"]
-    I --> J
+$$
+W=\frac{1}{\mu-\lambda}.
+$$
 
-    class A demand; class B,C,E,F,G system; class D choice; class H,I,J result
+If:
+
+$$
+\mu=100
+$$
+
+then at 50 req/s:
+
+$$
+W=\frac{1}{100-50}=0.02s.
+$$
+
+At 90:
+
+$$
+W=0.10s.
+$$
+
+At 99:
+
+$$
+W=1s.
+$$
+
+At 99.9:
+
+$$
+W=10s.
+$$
+
+The exact formula won't describe most ML systems accurately, but the lesson survives:
+
+$$
+\boxed{\text{Queueing delay becomes highly nonlinear near saturation.}}
+$$
+
+That is the fundamental reason you leave headroom. Suppose your model dashboard says:
+
+inference latency = 240 ms.
+
+Your user reports:
+
+requests take 900 ms.
+
+Both can be correct. A real request might experience:
+
+$$
+\begin{aligned}
+L =
+L_{\text{network}} \\
+&+L_{\text{load balancer}} \\
+&+L_{\text{authentication}} \\
+&+L_{\text{queue}} \\
+&+L_{\text{batch wait}} \\
+&+L_{\text{preprocessing}} \\
+&+L_{\text{model}} \\
+&+L_{\text{postprocessing}} \\
+&+L_{\text{return network}}.
+\end{aligned}
+$$
+
+For example:
+
+| Stage            |       Time |
+| ---------------- | ---------: |
+| Network          |      70 ms |
+| Gateway/auth     |      25 ms |
+| Queue            |     350 ms |
+| Batch waiting    |     100 ms |
+| Model            |     240 ms |
+| Postprocessing   |      15 ms |
+| Response/network |     100 ms |
+| **Total**        | **900 ms** |
+
+Optimizing model inference from 240 ms to 180 ms only saves 60 ms. Reducing queueing from 350 ms to 50 ms saves 300 ms. You therefore want timestamps around important boundaries rather than one giant "latency" metric. Suppose ten requests have latency:
+
+```text
+100 100 100 100 100
+100 100 100 100 5100 ms
 ```
 
-An operating dashboard should preserve these distinctions. A graph of request latency beside accepted throughput and queue depth tells a story. A single utilization gauge omits both user experience and completed work.
+Mean latency is:
 
-## Measure The Full Request Path
-<!-- section-summary: End-to-end latency contains admission, queueing, feature work, preprocessing, model execution, postprocessing, and response delivery. -->
+$$
+\frac{6000}{10}=600\text{ ms}.
+$$
 
-The user experiences the entire request path. A 20-millisecond model can sit inside a 400-millisecond endpoint if feature retrieval, queueing, or serialization takes most of the time.
+But nine users received a response in 100 ms and one waited 5.1 seconds. The average describes neither experience particularly well. That motivates percentiles.
 
-A useful latency budget assigns time to the stages that own it:
+### p50
 
-\[
-L_{total} = L_{admission} + L_{queue} + L_{features} + L_{preprocess} + L_{inference} + L_{postprocess} + L_{response}
-\]
+Half of requests are faster and half slower. Approximately the typical experience.
 
-The exact stages depend on the service. A recommendation endpoint may fetch candidates and online features. A vision endpoint may decode and resize an image. An LLM endpoint separates time to first token from inter-token latency and total generation time.
+### p95
+
+95% are faster; 5% are slower.
+
+### p99
+
+99% are faster; 1% are slower. Large production systems care heavily about p99 because even 1% represents many requests. At one million requests/day:
+
+$$
+1\% = 10,000
+$$
+
+requests/day. Suppose replica A reports:
+
+$$
+p99=200ms
+$$
+
+and replica B:
+
+$$
+p99=1000ms.
+$$
+
+You cannot calculate global p99 as:
+
+$$
+\frac{200+1000}{2}=600ms.
+$$
+
+Quantiles don't compose that way. You need the underlying latency distribution—usually represented by mergeable histograms. Another subtlety:
+
+$$
+p99(A+B)
+\neq
+p99(A)+p99(B).
+$$
+
+If request latency consists of queue + inference + network, simply adding each component's p99 usually produces the wrong total. Percentiles must come from the distribution you're actually interested in. Suppose latency has two modes:
+
+```text
+       ****
+      ******                        ***
+     ********                      *****
+----|---------|---------|---------|-------
+  100ms     500ms      1s        5s
+```
+
+Why are some requests clustered around 100 ms and others around 5 s? Possibilities include:
+
+* one unhealthy replica;
+* cache miss versus hit;
+* short versus long prompts;
+* cold versus warm models;
+* one hardware class slower than another;
+* batched versus unbatched requests.
+
+A mean or p95 can hide this structure. Histograms help you ask the more useful question:
+
+What populations of requests exist
+
+Another common failure is running:
+
+"1,000 requests/sec"
+
+against a model. That's incomplete. Real traffic has at least three important dimensions:
+
+$$
+\text{arrival pattern}
+$$
+
+$$
+\text{request work distribution}
+$$
+
+$$
+\text{service objective}.
+$$
+
+For example:
+
+```text
+Average rate:          1,000 requests/s
+Peak rate:             2,200 requests/s
+Burst:                 4,000 requests within 2 seconds
+Input tokens:
+  p50                     400
+  p95                   4,000
+  p99                  15,000
+Output tokens:
+  p50                      80
+  p95                     500
+  p99                   1,500
+TTFT target:
+  p99                    <1 s
+```
+
+That is far more meaningful than "1,000 RPS." The size distribution matters enormously. Testing exclusively with average-sized prompts can dramatically overestimate capacity. One of the most valuable relationships in serving systems is:
+
+$$
+\boxed{L=\lambda W}
+$$
+
+where:
+
+* $$L$$ = average number of requests in the system;
+* $$\lambda$$ = throughput;
+* $$W$$ = average time each request spends in the system.
+
+Suppose:
+
+$$
+\lambda=50\text{ requests/sec}
+$$
+
+and average end-to-end request time is:
+
+$$
+W=0.8s.
+$$
+
+Then:
+
+$$
+L=50\times0.8=40.
+$$
+
+You should expect roughly:
+
+$$
+\boxed{40\text{ concurrent requests}}
+$$
+
+on average. This is surprisingly powerful. If monitoring reports:
+
+```text
+50 req/s
+800 ms average latency
+4 concurrent requests
+```
+
+something is inconsistent. Perhaps:
+
+* concurrency is being measured at only one internal stage;
+* latency includes client-side queueing;
+* throughput metric is wrong;
+* sampling is broken.
+
+Little's Law gives you an independent consistency check.
 
 ![Seven stages in an inference request from the service timer and admission through queueing, input preparation, model execution, output handling, and a usable result, with latency, throughput, and percentile views.](/content-assets/articles/article-mlops-model-serving-latency-throughput-autoscaling-cost/request-path-latency.png)
 
 *Measure the full request boundary and keep accepted latency beside throughput, request-shape percentiles, and rejection, because a fast model alone does not prove a fast or useful service.*
 
-```mermaid
-flowchart TD
-    A["Service Boundary<br/>(start the end-to-end timer)"] --> B["Admission<br/>(validate limits and apply rate policy)"]
-    B --> C["Queue Wait<br/>(await worker or batch capacity)"]
-    C --> D["Input Preparation<br/>(fetch features decode or tokenize)"]
-    D --> E["Model Execution<br/>(run the selected artifact and runtime)"]
-    E --> F["Output Handling<br/>(apply policy serialize and return)"]
-    F --> G["Service Boundary<br/>(finish with a usable outcome)"]
+## How Do Concurrency, Bounded Queues, Backpressure, Retries, Batching, and Memory Interact?
+<!-- section-summary: Concurrency only creates in-flight work, bounded queues and backpressure contain overload, retries amplify it, batching improves efficiency with delay, and memory sets another limit. -->
 
-    class A,G boundary; class B,C,D,F stage; class E model
+The next controls decide how much work may enter and wait: concurrency, queues, backpressure, retries, batching, and memory.
+
+Suppose one model server can run 32 requests concurrently. That doesn't necessarily mean 32 is optimal. Increasing concurrency has competing effects. At low concurrency, hardware can be underutilized:
+
+```text
+Concurrency = 1
+GPU often waits
+Poor throughput
+Low queueing
 ```
 
-Suppose p99 endpoint latency rises from 180 to 600 milliseconds. Model execution remains near 45 milliseconds. Traces show 350 milliseconds in a feature lookup and another 120 milliseconds in the queue. Optimizing the model runtime can touch only a small part of the delay. The immediate containment may bypass a nonessential feature, reduce admission for expensive request classes, or route to an approved fallback while the dependency recovers.
+Increasing concurrency can fill idle execution slots:
 
-Instrument the outer boundary with a duration histogram and instrument important internal stages with spans or dedicated histograms. OpenTelemetry's HTTP semantic conventions define `http.server.request.duration` as a histogram for server requests. Model-serving metrics should add bounded dimensions such as model route, request class, response outcome, region, and release version. Request IDs belong in traces and logs because per-request labels would create an unbounded metric series set.
-
-## Read Percentiles And Histograms Carefully
-<!-- section-summary: Percentiles describe the latency distribution, while histogram design and query scope determine whether those percentiles are meaningful. -->
-
-An average combines fast and slow requests into one number. It can look healthy while a significant minority of users wait far longer. Percentiles describe positions in the full distribution.
-
-**p50**, the median, is the latency met by half of observations. **p95** is met by 95% of observations. **p99** is met by 99%, leaving the slowest 1% above it. For one million daily requests, that slowest 1% still represents ten thousand user experiences.
-
-A percentile always needs a scope. Start with its time window and endpoint. Then separate request classes that have materially different cost. Outcome, region, and model route show whether the tail belongs to accepted work or one part of the deployment.
-
-Combining thumbnail and full-resolution image requests into one p99 hides which shape created the tail. Combining successful responses with fast rejections can make a degraded service appear faster.
-
-Prometheus histograms store duration observations so operators can calculate rates, threshold compliance, and percentiles. Current Prometheus guidance prefers native histograms where the instrumentation and storage path support them. Classic histograms remain common and need bucket boundaries around the service objective; percentile accuracy is limited by bucket width.
-
-For a classic histogram, a p99 query might look like this:
-
-```promql
-histogram_quantile(
-  0.99,
-  sum by (le, model_route, request_class) (
-    rate(ml_inference_request_duration_seconds_bucket{result="accepted"}[5m])
-  )
-)
+```text
+Concurrency = 8
+Better GPU utilization
+Higher throughput
 ```
 
-This query calculates separate p99 estimates for each bounded route and request class. It excludes rejected work from the accepted-latency view, so the dashboard should show rejection rate beside it. Otherwise, aggressive load shedding could improve the p99 graph by refusing difficult requests.
+But eventually:
 
-Histograms also support a direct service-objective question: what share of accepted requests finished within 250 milliseconds? That ratio is often more actionable than a percentile because it matches the promise directly. Keep both views if operators need the distribution and the objective.
-
-## Describe Traffic And Request Work Before Load Testing
-<!-- section-summary: Request shapes, arrival patterns, client behaviour, and delivery mode determine the load a serving system must handle. -->
-
-“One thousand requests per second” describes only arrival count. Capacity also depends on what those requests contain, how they arrive, how long clients wait, and whether clients retry.
-
-Start with **request classes**. A ranking request with 20 candidates costs less than one with 2,000. A 64-token prompt consumes less LLM memory and compute than a 16,000-token prompt. A request that generates 20 tokens occupies the engine for less time than one that generates 2,000. Define stable classes around the variables that materially affect service time or memory.
-
-Then describe the **arrival pattern**. Steady traffic tests sustained capacity. A burst reveals queue and admission behaviour. A ramp helps locate the saturation knee. A scheduled peak may justify adding capacity in advance. A regional failover can move a large share of traffic almost instantly.
-
-Load generators use two common models. In a **closed model**, each virtual user waits for a response before sending its next request. A slowing server reduces the generated arrival rate, which can hide overload. In an **open model**, requests start according to an external arrival schedule. This preserves offered load even as latency rises. Grafana k6 arrival-rate executors implement the open approach and report dropped iterations if the load generator lacks enough virtual users.
-
-Client behaviour completes the workload. Record timeouts, retry count, backoff, cancellation, and connection reuse. A client that times out at 500 milliseconds and retries twice can turn one product action into three inference attempts. The service should stop work after cancellation where the runtime allows it, especially for expensive generation.
-
-A compact workload contract makes the test reproducible:
-
-```yaml
-workload: product-ranking
-request_classes:
-  small:
-    candidate_limit: 100
-    traffic_share: 0.85
-  large:
-    candidate_limit: 1000
-    traffic_share: 0.15
-arrival:
-  steady_rps: 450
-  peak_rps: 900
-  burst_duration_seconds: 30
-service_objective:
-  accepted_p99_ms: 250
-  maximum_rejection_rate: 0.005
-client:
-  timeout_ms: 500
-  retry_budget: 1
+```text
+Concurrency = 64
+GPU already saturated
+Requests contend for resources
+Queueing rises
+KV cache pressure rises
+Tail latency explodes
 ```
 
-The values are illustrative. Production evidence must use the contract approved for that endpoint and release.
+So you often see:
 
-## Use Little's Law To Check Concurrency Estimates
-<!-- section-summary: Little's Law connects average arrival rate, time in the system, and work in progress for a stable flow. -->
+```text
+Throughput
+   ^
+   |                   __________
+   |               ___/
+   |           ___/
+   |       ___/
+   |______/
+   +--------------------------> concurrency
 
-Capacity planning often needs a quick check on whether arrival rate, latency, and observed work in progress agree. Little's Law supplies that check for a stable flow. It connects three measurements without requiring a detailed model of the service internals.
 
-The relationship is:
-
-\[
-L = \lambda W
-\]
-
-Here, **L** is the average number of requests in the system, **lambda** is the average arrival rate, and **W** is the average time each request spends in the system.
-
-The relationship is intuitive. If 100 requests arrive each second and each stays for 0.2 seconds, about 20 requests are present on average:
-
-\[
-100\ requests/second \times 0.2\ seconds = 20\ concurrent\ requests
-\]
-
-Think of a café serving ten customers per minute. If each customer spends six minutes from joining the line to receiving the order, roughly sixty customers are somewhere in that process on average. A longer wait raises work in progress even if the arrival rate stays unchanged.
-
-Use this law as a cross-check. Replica planning needs additional evidence because the formula relies on averages and a stable flow. Production traffic includes bursts and multiple request classes. Timeouts, batching, and changing replica counts also affect the observed system. Tail latency objectives need more headroom than an average relationship reveals.
-
-The formula is still useful during diagnosis. If observed arrival rate is 200 requests per second and average latency is 0.5 seconds, average in-system concurrency should be near 100. A dashboard showing only 20 active requests may have a different measurement boundary, missing queue instrumentation, or fast rejected traffic. Resolve that mismatch before using the metric for autoscaling.
-
-## Set A Safe Concurrency Limit
-<!-- section-summary: A safe concurrency limit keeps each replica below the point where added work creates unstable queues, memory pressure, or tail latency. -->
-
-Increasing concurrency gives a worker more opportunities to overlap work. It can keep CPU threads, network calls, or a GPU pipeline supplied. The benefit ends after a limiting resource reaches its practical capacity.
-
-Run one warmed replica under increasing offered concurrency. At low levels, throughput often rises with concurrency. Near the **saturation knee**, throughput gains shrink while queue time and p99 latency begin to climb. Past that point, more inflight work mainly creates waiting and memory pressure.
-
-```mermaid
-flowchart TD
-    A["Low Concurrency<br/>(some execution capacity remains idle)"] --> B["Increase Inflight Work<br/>(supply more requests to the replica)"]
-    B --> C["Rising Throughput<br/>(more useful work completes)"]
-    C --> D{"Saturation Knee<br/>(throughput gain starts to flatten)"}
-    D -->|"Headroom remains"| B
-    D -->|"Queue and tails rise"| E["Safe Limit<br/>(operate below the unstable region)"]
-    E --> F["Admission Policy<br/>(bound inflight work per replica)"]
-
-    class A state; class B,C work; class D choice; class E,F policy
+Latency
+   ^
+   |                       /
+   |                    __/
+   |                ___/
+   |______________/
+   +--------------------------> concurrency
 ```
 
-The safe limit should pass the latency, memory, error, and quality gates with headroom. For an LLM, include prompt length, generated length, and KV-cache occupancy. For a GPU model server, test batch size and model-instance count with concurrency because all three consume device resources.
+The goal isn't maximum concurrency. It is the concurrency that gives good utilization **without violating your latency budget**. Suppose experiments give:
 
-Suppose one image replica completes 75 requests per second at concurrency 12 with p99 of 170 milliseconds. At concurrency 20, it completes 79 requests per second while p99 reaches 430 milliseconds and OOMs appear on large images. The extra four requests per second are poor capacity. A per-replica inflight limit near 12, validated across the shape mix, gives the service a defensible operating point.
+| Concurrency | Throughput |      p99 |
+| ----------: | ---------: | -------: |
+|           4 |   40 req/s |   200 ms |
+|           8 |         75 |   230 ms |
+|          16 |        120 |   300 ms |
+|          24 |        145 |   500 ms |
+|          32 |        155 |   900 ms |
+|          48 |        158 | 3,000 ms |
 
-## Control Overload With Bounded Queues And Backpressure
-<!-- section-summary: Bounded queues absorb short variation, while backpressure and load shedding protect useful work after demand exceeds timely capacity. -->
+If your target is:
 
-A queue stores work awaiting execution. It can smooth a brief arrival spike and help a batcher collect compatible requests. The worker completion rate stays unchanged.
+$$
+p99 < 1s,
+$$
 
-If arrivals remain above completion rate, the queue grows. Waiting requests consume memory and continue aging toward their client deadlines. By the time a worker starts an old request, the caller may already have abandoned it. The service then spends capacity on a result nobody can use.
+32 technically passes. But operating permanently at the boundary is risky. You may choose:
 
-Set a maximum queue length or maximum queue age from the end-to-end budget. If the whole request has 250 milliseconds and typical execution needs 150, a 300-millisecond queue budget already violates the service objective. Admission should account for the request's remaining deadline where possible.
+$$
+C_{\text{safe}}=24.
+$$
 
-**Backpressure** tells callers or upstream components that the service has reached its safe inflight capacity. For synchronous APIs, this may be a fast retryable response with a bounded retry policy. For asynchronous work, the producer may slow down or the queue may retain the message for later processing.
+Notice that going from concurrency 24 to 48:
 
-**Load shedding** deliberately refuses lower-priority or excess work to preserve the capacity needed for important requests. Possible actions include rejecting an expensive request class, routing to a smaller approved model, returning a cached result, shortening generation limits, or deferring background enrichment. Each action needs a product-approved meaning and its own outcome metric.
+* throughput increases only $$145 \rightarrow 158$$;
+* latency increases $$500 \rightarrow 3000$$ ms.
 
-```mermaid
-flowchart TD
-    A["New Request<br/>(arrives with class priority and deadline)"] --> B{"Admission Check<br/>(capacity and remaining budget)"}
-    B -->|"Capacity available"| C["Bounded Queue<br/>(wait within the approved limit)"]
-    B -->|"Interactive overload"| D["Fast Response<br/>(reject or use approved fallback)"]
-    B -->|"Deferrable work"| E["Durable Queue<br/>(process later with idempotency)"]
-    C --> F["Model Execution<br/>(consume measured service capacity)"]
-    D --> G["Visible Outcome<br/>(record rejection or fallback)"]
-    E --> G
-    F --> G
+That's a terrible trade. This is another way to locate the saturation knee. Suppose your service can complete:
 
-    class A request; class B choice; class C,D,E,F path; class G result
+$$
+100\text{ req/s}
+$$
+
+but suddenly receives:
+
+$$
+1,000\text{ req/s}.
+$$
+
+An unbounded queue appears attractive:
+
+"We'll just buffer everything."
+
+But every second:
+
+$$
+1000-100=900
+$$
+
+additional requests enter the backlog. After 10 seconds:
+
+$$
+9,000
+$$
+
+requests are waiting. Even if traffic instantly returns to normal, the backlog can take a long time to drain. Meanwhile users receive responses long after they're useful. An unlimited queue doesn't create capacity. It converts overload into latency and memory consumption. Instead, suppose you permit only:
+
+* 100 actively executing requests;
+* 200 queued requests.
+
+Once those limits are reached, you stop accepting additional work. Possible responses include:
+
+* HTTP 429;
+* HTTP 503;
+* explicit retry instructions;
+* upstream rate limiting.
+
+It feels counterintuitive to reject traffic deliberately. But compare:
+
+**Unbounded system**
+
+```text
+100% accepted initially
+latency → 30 seconds
+timeouts
+retries
+more traffic
+collapse
 ```
 
-Coordinate timeouts and retries across the chain. Add jittered backoff and a retry budget. A synchronized retry wave can turn a short overload into a sustained incident. Track original product actions separately from inference attempts so the business-workload metric counts each action once.
+**Bounded system**
 
-## Use Batching To Improve Efficiency Within The Latency Limit
-<!-- section-summary: Batching groups compatible inputs into one execution, improving throughput for some runtimes while consuming queue time and memory. -->
-
-A **batch** is a group of inputs processed by one model execution. Vectorized CPU libraries and GPUs often handle a batch more efficiently than the same inputs executed one at a time. Fixed overhead is shared, and larger tensor operations may use the hardware more fully.
-
-Online requests rarely arrive already grouped. A **dynamic batcher** holds compatible requests for a short time or until it reaches a size limit. That deliberate wait uses part of the latency budget. Larger batches also increase activation memory and can take longer to execute.
-
-Tune maximum batch size, queue delay, concurrency, and model instances together. Measure the batch sizes the server actually forms at production-like arrival rates. A configured maximum of 32 means little if ordinary traffic forms batches of two.
-
-For example, a stateless embedding endpoint may gain substantial throughput from a one-millisecond batching window and stay inside a 100-millisecond p99 objective. The same delay adds pure waiting to a quiet endpoint that rarely receives adjacent requests. Text-generation runtimes commonly use continuous batching because sequences finish at different times; prompt length, output length, and KV cache then join the capacity model.
-
-NVIDIA Triton supplies dynamic batching for stateless models and Performance Analyzer for controlled concurrency or request-rate tests. The following GPU article develops the hardware-specific batch, memory, and instance interactions in more depth. Here, the capacity principle is simple: count the waiting time, memory, and accepted throughput produced by the complete batch policy.
-
-## Understand Why Autoscaling Reacts With A Delay
-<!-- section-summary: Autoscaling observes a demand signal, calculates desired replicas, waits for infrastructure and model startup, and sees the result after another delay. -->
-
-An autoscaler is a feedback controller. It measures a signal, compares that value with a target, changes desired replica count, and later observes whether the change reduced pressure. Every step takes time.
-
-Metric collection and aggregation introduce the first delay. The controller evaluates on a schedule. Kubernetes must find an existing node or request a new one. The node pulls the image, the pod downloads and loads the model, the runtime allocates memory, warm-up runs, and readiness finally allows traffic. The effect appears in queue and latency metrics after requests reach the new replica.
-
-```mermaid
-flowchart TD
-    A["Demand Change<br/>(arrival rate or request cost moves)"] --> B["Observed Signal<br/>(queue inflight work or resource pressure)"]
-    B --> C["Controller Decision<br/>(calculate desired replicas)"]
-    C --> D["Cluster Capacity<br/>(place a pod or add a node)"]
-    D --> E["Model Startup<br/>(pull load allocate and warm)"]
-    E --> F["Ready Replica<br/>(start accepting routed traffic)"]
-    F --> G["Service Response<br/>(queue latency and saturation change)"]
-    G --> B
-
-    class A demand; class B,C control; class D,E,F platform; class G result
+```text
+95% accepted
+accepted requests remain fast
+5% rejected immediately
+clients can retry appropriately
+system remains healthy
 ```
 
-If the complete scale-up path takes four minutes, a 30-second burst has ended long before new capacity arrives. A warm replica floor, scheduled capacity before known peaks, faster startup, or overload control must protect that event.
+A fast rejection is often much more useful than a response that arrives after the user's deadline. This leads to an important distinction:
 
-Scale-down needs patience. Removing a recently warmed replica after one quiet interval can start an oscillation: traffic rises, pods warm, the signal falls, pods leave, and the queue rises again. Stabilization windows and conservative scale-down policies give the system time to reveal the effect of a change.
+$$
+\text{offered traffic}
+\neq
+\text{accepted traffic}.
+$$
 
-Each controller needs an explicit responsibility. A model server may tune batches, an HPA changes pods, and a cluster autoscaler changes nodes. Their observation windows and limits should reflect that order. Several controllers reacting to the same delayed symptom can amplify oscillation.
+Capacity calculations should distinguish the two. Imagine the server receives 1,000 requests/s but handles only 800. Two hundred fail. If every failed request immediately retries, you now receive:
+
+$$
+1000+200=1200.
+$$
+
+More fail, causing more retries. This positive feedback loop is called a **retry storm**. Backpressure therefore works best with:
+
+* exponential backoff;
+* jitter;
+* retry limits;
+* rate limits;
+* circuit breakers;
+* admission control.
+
+The fundamental idea is to prevent demand from recursively creating even more demand. Suppose a GPU takes approximately:
+
+$$
+10ms + 2ms\times N
+$$
+
+to process a batch containing $$N$$ requests. The 10 ms represents fixed overhead. Batch size 1:
+
+$$
+12ms
+$$
+
+for one request. Throughput:
+
+$$
+\frac{1}{0.012}\approx83\text{ req/s}.
+$$
+
+Batch size 8:
+
+$$
+10+16=26ms.
+$$
+
+Eight requests complete in 26 ms:
+
+$$
+\frac{8}{0.026}\approx308\text{ req/s}.
+$$
+
+Batching amortized the fixed cost. It can also let GPUs exploit more parallelism. To create a batch, the scheduler may have to wait. Suppose:
+
+$$
+\text{batch wait}=20ms
+$$
+
+and batching reduces model execution:
+
+$$
+100ms\rightarrow60ms.
+$$
+
+Then:
+
+$$
+20+60=80ms.
+$$
+
+Great. But if traffic is sparse and building the batch requires 200 ms:
+
+$$
+200+60=260ms.
+$$
+
+Now batching made latency worse. Thus:
+
+$$
+\boxed{\text{Batch until marginal throughput gains stop justifying latency cost.}}
+$$
+
+The optimal batch size therefore depends on load and the latency SLO. Imagine batching these sequence lengths:
+
+```text
+100
+110
+120
+4,000
+```
+
+If your implementation pads everything to the longest sequence, you may effectively process:
+
+$$
+4\times4000=16,000
+$$
+
+token positions despite having only:
+
+$$
+100+110+120+4000=4,330
+$$
+
+real token positions. That is enormous wasted computation. This is why sophisticated model servers may:
+
+* bucket requests by size;
+* dynamically batch;
+* continuously add/remove sequences;
+* schedule based on token count rather than request count.
+
+For LLM serving, **continuous batching** is particularly useful because different requests produce different numbers of output tokens. A request that finishes can leave the batch while another request joins. Compute isn't the only constraint. For an autoregressive transformer, each active sequence generally needs a KV cache representing prior tokens. Very roughly:
+
+$$
+M_{\text{KV}}
+\propto
+\text{active sequences}
+\times
+\text{sequence length}
+\times
+\text{model structure}.
+$$
+
+Consequently:
+
+```text
+32 concurrent short prompts
+```
+
+might fit easily while
+
+```text
+32 concurrent 100k-token contexts
+```
+
+does not. So a fixed "maximum requests = 64" may be less useful than a resource budget such as:
+
+$$
+\text{maximum active tokens}
+$$
+
+or
+
+$$
+\text{maximum KV-cache blocks}.
+$$
+
+This is a recurring theme:
+
+> **Scale should often be measured in work units, not request units.**
+
+## How Do Autoscaling, Headroom, Cold Starts, Resilience, and Workload Classes Shape Capacity?
+<!-- section-summary: Autoscaling reacts after demand changes, so safe operation needs headroom, useful signals, cold-start planning, redundancy, and separate classes for very different work. -->
+
+Because demand changes over time, autoscaling and resilience need headroom and workload-aware signals rather than assuming new capacity appears instantly.
+
+Suppose you currently have four replicas. At 12:00:00 traffic doubles. An autoscaler doesn't instantly produce eight fully operational replicas. The sequence might be:
+
+```text
+traffic increases
+      ↓
+queue begins growing
+      ↓
+metrics observe growth
+      ↓
+metrics exported
+      ↓
+autoscaler evaluates
+      ↓
+new replica requested
+      ↓
+machine provisioned
+      ↓
+container starts
+      ↓
+model weights loaded
+      ↓
+runtime initializes
+      ↓
+server warms up
+      ↓
+capacity finally increases
+```
+
+If that process takes two minutes, then autoscaling is responding to traffic from roughly two minutes ago. This is a control-system problem. Suppose traffic jumps instantly:
+
+$$
+1,000 \rightarrow 3,000\text{ req/s}.
+$$
+
+Current fleet capacity:
+
+$$
+1,500\text{ req/s}.
+$$
+
+New replicas take 90 seconds to become usable. During those 90 seconds, the autoscaler cannot create capacity retroactively. You need one or more of:
+
+* spare capacity;
+* bounded queues;
+* traffic shaping;
+* predictive scaling;
+* scheduled scaling;
+* faster startup;
+* graceful rejection.
+
+Autoscaling is best thought of as:
+
+**A mechanism for moving capacity toward demand over time.**
+
+It is not a substitute for overload protection. A weak mental model is:
+
+"Scale when GPU utilization exceeds 80%."
+
+GPU utilization might work, but ask what you're really trying to detect. If the bottleneck is request concurrency, you may scale from:
+
+$$
+\text{in-flight requests per replica}.
+$$
+
+If workloads are queued:
+
+$$
+\text{queue depth}.
+$$
+
+If request cost is predictable:
+
+$$
+\text{incoming work units/sec}.
+$$
+
+For LLMs, you might derive a signal from:
+
+$$
+\text{input tokens/sec}
+$$
+
+and
+
+$$
+\text{output tokens/sec}.
+$$
+
+If all requests are homogeneous, request rate can work well:
+
+$$
+\text{RPS per replica}.
+$$
+
+The principle is:
+
+$$
+\boxed{\text{Scale from the signal most closely related to the resource becoming saturated.}}
+$$
+
+Not simply the metric that's easiest to collect. Suppose there are 100 requests waiting. Is that bad? If throughput is:
+
+$$
+10,000\text{ req/s},
+$$
+
+the queue represents roughly:
+
+$$
+100/10000=10ms
+$$
+
+of work. Probably fine. If throughput is:
+
+$$
+10\text{ req/s},
+$$
+
+it represents:
+
+$$
+100/10=10s.
+$$
+
+Terrible. So queue depth is often more meaningful when converted to **estimated waiting time**.
+
+Conceptually:
+
+$$
+\text{queue delay}
+\approx
+\frac{\text{queued work}}
+{\text{processing capacity}}.
+$$
+
+Again, work matters more than raw request count. "Replica created" is not the same as "replica serving." A cold start can involve:
+
+$$
+T_{\text{cold}}
+=
+T_{\text{schedule}}
++
+T_{\text{machine}}
++
+T_{\text{image}}
++
+T_{\text{weights}}
++
+T_{\text{runtime}}
++
+T_{\text{compile}}
++
+T_{\text{warmup}}.
+$$
+
+Large model weights can make this substantial. Consequently, an autoscaling policy must ask:
+
+How far ahead of demand do I need to begin adding capacity
+
+Scale-to-zero means:
+
+```text
+no requests
+→
+zero serving replicas
+→
+very low idle cost
+```
+
+That's economically attractive. But the next request becomes:
+
+```text
+request
+→
+provision server
+→
+load model
+→
+initialize
+→
+run inference
+```
+
+The first user pays the cold-start penalty. Therefore scale-to-zero is usually most attractive when:
+
+* requests are infrequent;
+* startup is quick;
+* latency requirements are loose;
+* idle hardware is expensive.
+
+It's less attractive when the service expects interactive low-latency responses. This is fundamentally a trade:
+
+$$
+\boxed{\text{idle cost} \leftrightarrow \text{cold-start latency}}
+$$
+
+Now suppose load testing tells you:
+
+One replica can sustainably handle 18 req/s while keeping p99 below our target.
+
+Forecast peak traffic:
+
+$$
+120\text{ req/s}.
+$$
+
+Naively:
+
+$$
+N=\left\lceil\frac{120}{18}\right\rceil=7.
+$$
+
+Seven replicas provide:
+
+$$
+7\times18=126.
+$$
+
+That's dangerously close to the expected peak. Suppose you want 20% headroom. Treat usable capacity per replica as:
+
+$$
+18\times0.8=14.4.
+$$
+
+Then:
+
+$$
+N=
+\left\lceil
+\frac{120}{14.4}
+\right\rceil
+=9.
+$$
+
+Nine replicas give substantially more breathing room. Suppose you require the service to survive the loss of one replica. Nine replicas normally provide:
+
+$$
+9\times18=162.
+$$
+
+With one failed:
+
+$$
+8\times18=144.
+$$
+
+Peak demand remains:
+
+$$
+120.
+$$
+
+Good. But failure domains can be larger than a single replica. You may need to survive:
+
+* one host;
+* one rack;
+* one availability zone;
+* one accelerator pool.
+
+The appropriate reserve depends on your reliability requirement. So capacity planning is not merely:
+
+$$
+\frac{\text{traffic}}{\text{machine throughput}}.
+$$
+
+A more realistic concept is:
+
+$$
+\boxed{
+\text{Required capacity}
+=
+\text{peak workload}
++
+\text{latency headroom}
++
+\text{failure reserve}
++
+\text{growth reserve}
+}
+$$
+
+while recognizing these aren't always simple additive percentages. Suppose your workload contains:
+
+```text
+80% small requests
+15% medium requests
+5% enormous requests
+```
+
+Average request size might suggest one replica handles:
+
+$$
+50\text{ requests/sec}.
+$$
+
+But bursts of enormous requests could saturate it. A better model could estimate work:
+
+$$
+W_i =
+aT_{in,i}
++
+bT_{out,i}.
+$$
+
+Then fleet demand becomes:
+
+$$
+W_{\text{total/sec}}
+=
+\lambda E[W].
+$$
+
+Better still, simulate the **actual empirical distribution**, including correlations. For example, perhaps long prompts also tend to produce long outputs. Assuming those dimensions are independent would underestimate the tail.
+
+## How Do You Measure Cost per Accepted Result?
+<!-- section-summary: Cost per accepted useful result includes failed, rejected, retried, idle, and batched work and exposes the real latency-cost trade. -->
+
+Capacity is economically useful only when it produces accepted results, so cost accounting must include waste and the required service objective.
+
+Suppose you operate 8 GPU replicas costing:
+
+$$
+\$3/\text{hour each}.
+$$
+
+Fleet cost:
+
+$$
+8\times3=\$24/\text{hour}.
+$$
+
+The fleet successfully delivers:
+
+$$
+40\text{ results/sec}.
+$$
+
+Per hour:
+
+$$
+40\times3600=144,000
+$$
+
+results. Infrastructure cost/result:
+
+$$
+\frac{24}{144000}
+=
+\$0.0001667.
+$$
+
+Approximately:
+
+$$
+\boxed{\$0.000167/\text{accepted result}}
+$$
+
+before other costs. Suppose your service receives 150,000 requests/hour, but:
+
+* 5,000 time out;
+* 1,000 fail;
+* retries consume 10,000 executions;
+* 4,000 results are discarded by downstream validation.
+
+If your business actually receives only:
+
+$$
+140,000
+$$
+
+useful results, dividing cost by 150,000 makes economics look artificially good. A useful formulation is:
+
+$$
+\boxed{
+\text{Cost per accepted result}
+=
+\frac{\text{total serving cost}}
+{\text{useful accepted results}}
+}
+$$
+
+Total serving cost should ideally include:
+
+$$
+C =
+C_{\text{accelerators}}
++
+C_{\text{CPU}}
++
+C_{\text{memory}}
++
+C_{\text{network}}
++
+C_{\text{storage}}
++
+C_{\text{supporting services}}
+$$
+
+plus the compute wasted on errors, retries, and rejected outputs when appropriate. This metric aligns infrastructure optimization with actual product value. Imagine one GPU costs:
+
+$$
+\$3/hour.
+$$
+
+Unbatched throughput:
+
+$$
+50\text{ results/sec}.
+$$
+
+Cost/result:
+
+$$
+\frac{3}{50\times3600}
+=
+\$0.0000167.
+$$
+
+With batching:
+
+$$
+150\text{ results/sec}.
+$$
+
+Cost/result:
+
+$$
+\frac{3}{150\times3600}
+=
+\$0.00000556.
+$$
+
+Roughly a 3× reduction. The latency of an individual computation didn't necessarily improve by 3×. Instead, you extracted more useful results from each GPU-second. That distinction is important:
+
+$$
+\boxed{\text{Efficiency improvement} \neq \text{individual latency improvement}.}
+$$
+
+Suppose batch size 1 gives:
+
+```text
+p99 latency: 100 ms
+GPU utilization: 20%
+cost/result: high
+```
+
+Batch size 32 gives:
+
+```text
+p99 latency: 900 ms
+GPU utilization: 90%
+cost/result: low
+```
+
+If the product allows:
+
+$$
+p99<1s,
+$$
+
+batch 32 may be excellent. If the product requires:
+
+$$
+p99<200ms,
+$$
+
+it may be unusable. Therefore optimization isn't:
+
+$$
+\min(\text{cost}).
+$$
+
+It is closer to:
+
+$$
+\min(\text{cost})
+$$
+
+subject to:
+
+$$
+p99 \le L_{\max},
+$$
+
+$$
+error\ rate \le E_{\max},
+$$
+
+$$
+quality \ge Q_{\min}.
+$$
+
+This is how an inference problem becomes an engineering optimization problem.
 
 ![A safe per-replica operating limit before the saturation knee, connected to bounded admission and the delayed path from an autoscaling signal to a ready replica.](/content-assets/articles/article-mlops-model-serving-latency-throughput-autoscaling-cost/safe-operating-point.png)
 
 *The tested inflight limit and bounded queue protect current requests; a warm floor and headroom bridge the separate delay before autoscaling can add ready capacity.*
 
-## Choose An Autoscaler From Its Signal And Serving Platform
-<!-- section-summary: HPA, KEDA, Knative, and KServe operate at different layers, so the workload and scaling signal determine which component should own the decision. -->
+## How Do Open-Loop and Closed-Loop Tests Find Sustainable Throughput?
+<!-- section-summary: Open-loop tests reveal overload under fixed arrivals, closed-loop tests reflect waiting clients, and realistic distributions find maximum sustainable rather than momentary throughput. -->
 
-The industrial stack provides several scaling components. They solve related parts of the system and should be selected by responsibility.
+Those numbers require load tests that preserve real arrivals, work distributions, and queueing instead of hiding overload.
 
-### Kubernetes Horizontal Pod Autoscaler
+A useful load test answers:
 
-The **Horizontal Pod Autoscaler**, or **HPA**, is the standard Kubernetes controller for changing replica count on a scalable workload such as a Deployment. The stable `autoscaling/v2` API supports CPU, memory, per-pod custom metrics, object metrics, and external metrics. If several metrics are configured, HPA calculates a desired count for each and uses the highest recommendation.
+What is the largest workload this system can sustainably process while meeting our service objectives
 
-CPU utilization is appropriate for a CPU-bound model whose CPU usage rises before latency fails. GPU endpoints often need a serving signal such as inflight requests or queue pressure because CPU can remain quiet while the accelerator is full. Custom metrics require an adapter that exposes them through the Kubernetes metrics APIs.
+That means gradually increasing offered load and recording things such as:
 
-HPA behaviour policies control scale-up and scale-down velocity. A scale-down stabilization window keeps recent higher recommendations and preserves useful capacity through a short dip.
+* accepted throughput;
+* latency distributions;
+* TTFT;
+* token generation rate;
+* queue delay;
+* GPU memory;
+* compute utilization;
+* batch sizes;
+* errors;
+* rejects;
+* timeouts.
 
-### KEDA
+The crucial output isn't:
 
-**Kubernetes Event-driven Autoscaling**, or **KEDA**, connects event sources and external metrics to Kubernetes scaling. For a ScaledObject, KEDA owns activation between zero and one replica, then supplies metrics to HPA for scaling between one and many. This is valuable for message queues and for Prometheus signals that already represent model-serving demand.
+"It handled 10,000 RPS once."
 
-A focused Prometheus-backed policy could scale an inference Deployment from total inflight work. An interactive endpoint keeps a warm floor of two replicas:
+It's something like:
 
-```yaml
-apiVersion: keda.sh/v1alpha1
-kind: ScaledObject
-metadata:
-  name: ranking-inference
-spec:
-  scaleTargetRef:
-    name: ranking-inference
-  minReplicaCount: 2
-  maxReplicaCount: 20
-  cooldownPeriod: 300
-  triggers:
-    - type: prometheus
-      metadata:
-        serverAddress: http://prometheus.monitoring.svc:9090
-        query: sum(ml_inference_inflight_requests{service="ranking-inference"})
-        threshold: "8"
+"With the production request-size distribution, one replica sustainably handles 63 RPS while maintaining p99 < 800 ms and error rate < 0.1%; beyond approximately 70 RPS queueing rises sharply."
+
+That's actionable capacity information. This distinction is extremely important. A simplistic client might do:
+
+```text
+send request
+wait for response
+send next request
 ```
 
-The threshold represents the target metric value used by the scaling calculation. Its value must come from the safe per-replica concurrency test. The metric query must return one usable scalar, and the production design needs authentication, metric-loss behaviour, and ownership of the generated HPA.
+Suppose the server slows down. The load generator now sends requests more slowly because it's waiting longer. Ironically, the test reduces offered load exactly when the server becomes overloaded. This is a **closed-loop** workload. It can hide capacity problems. For many online systems, you also want an **open-loop** test in which arrivals occur according to a target schedule:
 
-### Knative Serving
-
-**Knative Serving** provides request-driven scaling for services and supports scaling to zero. Its pod autoscaler can use concurrency or requests per second. Knative distinguishes a soft concurrency target used for scaling from an optional hard `containerConcurrency` limit that controls how many simultaneous requests reach a replica.
-
-Knative fits predictive endpoints with request patterns and startup times compatible with its request buffering and activation path. A low hard concurrency limit can create extra buffering and cold starts, so derive it from the same saturation experiment used for other admission controls.
-
-### KServe
-
-**KServe** adds model-serving resources and lifecycle management on Kubernetes. Its current architecture offers Standard mode for direct Kubernetes control and Knative mode for serverless predictive inference. Standard deployments can use HPA and, where configured, KEDA for custom metrics. KServe documents KEDA scaling from Prometheus or OpenTelemetry-derived LLM metrics such as waiting requests or KV-cache pressure.
-
-For GPU-heavy generative inference, current KServe guidance favors Standard mode because long requests, accelerator scheduling, and specialized scaling signals need more direct control. Knative mode is aimed primarily at predictive workloads that benefit from request-based scaling and scale-to-zero behaviour.
-
-The choice follows the workload. Use HPA for a direct Kubernetes replica controller with available metrics. Add KEDA for event-driven activation or external sources. Use Knative for request-driven serverless behaviour. Use KServe to standardize the model-serving resource and runtime lifecycle, then select the supported autoscaling path within that deployment mode.
-
-## Plan For Cold Starts And Scale To Zero
-<!-- section-summary: Cold-start time determines whether new or zero-scaled capacity can meet the product's response objective. -->
-
-A **cold start** is the delay before newly requested capacity can serve real traffic. For ML systems, it can include node provisioning, image pull, model download, engine compilation, weight loading, device-memory allocation, dependency connection, warm-up, and readiness.
-
-Measure each stage separately. A large container image may dominate one service. A TensorRT engine build may dominate another. A large language model may spend most startup time downloading weights and filling device memory. The slowest stage needs an owner and a tested improvement path.
-
-**Scale to zero** removes all serving replicas during idle periods. It saves idle compute, while the first new request or event must activate the service. That behaviour suits asynchronous jobs, development endpoints, and interactive products whose contract explicitly tolerates the activation delay.
-
-Suppose a GPU endpoint takes six minutes to provision a node and load its model. A two-second user objective requires ready capacity, a smaller warm fallback, or an asynchronous product flow. For a nightly document-embedding queue, six minutes may be acceptable and scale to zero can materially reduce cost.
-
-```mermaid
-flowchart TD
-    A{"Idle Capacity Decision<br/>(compare startup delay with product tolerance)"} -->|"Immediate response required"| B["Warm Floor<br/>(keep ready replicas or nodes)"]
-    A -->|"Delay is acceptable"| C["Scale To Zero<br/>(activate from request or event)"]
-    B --> D["Ready Route<br/>(serve bursts inside the latency budget)"]
-    C --> E["Activation Path<br/>(provision pull load warm and become ready)"]
-    E --> F["Deferred Or First Response<br/>(complete after startup)"]
-    D --> G["Measured Cost<br/>(include idle reserve)"]
-    F --> G
-
-    class A choice; class B,C,D,E path; class F,G result
+```text
+10:00:00.000 request
+10:00:00.010 request
+10:00:00.020 request
+...
 ```
 
-Caches help only with controlled compatibility. A cached engine needs a matching model graph, runtime, driver expectations, and hardware profile. A cached artifact needs digest verification and an eviction policy. Readiness should remain false until a representative warm-up proves the actual execution path.
+regardless of whether previous requests finished. That more realistically demonstrates what happens when users keep arriving while the service slows. A related benchmarking mistake is sometimes called **coordinated omission**. Imagine a request should have been sent every 10 ms. The server stalls for one second. If your load generator waits for the previous response, it skips the requests that would have arrived during that second. The resulting latency histogram underrepresents how bad real-world overload would have been. For capacity testing, your traffic generator should represent intended arrival times accurately. Suppose production prompts have:
 
-## Build A Capacity Plan From Measurements
-<!-- section-summary: A capacity plan converts safe per-replica throughput into replica floors, peak capacity, failure reserve, and infrastructure limits. -->
+$$
+p50=500\text{ tokens}
+$$
 
-The capacity plan starts with one configuration that passed the quality, latency, memory, and error gates. Record its sustainable accepted throughput for the representative request mix at the safe concurrency limit.
+but
 
-A first replica estimate is:
+$$
+p99=20,000\text{ tokens}.
+$$
 
-\[
-N = \left\lceil \frac{R_{peak}}{T_{safe} \times U_{target}} \right\rceil
-\]
+Benchmarking exclusively with 500-token prompts answers:
 
-Here, **N** is the replica count, **R peak** is forecast peak arrival rate, **T safe** is sustainable accepted throughput per warmed replica, and **U target** is the chosen load fraction that preserves headroom.
+"What happens when every request resembles p50?"
 
-If one replica safely accepts 70 requests per second and the target load fraction is 0.65, plan around 45.5 requests per second of usable capacity per replica. A peak of 400 requests per second needs nine replicas before additional failure reserve.
+It does not answer:
 
-Headroom has a purpose. Traffic variance needs some. Uneven load balancing may leave one replica hotter than another. A rolling release needs old and new replicas at the same time. Zone or node failure removes capacity. A slower dependency can reduce per-replica throughput. State which event each reserve covers.
+"What will happen in production?"
 
-The infrastructure must also be able to place the plan. Check node-pool maximums, GPU availability, quotas, IP capacity, topology constraints, image-registry throughput, and model-storage bandwidth. An autoscaler with `maxReplicas: 50` provides no protection if the cluster can place only 12 replicas.
+You should normally preserve the important characteristics of real traffic:
 
-Test capacity loss as well as demand growth. Remove a node or a zone-sized share of replicas under representative traffic. Observe admission, queue bounds, fallback, autoscaling, replacement readiness, and recovery time. This establishes whether the stated reserve works in the failure it was meant to cover.
-
-## Calculate Cost Per Accepted Result
-<!-- section-summary: Cost per accepted result connects total serving spend with predictions that met the required quality, latency, and outcome contract. -->
-
-Hourly instance price is only one part of serving cost. Include CPU or accelerator capacity, memory, nodes held ready, storage, model transfer, networking, observability, managed control planes, and platform overhead. Failed attempts, late results, and duplicate retries consume those resources too.
-
-Define an **accepted result** before calculating unit cost. For an online classifier, it may be a valid prediction returned inside the latency objective. For an LLM endpoint, it may require a completed or deliberately stopped response that passed safety checks. For a batch job, it may be a record published exactly once before the deadline.
-
-\[
-\text{cost per accepted result} = \frac{\text{serving spend for the period}}{\text{accepted results in the period}}
-\]
-
-Suppose a service spends £120 during a load window. It receives one million requests, rejects 50,000 during overload, and returns another 20,000 after the product deadline. The denominator is 930,000 accepted results, giving about £0.000129 per accepted result. Dividing by all one million requests would hide the cost of unusable work.
-
-Segment unit cost by model route, request class, hardware pool, and region. A larger GPU can cost more per hour and less per accepted result if it completes far more useful work. A shared deployment can reduce idle cost and introduce contention that harms p99. A warm floor raises idle spend and may be necessary to meet the availability and cold-start contract.
-
-Cost optimization should preserve the product gates. Batching, compilation, quantization, caching, smaller models, workload routing, and scale-down policies can all change quality, latency, or failure behaviour. Compare complete candidates at the same accepted-result definition.
-
-## Use Load Tests To Prove Safe Operating Limits
-<!-- section-summary: Load tests identify the range of traffic and failures where latency, quality, rejection, memory, recovery, and cost remain acceptable together. -->
-
-A production load test should answer a release question. It uses the exact artifact, serving image, hardware class, model-server configuration, autoscaling policy, and dependency path intended for production.
-
-Build the campaign in layers:
-
-1. **Warm baseline.** Confirm correctness and low-load latency after the declared warm-up state.
-2. **Step or ramp.** Increase offered arrival rate to locate the saturation knee and safe per-replica concurrency.
-3. **Burst.** Test admission, queue bounds, retry amplification, and the time before scaled capacity is ready.
-4. **Soak.** Hold representative load long enough to expose leaks, cache growth, fragmentation, or thermal effects.
-5. **Shape stress.** Exercise the largest supported images, candidate sets, prompts, and generated outputs in their expected proportions.
-6. **Dependency impairment.** Add latency or failure to feature stores, model storage, queues, and downstream services.
-7. **Capacity loss.** Drain nodes or remove a failure-sized share of replicas during traffic.
-8. **Recovery.** Confirm that queues fall, fallback stops, and unit cost returns to its expected range.
-
-Grafana k6 can generate constant or ramping arrival-rate scenarios and enforce thresholds. A focused test gate might require accepted p99 under 250 milliseconds and rejection below 0.5%:
-
-```javascript
-export const options = {
-  scenarios: {
-    peak: {
-      executor: "constant-arrival-rate",
-      rate: 900,
-      timeUnit: "1s",
-      duration: "10m",
-      preAllocatedVUs: 300,
-      maxVUs: 1200,
-    },
-  },
-  thresholds: {
-    http_req_duration: ["p(99)<250"],
-    http_req_failed: ["rate<0.005"],
-  },
-};
+```text
+request sizes
+output lengths
+burstiness
+arrival rate
+model selection
+cache hit rate
+request mix
+streaming/nonstreaming
 ```
 
-The load generator must have enough capacity to maintain the offered rate. k6 exposes dropped iterations if it runs out of available virtual users. Monitor the generator separately because a client-side bottleneck can create a falsely low service load.
+And test worst-case or adversarial-but-valid workloads separately. Suppose a machine handles:
 
-Store the workload contract, test code, raw results, release identity, and gate decision together. Re-run after material changes to the model, runtime, hardware, batching, request distribution, autoscaler, dependencies, or overload policy.
+$$
+200\text{ req/s}
+$$
 
-## Release And Recover Capacity Changes Safely
-<!-- section-summary: Capacity changes need staged release gates, signal-based diagnosis, a safe traffic route, and proof that recovery restores the full service contract. -->
+for ten seconds. Then memory fills, queues grow, and throughput falls to 140 req/s. Its capacity is not meaningfully 200 req/s. A system is stable only when:
 
-A capacity release can change the model, runtime, container resources, concurrency, batching, queue limits, replica floor, autoscaling signal, scaling thresholds, node pool, or fallback. Each change can affect several signals, so release the complete configuration as one identified candidate.
+$$
+\text{long-run accepted arrival rate}
+\le
+\text{long-run service rate}.
+$$
 
-Before production exposure, require four groups of evidence. The **service gate** proves accepted p99 and throughput at the release load. Rejection, fallback, and errors must stay inside their separate limits.
+Otherwise backlog keeps growing. Hence the word **sustainable** matters. Run tests long enough to expose:
 
-The **resource gate** proves memory and saturation headroom on each supported hardware class. The **control gate** proves that metrics remain available, scaled capacity reaches readiness inside its budget, and the platform can reach the declared maximum. It also verifies stable scale-down. The **economic gate** checks cost per accepted result at ordinary and peak traffic.
+* memory growth;
+* cache behavior;
+* thermal effects;
+* queue accumulation;
+* periodic maintenance;
+* autoscaling behavior;
+* resource fragmentation.
 
-Use a small canary with the same request-shape mix as the target route. Compare it with the previous configuration across latency stages, queue age, accepted throughput, resource pressure, scaling events, cold starts, and unit cost. Expand only through predefined evidence windows.
+## How Should Capacity Regressions and Releases Be Controlled?
+<!-- section-summary: Releases consume temporary capacity and can move the knee, so performance evidence, progressive exposure, and the full request path belong in correctness gates. -->
 
-```mermaid
-flowchart TD
-    A["Capacity Candidate<br/>(runtime limits scaling and overload policy)"] --> B["Preproduction Gates<br/>(load failure startup and cost evidence)"]
-    B --> C["Small Canary<br/>(representative production traffic)"]
-    C --> D{"Release Evidence<br/>(latency capacity control and cost limits)"}
-    D -->|"All limits hold"| E["Staged Expansion<br/>(increase traffic with the same checks)"]
-    D -->|"A limit is breached"| F["Restore Safe Route<br/>(shift traffic and preserve evidence)"]
-    E --> G["Production Baseline<br/>(record the accepted operating envelope)"]
-    F --> H["Targeted Diagnosis<br/>(identify demand queue runtime or platform cause)"]
+A new release can change both performance and available headroom, so capacity regressions need the same progressive control as functional changes.
 
-    class A candidate; class B,C,E gate; class D choice; class F,G,H result
+Imagine you have ten replicas. You deploy a new version. During rollout:
+
+* some old replicas terminate;
+* new replicas load weights;
+* caches are cold;
+* JIT compilation happens;
+* new containers warm up.
+
+Even if steady-state capacity is unchanged, effective serving capacity during deployment may drop. That can cause:
+
+```text
+deployment
+→ lower capacity
+→ queues grow
+→ autoscaler reacts
+→ more replicas start
+→ deployment progresses
+→ demand/capacity oscillate
 ```
 
-During an incident, read the signal relationships in order. Confirm offered arrival rate and request mix. Check accepted throughput and rejection. Inspect queue age and inflight work. Compare stage latency. Identify the saturated resource. Then inspect desired, scheduled, starting, ready, and unavailable replicas.
+Capacity management and deployment strategy therefore interact. Suppose a runtime upgrade produces exactly the same model outputs but changes throughput:
 
-Several patterns lead to different actions:
+$$
+100\rightarrow75\text{ req/s}.
+$$
 
-- Rising queue age with stable per-request execution indicates insufficient ready capacity or an admission limit that is too loose. Contain with load shedding or fallback while capacity recovers.
-- Rising model execution time with stable traffic points toward an artifact, runtime, input-shape, hardware, or neighbour change. Shift traffic to the previous route and compare profiles.
-- Desired replicas rise while ready replicas stay flat indicates scheduling, quota, node provisioning, image pull, model load, or readiness trouble. Inspect the startup chain before increasing the desired maximum.
-- Rejections rise while p99 improves indicates that overload control is protecting the accepted path. Verify the rejection budget and product impact before declaring the service healthy.
-- Cost rises with flat accepted throughput indicates idle capacity, failed work, routing imbalance, or a less efficient candidate. Break unit cost down by route and hardware pool.
+That's a 25% serving-capacity regression. For a fleet of 100 GPUs, maintaining previous capacity might now require roughly:
 
-Rollback restores a known-safe combination of limits, scaling policy, serving image, artifact, and routing. Keep enough old capacity ready during a risky rollout, especially where node and model startup are slow. After recovery, prove that queue age returns to baseline, accepted p99 and rejection meet their gates, the autoscaler stabilizes, and cost per accepted result returns to the approved range.
+$$
+100\times\frac{100}{75}
+\approx133
+$$
 
-## The Main Idea
+GPUs. A "correct" software change just increased your required hardware by about one-third. Performance is therefore part of production correctness for inference infrastructure. For things that affect serving behavior—new model, quantization format, runtime, batch scheduler, kernel, GPU type, context limits—a safer pattern is:
 
-Inference scaling is the controlled relationship among arriving work, per-request time, safe concurrency, finite capacity, queueing, delayed autoscaling, and spend. Latency shows the experience of one request. Throughput shows completed work. Concurrency and queues show work in progress. Saturation explains the limit. Cost per accepted result shows the economic consequence.
+```text
+benchmark
+    ↓
+small canary
+    ↓
+compare latency / throughput / errors
+    ↓
+increase traffic gradually
+    ↓
+watch saturation
+    ↓
+continue or rollback
+```
 
-Measure the whole request path and representative workload. Find the safe operating point for one replica. Bound the queue and define overload behaviour. Choose an autoscaling component whose signal matches the missing capacity, then account for its startup delay. Prove peak load, capacity loss, recovery, and unit cost before expanding the release.
+The important thing is to compare under equivalent workload distributions. Otherwise:
+
+```text
+old version gets hard requests
+new version gets easy requests
+```
+
+can produce misleading performance conclusions. At this point, we can reduce most model-serving questions to four quantities.
+
+### Demand
+
+$$
+D =
+\lambda
+\times
+E[\text{work/request}].
+$$
+
+How much work users ask for.
+
+### Supply
+
+$$
+S =
+N
+\times
+\text{safe work/second/replica}.
+$$
+
+How much work your fleet can sustainably perform.
+
+### Delay
+
+As:
+
+$$
+D\rightarrow S,
+$$
+
+queues generally become increasingly sensitive to randomness. Hence:
+
+$$
+\boxed{\text{operating at }D=S\text{ is usually unsafe}}
+$$
+
+for an interactive service.
+
+### Cost
+
+$$
+\text{Cost per accepted result}
+=
+\frac{\text{resource cost/time}}
+{\text{accepted results/time}}.
+$$
+
+Which can be rewritten approximately as:
+
+$$
+\boxed{
+\text{Cost/result}
+\propto
+\frac{\text{hardware price}}
+{\text{useful hardware throughput}}
+}
+$$
+
+plus supporting costs. This shows why the major serving optimizations are so economically valuable:
+
+* batching increases useful throughput;
+* quantization may increase throughput or reduce required hardware;
+* efficient kernels increase work/GPU-second;
+* request routing reduces wasted capacity;
+* right-sizing reduces idle capacity;
+* autoscaling reduces excess idle capacity;
+* caching avoids recomputation;
+* overload control prevents resources being wasted on doomed requests.
+
+All of them improve some part of that ratio. Consider an LLM API. Production traffic:
+
+$$
+\lambda_{\text{peak}}=1,000\text{ req/s}.
+$$
+
+Request distribution:
+
+```text
+Input tokens:
+p50 =   500
+p95 = 4,000
+p99 = 15,000
+
+Output tokens:
+p50 = 100
+p95 = 500
+p99 = 1,200
+```
+
+SLO:
+
+$$
+p99(TTFT)<1s.
+$$
+
+Load testing with the production distribution finds:
+
+```text
+30 req/s → p99 300 ms
+40 req/s → p99 450 ms
+50 req/s → p99 700 ms
+55 req/s → p99 950 ms
+60 req/s → p99 1,800 ms
+65 req/s → p99 4,000 ms
+```
+
+The physical maximum might be around:
+
+$$
+65\text{ req/s}.
+$$
+
+But the SLO-compatible capacity is:
+
+$$
+55\text{ req/s}.
+$$
+
+You decide to operate at roughly 80% of that:
+
+$$
+55\times0.8=44\text{ req/s/replica}.
+$$
+
+Required replicas:
+
+$$
+\left\lceil
+\frac{1000}{44}
+\right\rceil
+=
+23.
+$$
+
+Now suppose each replica costs:
+
+$$
+\$4/hour.
+$$
+
+Fleet cost:
+
+$$
+23\times4=\$92/hour.
+$$
+
+At peak, if 1,000 results/sec are successfully delivered:
+
+$$
+1000\times3600=3.6\text{ million results/hour}.
+$$
+
+Accelerator cost per result:
+
+$$
+\frac{92}{3,600,000}
+\approx\$0.0000256.
+$$
+
+Then suppose better batching increases safe capacity:
+
+$$
+55\rightarrow70\text{ req/s}.
+$$
+
+With the same 80% operating target:
+
+$$
+70\times0.8=56.
+$$
+
+Required replicas become:
+
+$$
+\left\lceil\frac{1000}{56}\right\rceil=18.
+$$
+
+Cost:
+
+$$
+18\times4=\$72/hour.
+$$
+
+The batching improvement saves:
+
+$$
+\$20/hour
+$$
+
+at that traffic level while preserving the same latency objective. That's model-serving economics in its simplest form.
+
+## Which Curves Explain Inference Capacity as a Budget?
+<!-- section-summary: Arrival, service, and cost curves show that finite capacity is a budget allocated across work, latency, resilience, and spend. -->
+
+The final curves summarize the system as a finite budget whose allocation determines throughput, latency, resilience, and cost.
+
+The concepts aren't independent. They form a loop:
+
+```text
+               request distribution
+                        │
+                        ▼
+                   amount of work
+                        │
+                        ▼
+traffic ──────────► concurrency
+                        │
+                        ▼
+                     batching
+                        │
+                        ▼
+             hardware efficiency
+                        │
+                        ▼
+                 service capacity
+                        │
+           ┌────────────┴────────────┐
+           ▼                         ▼
+        latency                    cost
+           │                         │
+           ▼                         │
+      SLO violations                 │
+           │                         │
+           ▼                         │
+   admission / scaling ◄─────────────┘
+```
+
+For example:
+
+**More concurrency** → larger batches → better GPU utilization → lower cost/result but also:
+
+→ more contention → larger queues → worse latency. So there is rarely a single "maximum" value you want. You are searching for a **safe operating region**. The behavior of many serving systems can be understood with three conceptual curves.
+
+### Throughput versus load
+
+```text
+Throughput
+ ^
+ |                    ___________
+ |                 __/
+ |              __/
+ |           __/
+ |        __/
+ |_____ _/
+ +----------------------------> offered load
+```
+
+Throughput eventually plateaus because physical capacity is finite.
+
+### Latency versus load
+
+```text
+Latency
+ ^
+ |                          /
+ |                       __/
+ |                    __/
+ |                ___/
+ |______________/
+ +----------------------------> offered load
+```
+
+Latency grows sharply around saturation.
+
+### Cost per result versus utilization
+
+```text
+Cost/result
+ ^
+ |\
+ | \
+ |  \
+ |   \______
+ |          \____
+ +----------------------------> utilization
+```
+
+Low utilization is expensive because you're paying for idle hardware. The engineering challenge is operating far enough right to obtain good economics, but not so far right that queueing destroys latency and reliability. You can think of every serving system as having a budget of resource-time. Suppose a fleet gives you:
+
+$$
+10,000\text{ GPU-seconds per second}
+$$
+
+of some normalized effective capacity. Every request spends part of that budget. Long prompts spend more. Long generations spend more. Retries spend the budget twice. Failed requests spend budget without producing useful results. Padding spends budget doing useless computation. Underfilled batches leave budget unused. Idle replicas represent purchased budget that nobody spends. An efficient serving system tries to maximize:
+
+$$
+\boxed{
+\frac{\text{useful accepted work}}
+{\text{purchased resources}}
+}
+$$
+
+while satisfying:
+
+$$
+\text{latency},
+\quad
+\text{reliability},
+\quad
+\text{quality}
+$$
+
+requirements. That perspective unifies almost every optimization in inference serving. If you remember only one model, make it this:
+
+$$
+\boxed{
+\text{Demand}
+=
+\text{arrival rate}
+\times
+\text{work/request}
+}
+$$
+
+$$
+\boxed{
+\text{Supply}
+=
+\text{replicas}
+\times
+\text{safe work/replica/sec}
+}
+$$
+
+and production requires:
+
+$$
+\boxed{
+\text{Demand}
+<
+\text{Supply}
+}
+$$
+
+with enough margin to absorb variance, bursts, failures, and autoscaling delay. As demand approaches supply, queues grow and tail latency rises sharply. **Concurrency** helps keep hardware busy but becomes harmful after saturation. **Batching** turns concurrency into hardware efficiency but consumes latency budget. **Bounded queues and backpressure** prevent overload from turning into collapse. **Autoscaling** changes supply, but only after a delay. **Cold starts** determine how large that delay can be. **Load tests** experimentally locate the safe operating region. Finally:
+
+$$
+\boxed{
+\text{Cost per accepted result}
+=
+\frac{\text{total serving cost}}
+{\text{useful results delivered}}
+}
+$$
+
+So the goal of model serving is not maximum GPU utilization, minimum latency, maximum throughput, or minimum server count in isolation. It is:
+
+> **Deliver the required amount of useful inference work, within the latency and reliability constraints, using the smallest sustainable amount of resources.**
+
+Once you understand that, concurrency limits, batching policies, autoscaling thresholds, queue sizes, capacity plans, and infrastructure cost all become different expressions of the same underlying problem.
 
 ![Capacity-release workflow from a representative workload contract and one-replica tests through a safe operating point, capacity plan, staged release, operating baseline, four evidence gates, and complete recovery.](/content-assets/articles/article-mlops-model-serving-latency-throughput-autoscaling-cost/capacity-release-summary.png)
 
 *A capacity change is ready for release only after service, resource, control, and economic evidence pass together, with a tested route back to the previous complete configuration when any limit fails.*
 
-## References
+## Check Your Answers
 
-- [Kubernetes Horizontal Pod Autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/)
-- [Kubernetes HorizontalPodAutoscaler API](https://kubernetes.io/docs/reference/kubernetes-api/autoscaling-resources/horizontal-pod-autoscaler-v2/)
-- [KEDA scaling Deployments and StatefulSets](https://keda.sh/docs/latest/concepts/scaling-deployments/)
-- [KEDA Prometheus scaler](https://keda.sh/docs/latest/scalers/prometheus/)
-- [Knative Serving autoscaling](https://knative.dev/docs/serving/autoscaling/)
-- [Knative concurrency configuration](https://knative.dev/docs/serving/autoscaling/concurrency/)
-- [KServe control-plane architecture](https://kserve.github.io/website/docs/concepts/architecture/control-plane)
-- [KServe autoscaling with LLM metrics](https://kserve.github.io/website/docs/model-serving/generative-inference/autoscaling)
-- [KServe administrator guide](https://kserve.github.io/website/docs/admin-guide/overview)
-- [Prometheus histograms and summaries](https://prometheus.io/docs/practices/histograms/)
-- [OpenTelemetry HTTP metrics conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/)
-- [NVIDIA Triton dynamic batching](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html)
-- [NVIDIA Triton Performance Analyzer](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/perf_analyzer/README.html)
-- [Grafana k6 arrival-rate testing](https://grafana.com/docs/k6/latest/using-k6/scenarios/concepts/arrival-rate-vu-allocation/)
-- [Grafana k6 thresholds](https://grafana.com/docs/k6/latest/using-k6/thresholds/)
-- [Google SRE Book: Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Work and Metrics Define Inference Cost and Scale?]{kind="recap"}
+Serving converts arriving work into accepted results with finite compute, memory, bandwidth, time, and money, measured through rates, latency, queueing, and errors.
+:::
+
+:::expand[Why Does Latency Rise near Capacity, and How Should the Full Path Be Measured?]{kind="recap"}
+Capacity has a knee where queues grow rapidly; end-to-end histograms, percentiles, traffic distributions, and Little's Law explain the complete path.
+:::
+
+:::expand[How Do Concurrency, Bounded Queues, Backpressure, Retries, Batching, and Memory Interact?]{kind="recap"}
+Concurrency only creates in-flight work, bounded queues and backpressure contain overload, retries amplify it, batching improves efficiency with delay, and memory sets another limit.
+:::
+
+:::expand[How Do Autoscaling, Headroom, Cold Starts, Resilience, and Workload Classes Shape Capacity?]{kind="recap"}
+Autoscaling reacts after demand changes, so safe operation needs headroom, useful signals, cold-start planning, redundancy, and separate classes for very different work.
+:::
+
+:::expand[How Do You Measure Cost per Accepted Result?]{kind="recap"}
+Cost per accepted useful result includes failed, rejected, retried, idle, and batched work and exposes the real latency-cost trade.
+:::
+
+:::expand[How Do Open-Loop and Closed-Loop Tests Find Sustainable Throughput?]{kind="recap"}
+Open-loop tests reveal overload under fixed arrivals, closed-loop tests reflect waiting clients, and realistic distributions find maximum sustainable rather than momentary throughput.
+:::
+
+:::expand[How Should Capacity Regressions and Releases Be Controlled?]{kind="recap"}
+Releases consume temporary capacity and can move the knee, so performance evidence, progressive exposure, and the full request path belong in correctness gates.
+:::
+
+:::expand[Which Curves Explain Inference Capacity as a Budget?]{kind="recap"}
+Arrival, service, and cost curves show that finite capacity is a budget allocated across work, latency, resilience, and spend.
+:::

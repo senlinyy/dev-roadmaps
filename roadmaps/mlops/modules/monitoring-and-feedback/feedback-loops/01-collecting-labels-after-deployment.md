@@ -1,7 +1,7 @@
 ---
 title: "Production Labels"
-description: "Define outcomes, preserve label provenance and maturity, join them to prediction-time identity, and control bias before monitoring or training use."
-overview: "Production labels are observations about what happened after a model decision. Their lifecycle preserves outcome meaning, provenance, delay, corrections, joins, quality, selection, and eligibility."
+description: "A production label is a versioned claim that a specific prediction's target outcome has been observed under the same definition used for training or evaluation."
+overview: "A production label is a versioned claim that a specific prediction's target outcome has been observed under the same definition used for training or evaluation. Labels close the loop by joining predictions to matured outcomes, exposing coverage and bias, supporting investigation, and providing governed evidence for future learning."
 tags: ["MLOps", "production", "feedback"]
 order: 1
 id: "article-mlops-monitoring-and-feedback-collecting-labels-after-deployment"
@@ -9,446 +9,2833 @@ id: "article-mlops-monitoring-and-feedback-collecting-labels-after-deployment"
 
 ## Table of Contents
 
-1. [What A Production Label Tells Us](#what-a-production-label-tells-us)
-2. [How A Prediction Receives A Label Later](#how-a-prediction-receives-a-label-later)
-3. [First Record The Prediction And Whether An Outcome Can Be Observed](#first-record-the-prediction-and-whether-an-outcome-can-be-observed)
-4. [Record Outcome Events And Their History](#record-outcome-events-and-their-history)
-5. [Wait Until Delayed Outcomes Are Mature](#wait-until-delayed-outcomes-are-mature)
-6. [Join Labels Without Losing Missing Cases](#join-labels-without-losing-missing-cases)
-7. [Check Whether The Label Pipeline Is Healthy](#check-whether-the-label-pipeline-is-healthy)
-8. [Correct For Product Decisions That Shape Which Labels Exist](#correct-for-product-decisions-that-shape-which-labels-exist)
-9. [Keep Label History And Reproducible Snapshots](#keep-label-history-and-reproducible-snapshots)
-10. [Make The Label Pipeline Reproducible And Replayable](#make-the-label-pipeline-reproducible-and-replayable)
-11. [Decide Whether Labels Can Be Used For Monitoring, Evaluation, Or Training](#decide-whether-labels-can-be-used-for-monitoring-evaluation-or-training)
-12. [The Main Idea](#the-main-idea)
-13. [References](#references)
+1. [What Makes a Production Outcome a Label for One Prediction?](#what-makes-a-production-outcome-a-label-for-one-prediction)
+2. [How Do Observability, Event History, Knowledge Time, and Maturity Define a Label?](#how-do-observability-event-history-knowledge-time-and-maturity-define-a-label)
+3. [How Do Joins, Coverage, Selective Labels, Product Actions, and Trust Levels Bias Evaluation?](#how-do-joins-coverage-selective-labels-product-actions-and-trust-levels-bias-evaluation)
+4. [How Should a Production Label Pipeline Be Monitored, Versioned, Replayed, and Kept Point-in-Time Correct?](#how-should-a-production-label-pipeline-be-monitored-versioned-replayed-and-kept-point-in-time-correct)
+5. [How Do Labels Support Quality, Calibration, and Threshold Analysis without Becoming False Truth?](#how-do-labels-support-quality-calibration-and-threshold-analysis-without-becoming-false-truth)
+6. [What Should a Canonical Label Record, Worked Examples, Denominators, and Multiple Clocks Show?](#what-should-a-canonical-label-record-worked-examples-denominators-and-multiple-clocks-show)
+7. [How Do Reproducible Snapshots and Lineage Determine Which Label Source Can Be Trusted?](#how-do-reproducible-snapshots-and-lineage-determine-which-label-source-can-be-trusted)
+8. [How Do Production Labels Close the Monitoring Loop?](#how-do-production-labels-close-the-monitoring-loop)
+9. [Check Your Answers](#check-your-answers)
 
-## What A Production Label Tells Us
-<!-- section-summary: A production label records a later outcome that can be connected back to a live prediction under a defined meaning and observation rule. -->
+A churn model predicts that a customer will leave within 30 days. On day ten the customer is still active, but that does not make the prediction wrong; the observation window is still open. On day forty, a late cancellation event arrives and changes what the monitoring system knows about the same prediction.
 
-A **production label** is a recorded outcome used to judge a prediction made in the real world. A payment-risk score may later connect to a confirmed chargeback. A delivery estimate may connect to the actual arrival time. A support-routing prediction may connect to the team that ultimately resolved the case.
+A **production label** is an outcome attached to a past prediction under an explicit target definition and time rule. Building one requires more than joining two tables: the system must preserve prediction identity, outcome history, observability, maturity, knowledge time, and the reasons some labels never appear.
 
-An offline training file often places the features and answer on the same row. Production separates them. The prediction happens now, the outcome may arrive weeks later, and another system usually owns that outcome. The model's action can even change whether the outcome will ever be observed.
+The questions below follow a label from one prediction through delayed events, biased joins, reproducible snapshots, evaluation, and the closed feedback loop:
 
-Consider a model that predicts whether an invoice will remain unpaid thirty days after its due date. On the fifth day, the account has made no payment. That case still belongs in the pending state because twenty-five days remain in the observation window. If a data pipeline writes `unpaid = false` at this point, recent predictions will look unusually successful simply because reality has not had enough time to unfold.
+1. **What Makes a Production Outcome a Label for One Prediction?**
+2. **How Do Observability, Event History, Knowledge Time, and Maturity Define a Label?**
+3. **How Do Joins, Coverage, Selective Labels, Product Actions, and Trust Levels Bias Evaluation?**
+4. **How Should a Production Label Pipeline Be Monitored, Versioned, Replayed, and Kept Point-in-Time Correct?**
+5. **How Do Labels Support Quality, Calibration, and Threshold Analysis without Becoming False Truth?**
+6. **What Should a Canonical Label Record, Worked Examples, Denominators, and Multiple Clocks Show?**
+7. **How Do Reproducible Snapshots and Lineage Determine Which Label Source Can Be Trusted?**
+8. **How Do Production Labels Close the Monitoring Loop?**
 
-This is the central production-label problem. A click, review action, payment, complaint, sensor reading, or database status starts as an **outcome event**. The system can admit it as ML evidence only after answering several questions:
+## What Makes a Production Outcome a Label for One Prediction?
+<!-- section-summary: A production label is a versioned claim that a specific prediction's target outcome has been observed under the same definition used for training or evaluation. -->
 
-- Which prediction and product action created this case?
-- Was the outcome actually observable under that action?
-- Which event defines success or failure?
-- Has enough time passed for the answer to be final?
-- Did the event arrive from an approved source under the expected policy?
-- Are missing labels evenly distributed or concentrated in one route or segment?
-- Is this evidence suitable for monitoring, evaluation, training, or audit?
+A production label is a versioned claim that a specific prediction's target outcome has been observed under the same definition used for training or evaluation.
 
-Production label collection is therefore a data product with its own contracts, quality checks, access rules, and recovery path. The goal is a defensible account of what happened, including what remains unknown.
+A production model makes a prediction at one moment, but the truth needed to judge that prediction often arrives later. That simple fact creates the entire production-label problem. Suppose a model predicts:
 
-## How A Prediction Receives A Label Later
-<!-- section-summary: The lifecycle preserves the decision-time case, observes later events, resolves their maturity and authority, and publishes a governed snapshot for an approved use. -->
+$$
+\hat Y_i = f(X_i)
+$$
 
-The label lifecycle is the path from one live decision to evidence that another system can safely use. Each stage protects a different part of the meaning.
+for event $$i$$. At prediction time, we know:
 
-```mermaid
-flowchart TD
-    A["Prediction Receipt<br/>(record the decision-time case)"] --> B["Observation Eligibility<br/>(state which outcomes can be seen)"]
-    B --> C["Outcome Event<br/>(capture later reality and provenance)"]
-    C --> D["Maturity Resolution<br/>(separate pending, final, and censored cases)"]
-    D --> E["Identity Join<br/>(connect outcome to the exact prediction)"]
-    E --> F["Quality Gate<br/>(check coverage, validity, and selection)"]
-    F --> G["Governed Snapshot<br/>(freeze policy, cutoff, rows, and lineage)"]
-    G --> H["Approved Use<br/>(monitor, evaluate, train, or audit)"]
+$$
+X_i,\hat Y_i
+$$
 
-    class A,B,C source
-    class D,E process
-    class F gate
-    class G,H output
+but usually we do **not** yet know the true outcome:
+
+$$
+Y_i
+$$
+
+The label may appear minutes, days, weeks, or months later. So monitoring a production model is fundamentally a problem of connecting:
+
+$$
+\boxed{\text{what we predicted then}}
+$$
+
+with:
+
+$$
+\boxed{\text{what actually happened later}}
+$$
+
+A **production label** is that later evidence about reality. Start with supervised learning. During training, we have examples:
+
+$$
+(X_i,Y_i)
+$$
+
+where:
+
+* $$X_i$$ is the input,
+* $$Y_i$$ is the target or outcome.
+
+The model learns:
+
+$$
+f(X)\approx Y
+$$
+
+or more precisely, for probabilistic classification:
+
+$$
+f(X)\approx P(Y|X)
+$$
+
+During production inference, however, we initially have:
+
+$$
+X_i
+$$
+
+and produce:
+
+$$
+\hat Y_i=f(X_i)
+$$
+
+but reality has not necessarily revealed:
+
+$$
+Y_i
+$$
+
+yet. When trustworthy evidence eventually tells us the outcome, we attach:
+
+$$
+Y_i
+$$
+
+to that old prediction. That value is the production label.
+
+Conceptually:
+
+$$
+\boxed{
+\text{production label}
+=
+\text{observed real-world outcome corresponding to a past prediction}
+}
+$$
+
+Before the outcome arrives, this record:
+
+$$
+(X_i,\hat Y_i)
+$$
+
+lets us inspect what the model saw and what it predicted. But we cannot directly determine whether it was correct. Once $$Y_i$$ arrives:
+
+$$
+(X_i,\hat Y_i,Y_i)
+$$
+
+becomes an evaluable production example. Now we can calculate:
+
+$$
+L(Y_i,\hat Y_i)
+$$
+
+where $$L$$ is some loss or quality measure. For example, for classification:
+
+$$
+\mathbf{1}(\hat Y_i\neq Y_i)
+$$
+
+or log loss:
+
+$$
+-[Y_i\log(\hat p_i)+(1-Y_i)\log(1-\hat p_i)]
+$$
+
+For regression:
+
+$$
+|Y_i-\hat Y_i|
+$$
+
+or:
+
+$$
+(Y_i-\hat Y_i)^2
+$$
+
+Without labels, you can monitor model behaviour. With labels, you can monitor model correctness. That is the central difference. Suppose you observe that transaction amounts changed:
+
+$$
+P_{\text{old}}(X)
+\neq
+P_{\text{new}}(X)
+$$
+
+That tells you there is data drift. Suppose prediction scores also move:
+
+$$
+P_{\text{old}}(\hat Y)
+\neq
+P_{\text{new}}(\hat Y)
+$$
+
+That tells you model behaviour changed. But neither proves the model became worse. Once labels arrive, you can ask:
+
+$$
+E[L(Y,\hat Y)]_{\text{current}}
+$$
+
+and compare it with:
+
+$$
+E[L(Y,\hat Y)]_{\text{reference}}
+$$
+
+Now you can determine whether quality actually changed. So an evidence hierarchy looks roughly like:
+
+$$
+\text{input changed}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{predictions changed}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\boxed{\text{prediction errors changed}}
+$$
+
+The last step requires production labels. Imagine a credit model predicts default risk on January 1:
+
+$$
+\hat p_i = 0.08
+$$
+
+The customer receives a 12-month loan. You cannot know on January 1 whether they will default over that future period. The prediction happens at:
+
+$$
+t_p
+$$
+
+The outcome becomes observable at:
+
+$$
+t_y
+$$
+
+where:
+
+$$
+t_y > t_p
+$$
+
+Potentially:
+
+$$
+t_y-t_p = 12\text{ months}
+$$
+
+This delay means a monitoring database cannot simply assume:
+
+Every prediction row should already have a label.
+
+Recent predictions may be perfectly valid but **not yet old enough to evaluate**. This introduces the concept of **label maturity**. The first requirement of a label system is actually not the label. It is a durable record of the original prediction. At inference time, you should conceptually preserve something like:
+
+$$
+P_i =
+(
+\text{prediction\_id},
+t_p,
+X_i,
+\hat Y_i,
+M_i,
+F_i,
+D_i,
+C_i
+)
+$$
+
+where:
+
+* `prediction_id` uniquely identifies the decision,
+* $$t_p$$ is prediction time,
+* $$X_i$$ represents the relevant model inputs,
+* $$\hat Y_i$$ is the model output,
+* $$M_i$$ is the model version,
+* $$F_i$$ is the feature/pipeline version,
+* $$D_i$$ is the resulting product decision,
+* $$C_i$$ is relevant context or segment information.
+
+Why?
+
+Because months later, when the outcome arrives, you must know exactly:
+
+Which prediction are we evaluating
+
+If you did not preserve the historical prediction, reconstructing it later may be impossible. Suppose a customer received a prediction on January 3 using:
+
+$$
+\text{model version}=v17
+$$
+
+and:
+
+$$
+\text{feature pipeline}=v9
+$$
+
+Three months later you evaluate the case. But now production uses:
+
+$$
+v21
+$$
+
+and feature logic has changed. If you recompute the old case with today's system, you are evaluating:
+
+$$
+f_{\text{today}}(X_{\text{today}})
+$$
+
+rather than the actual historical prediction:
+
+$$
+f_{v17}(X_{\text{Jan 3}})
+$$
+
+Those are not the same experiment. Production evaluation should normally judge:
+
+$$
+\boxed{\text{the decision that was actually made at the time}}
+$$
+
+not a reconstructed prediction from today's code. This is why prediction logging is foundational. The cleanest joining design usually includes a unique identifier:
+
+$$
+\text{prediction\_id}
+$$
+
+For example:
+
+```text
+prediction_id = 7f81...
+customer_id   = 10491
+prediction_at = 2026-01-03T14:02:17Z
+model_version = churn-v17
+score         = 0.78
 ```
 
-The lifecycle starts at prediction time because later events need a stable case to attach to. It keeps event time separate from arrival time because outcomes travel at different speeds. It preserves pending and missing cases because an inner join would quietly remove them. It ends with a named snapshot because a mutable “latest labels” table leaves earlier evaluations unreproducible.
+Later, an outcome event can refer back to:
 
-The stages also have separate owners. A product team defines the outcome and observation policy, while source-system owners publish the events. A data or MLOps team builds the join and quality gates. Risk, privacy, and domain owners approve downstream use.
-
-This separation directs incident response. Missing source events go back to the source owner. Orphaned events point to the identity join. A review backlog belongs to the review operation, and biased coverage may require a change to the product's sampling policy.
-
-## First Record The Prediction And Whether An Outcome Can Be Observed
-<!-- section-summary: A prediction receipt identifies the exact decision, while observation eligibility records whether the chosen action allowed the relevant outcome to be seen. -->
-
-Label collection starts before any label exists. The prediction path must leave behind enough information to recognize the case later and explain what the product did with the model output.
-
-### Record Which Prediction The Outcome Belongs To
-
-A **prediction receipt** is the durable record for one live prediction. At minimum, it carries a stable `prediction_id`, prediction time, model version, feature or preprocessing version, model output, policy version, product action, and approved join key. Route and segment fields help the team locate failures, while a trace reference connects operational investigation without turning high-cardinality IDs into metric labels.
-
-The prediction ID matters because one entity can receive many predictions. A courier may receive a new arrival estimate every few minutes. Joining the final arrival to the courier ID alone gives every estimate the same outcome and hides which estimate was visible at each decision point. A stable prediction ID plus an explicit attribution rule preserves the intended comparison.
-
-The receipt also separates the model output from the action. A risk score of `0.72` may be approved under one threshold and sent to manual review under another. The later outcome can evaluate the score, the threshold policy, or the complete decision system. Those are different questions, so the receipt keeps the fields separate.
-
-### Record Whether An Outcome Could Be Observed
-
-**Observation eligibility** states whether a case had a genuine opportunity to produce the outcome being measured. The pipeline can then preserve an unobservable case as unknown, with no negative outcome inferred from the missing event.
-
-Suppose a recommendation model scores 500 products and the product displays only the top ten. A click can occur only for a displayed product. The other 490 candidates have no click event, yet `clicked = false` would misrepresent them as 490 rejected recommendations. The receipt should record the displayed items, their positions, the ranking policy, and any sampling probability used to expose lower-ranked items.
-
-A fraud decision creates a harder boundary. Blocking a payment closes the path that could have produced a later chargeback because the transaction never completed. The action changed the world being measured. The receipt records `action = blocked` and marks the approval outcome as unobservable for that case. Review results, appeals, or controlled expert samples may provide other evidence, although they answer a different question from an observed chargeback.
-
-Eligibility rules belong in the outcome contract. They name the target population, the actions that permit observation, the sampling design, and the approved alternative evidence for cases outside the normal outcome path. This information will later define the denominator for coverage and quality.
-
-## Record Outcome Events And Their History
-<!-- section-summary: Outcome events preserve what happened, who or what observed it, when it happened, and which policy gave the event its meaning. -->
-
-An outcome source produces events from the real process the model tried to support. Payment settlement, delivery completion, subscription cancellation, case resolution, an appeal, or a reviewed document can all be sources. The important question is which event answers the model's target.
-
-### Define The Outcome Before Building The Feed
-
-A support-routing system illustrates the difference between available events and useful labels. The first agent may move a ticket, a second team may resolve it, a manager may audit it, and the customer may reopen it. Each event describes part of the journey. None automatically means “correct initial route.”
-
-The outcome contract could define success as “the specialist queue that resolved the case under routing policy version 12, excluding transfers made only to balance workload.” That statement identifies the target, observation window, exclusions, policy version, and authoritative source. Engineers can then implement the rule and domain owners can challenge it.
-
-Different decisions may use different outcomes. An agent correction within ten minutes can warn that routing quality changed. A final resolution after the reopen window can support release evaluation. A customer-satisfaction response can measure a broader product effect. Combining all three into one `label` column would hide their timing and authority.
-
-### Record When The Outcome Happened, Arrived, And Where It Came From
-
-An outcome event needs two clocks. **Event time** says when the real-world event occurred. **Available time** says when the label pipeline could first use it. A chargeback may belong to Monday's transaction and reach the analytics system on Thursday. Monday is part of the outcome; Thursday explains its absence from Tuesday's report.
-
-The event also records a unique event ID, prediction or entity reference, label name and value, source system, policy version, actor type, authority level, and an approved reference to source evidence. Sensitive text, medical records, and direct identifiers stay in restricted source systems unless policy explicitly permits their duplication. The label table uses a governed reference for that evidence.
-
-Corrections are appended as new events. An appeal that reverses a moderation decision points to the event it supersedes. The old event remains available for audit, and a resolved view selects the authoritative state known at a declared cutoff. Overwriting the original row would make an earlier model evaluation impossible to reconstruct.
-
-### Choose How Outcome Events Enter The Pipeline
-
-A small batch product may load outcome rows directly from an operational database into its warehouse each night. A high-volume service may publish events through Apache Kafka or a managed event stream, then land them in object storage, a warehouse, or a lakehouse. Change-data capture can move committed database changes without adding a second write to the application path.
-
-The ingestion layer transports evidence. Authority comes from the outcome contract and source policy. Producers still need stable event IDs, schema validation, and a retry-safe write. Consumers deduplicate by event ID and send malformed records to quarantine. The source owner reconciles published event counts with the source system, which exposes events lost before the consumer received them.
-
-## Wait Until Delayed Outcomes Are Mature
-<!-- section-summary: Maturity rules keep recent, incomplete, and censored cases separate from final labels. -->
-
-Many production outcomes need time. A delivery arrives later in the day. A subscription-churn label needs the full cancellation horizon. A loan or invoice outcome may require months. The label pipeline must represent this waiting period explicitly.
-
-### Define When An Outcome Is Final Enough To Use
-
-A **maturity rule** states how much observation time a case needs and which source events can finalize it earlier. Consider a prediction of whether an invoice will still be unpaid thirty days after its due date. A confirmed payment during those thirty days supplies an explicit answer: the invoice was paid within the window, so the case can close early. The opposite answer needs more care. An empty payment history proves “unpaid” only after the thirty-day window and the agreed ingestion allowance have passed.
-
-Some targets deliberately use the absence of an event. “No payment by day thirty” is one example. In that case, the outcome contract must name `unpaid` as the label produced by absence, and the source history must be reconciled through the cutoff. Reconciliation may compare source totals, freshness markers, and completed partitions with the records landed in the label store. If that proof fails, no payment event still means missing evidence. It does not yet mean the customer failed to pay.
-
-```mermaid
-flowchart TD
-    A["Prediction Time<br/>(start the observation window)"] --> B["Pending Case<br/>(the final answer is still open)"]
-    B --> C{"Outcome State<br/>(inspect events at the declared cutoff)"}
-    C -->|"Final event arrived"| D["Mature Observed<br/>(use the explicit outcome)"]
-    C -->|"Window still open"| E["Remain Pending<br/>(exclude from final quality)"]
-    C -->|"Observation ended early"| F["Censored Case<br/>(preserve that the answer is unknown)"]
-    C -->|"Window closed with no event"| G{"Absence Rule<br/>(check the contract and source proof)"}
-    G -->|"Defined and reconciled"| H["Mature From Absence<br/>(use the contracted label)"]
-    G -->|"Undefined or unproven"| I["Mature Missing<br/>(investigate the evidence gap)"]
-
-    class A,B time
-    class C,G decision
-    class D,E,F,H state
-    class I failure
+```text
+prediction_id = 7f81...
+event         = churn_confirmed
+event_at      = 2026-02-19
 ```
 
-The pipeline publishes explicit states such as `pending`, `mature_observed`, `mature_from_trusted_absence`, `censored`, and `mature_missing`. The state records how the answer was obtained. An explicit payment event and a reconciled absence may both produce valid labels, but they carry different evidence.
+Then the relationship is explicit:
+
+$$
+\text{prediction\_id}
+\rightarrow
+\text{outcome}
+$$
+
+This is much safer than trying to infer joins from ambiguous fields such as:
+
+$$
+\text{customer\_id}
+$$
+
+alone. A customer may have many predictions. Suppose a churn model scores the same customer once per week:
+
+$$
+\hat Y_{i,1},
+\hat Y_{i,2},
+\hat Y_{i,3},
+\dots
+$$
+
+The customer eventually churns on April 10.
+
+Which predictions should receive a positive label?
+
+That depends on the precise target definition. Maybe your model predicts:
+
+Will this customer churn within the next 30 days
+
+Then the prediction on March 20 may have:
+
+$$
+Y=1
+$$
+
+because April 10 is within 30 days. But the January 1 prediction may have:
+
+$$
+Y=0
+$$
+
+because churn did not occur within its 30-day horizon. Therefore labels are not merely properties of entities. Often they are properties of:
+
+$$
+\boxed{
+(\text{entity},
+\text{prediction time},
+\text{prediction horizon})
+}
+$$
+
+That is an important first-principles distinction. Suppose training used:
+
+$$
+Y =
+\begin{cases}
+1,&\text{fraud confirmed within 60 days}\\
+0,&\text{otherwise}
+\end{cases}
+$$
+
+Then production evaluation should use the same semantics. It would be incorrect to compare the model against:
+
+$$
+Y'=
+\text{fraud confirmed within 7 days}
+$$
+
+because:
+
+$$
+Y'\neq Y
+$$
+
+even though both might be casually called "fraud labels." A production label is meaningful only relative to a precise target definition. That target definition includes things such as:
+
+* event type,
+* prediction horizon,
+* observation window,
+* exclusions,
+* handling of reversals,
+* handling of missing outcomes,
+* timestamp semantics.
+
+The label definition is effectively part of the model contract.
+
+## How Do Observability, Event History, Knowledge Time, and Maturity Define a Label?
+<!-- section-summary: Prediction time, outcome-event time, knowledge time, observation windows, buffers, and maturity states distinguish unknown outcomes from genuine negative labels. -->
+
+Prediction time, outcome-event time, knowledge time, observation windows, buffers, and maturity states distinguish unknown outcomes from genuine negative labels.
+
+Not every prediction will eventually have an observable truth. Let:
+
+$$
+O_i =
+\begin{cases}
+1,&\text{outcome is observable}\\
+0,&\text{outcome cannot be observed}
+\end{cases}
+$$
+
+This variable matters enormously. Suppose a loan model recommends:
+
+$$
+\text{reject}
+$$
+
+The applicant never receives a loan. Then the question:
+
+Would this person have defaulted
+
+may be fundamentally unobservable. So:
+
+$$
+Y_i
+$$
+
+is not merely delayed. It may be **counterfactual**. This differs from ordinary missing data. This is one of the most important production-label rules. Suppose a transaction has no fraud report yet. That could mean:
+
+1. it was legitimate,
+2. fraud has not yet been discovered,
+3. the reporting pipeline is delayed,
+4. the label source is unavailable,
+5. the transaction was never observable,
+6. the event was censored.
+
+Therefore:
+
+$$
+Y=\text{missing}
+$$
+
+does **not** automatically imply:
+
+$$
+Y=0
+$$
+
+A naive left join that converts every missing label into a negative can produce dramatically biased evaluation. You must distinguish at least:
+
+$$
+\boxed{
+\text{negative}
+\neq
+\text{not yet observed}
+\neq
+\text{unobservable}
+\neq
+\text{missing due to pipeline failure}
+}
+$$
+
+A useful prediction record might include:
+
+$$
+\text{label\_eligibility}
+$$
+
+or an equivalent concept.
+
+For example:
+
+| Prediction | Outcome state                       |
+| ---------- | ----------------------------------- |
+| A          | Observable and mature               |
+| B          | Observable but still immature       |
+| C          | Outcome impossible to observe       |
+| D          | Expected label missing unexpectedly |
+| E          | Label successfully observed         |
+
+These states prevent very different situations from collapsing into:
+
+```text
+label = NULL
+```
+
+A raw `NULL` does not explain why the label is absent. Suppose a fraud transaction goes through this sequence:
+
+$$
+t_1:\text{transaction created}
+$$
+
+$$
+t_2:\text{customer disputes transaction}
+$$
+
+$$
+t_3:\text{bank opens investigation}
+$$
+
+$$
+t_4:\text{fraud confirmed}
+$$
+
+$$
+t_5:\text{dispute reversed}
+$$
+
+If you store only:
+
+```text
+fraud = true
+```
+
+you lose the history. A more robust system records the events:
+
+$$
+E_1,E_2,E_3,\dots
+$$
+
+with their timestamps. Then a label-building function derives:
+
+$$
+Y=g(E_1,E_2,\dots)
+$$
+
+This distinction is powerful:
+
+$$
+\boxed{\text{events are facts; labels are interpretations of those facts}}
+$$
+
+The facts can remain immutable while label logic evolves. Suppose your current definition says:
+
+$$
+Y=1
+$$
+
+if fraud is confirmed within 45 days. Next year the company decides that 60 days is a better horizon. If you preserved raw outcome events, you can recompute:
+
+$$
+Y^{45}
+$$
+
+and:
+
+$$
+Y^{60}
+$$
+
+from the same event history. If you stored only the final boolean label:
+
+```text
+fraud = 1
+```
+
+you may not know whether the event occurred after 10, 40, or 58 days. You have thrown away information. Therefore:
+
+$$
+\text{raw outcome events}
+$$
+
+should usually be treated as the source of truth, while:
+
+$$
+\text{labels}
+$$
+
+are derived data products. Consider chargebacks. At day 5:
+
+$$
+Y_i=\text{unknown}
+$$
+
+At day 20:
+
+$$
+Y_i=\text{suspected fraud}
+$$
+
+At day 45:
+
+$$
+Y_i=\text{confirmed fraud}
+$$
+
+At day 70:
+
+$$
+Y_i=\text{reversed}
+$$
+
+So instead of assuming a label is timeless, think of:
+
+$$
+Y_i(t)
+$$
+
+the label state as known at time $$t$$. That distinction matters when reproducing historical dashboards. A metric computed on March 1 may legitimately differ from one recomputed in June using more mature information. Production label systems often need at least two temporal concepts:
+
+### Event time
+
+When the real-world event happened:
+
+$$
+t_{\text{event}}
+$$
+
+### Knowledge time
+
+When your system learned about it:
+
+$$
+t_{\text{known}}
+$$
+
+These can be very different. Suppose a customer defaults on:
+
+$$
+\text{March 3}
+$$
+
+but your data warehouse receives confirmation on:
+
+$$
+\text{March 10}
+$$
+
+Then:
+
+$$
+t_{\text{event}}=\text{March 3}
+$$
+
+while:
+
+$$
+t_{\text{known}}=\text{March 10}
+$$
+
+Both matter. Event time describes reality. Knowledge time describes what information was available to your system at a historical moment. Suppose someone asks:
+
+What did the model-monitoring dashboard show on March 5
+
+If you rebuild the metric today using all labels now known, you may include the March 3 default that was not reported until March 10. You would accidentally use future information. To reproduce the March 5 dashboard, you need:
+
+$$
+\text{labels known as of March 5}
+$$
+
+not:
+
+$$
+\text{labels known today}.
+$$
+
+This is sometimes called **point-in-time correctness**.
+
+Conceptually:
+
+$$
+\boxed{
+\text{historical evaluation}
+=
+\text{information available at that historical cutoff}
+}
+$$
+
+Suppose your target is:
+
+Did the customer churn within 30 days
+
+A prediction made yesterday cannot yet be assigned a trustworthy negative label.
+
+Why?
+
+Because the customer still has:
+
+$$
+29
+$$
+
+days in which they could churn. Therefore, for a prediction at time $$t_p$$, with outcome horizon $$H$$, a simple maturity condition is:
+
+$$
+t_{\text{now}} \ge t_p + H
+$$
+
+Only then can you safely conclude:
+
+$$
+Y=0
+$$
+
+if no positive event occurred. Before maturity:
+
+$$
+Y=\text{unknown}
+$$
+
+not $$0$$. Real systems have ingestion delays. Suppose the prediction horizon is:
+
+$$
+30\text{ days}
+$$
+
+but churn events may take another:
+
+$$
+3\text{ days}
+$$
+
+to reach your warehouse. Then maturity might require:
+
+$$
+t_{\text{mature}}
+=
+t_p + 30\text{ days}+3\text{ days}
+$$
+
+The additional delay is sometimes called a lag or grace period. The principle is:
+
+$$
+\boxed{
+\text{maturity}
+=
+\text{outcome horizon}
++
+\text{reasonable reporting delay}
+}
+$$
+
+Otherwise very recent negatives will be systematically mislabeled. This is subtle. Suppose the target is:
+
+Fraud within 60 days.
+
+If confirmed fraud occurs on day 4, then you can know:
+
+$$
+Y=1
+$$
+
+on day 4. You do not need to wait until day 60. But to confidently say:
+
+$$
+Y=0
+$$
+
+you generally need to wait until the full window closes. So:
+
+$$
+\text{positive label maturity}
+$$
+
+can occur earlier than:
+
+$$
+\text{negative label maturity}.
+$$
+
+This creates temporary class imbalance among immature data. If you evaluate too early, the metrics may be distorted. You can think of every prediction moving through states:
+
+$$
+\boxed{
+\text{Predicted}
+\rightarrow
+\text{Waiting}
+\rightarrow
+\text{Mature}
+\rightarrow
+\text{Evaluable}
+}
+$$
+
+There may also be branches such as:
+
+$$
+\text{Waiting}
+\rightarrow
+\text{Unobservable}
+$$
+
+or:
+
+$$
+\text{Waiting}
+\rightarrow
+\text{Label pipeline error}
+$$
+
+or:
+
+$$
+\text{Mature}
+\rightarrow
+\text{Label revised}
+$$
+
+Thinking in explicit states is safer than treating labels as a single nullable column.
 
 ![An invoice label at day five remaining pending, followed by the maturity branches for an observed payment, an open window, censoring, trusted absence, or missing evidence.](/content-assets/articles/article-mlops-monitoring-and-feedback-collecting-labels-after-deployment/invoice-label-maturity.png)
 
 *No payment event on day five is not a negative label; the outcome is final only after an explicit event or a contracted, reconciled absence after the full window.*
 
-### Keep Unobserved Outcomes As Unknown
+## How Do Joins, Coverage, Selective Labels, Product Actions, and Trust Levels Bias Evaluation?
+<!-- section-summary: Left-preserving joins and segment coverage expose missing labels, while selective observation, product intervention, and provisional sources limit what the resulting dataset can prove. -->
 
-A case is **right-censored** if observation ended before the outcome window completed. A customer may leave the study, an account may be deleted, or the dataset cutoff may arrive before the ninety-day horizon closes. The final answer remains unknown, and the available evidence cannot prove a negative outcome.
+Left-preserving joins and segment coverage expose missing labels, while selective observation, product intervention, and provisional sources limit what the resulting dataset can prove.
 
-Censored rows can support survival analysis or other methods designed for incomplete follow-up. A standard binary classifier usually excludes them from final evaluation and training. The snapshot records the exclusion count by cohort and segment, so the missing population remains visible.
+Suppose you have a prediction table:
 
-Some outcomes arrive after the normal ingestion allowance. The event still keeps its original event time and later available time. A new snapshot can incorporate the late evidence and record a metric revision. The earlier snapshot remains valid as the evidence available at its own cutoff.
+| prediction_id | score |
+| ------------- | ----: |
+| A             |   0.2 |
+| B             |   0.7 |
+| C             |   0.9 |
 
-### Use Streaming Watermarks For Late-Arriving Data
+And an outcome table:
 
-Spark Structured Streaming can use an event-time watermark to bound the state kept for late streaming data. Records older than the watermark may be dropped according to the query's semantics. This watermark controls streaming state. The outcome contract supplies the business maturity rule for a label.
+| prediction_id | label |
+| ------------- | ----: |
+| A             |     0 |
+| C             |     1 |
 
-A thirty-day chargeback definition therefore needs its own maturity rule beyond a two-hour streaming watermark. The stream can land events quickly, while a durable raw table retains late arrivals and a scheduled cohort job resolves business maturity. Teams that discard late stream events need a dead-letter or reconciliation path capable of recovering them from the source.
+A careless inner join produces:
 
-## Join Labels Without Losing Missing Cases
-<!-- section-summary: A label cohort preserves every eligible prediction, attaches the authoritative outcome available at a cutoff, and keeps pending or missing cases in the result. -->
+| prediction_id | score | label |
+| ------------- | ----: | ----: |
+| A             |   0.2 |     0 |
+| C             |   0.9 |     1 |
 
-The join is where prediction-time evidence meets later reality. Its safest starting point is the complete set of eligible predictions. A left join then attaches the resolved outcome events. An inner join would remove predictions without labels and make coverage look perfect by construction.
+Prediction B disappears. That is dangerous because you no longer know:
 
-### Join On Stable IDs And A Fixed Cutoff Time
+Why didn't B receive a label
 
-The preferred key is `prediction_id`. If the source can provide only an entity ID, the contract must define the allowed time relationship and how repeated predictions are resolved. A delivery outcome, for example, may attach to the last estimate shown before arrival. The join should encode that rule and fail on ambiguous matches.
+You generally want the prediction population to remain visible:
 
-The dataset also needs an **as-of cutoff**. The cutoff means “use only outcome evidence available by this time.” It makes an evaluation reproducible even after appeals, late events, or corrections arrive.
+$$
+\text{Predictions}
+\ \text{LEFT JOIN}\
+\text{Outcomes}
+$$
 
-This focused BigQuery query applies that rule to the invoice outcome. A final payment event inside the thirty-day window can resolve the case immediately. After the window closes, `@absence_label_value` supplies `unpaid` only if the contract defines that result and `@source_history_reconciled` confirms complete source history. A production job should derive that reconciliation flag from a source-quality gate for the same cohort rather than from an unchecked manual setting.
+so that you can distinguish:
 
-```sql
-WITH predictions_in_scope AS (
-  SELECT prediction_id, prediction_time, model_version, model_route, action
-  FROM mlops.prediction_receipts
-  WHERE prediction_time >= @cohort_start
-    AND prediction_time < @cohort_end
-    AND observation_eligible = TRUE
-), resolved_events AS (
-  SELECT e.prediction_id, e.label_value, e.label_event_id, e.available_time
-  FROM mlops.label_events AS e
-  JOIN predictions_in_scope AS p
-    ON e.prediction_id = p.prediction_id
-  WHERE e.available_time <= @as_of_time
-    AND e.event_time >= p.prediction_time
-    AND e.event_time <= TIMESTAMP_ADD(p.prediction_time, INTERVAL 30 DAY)
-    AND e.label_policy_version = @label_policy_version
-    AND e.is_authoritative = TRUE
-    AND e.finalizes_outcome = TRUE
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY e.prediction_id
-    ORDER BY e.available_time DESC, e.label_event_id DESC
-  ) = 1
+$$
+\text{matched}
+$$
+
+from:
+
+$$
+\text{unmatched}.
+$$
+
+Then investigate the unmatched population. Define:
+
+$$
+\text{label coverage}
+=
+\frac{
+N_{\text{eligible predictions with valid labels}}
+}{
+N_{\text{eligible predictions}}
+}
+$$
+
+Suppose:
+
+$$
+\text{coverage}=98\%
+$$
+
+normally. Then one week:
+
+$$
+98\%\rightarrow61\%
+$$
+
+Your model's AUC might still be computable, but you should immediately question whether it remains representative. Maybe one data source stopped reporting outcomes. Therefore:
+
+$$
+\boxed{\text{a model-quality metric is only as trustworthy as its label coverage}}
+$$
+
+Overall:
+
+$$
+\text{label coverage}=95\%
+$$
+
+may look fine. But perhaps:
+
+| Segment | Coverage |
+| ------- | -------: |
+| UK      |      99% |
+| France  |      98% |
+| Germany |      97% |
+| Spain   |      31% |
+
+Now your reported Spanish model quality may be meaningless. So monitor:
+
+$$
+P(O=1|\text{segment})
+$$
+
+not just:
+
+$$
+P(O=1).
+$$
+
+Missing labels are dangerous when they are systematic rather than random. Suppose labels are missing independently of correctness. Then evaluating the observed subset may still approximate the true performance. But suppose hard cases are systematically less likely to receive labels.
+
+Then:
+
+$$
+P(O=1|X,Y,\hat Y)
+$$
+
+is not constant. Your observed evaluation dataset differs from your deployment population. You may compute:
+
+$$
+E[L(Y,\hat Y)\mid O=1]
+$$
+
+while what you actually care about is:
+
+$$
+E[L(Y,\hat Y)]
+$$
+
+These need not be equal. This is a selection-bias problem. This is one of the deepest issues in feedback systems. Suppose a loan model chooses:
+
+$$
+D=
+\begin{cases}
+1,&\text{approve}\\
+0,&\text{reject}
+\end{cases}
+$$
+
+You observe repayment outcomes only when:
+
+$$
+D=1
+$$
+
+because rejected customers never receive the loan. Therefore the label observability mechanism is:
+
+$$
+P(O=1|D=1)\approx1
+$$
+
+$$
+P(O=1|D=0)\approx0
+$$
+
+But $$D$$ itself depends on the model:
+
+$$
+D=g(\hat Y)
+$$
+
+So:
+
+$$
+\hat Y
+\rightarrow
+D
+\rightarrow
+O
+$$
+
+The model helps determine which labels enter the future dataset. This is a feedback loop. Suppose the model approves mostly low-risk users. You observe their outcomes and calculate:
+
+$$
+\text{default rate}=2\%
+$$
+
+This does **not** prove:
+
+The model's default predictions are accurate across all applicants.
+
+You only observed:
+
+$$
+P(Y|\text{approved})
+$$
+
+not:
+
+$$
+P(Y|\text{all applicants}).
+$$
+
+The rejected population may contain:
+
+* genuinely high-risk users,
+* safe users incorrectly rejected,
+* entirely new regions of the feature space.
+
+Without some way of observing them, their true outcomes remain unknown. Suppose a model recommends item $$A$$ but not item $$B$$. The user clicks $$A$$.
+
+What is the label for $$B$$?
+
+You do not know. The user never saw it. Observed behaviour is conditional on exposure:
+
+$$
+P(\text{click}|X,\text{shown})
+$$
+
+not:
+
+$$
+P(\text{click}|X,\text{arbitrary item})
+$$
+
+So a click label cannot be interpreted independently of the serving policy. This is why recommendation and advertising systems need to record:
+
+$$
+\text{what was eligible}
+$$
+
+$$
+\text{what was shown}
+$$
+
+$$
+\text{where it was shown}
+$$
+
+$$
+\text{which ranking policy chose it}.
+$$
+
+The exposure process is part of the label semantics. Consider fraud detection. Suppose the model predicts:
+
+$$
+P(\text{fraud}|X)=0.99
+$$
+
+and blocks the transaction. Later no fraud loss occurs. Does that mean:
+
+$$
+Y=0
+$$
+
+Not necessarily. The transaction may have been fraudulent but prevented. The decision changed the outcome. Causally:
+
+$$
+\hat Y
+\rightarrow
+D
+\rightarrow
+Y
+$$
+
+So the observed outcome is:
+
+$$
+Y(D)
+$$
+
+the outcome under the action that was actually taken. You may be interested in a different counterfactual:
+
+$$
+Y(D=0)
+$$
+
+what would have happened if the transaction had been allowed. That outcome is not directly observable. This makes labels in decision systems fundamentally causal. Suppose a medical model predicts:
+
+$$
+\text{risk of deterioration without intervention}
+$$
+
+A high-risk prediction causes clinicians to intervene. The patient improves. Observed:
+
+$$
+Y=\text{no deterioration}
+$$
+
+Was the model wrong?
+
+Possibly not. The model may have correctly identified a dangerous case, and the intervention prevented the predicted event. Therefore before monitoring a model using production outcomes, ask:
+
+$$
+\boxed{\text{Does the model's own action change the target?}}
+$$
+
+If yes, naive label interpretation becomes dangerous. There is no universal fix, but possible strategies include:
+
+* randomized exploration,
+* holdout/control groups,
+* carefully designed audits,
+* inverse-propensity weighting,
+* counterfactual estimation,
+* external outcome sources,
+* manual review samples.
+
+For example, a recommendation platform may occasionally randomize exposure probabilities. If item $$j$$ is shown with known probability:
+
+$$
+\pi_j(X)
+$$
+
+then observations can sometimes be reweighted using:
+
+$$
+\frac{1}{\pi_j(X)}
+$$
+
+to correct some exposure bias. But the broader principle is more important:
+
+$$
+\boxed{\text{You cannot correct policy-shaped labels by pretending they were sampled randomly.}}
+$$
+
+You must model how they became observable. Suppose a production label is good enough to answer:
+
+Did our model's precision fall this month
+
+That does not necessarily mean it is safe for retraining.
+
+Why?
+
+Because training data has stronger requirements. For retraining you care about:
+
+* target correctness,
+* representative sampling,
+* leakage,
+* observability bias,
+* feature point-in-time correctness,
+* label stability,
+* deduplication,
+* policy effects.
+
+A noisy but timely label may be useful for monitoring. It might be unsafe for training. A helpful framework is to classify labels by what they are safe to support.
+
+### Level 1: Operational monitoring
+
+Good enough for detecting:
+
+$$
+\text{something may be wrong}
+$$
+
+Example: provisional fraud reports.
+
+### Level 2: Formal evaluation
+
+Good enough for estimating:
+
+$$
+\text{precision, recall, calibration, loss}
+$$
+
+This requires more stable label semantics and maturity.
+
+### Level 3: Training
+
+Good enough to become future supervised-learning ground truth. This requires the strongest guarantees. So:
+
+$$
+\boxed{
+\text{monitoring-safe}
+\not\Rightarrow
+\text{evaluation-safe}
+\not\Rightarrow
+\text{training-safe}
+}
+$$
+
+Suppose fraud labels have states:
+
+$$
+\text{suspected}
+$$
+
+$$
+\text{confirmed}
+$$
+
+$$
+\text{reversed}
+$$
+
+A suspected-fraud flag may be available after:
+
+$$
+2\text{ days}
+$$
+
+and be correlated enough with true fraud to act as an early monitoring signal. But final confirmed chargeback data may take:
+
+$$
+60\text{ days}.
+$$
+
+You could therefore maintain:
+
+$$
+Y_{\text{provisional}}
+$$
+
+for fast monitoring, and:
+
+$$
+Y_{\text{final}}
+$$
+
+for official evaluation. This gives both speed and reliability without pretending they are equivalent.
+
+## How Should a Production Label Pipeline Be Monitored, Versioned, Replayed, and Kept Point-in-Time Correct?
+<!-- section-summary: The label pipeline is a monitored data product with immutable raw history, definition versions, snapshot cutoffs, replay, idempotence, late-event handling, and point-in-time controls. -->
+
+The label pipeline is a monitored data product with immutable raw history, definition versions, snapshot cutoffs, replay, idempotence, late-event handling, and point-in-time controls.
+
+Once labels affect model monitoring, evaluation, retraining, or business decisions, they deserve engineering discipline. A conceptual pipeline looks like:
+
+$$
+\text{raw outcome events}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{clean / validate}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{apply label definition}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{apply maturity rules}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{join to predictions}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{publish labeled prediction dataset}
+$$
+
+The final dataset might look like:
+
+$$
+(
+\text{prediction\_id},
+\hat Y,
+Y,
+\text{label\_status},
+\text{prediction\_time},
+\text{label\_event\_time},
+\text{label\_known\_time},
+\text{model\_version},
+\dots
 )
-SELECT
-  p.*,
-  CASE
-    WHEN e.prediction_id IS NOT NULL THEN e.label_value
-    WHEN @as_of_time >= TIMESTAMP_ADD(p.prediction_time, INTERVAL 30 DAY)
-      AND @absence_label_value IS NOT NULL
-      AND @source_history_reconciled
-      THEN @absence_label_value
-    ELSE NULL
-  END AS label_value,
-  e.label_event_id,
-  CASE
-    WHEN e.prediction_id IS NOT NULL
-      THEN 'mature_observed'
-    WHEN @as_of_time < TIMESTAMP_ADD(p.prediction_time, INTERVAL 30 DAY)
-      THEN 'pending'
-    WHEN @absence_label_value IS NOT NULL
-      AND @source_history_reconciled
-      THEN 'mature_from_trusted_absence'
-    ELSE 'mature_missing'
-  END AS label_state
-FROM predictions_in_scope AS p
-LEFT JOIN resolved_events AS e USING (prediction_id);
+$$
+
+This should be treated as a first-class production asset. A healthy model with a broken label pipeline can look like a broken model. A broken model with a broken label pipeline can look healthy. So monitor:
+
+$$
+\text{label event volume}
+$$
+
+$$
+\text{coverage}
+$$
+
+$$
+\text{join rate}
+$$
+
+$$
+\text{freshness}
+$$
+
+$$
+\text{processing lag}
+$$
+
+$$
+\text{class balance}
+$$
+
+$$
+\text{unknown/unresolved fraction}
+$$
+
+$$
+\text{duplicate rate}
+$$
+
+$$
+\text{revision rate}
+$$
+
+and relevant segment-level statistics. The label system needs its own observability. Suppose you normally receive:
+
+$$
+50{,}000
+$$
+
+completed-order events per day. Today:
+
+$$
+4{,}000
+$$
+
+arrive. Before concluding that your positive conversion rate collapsed, check whether the event source is broken. A useful chain is:
+
+$$
+\text{source events}
+\rightarrow
+\text{processed labels}
+\rightarrow
+\text{joined labels}
+\rightarrow
+\text{model metrics}
+$$
+
+If the upstream volume collapses, downstream performance statistics cannot be trusted. Suppose you receive:
+
+$$
+100{,}000
+$$
+
+outcome events. But only:
+
+$$
+62{,}000
+$$
+
+join to predictions.
+
+Then:
+
+$$
+\text{join rate}=62\%
+$$
+
+Maybe prediction IDs changed format. Maybe one region uses different identifiers. Maybe predictions stopped being logged. Any of these can corrupt model evaluation. The join itself is therefore a monitored production process. Don't only monitor average delay. Track something like:
+
+$$
+P(t_{\text{known}}-t_{\text{event}})
+$$
+
+or:
+
+$$
+P(t_{\text{label}}-t_p)
+$$
+
+For example:
+
+| Percentile | Label delay |
+| ---------- | ----------: |
+| p50        |      3 days |
+| p90        |     19 days |
+| p99        |     52 days |
+
+Then suppose p90 suddenly becomes:
+
+$$
+37\text{ days}.
+$$
+
+Your most recent evaluation window may now be less mature than usual. That can create artificial performance changes. Suppose historical labels are:
+
+$$
+P(Y=1)=4\%
+$$
+
+Then suddenly:
+
+$$
+P(Y=1)=0.1\%
+$$
+
+Possible explanations include:
+
+1. real-world behaviour changed,
+2. positive-label ingestion broke,
+3. label semantics changed,
+4. recent data is immature,
+5. a segment disappeared,
+6. model decisions suppressed observation.
+
+The distribution of labels itself is therefore both:
+
+$$
+\text{a world signal}
+$$
+
+and:
+
+$$
+\text{a pipeline-health signal}.
+$$
+
+Context is needed to distinguish them. A robust architecture often follows this principle:
+
+$$
+\boxed{\text{append facts; derive interpretations}}
+$$
+
+Instead of repeatedly overwriting:
+
+```text
+transaction 123: fraud = false
 ```
 
-The result has four visible states. `mature_observed` rows carry an accepted final event. `pending` rows are still inside the observation window. `mature_from_trusted_absence` rows use the absence label declared by the contract after source reconciliation. `mature_missing` rows reached the horizon without enough evidence and count against coverage. The two mature label states can enter the next quality gate; pending and missing rows cannot. A production version would also apply per-source reconciliation, censoring rules, correction links, and the ingestion allowance defined by the outcome contract.
+with:
 
-### Rebuild Prediction-Time Inputs Separately
-
-The label join answers what happened after the decision. A training dataset also needs the feature values available at the original prediction time. Joining today's customer profile to an old label leaks later information into the model.
-
-Production pipelines read an immutable feature snapshot or perform a point-in-time join using entity identity and event time. The output records the feature-table version, transformation revision, label-policy version, cohort bounds, and as-of cutoff. These identifiers let another run recover the same rows and the same meaning.
-
-## Check Whether The Label Pipeline Is Healthy
-<!-- section-summary: Label quality combines structural validity, source freshness, cohort coverage, timing, agreement, and segment balance. -->
-
-A valid label value can still come from an unhealthy label system. Quality monitoring therefore measures the path that produced the labels as well as the values themselves.
-
-### Measure Label Coverage Against All Eligible Predictions
-
-**Label coverage** is the share of eligible mature predictions with an accepted label. Prediction receipts supply the complete denominator. Coverage is calculated by prediction cohort, model route, product action, source, and approved segment.
-
-Suppose the global dashboard reports 96 percent coverage. A mobile application release stopped sending the prediction ID for one language route, and coverage for that route fell to 38 percent. The overall number still looks healthy because the route carries little traffic. Segment-level coverage reveals the join failure and prevents the remaining 38 percent from representing the full route.
-
-Freshness answers a different question: how recently did each source publish events? Time-to-label shows the delay from prediction to available outcome. Orphan events have no matching receipt. Duplicate authoritative events claim two final answers. Correction and disagreement rates reveal unstable policy or review quality. Class and source mix can reveal an unexpected workflow change.
-
-### Use Data Tests To Enforce Label Rules
-
-Warehouse teams often use dbt data tests for structural and business assertions. Built-in tests cover uniqueness, nulls, accepted values, and relationships. A custom SQL test can return cohorts whose mature coverage falls below an approved threshold. For the BigQuery path shown above, the test can express the mature coverage ratio with `SAFE_DIVIDE`:
-
-```sql
-SELECT cohort_date, model_route
-FROM {{ ref('production_label_snapshot') }}
-WHERE observation_eligible = TRUE
-  AND label_state IN (
-    'mature_observed',
-    'mature_from_trusted_absence',
-    'mature_missing'
-  )
-GROUP BY cohort_date, model_route
-HAVING SAFE_DIVIDE(
-  COUNTIF(label_state IN (
-    'mature_observed',
-    'mature_from_trusted_absence'
-  )),
-  COUNT(*)
-) < 0.95
+```text
+transaction 123: fraud = true
 ```
 
-dbt treats the returned rows as failures. For this particular decision, the job would withhold a snapshot if any route falls below 95 percent. Product and risk owners choose that threshold for this label. Another label may need 99.9 percent coverage or may publish a clearly marked partial result.
+record a history such as:
 
-The gate also checks unique event IDs, valid state transitions, source freshness, policy compatibility, and the absence of unresolved authoritative conflicts. Failed rows should enter a quarantined audit table with enough identifiers for repair. Training and release-evaluation jobs remain blocked until the snapshot passes or an approved exception records the limitation.
-
-### Quality Metrics Need Owners And Responses
-
-A fall in source freshness belongs to the source owner. Orphan events belong to the identity or integration owner. A growing pending queue may indicate normal label delay, while a growing mature-missing queue points to lost evidence or incorrect eligibility. Reviewer disagreement belongs to the review-policy owner.
-
-Each alert should identify the affected cohort and source, the failing assertion, the last successful snapshot, and the safe response. A “label job failed” page without this context forces responders to reconstruct the entire lifecycle during an incident.
-
-## Correct For Product Decisions That Shape Which Labels Exist
-<!-- section-summary: The model and product policy influence which outcomes are observed, so production labels rarely form a neutral sample of all possible cases. -->
-
-Production labels reflect the path that created them. A ranking model determines which items receive exposure. A risk threshold determines which cases enter review. Users report severe or visible problems more often than ordinary ones. This creates **selection bias**: the labelled population differs systematically from the population the team wants to understand.
-
-### Record Exposure And Routing With Each Outcome
-
-Imagine a search system that learns from clicks. Results shown in the first position receive more clicks simply because people see them first. Training on raw clicks can reinforce the existing ranking: yesterday's top result produces more labels, so tomorrow's model treats that exposure as proof of relevance.
-
-The prediction receipt records candidate eligibility, displayed position, route, action, and any exploration probability. Analysis compares like positions or uses an approved experimental design to estimate behaviour beyond the current ranking. Google describes this feedback-loop risk through positional features: position affects interaction, while the model later scores candidates before the final display position exists.
-
-```mermaid
-flowchart TD
-    A["Eligible Traffic<br/>(all cases the decision could affect)"] --> B["Product Policy<br/>(route, rank, block, or review)"]
-    B --> C["Observed Outcomes<br/>(labels from exposed or selected cases)"]
-    B --> D["Unobserved Outcomes<br/>(cases whose alternative result is unknown)"]
-    A --> E["Audit Sample<br/>(collect bounded evidence across the population)"]
-    E --> F["Coverage Estimate<br/>(measure selection by route and score band)"]
-    C --> G["Label Snapshot<br/>(state the population represented)"]
-    F --> G
-    D --> G
-
-    class A,E population
-    class B policy
-    class C,F,G evidence
-    class D unknown
+```text
+day 0: transaction completed
+day 9: dispute opened
+day 21: fraud confirmed
+day 40: case reversed
 ```
 
-The diagram keeps unobserved outcomes visible. No weighting formula can recover information that the product never collected without assumptions.
+Then label logic can decide what the target means. This provides:
+
+* auditability,
+* reproducibility,
+* debugging,
+* historical reconstruction,
+* safer label-definition changes.
+
+A model has a version:
+
+$$
+M=v17
+$$
+
+Feature logic has a version:
+
+$$
+F=v8
+$$
+
+The label definition should have one too:
+
+$$
+L=v4
+$$
+
+Suppose `label_v3` means:
+
+$$
+\text{chargeback within 45 days}
+$$
+
+while `label_v4` means:
+
+$$
+\text{confirmed fraud within 60 days excluding merchant disputes}.
+$$
+
+If a model metric changes across these definitions, that is not necessarily model degradation. The target changed. Therefore evaluation should record:
+
+$$
+\boxed{
+(\text{model version},
+\text{feature version},
+\text{label version})
+}
+$$
+
+Suppose you publish a performance snapshot on August 30. A useful metadata record could include:
+
+$$
+\text{prediction window}
+$$
+
+$$
+\text{outcome cutoff}
+$$
+
+$$
+\text{label version}
+$$
+
+$$
+\text{maturity rule}
+$$
+
+$$
+\text{source-data version}
+$$
+
+$$
+\text{pipeline/code version}
+$$
+
+Then the metric:
+
+$$
+\text{recall}=0.87
+$$
+
+is not merely a floating-point number. It is a reproducible claim. Suppose last month's dashboard showed:
+
+$$
+AUC=0.91
+$$
+
+Today you rerun the same period and get:
+
+$$
+AUC=0.88
+$$
+
+Did the dashboard have a bug?
+
+Not necessarily. Late-arriving labels may have changed the historical truth as known today. Therefore it is useful to distinguish:
+
+### As-was evaluation
+
+What did we know at the time?
+
+$$
+M(t,\text{knowledge cutoff}=t)
+$$
+
+### As-final evaluation
+
+What do we know now about that historical prediction period?
+
+$$
+M(t,\text{using mature current labels})
+$$
+
+Both can be useful, but they answer different questions. Suppose a bug is discovered in the label definition. You fix the code. Now you need to rebuild historical labels. If the pipeline only works incrementally from "today onward," the past remains contaminated. A replayable system allows:
+
+$$
+\text{raw events}
++
+\text{label code version}
++
+\text{cutoff}
+$$
+
+to deterministically produce:
+
+$$
+\text{labeled dataset}.
+$$
+
+In other words:
+
+$$
+D_{\text{labels}}
+=
+g(
+D_{\text{events}},
+\text{definition},
+\text{cutoff}
+)
+$$
+
+That function should be runnable again. Suppose the same label job runs twice. Ideally:
+
+$$
+g(D)=g(g(D))
+$$
+
+in the operational sense that rerunning does not duplicate or corrupt records. For example, processing the same fraud-confirmation event twice should not create two positive labels. This property makes recovery much safer. Production data pipelines fail. Replay without duplication is therefore valuable. Suppose your 30-day window closes. You label:
+
+$$
+Y=0
+$$
+
+Then on day 37 a delayed source delivers an event that actually occurred on day 25. Now reality says:
+
+$$
+Y=1
+$$
+
+What happens?
+
+A robust system has an explicit policy. Possibilities include:
+
+* revise the label,
+* keep both historical and latest label states,
+* mark the case as late-arriving,
+* recompute affected metrics,
+* freeze official evaluation after a cutoff.
+
+What matters is that this behaviour is defined rather than accidental. Not all outcome events are monotonic. A customer may:
+
+$$
+\text{open dispute}
+\rightarrow
+\text{fraud confirmed}
+\rightarrow
+\text{dispute reversed}
+$$
+
+A subscription may be marked canceled and later reinstated. An order may be returned, then the return rescinded. Therefore label construction often needs:
+
+$$
+\text{event history}
+$$
+
+rather than a one-way transition:
+
+$$
+0\rightarrow1.
+$$
+
+This is another reason immutable event histories are safer than overwriting final labels. Suppose a prediction was made on January 1. During offline evaluation in March, you reconstruct a feature:
+
+$$
+\text{lifetime purchases}
+$$
+
+using data through March. Now the January record contains information that did not exist at prediction time. That is leakage. The correct historical feature should satisfy:
+
+$$
+X_i
+=
+X_i(t\le t_p)
+$$
+
+Likewise, if evaluating "what did we know on January 15?", labels should satisfy the chosen knowledge cutoff. So production evaluation requires temporal discipline on both sides:
+
+$$
+\boxed{
+\text{point-in-time features}
++
+\text{point-in-time labels}
+}
+$$
+
+## How Do Labels Support Quality, Calibration, and Threshold Analysis without Becoming False Truth?
+<!-- section-summary: Mature labels enable quality, calibration, and threshold evaluation, but disagreement, definition drift, deployed policy, and leakage can make an observed label misleading. -->
+
+Mature labels enable quality, calibration, and threshold evaluation, but disagreement, definition drift, deployed policy, and leakage can make an observed label misleading.
+
+Suppose your churn target is:
+
+$$
+Y=\text{churn within next 30 days}
+$$
+
+and one feature in a reconstructed dataset is:
+
+$$
+\text{account status today}.
+$$
+
+If you build the training/evaluation set after the fact, churned customers may already be marked:
+
+```text
+status = closed
+```
+
+That future information trivially predicts:
+
+$$
+Y=1
+$$
+
+Your offline metric looks fantastic. Production performance collapses. This is why the label pipeline cannot be designed independently of feature timing. Suppose today is August 30 and labels require:
+
+$$
+30\text{ days}
+$$
+
+to mature. Then measuring "August model performance" using August 25 predictions is invalid. Those cases have barely had time to produce outcomes. A sensible evaluation cutoff might instead use predictions through:
+
+$$
+\text{July 28}
+$$
+
+or another date accounting for reporting lag. So the most current input-monitoring window and the most current performance-monitoring window may be different:
+
+$$
+\text{drift window}=\text{recent}
+$$
+
+$$
+\text{label-based performance window}=\text{older}.
+$$
+
+That is normal. Imagine:
+
+$$
+\text{feature monitoring delay}=5\text{ minutes}
+$$
+
+but:
+
+$$
+\text{label maturity delay}=45\text{ days}.
+$$
+
+Then there is a:
+
+$$
+45\text{-day gap}
+$$
+
+during which you need to operate using proxy evidence. You may monitor:
+
+$$
+P(X)
+$$
+
+$$
+P(\hat Y)
+$$
+
+$$
+\text{decision rates}
+$$
+
+$$
+\text{data-quality invariants}
+$$
+
+until outcomes become available. This is why production monitoring always benefits from both:
+
+$$
+\boxed{\text{fast weak signals}}
+$$
+
+and:
+
+$$
+\boxed{\text{slow strong signals}}
+$$
+
+Recall:
+
+$$
+P(X,Y)=P(X)P(Y|X)
+$$
+
+Data drift concerns:
+
+$$
+P(X)
+$$
+
+Concept drift concerns:
+
+$$
+P(Y|X)
+$$
+
+Without labels, you can directly observe changes in:
+
+$$
+P(X)
+$$
+
+but not reliably determine whether:
+
+$$
+P(Y|X)
+$$
+
+changed. Production labels give you the $$Y$$ side of the relationship. Therefore they are essential for detecting whether the learned relationship itself has become stale. Suppose the model predicts:
+
+$$
+\hat p=0.8
+$$
+
+for 1,000 cases. A well-calibrated model should have roughly:
+
+$$
+800
+$$
+
+positives among those cases. Formally:
+
+$$
+P(Y=1|\hat p=p)\approx p
+$$
+
+You cannot test this without production labels. A model can preserve ranking quality while calibration deteriorates.
+
+For example:
+
+$$
+AUC\approx\text{stable}
+$$
+
+while:
+
+$$
+P(Y=1|\hat p=0.2)=0.4
+$$
+
+So production labels reveal failure modes that score distributions alone cannot. Suppose the model estimates fraud risk:
+
+$$
+\hat p
+$$
+
+and the system blocks when:
+
+$$
+\hat p > 0.8
+$$
+
+Once labels arrive, you can calculate:
+
+$$
+TP,FP,TN,FN
+$$
+
+and ask:
+
+$$
+\text{precision}
+=
+\frac{TP}{TP+FP}
+$$
+
+$$
+\text{recall}
+=
+\frac{TP}{TP+FN}
+$$
+
+You can also estimate business cost:
+
+$$
+C
+=
+c_{FP}FP+c_{FN}FN
+$$
+
+Then perhaps the optimal threshold is no longer:
+
+$$
+0.8
+$$
+
+but:
+
+$$
+0.65
+$$
+
+Production labels therefore inform not only retraining, but also decision-policy tuning. This matters when model decisions affect exposure or outcomes. Suppose a recommender determines which items are shown. Observed click labels are generated under policy:
+
+$$
+\pi_{\text{current}}
+$$
+
+Therefore your evaluation describes:
+
+$$
+\text{model behaviour under }\pi_{\text{current}}
+$$
+
+It does not automatically tell you what would happen under:
+
+$$
+\pi_{\text{new}}.
+$$
+
+Similarly, fraud labels observed after blocking rules reflect those blocking rules. Production evaluation is often **policy-dependent**. This is a subtle reason offline and online metrics can disagree. We casually say:
+
+$$
+Y=\text{ground truth}
+$$
+
+but in many domains the "truth" is measured imperfectly. Examples:
+
+* abuse labels from human reviewers,
+* medical diagnoses,
+* user-reported fraud,
+* churn inferred from inactivity,
+* product relevance from clicks,
+* sentiment inferred from surveys.
+
+These are measurement processes. The observed label is better represented as:
+
+$$
+Y_{\text{observed}}
+$$
+
+which may differ from:
+
+$$
+Y_{\text{true}}
+$$
+
+The measurement mechanism can itself drift. Suppose human moderators originally classified:
+
+$$
+\text{borderline abuse}\rightarrow0
+$$
+
+After a policy change:
+
+$$
+\text{borderline abuse}\rightarrow1
+$$
+
+The same content now receives a different label. Your measured model precision falls. Did:
+
+$$
+P(Y|X)
+$$
+
+change in the world Or did your definition of $$Y$$ change Potentially the latter. So monitor not only:
+
+$$
+\text{model version}
+$$
+
+but also:
+
+$$
+\text{label/policy version}.
+$$
+
+Otherwise a target-definition change can look like concept drift. Suppose three reviewers label the same example:
+
+$$
+Y_1=1,\qquad Y_2=0,\qquad Y_3=1
+$$
+
+What is ground truth?
+
+Perhaps:
+
+$$
+Y=\text{majority vote}=1
+$$
+
+But the disagreement itself contains useful information. You may want to retain:
+
+$$
+\{Y_1,Y_2,Y_3\}
+$$
+
+plus:
+
+$$
+\text{adjudicated label}
+$$
+
+instead of discarding reviewer history. If disagreement rates suddenly increase, the domain or labeling guidelines may have become ambiguous. That is another kind of feedback signal. Suppose production outcomes are ultimately used to train the next model. For every historical prediction time:
+
+$$
+t_p
+$$
+
+features must be built using only information available at or before:
+
+$$
+t_p.
+$$
+
+Then the label should come from the future window:
+
+$$
+(t_p,t_p+H]
+$$
+
+Conceptually:
+
+$$
+X(t\le t_p)
+\rightarrow
+Y(t_p<t\le t_p+H)
+$$
+
+This temporal separation is the basic structure of a supervised temporal example. Breaking it produces leakage.
 
 ![Recommendation exposure, fraud actions, and a full prediction-cohort left join showing how observability, missingness, and route-level label coverage differ from negative outcomes.](/content-assets/articles/article-mlops-monitoring-and-feedback-collecting-labels-after-deployment/observation-eligibility-and-coverage.png)
 
 *Product policy determines which outcomes can exist: keep unexposed and blocked cases distinct from negatives, and measure coverage against the complete eligible cohort by route.*
 
-### Keep A Representative Measurement Path
+## What Should a Canonical Label Record, Worked Examples, Denominators, and Multiple Clocks Show?
+<!-- section-summary: Canonical records and fraud, churn, join, and self-reinforcement examples make uncertainty, denominator counts, and different label clocks explicit. -->
 
-A practical design reserves a bounded audit sample across model-score bands, routes, and important segments. The sampling service records eligibility and selection probability. A risk owner defines which cases may enter the sample, the maximum exposure, the review capacity, and a stop condition.
+Canonical records and fraud, churn, join, and self-reinforcement examples make uncertainty, denominator counts, and different label clocks explicit.
 
-If every sampled case has a known selection probability, an analyst may use inverse-probability weighting to estimate the eligible population. A case selected with probability `0.1` receives more weight than a case selected with probability `0.5`. Large weights also create unstable estimates, so the report checks effective sample size and keeps score bands with no coverage marked unknown. Weighting repairs a documented sampling design. Outcomes remain unknown for any part of the population that never entered the sample.
+Conceptually, a high-quality labeled example might contain:
 
-Active learning can send informative or uncertain cases to review, which is useful for improving a model. That sample is intentionally selective. A separate random or stratified sample protects population-level monitoring. Combining both queues without recording their selection rules would make the final dataset impossible to interpret.
+$$
+\boxed{
+\begin{aligned}
+&\text{prediction\_id}\\
+&\text{entity\_id}\\
+&\text{prediction\_time}\\
+&\text{model\_version}\\
+&\text{feature\_version}\\
+&\hat Y\\
+&\text{decision}\\
+&\text{decision\_policy\_version}\\
+&\text{label\_status}\\
+&Y\\
+&\text{label\_event\_time}\\
+&\text{label\_known\_time}\\
+&\text{label\_definition\_version}\\
+&\text{observable?}\\
+&\text{mature?}\\
+&\text{source}\\
+&\text{snapshot\_cutoff}
+\end{aligned}
+}
+$$
 
-Safety rules may forbid randomization for some decisions. A payment team may refuse to approve high-risk transactions solely to learn their chargeback rate. It can use expert review, appeals, later reports, and carefully bounded samples from an approved risk range. The published evidence must state the population it covers and the counterfactual outcomes that remain unknown.
+You may not literally store every field in one table. The point is that these concepts should exist somewhere in the lineage. Suppose at:
 
-## Keep Label History And Reproducible Snapshots
-<!-- section-summary: A production label system separates restricted source events, resolved label views, and immutable snapshots with explicit access, lineage, and retention. -->
+$$
+t_0
+$$
 
-Label storage serves three different needs. Investigators need the original history. Current applications need a resolved view of the latest approved label state. Evaluation and training need a frozen snapshot that stays fixed throughout an experiment.
+a transaction arrives. The model records:
 
-### Separate Raw Events, Corrected History, And Approved Datasets
-
-The **event layer** is append-only and restricted. It retains outcome events, corrections, source references, policy versions, event time, and available time. Access is narrow because this layer may contain identifiers or references to sensitive source evidence.
-
-The **resolved layer** applies one versioned label policy at one cutoff. It selects authoritative events, exposes pending and censored states, and preserves conflicts for adjudication. Rebuilding this layer under another policy publishes a new version and retains the earlier history.
-
-The **snapshot layer** freezes the rows admitted to one use. Its manifest records the source table versions, query or transformation revision, cohort bounds, as-of cutoff, label-policy version, eligibility rule, quality results, exclusions, and row counts. The snapshot ID is what a monitoring report or training run references.
-
-### Choose Storage That Fits The Existing Data Platform
-
-A warehouse-first team can keep events and snapshots in BigQuery or Snowflake and use dbt for transformations and tests. BigQuery table snapshots can preserve a read-only table state beyond the ordinary time-travel window. A lakehouse team can use Delta Lake or Apache Iceberg tables with Spark for large histories and backfills. Delta and Iceberg table versions support historical queries, although retained metadata and data files set the recovery boundary.
-
-Object storage can retain raw events economically, while governed catalog tables expose approved columns to analytics and training. A smaller system may start with PostgreSQL and scheduled SQL. Kafka, Spark, and a lakehouse become worthwhile after event volume, replay cost, or shared ownership exceeds that simpler design.
-
-Native catalog and identity controls protect the layers. Production jobs receive write access to their own tables. Analysts receive approved read views. Training identities receive only eligible snapshots. Retention, deletion, legal hold, and correction policies apply to label data just as they apply to the source system.
-
-### Use MLflow To Record Which Dataset A Model Used
-
-MLflow's dataset APIs can connect a training or evaluation run to a named dataset and its digest. They can also record its schema, profile, and source reference. This gives a model result a traceable link to the label snapshot it used.
-
-The source may differ from the final transformed dataset. The durable manifest therefore keeps the exact snapshot identity and transformation lineage alongside the rows.
-
-For a Delta snapshot, an MLflow run can record the table name and version. For a BigQuery snapshot, it can record the governed table name plus the snapshot manifest. MLflow supplies experiment lineage; the warehouse or lakehouse remains responsible for row retention, access, corrections, and replay.
-
-## Make The Label Pipeline Reproducible And Replayable
-<!-- section-summary: A production workflow uses explicit cohort and cutoff parameters, blocks unsafe publication, monitors every stage, and can rebuild past evidence after a repair. -->
-
-Label collection is a recurring production workflow. New outcomes arrive, recent predictions mature, corrections appear, and older cohorts need revisions. The workflow must produce the same answer again from the same inputs.
-
-### Record Every Run's Time Window And Policy
-
-An orchestrator such as Airflow, Dagster, Lakeflow Jobs, or a provider-managed workflow runs the stages in dependency order. A typical run captures events, validates sources, resolves authority, calculates maturity, joins predictions, evaluates quality, writes a snapshot, and publishes its manifest.
-
-Every run receives explicit `cohort_start`, `cohort_end`, `as_of_time`, and `label_policy_version` parameters. Airflow data intervals can define the cohort window, while the maturity rule determines which older outcomes are eligible at that run's cutoff. Lakeflow Jobs can pass the same parameters through its tasks. A replay reuses the original values and leaves the wall clock out of the calculation.
-
-```mermaid
-flowchart TD
-    A["Capture Events<br/>(land source evidence durably)"] --> B["Validate Sources<br/>(check freshness, schema, and counts)"]
-    B --> C["Resolve Labels<br/>(apply authority and maturity rules)"]
-    C --> D["Build Cohort<br/>(left join from eligible predictions)"]
-    D --> E{"Quality Gate<br/>(coverage, bias, conflicts, and policy)"}
-    E -->|"Pass"| F["Publish Snapshot<br/>(freeze rows and manifest)"]
-    E -->|"Fail"| G["Quarantine Result<br/>(block downstream use)"]
-    G --> H["Repair And Replay<br/>(rerun the same bounded interval)"]
-    H --> B
-
-    class A,B ingest
-    class C,D,F process
-    class E gate
-    class G,H failure
+```text
+prediction_id = P123
+score         = 0.82
+model         = fraud-v6
+decision      = allow
+prediction_at = Aug 1
 ```
 
-The orchestrator coordinates work. The outcome contract and versioned transformations supply label semantics. A job marked successful proves only that its tasks finished, so the final publication task also checks record counts and quality results.
+At:
 
-### Monitor Labels From Source To Consumer
+$$
+t_0+12\text{ days}
+$$
 
-Pipeline health includes source freshness, source-to-event reconciliation, invalid and duplicate event counts, event lag, pending age, mature coverage, orphan joins, conflicts, correction rate, snapshot age, and the identity of the latest successful run. Dashboards split these measures by source and model route.
+the customer files a dispute. You record an event:
 
-dbt source freshness and data tests suit warehouse transformations. Spark suits distributed joins and durable reprocessing of large event histories. The existing cloud scheduler and alerting service are often enough for a smaller pipeline. Kafka or another event stream adds value for high-volume, low-latency capture, although the mature-label build can still run as a bounded batch job.
+```text
+prediction_id = P123
+event         = dispute_opened
+event_at      = Aug 13
+known_at      = Aug 13
+```
 
-A controlled probe can test the full path. The team inserts a synthetic prediction and an approved synthetic outcome, then expects a known label state in a non-training monitoring cohort. The probe confirms capture, resolution, joining, quality calculation, publication, and alert delivery without placing fake evidence in a production training snapshot.
+At:
 
-### Replay Missing Outcomes Without Hiding The Gap
+$$
+t_0+25\text{ days}
+$$
 
-Suppose a source deployment omits prediction IDs for six hours. The pipeline should mark affected cohorts unavailable and pause retraining or release gates that depend on them. The source owner repairs the event mapping and backfills the missing records from the authoritative system. The data owner reruns validation and rebuilds the same cohort using the original cutoff.
+fraud is confirmed. Now:
 
-Recovery requires more than a green rerun. Source counts must reconcile, orphan events must return to their expected range, coverage must recover for every affected route, and a sample of joined cases must point to the correct predictions. The repaired output receives a new snapshot revision with lineage to the incident and backfill. Downstream automation resumes only after those checks pass.
+$$
+Y=1
+$$
 
-## Decide Whether Labels Can Be Used For Monitoring, Evaluation, Or Training
-<!-- section-summary: A resolved outcome can support one purpose while remaining too early, biased, sensitive, or weak for another. -->
+under a 60-day fraud definition. That positive label is usable immediately if confirmation is considered final. Meanwhile another transaction `P124` has no fraud event. At day 25, its state is:
 
-The final lifecycle decision is **use eligibility**. It states which downstream jobs may consume a label state and under which restrictions.
+$$
+Y=\text{unknown}
+$$
 
-### Use Early Labels Carefully For Monitoring
+At day 60 plus reporting lag:
 
-A provisional signal can reveal a problem before final outcomes mature. A sudden increase in support-ticket reroutes may warn that a classifier or policy changed. The monitoring dashboard can show that signal with its source and provisional status. It should remain separate from the final resolution metric.
+$$
+Y=0
+$$
 
-Operational response may use early evidence for reversible containment, such as reducing a candidate route or increasing review. A permanent quality claim waits for the agreed mature outcome.
+if no positive event exists. This is how maturity changes the meaning of absence. Suppose the model predicts:
 
-### Use Comparable Labels For Evaluation
+Will customer $$i$$ cancel within 30 days
 
-Release evaluation needs a stable cohort, compatible label policy, sufficient coverage, and a population that supports comparison. A random audit sample may stay separate from training so repeated model changes cannot consume its independence. Historical and candidate results must use the same cutoff and inclusion rules.
+At August 1:
 
-Incident cases are valuable regression tests because they preserve known failures. A representative evaluation set still provides the population-level comparison, and deliberately oversampled incident cases keep their separate weighting.
+$$
+\hat p_i=0.73
+$$
 
-### Apply The Strongest Label Checks Before Training
+Customer cancels on August 17. Therefore:
 
-Training usually admits only mature labels from an authoritative source. The dataset also needs point-in-time features and a compatible policy era. Privacy and domain owners confirm the legal basis or consent, while quality gates check selection probabilities and segment coverage.
+$$
+Y_i=1
+$$
 
-A quick agent correction can support monitoring and review sampling. Training waits for adjudication and completion of the appeal window.
+For another customer:
 
-The training snapshot manifest records all of these decisions. MLflow or a managed experiment tracker can then link the snapshot identity to the training run and evaluation results. If a policy changes, the team publishes another snapshot and measures the effect while the earlier labels remain reproducible.
+$$
+\hat p_j=0.12
+$$
 
-## The Main Idea
-<!-- section-summary: Production label collection turns delayed and selective outcome events into governed evidence whose meaning, coverage, and history remain visible. -->
+No cancellation has occurred by August 20. You still cannot conclude:
 
-A production label is a claim about what happened after a live prediction. That claim is trustworthy only if the system preserves the prediction, states whether the outcome was observable, defines the authoritative event, waits for maturity, retains missing cases, and measures coverage across the population.
+$$
+Y_j=0
+$$
 
-The complete lifecycle carries events into governed history, resolves them under a versioned policy, joins them from the full prediction cohort, blocks weak snapshots, and records the exact evidence admitted to each use. Explicit run parameters and durable source history then make repair and replay possible.
+because the 30-day horizon has not completed. On September 1, assuming the relevant data has arrived:
 
-This design keeps unknown outcomes visible and prevents the current product policy from quietly writing its own answer key. Monitoring, evaluation, and training can then use production feedback with a clear account of what the data represents and where its limits remain.
+$$
+Y_j=0.
+$$
+
+This simple example captures most of the temporal reasoning behind production labels. Suppose 100 predictions are mature. Actual reality:
+
+$$
+20\text{ positives},\quad80\text{ negatives}
+$$
+
+But your positive-event pipeline works better than your negative-resolution pipeline. You successfully label:
+
+$$
+20/20\text{ positives}
+$$
+
+but only:
+
+$$
+20/80\text{ negatives}.
+$$
+
+Your joined dataset contains:
+
+$$
+40
+$$
+
+examples:
+
+$$
+20\text{ positive},\quad20\text{ negative}.
+$$
+
+It appears:
+
+$$
+P(Y=1)=50\%
+$$
+
+even though reality is:
+
+$$
+20\%.
+$$
+
+If you blindly evaluate on joined rows, every downstream metric may be badly biased. This is why label coverage and selection mechanisms matter. Suppose a hiring model ranks applicants. Only highly ranked candidates are interviewed. Only interviewed candidates receive detailed performance assessments. Therefore:
+
+$$
+\text{high score}
+\rightarrow
+\text{interview}
+\rightarrow
+\text{observable label}.
+$$
+
+Future training data becomes dominated by people whom the old model already liked. The model then learns from its own historical selection. This creates:
+
+$$
+\text{model}
+\rightarrow
+\text{selection}
+\rightarrow
+\text{labels}
+\rightarrow
+\text{training data}
+\rightarrow
+\text{model}.
+$$
+
+The production label system must therefore preserve enough information to understand **how each label was selected into the dataset**. A label is not always just:
+
+$$
+0\text{ or }1
+$$
+
+A more realistic state can include:
+
+$$
+\text{unknown}
+$$
+
+$$
+\text{provisional positive}
+$$
+
+$$
+\text{confirmed positive}
+$$
+
+$$
+\text{mature negative}
+$$
+
+$$
+\text{unobservable}
+$$
+
+$$
+\text{invalid}
+$$
+
+$$
+\text{revised}
+$$
+
+This prevents downstream consumers from treating fundamentally different cases as equivalent. A clear state machine is often better than clever inference from NULLs and timestamps. Suppose dashboard precision is:
+
+$$
+91\%
+$$
+
+A careful question is:
+
+91% of what
+
+Was it computed over:
+
+$$
+\text{all predictions}
+$$
+
+Or:
+
+$$
+\text{mature predictions}
+$$
+
+Or:
+
+$$
+\text{mature predictions with labels}
+$$
+
+Or:
+
+$$
+\text{only approved customers with labels}
+$$
+
+These populations can differ dramatically. Every metric implicitly has a denominator. In production ML, understanding that denominator is often as important as the metric itself. For a prediction window, it is useful to know:
+
+$$
+N_{\text{total}}
+$$
+
+total predictions,
+
+$$
+N_{\text{eligible}}
+$$
+
+predictions expected to eventually receive an observable label, and:
+
+$$
+N_{\text{labeled}}
+$$
+
+predictions currently carrying usable labels. Then you can reason separately about:
+
+$$
+\frac{N_{\text{eligible}}}{N_{\text{total}}}
+$$
+
+observability, and:
+
+$$
+\frac{N_{\text{labeled}}}{N_{\text{eligible}}}
+$$
+
+label coverage. Collapsing these into one number hides important failure modes. Some domains have several meaningful outcome horizons.
+
+For example:
+
+$$
+Y_7=\text{churn within 7 days}
+$$
+
+$$
+Y_{30}=\text{churn within 30 days}
+$$
+
+$$
+Y_{90}=\text{churn within 90 days}
+$$
+
+These are different targets. Likewise:
+
+$$
+\text{7-day retention}
+$$
+
+$$
+\text{30-day retention}
+$$
+
+$$
+\text{90-day retention}.
+$$
+
+The same prediction event can therefore produce multiple labels with different maturity schedules. Production label infrastructure should make the horizon explicit.
+
+## How Do Reproducible Snapshots and Lineage Determine Which Label Source Can Be Trusted?
+<!-- section-summary: Reproducibility binds code, data, configuration, immutable evaluation snapshots, training-dataset lineage, and a stated trust purpose for every source. -->
+
+Reproducibility binds code, data, configuration, immutable evaluation snapshots, training-dataset lineage, and a stated trust purpose for every source.
+
+To reproduce a label dataset, you need more than a SQL query.
+
+Conceptually:
+
+$$
+\boxed{
+\text{Label snapshot}
+=
+f(
+\text{raw events},
+\text{code version},
+\text{configuration},
+\text{cutoff},
+\text{target definition}
+)
+}
+$$
+
+If any component changes, the output may change. Therefore good systems track:
+
+* source versions,
+* transformation code,
+* target definition,
+* time cutoffs,
+* backfill/revision rules.
+
+This is what turns labels from an ad hoc query into infrastructure. Suppose for two weeks a pipeline incorrectly classified:
+
+```text
+refund = fraud
+```
+
+You fix the logic. Now every affected label must be rebuilt. A replayable pipeline lets you:
+
+$$
+\text{reprocess historical raw events}
+$$
+
+under:
+
+$$
+\text{label definition }v_{new}
+$$
+
+and republish corrected labels. Then you can recompute:
+
+$$
+\text{historical model metrics}
+$$
+
+and, if necessary:
+
+$$
+\text{training datasets}.
+$$
+
+Without replayability, label bugs create permanent ambiguity. This may sound contradictory. You often want both:
+
+1. the latest corrected truth,
+2. the exact dataset used for a historical evaluation or training run.
+
+So keep:
+
+$$
+D_{\text{latest}}
+$$
+
+and immutable references such as:
+
+$$
+D_{\text{evaluation-2026-08-30}}
+$$
+
+or equivalent versioned snapshots. Then you can answer both:
+
+What is our best current understanding of June performance
+
+and:
+
+What exact data produced the metric that the team saw on July 10
+
+Those are different audit questions. Suppose a retrained model performs unexpectedly. You need to reconstruct:
+
+$$
+\text{which predictions became examples}
+$$
+
+$$
+\text{which label definition was used}
+$$
+
+$$
+\text{what maturity cutoff was used}
+$$
+
+$$
+\text{which cases were excluded}
+$$
+
+$$
+\text{which revisions were present}
+$$
+
+Without training-data lineage, debugging model differences becomes guesswork. The training dataset is itself a versioned artifact. Imagine three possible labels:
+
+### Source A
+
+User self-report within hours. Fast, but noisy.
+
+### Source B
+
+Human review within 3 days. Better quality, but subjective.
+
+### Source C
+
+Final audited outcome after 60 days. Slow, but highly reliable. You might decide:
+
+| Label source | Monitoring | Official evaluation | Training |
+| ------------ | ---------- | ------------------- | -------- |
+| User report  | Yes        | No                  | No       |
+| Human review | Yes        | Maybe               | Maybe    |
+| Final audit  | Yes        | Yes                 | Yes      |
+
+This is much better than treating all three as interchangeable "ground truth." Suppose you want an early warning. A noisy label with:
+
+$$
+90\%\text{ precision}
+$$
+
+available after one day might be useful. Suppose you want to compare two models for a regulatory report. You may require finalized labels only. Suppose you want to retrain. You may also require:
+
+* stable target definition,
+* representative coverage,
+* deduplication,
+* no leakage,
+* known selection mechanism.
+
+Different tasks impose different evidence standards.
+
+## How Do Production Labels Close the Monitoring Loop?
+<!-- section-summary: Labels close the loop by joining predictions to matured outcomes, exposing coverage and bias, supporting investigation, and providing governed evidence for future learning. -->
+
+Labels close the loop by joining predictions to matured outcomes, exposing coverage and bias, supporting investigation, and providing governed evidence for future learning.
+
+Without labels:
+
+$$
+X
+\rightarrow
+f(X)
+\rightarrow
+\hat Y
+$$
+
+and monitoring can tell you:
+
+Here is what the model saw and what it predicted.
+
+With labels:
+
+$$
+X
+\rightarrow
+f(X)
+\rightarrow
+\hat Y
+\rightarrow
+\text{decision}
+\rightarrow
+Y
+$$
+
+and now monitoring can ask:
+
+$$
+\boxed{\text{Was the prediction actually right?}}
+$$
+
+With business outcomes, it can go further:
+
+$$
+\boxed{\text{Was the decision useful?}}
+$$
+
+That is why production labels are the core feedback mechanism in supervised ML systems. A robust flow can be thought of as:
+
+$$
+\boxed{
+\begin{array}{c}
+\text{Prediction occurs}\\
+\downarrow\\
+\text{Persist prediction + lineage}\\
+\downarrow\\
+\text{Record whether outcome is observable}\\
+\downarrow\\
+\text{Collect raw outcome events}\\
+\downarrow\\
+\text{Preserve event history}\\
+\downarrow\\
+\text{Apply label definition}\\
+\downarrow\\
+\text{Wait for maturity}\\
+\downarrow\\
+\text{Join outcome to prediction}\\
+\downarrow\\
+\text{Measure coverage and pipeline health}\\
+\downarrow\\
+\text{Correct/understand selection effects}\\
+\downarrow\\
+\text{Produce versioned labeled snapshot}\\
+\downarrow\\
+\text{Use for monitoring/evaluation/training as appropriate}
+\end{array}
+}
+$$
+
+Every step protects against a different class of false conclusion. Suppose model recall suddenly falls. Before concluding the model deteriorated, investigate:
+
+$$
+\boxed{
+\text{Label source}
+\rightarrow
+\text{event volume}
+\rightarrow
+\text{freshness}
+\rightarrow
+\text{maturity}
+\rightarrow
+\text{join rate}
+\rightarrow
+\text{coverage}
+\rightarrow
+\text{label-definition version}
+\rightarrow
+\text{selection effects}
+\rightarrow
+\text{model performance}
+}
+$$
+
+For example, what appears to be:
+
+$$
+\text{recall collapse}
+$$
+
+could actually be:
+
+* a positive-label feed arriving late,
+* a changed target definition,
+* broken prediction IDs,
+* immature negatives,
+* a product release changing who receives observable labels.
+
+First establish that the measuring instrument is trustworthy. The model is deployed over a production population:
+
+$$
+(X,Y)\sim P_{\text{prod}}
+$$
+
+Ideally, we want to measure:
+
+$$
+R(f)
+=
+E_{(X,Y)\sim P_{\text{prod}}}
+[L(Y,f(X))]
+$$
+
+But labels are only visible for some examples. Let:
+
+$$
+O\in\{0,1\}
+$$
+
+represent observability. What we can directly estimate is often:
+
+$$
+E[L(Y,f(X))\mid O=1]
+$$
+
+The desired quantity is:
+
+$$
+E[L(Y,f(X))]
+$$
+
+These are equal only under assumptions about the observation process. If:
+
+$$
+O\not\!\perp\!(X,Y,\hat Y,D)
+$$
+
+then naive evaluation can be biased. That single equation explains why production-label engineering and causal reasoning are sometimes inseparable. For every prediction, there are really three questions:
+
+### What did we know when we predicted
+
+$$
+\mathcal I(t_p)
+$$
+
+### What happened afterward
+
+$$
+Y(t>t_p)
+$$
+
+### When did we learn about what happened
+
+$$
+t_{\text{known}}
+$$
+
+A trustworthy production evaluation preserves all three. That prevents:
+
+* future information leaking backward,
+* immature negatives,
+* incorrect historical reconstruction,
+* accidental changes in label meaning.
+
+A production label is not simply a column that eventually changes from:
+
+```text
+NULL
+```
+
+to:
+
+```text
+0
+```
+
+or:
+
+```text
+1
+```
+
+It is the result of a carefully defined evidence process. The model makes a prediction:
+
+$$
+\boxed{\hat Y_i=f(X_i)}
+$$
+
+at:
+
+$$
+t_p
+$$
+
+Reality unfolds afterward. Eventually some observable event provides information about:
+
+$$
+Y_i
+$$
+
+and only after the relevant outcome window and reporting delay have matured can that label be safely interpreted. The full reasoning chain is:
+
+$$
+\boxed{
+\text{Prediction}
+\rightarrow
+\text{durable identity}
+\rightarrow
+\text{future outcome events}
+\rightarrow
+\text{observability}
+\rightarrow
+\text{maturity}
+\rightarrow
+\text{label definition}
+\rightarrow
+\text{point-in-time join}
+\rightarrow
+\text{coverage checks}
+\rightarrow
+\text{bias/selection analysis}
+\rightarrow
+\text{versioned snapshot}
+\rightarrow
+\text{evaluation or training}
+}
+$$
+
+The most important distinctions are:
+
+$$
+\boxed{\text{missing label}\neq\text{negative label}}
+$$
+
+$$
+\boxed{\text{observed outcome}\neq\text{counterfactual outcome}}
+$$
+
+$$
+\boxed{\text{early label}\neq\text{mature label}}
+$$
+
+$$
+\boxed{\text{raw event}\neq\text{derived label}}
+$$
+
+$$
+\boxed{\text{monitoring-safe label}\neq\text{training-safe label}}
+$$
+
+and:
+
+$$
+\boxed{\text{label coverage}\neq100\%\Rightarrow\text{evaluation population may be biased}}
+$$
+
+Ultimately, production labels exist to close the gap between:
+
+$$
+\text{what the model believed}
+$$
+
+and:
+
+$$
+\text{what reality eventually revealed}.
+$$
+
+Without them, you can know that a model is running. You can know that its inputs changed. You can know that its predictions changed. But you cannot reliably answer the most important supervised-learning question:
+
+$$
+\boxed{\text{Was the model actually right?}}
+$$
 
 ![The governed production-label lifecycle from prediction receipt and observation eligibility through outcome events, maturity, left joins, quality gates, replay, immutable snapshots, and approved downstream uses.](/content-assets/articles/article-mlops-monitoring-and-feedback-collecting-labels-after-deployment/production-label-lifecycle-summary.png)
 
 *Explicit observability, timing, provenance, maturity, coverage, snapshot, and use-eligibility decisions turn a label into governed evidence; failed cohorts remain quarantined until replay under the original parameters passes the gate.*
 
-## References
+## Check Your Answers
 
-- [Google Rules of ML](https://developers.google.com/machine-learning/guides/rules-of-ml)
-- [Apache Kafka introduction](https://kafka.apache.org/intro/)
-- [Apache Spark Structured Streaming programming guide](https://spark.apache.org/docs/latest/streaming/index.html)
-- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
-- [dbt source freshness](https://docs.getdbt.com/docs/deploy/source-freshness)
-- [Apache Airflow timetables](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timetable.html)
-- [Databricks table history and time travel](https://docs.databricks.com/aws/en/tables/history)
-- [Databricks Lakeflow Jobs](https://docs.databricks.com/aws/en/jobs/)
-- [BigQuery table snapshots](https://cloud.google.com/bigquery/docs/table-snapshots-intro)
-- [BigQuery GoogleSQL query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax)
-- [MLflow dataset tracking](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.data.html)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Makes a Production Outcome a Label for One Prediction?]{kind="recap"}
+A production label is a versioned claim that a specific prediction's target outcome has been observed under the same definition used for training or evaluation.
+:::
+
+:::expand[How Do Observability, Event History, Knowledge Time, and Maturity Define a Label?]{kind="recap"}
+Prediction time, outcome-event time, knowledge time, observation windows, buffers, and maturity states distinguish unknown outcomes from genuine negative labels.
+:::
+
+:::expand[How Do Joins, Coverage, Selective Labels, Product Actions, and Trust Levels Bias Evaluation?]{kind="recap"}
+Left-preserving joins and segment coverage expose missing labels, while selective observation, product intervention, and provisional sources limit what the resulting dataset can prove.
+:::
+
+:::expand[How Should a Production Label Pipeline Be Monitored, Versioned, Replayed, and Kept Point-in-Time Correct?]{kind="recap"}
+The label pipeline is a monitored data product with immutable raw history, definition versions, snapshot cutoffs, replay, idempotence, late-event handling, and point-in-time controls.
+:::
+
+:::expand[How Do Labels Support Quality, Calibration, and Threshold Analysis without Becoming False Truth?]{kind="recap"}
+Mature labels enable quality, calibration, and threshold evaluation, but disagreement, definition drift, deployed policy, and leakage can make an observed label misleading.
+:::
+
+:::expand[What Should a Canonical Label Record, Worked Examples, Denominators, and Multiple Clocks Show?]{kind="recap"}
+Canonical records and fraud, churn, join, and self-reinforcement examples make uncertainty, denominator counts, and different label clocks explicit.
+:::
+
+:::expand[How Do Reproducible Snapshots and Lineage Determine Which Label Source Can Be Trusted?]{kind="recap"}
+Reproducibility binds code, data, configuration, immutable evaluation snapshots, training-dataset lineage, and a stated trust purpose for every source.
+:::
+
+:::expand[How Do Production Labels Close the Monitoring Loop?]{kind="recap"}
+Labels close the loop by joining predictions to matured outcomes, exposing coverage and bias, supporting investigation, and providing governed evidence for future learning.
+:::

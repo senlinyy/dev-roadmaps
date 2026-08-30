@@ -1,0 +1,40 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/usr/sbin/nginx": { "type": "file", "content": "simulated nginx binary\n", "mode": 493 },
+    "/usr/local/bin/ordersctl": { "type": "file", "content": "#!/bin/sh\necho orders\n", "mode": 493 }
+  },
+  "commandModules": ["packages"],
+  "packages": {
+    "manager": "apt",
+    "indexFresh": true,
+    "repositories": [
+      { "id": "noble-updates", "name": "Ubuntu", "family": "apt", "url": "http://archive.ubuntu.com/ubuntu noble-updates", "enabled": true, "trusted": true }
+    ],
+    "packages": [
+      {
+        "name": "nginx-core",
+        "architecture": "amd64",
+        "installedVersion": "1.24.0-2ubuntu7.3",
+        "candidateVersion": "1.24.0-2ubuntu7.3",
+        "repository": "noble-updates",
+        "summary": "Nginx web and reverse proxy server",
+        "files": ["/usr/sbin/nginx"]
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "nginx-core: /usr/sbin/nginx",
+      "Version: 1.24.0-2ubuntu7.3",
+      "Origin: Ubuntu",
+      "/usr/local/bin/ordersctl"
+    ],
+    "requireCommands": ["dpkg", "apt", "command"],
+    "minCommandCount": 3
+  }
+}

@@ -9,595 +9,2359 @@ id: "article-mlops-data-for-ml-systems-feature-engineering-in-production"
 
 ## Table of Contents
 
-1. [How A Useful Notebook Feature Reaches Production](#how-a-useful-notebook-feature-reaches-production)
-2. [Separate The Feature Recipe From Each Calculated Value](#separate-the-feature-recipe-from-each-calculated-value)
-3. [Start With The Product Decision And Its Deadline](#start-with-the-product-decision-and-its-deadline)
-4. [Define What Each Source Means And Who Maintains It](#define-what-each-source-means-and-who-maintains-it)
-5. [Make The Same Inputs Produce The Same Feature Values](#make-the-same-inputs-produce-the-same-feature-values)
-6. [Build Historical Features From Facts Available At That Time](#build-historical-features-from-facts-available-at-that-time)
-7. [Choose How Training And Serving Reuse The Logic](#choose-how-training-and-serving-reuse-the-logic)
-8. [Check The Feature Before Other Systems Use It](#check-the-feature-before-other-systems-use-it)
-9. [Publish Feature Values And Keep Them Fresh](#publish-feature-values-and-keep-them-fresh)
-10. [Record Feature Changes And Monitor The Live Path](#record-feature-changes-and-monitor-the-live-path)
-11. [Change Historical Values And Remove Old Features Safely](#change-historical-values-and-remove-old-features-safely)
-12. [The Main Idea](#the-main-idea)
-13. [References](#references)
+1. [What Turns a Notebook Column into a Production Feature?](#what-turns-a-notebook-column-into-a-production-feature)
+2. [How Does a Feature Contract Separate Meaning from Calculated Values?](#how-does-a-feature-contract-separate-meaning-from-calculated-values)
+3. [How Do Time Boundaries Keep Historical Feature Values Honest?](#how-do-time-boundaries-keep-historical-feature-values-honest)
+4. [How Can Offline and Online Implementations Preserve One Meaning?](#how-can-offline-and-online-implementations-preserve-one-meaning)
+5. [How Do Freshness, Missingness, Latency, and Availability Shape Serving?](#how-do-freshness-missingness-latency-and-availability-shape-serving)
+6. [How Are Features Validated, Versioned, and Backfilled?](#how-are-features-validated-versioned-and-backfilled)
+7. [How Do Shared Paths and Monitoring Keep Features Operable?](#how-do-shared-paths-and-monitoring-keep-features-operable)
+8. [How Are Feature Dependencies Deprecated and Removed Safely?](#how-are-feature-dependencies-deprecated-and-removed-safely)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## How A Useful Notebook Feature Reaches Production
-<!-- section-summary: A useful notebook column turns into a production feature only after its meaning, time boundary, computation, delivery, evidence, and ownership are made explicit. -->
+A fraud notebook creates `failed_payments_24h`, the number of failed attempts for an account during the previous 24 hours. The feature improves recall on historical data. That result only shows that the idea may help.
 
-Suppose a fraud model gains useful predictive power from `failed_payments_24h`, the number of failed payment attempts associated with an account during the previous 24 hours. The notebook result looks promising. Accounts with several recent failures are more likely to produce a disputed transaction, and the feature improves recall on a historical test set.
+The warehouse may have removed duplicate events before the notebook reads them, while the live path receives the same event twice after a retry. The notebook may measure the window from each old authorization time, while serving uses the current clock. Both paths return an integer, but the integers may describe different facts.
 
-### A Notebook Test Only Shows That The Feature May Help
+A **production feature** needs a precise contract: meaning, entity, sources, time window, availability rule, missing states, version, owner, and delivery deadline. The same contract must guide historical training, live serving, backfills, validation, monitoring, and retirement.
 
-The same feature can behave very differently after deployment.
+Carry the feature through that lifecycle:
 
-The notebook may read a corrected warehouse table in which duplicate events have already been removed. A live pipeline may receive the same payment event twice after a retry. The notebook may calculate the window relative to each old authorization time. A serving job may calculate it relative to the current clock. The historical dataset may treat a missing account as zero failures, while the online lookup may return zero during a store outage. All four systems can produce a valid integer. Only some of those integers express the intended fact.
+1. **What Turns a Notebook Column into a Production Feature?**
+2. **How Does a Feature Contract Separate Meaning from Calculated Values?**
+3. **How Do Time Boundaries Keep Historical Feature Values Honest?**
+4. **How Can Offline and Online Implementations Preserve One Meaning?**
+5. **How Do Freshness, Missingness, Latency, and Availability Shape Serving?**
+6. **How Are Features Validated, Versioned, and Backfilled?**
+7. **How Do Shared Paths and Monitoring Keep Features Operable?**
+8. **How Are Feature Dependencies Deprecated and Removed Safely?**
 
-Production feature engineering therefore reaches beyond writing a transformation. The team is turning a statistical idea into a maintained data product for a model. Its meaning must survive historical training, batch recomputation, live delivery, late events, source changes, and operational failures.
+## What Turns a Notebook Column into a Production Feature?
 
-### Production Needs A Repeatable Definition And Owner
+<!-- section-summary: A production feature has stable semantics, an entity and prediction-time boundary, governed sources, reproducible historical logic, a serving strategy, validation, versions, owners, service expectations, monitoring, back -->
 
-Production needs the feature to mean the same thing across historical training, live delivery, source changes, and incident recovery. That promise requires a repeatable lifecycle and a named owner.
+A feature in a notebook is just a calculation. A **production feature** is a calculation that has become part of a reliable system. That difference is much larger than it first appears.
 
-Suppose the payment-events source begins delivering duplicates after a retry-policy change. The source owner can explain the new delivery behaviour, but the feature owner must decide how `failed_payments_24h` removes duplicates, backfill the corrected history, verify the online value, and tell model owners which feature version changed. Without that ownership chain, a source repair may leave training tables, online values, and deployed models describing different facts.
+Suppose a researcher writes:
 
-The lifecycle below preserves the feature definition, computation, historical values, delivery policy, tests, and release evidence. Each artifact gives the owner something concrete to review, reproduce, and repair.
-
-```mermaid
-flowchart TD
-    Intent["Product decision<br/>and prediction time"] --> Contract["Feature contract<br/>meaning, entity, clocks, owner"]
-    Contract --> Compute["Deterministic computation<br/>SQL, Spark, or Polars"]
-    Compute --> History["Point-in-time history<br/>reproducible feature values"]
-    History --> Delivery["Batch or online delivery<br/>with freshness policy"]
-    Delivery --> Evidence["Tests, lineage, monitoring<br/>and release evidence"]
-    Evidence --> Change["Version, backfill,<br/>migration, or retirement"]
-    Change --> Contract
-
-    class Intent,Contract yellow;
-    class Compute,History teal;
-    class Delivery blue;
-    class Evidence purple;
-    class Change pink;
+```python
+customer_spend_30d = sum(
+    transaction.amount
+    for transaction in customer.transactions
+    if transaction.time >= prediction_time - 30_days
+)
 ```
 
-Each step protects a different promise. The contract protects meaning. Deterministic computation gives repeated runs the same rules. Point-in-time history protects the experiment from future information. Delivery controls latency and freshness. Evidence lets a reviewer connect a model to the exact data and code that produced it. Versioning gives consumers a safe way to adopt a change.
+In a notebook, the feature may look useful. But production immediately introduces harder questions:
 
-A feature store can help with several of these responsibilities, although many teams can operate production features without one. A warehouse table built by dbt may be enough for a batch model. A governed Delta table may support training and batch inference on a lakehouse. Low-latency models shared across many teams may justify a feature platform with historical retrieval, an online store, materialization, and a registry. The architecture should follow the product need.
+* What exactly counts as a transaction?
+* Which currency is `amount` in?
+* Are refunds included?
+* What happens when transactions arrive late?
+* What value should be used for a brand-new customer?
+* Can the feature be calculated before the prediction deadline?
+* Can we reconstruct its value six months ago?
+* Will training and serving calculate it identically?
+* How fresh must it be?
+* Who fixes it when the source breaks?
+* What happens to old models if its definition changes?
 
-The lifecycle stays the same across those implementations. A team still has to state what the feature means, which past information it may use, how values are computed, how consumers receive them, how failures are detected, and who owns the repair.
+The real problem is therefore not:
 
-## Separate The Feature Recipe From Each Calculated Value
-<!-- section-summary: A feature definition is the recipe, a feature value is one result, and a feature store is an optional system that manages feature metadata and retrieval. -->
+**How do we compute this feature?**
 
-People often use the word **feature** for the calculation, the resulting number, the table that stores it, and the platform that retrieves it. Those objects work together, although each solves a different problem. A wrong recipe, corrupted stored values, and a failed online lookup have different causes, owners, and repairs.
+It is:
 
-### A Feature Definition Is The Recipe For Calculating Values
+> **How do we make this feature a stable, time-correct, reproducible input to an ML system?**
 
-A **feature definition** is the recipe. It describes the entity, sources, time rules, transformation, data type, missing-value policy, freshness target, and owner. `failed_payments_24h` is a definition of which payment events count and how their timestamps relate to a prediction.
+The resulting feature value depends on all of these inputs:
 
-A **feature value** is one output of that recipe. For example, the value `3` may describe account `A17` at an authorization time of `14:05`. The entity and timestamp are part of the meaning. The number alone is incomplete.
+$$
+\boxed{
+\text{Feature Value}
+=
+F(
+\text{source facts},
+\text{feature definition},
+\text{entity},
+\text{prediction time}
+)
+}
+$$
 
-A **feature table** stores many feature values. One row might represent an account at an hourly timestamp; another design might keep only the latest value per account. A time-series feature table preserves history, while a latest-state table serves current values efficiently.
+Production feature engineering is about controlling every term in that equation.
 
-### Add A Feature Store Only For Shared Retrieval Needs
+### Why features exist
 
-A **feature store** is a platform for managing and retrieving features. Common capabilities include a registry, historical point-in-time retrieval, materialization into an online store, discovery, access control, lineage, and consistent lookup metadata. Feast offers an open-source feature-store architecture. Databricks Feature Store integrates governed feature tables and model-feature lineage with Unity Catalog. Managed cloud platforms provide related capabilities within their own ecosystems.
+An ML system eventually makes some decision:
 
-```mermaid
-mindmap
-  root((Production feature))
-    Definition
-      Business meaning
-      Entity and key
-      Time rules
-      Transformation
-      Missing-value policy
-      Owner
-    Values
-      Entity
-      Feature timestamp
-      Computed value
-      Source visibility
-    Storage
-      Historical table
-      Latest-state table
-      Online key-value store
-    Optional feature platform
-      Registry
-      Point-in-time retrieval
-      Materialization
-      Discovery and lineage
+$$
+\hat{Y}=M(X)
+$$
+
+where $$X$$ is the collection of features. Consider a fraud system may decide:
+
+$$
+\text{approve transaction?}
+$$
+
+A delivery system may estimate:
+
+$$
+\text{expected arrival time}
+$$
+
+A recommendation system may choose:
+
+$$
+\text{which products to rank}
+$$
+
+Features exist to provide the model with information available when that decision must be made. So before defining a feature, ask:
+
+**What decision are we making, for which entity, and at what time?**
+
+The result gives three fundamental pieces:
+
+$$
+\boxed{
+\text{Entity}
++
+\text{Decision}
++
+\text{Decision Time}
+}
+$$
+
+For example:
+
+```text
+Entity:
+transaction 88127
+
+Decision:
+approve or decline
+
+Decision time:
+2026-08-28 14:03:17
 ```
 
-The distinction matters during incidents. A bad definition requires a semantic review and often a new version. Corrupt feature values may require a backfill. A broken online store calls for a delivery repair or fallback. Replacing the store cannot repair a flawed definition, and rewriting the definition cannot restore a failed serving path.
+Now feature requirements become much clearer.
 
-Consider three ordinary situations:
+### The decision deadline constrains what features are possible
 
-- A weekly churn model reads one governed warehouse snapshot and scores every customer in a batch. Versioned SQL models, tests, and a reproducible table may cover the full requirement.
-- Several real-time risk models need the latest account features within a few milliseconds. The team now needs online materialization, freshness controls, lookup monitoring, and a clear fallback.
-- Multiple groups independently calculate “active customer” with different rules. A registry and shared definitions can reduce semantic duplication even if no online store is required.
+Imagine a fraud decision must return within:
 
-Feature-store adoption carries operating cost. Teams maintain registry changes, storage, materialization jobs, access control, SDK compatibility, and incident procedures. It pays for itself through genuine reuse, recurring point-in-time retrieval, or low-latency delivery. A feature store added only because the project uses machine learning creates another platform without resolving a demonstrated problem.
+$$
+100\text{ ms}
+$$
+
+Suppose someone proposes:
+
+```text
+number_of_chargebacks_last_year
+```
+
+This may be predictive. But if computing it requires scanning 50 million records and takes 8 seconds, it is not usable in the live decision path. So predictive usefulness alone is insufficient.
+
+A production feature must satisfy:
+
+$$
+\boxed{
+\text{useful}
++
+\text{available}
++
+\text{fast enough}
+}
+$$
+
+If the prediction deadline is $$t_d$$, then:
+
+$$
+t_{\text{feature ready}}
+\le t_d
+$$
+
+Otherwise the model cannot use the feature in production.
+
+## How Does a Feature Contract Separate Meaning from Calculated Values?
+
+<!-- section-summary: The definition records what the feature means, how it is calculated, and which version owns those semantics. -->
+
+### Production features have two different things: definition and value
+
+This distinction is fundamental. Consider:
+
+```text
+purchases_last_30_days
+```
+
+There is a **feature definition**:
+
+Count completed purchases made by a customer during the 30 days before prediction time.
+
+And there are **feature values**:
+
+```text
+customer 101 at 09:00 → 4
+customer 102 at 09:00 → 17
+customer 101 at 12:00 → 5
+```
+
+Conceptually:
+
+$$
+\boxed{
+\text{Feature Definition}
+\neq
+\text{Feature Value}
+}
+$$
+
+The feature definition is the recipe. The value is one evaluation of that recipe.
+
+### Think of a feature as a function
+
+Suppose:
+
+$$
+F=
+\text{purchases in previous 30 days}
+$$
+
+Then:
+
+$$
+F(customer,t)
+$$
+
+means:
+
+Evaluate the feature for this customer at time $$t$$.
+
+For example:
+
+$$
+F(101,\text{Aug 1})=8
+$$
+
+and:
+
+$$
+F(101,\text{Aug 20})=12
+$$
+
+Same feature definition. Different feature values. This time dependence is one reason production ML features are more subtle than ordinary database columns.
+
+### The feature recipe must have precise semantics
+
+A weak definition is:
+
+```text
+customer spending
+```
+
+What does that mean? Possibilities include:
+
+```text
+lifetime spending
+spending in last 30 days
+authorized transaction value
+completed transaction value
+value after refunds
+value before refunds
+GBP-equivalent value
+raw transaction currency
+```
+
+The model doesn't know which interpretation you intended. A stronger definition might be:
+
+```text
+Feature:
+completed_spend_30d_gbp
+
+Entity:
+customer
+
+Definition:
+sum of completed, non-refunded purchases
+whose event times fall within the 30 days
+before prediction_time
+
+Currency:
+converted to GBP using exchange rate
+available at transaction time
+
+Window:
+[prediction_time - 30 days, prediction_time)
+
+Missing behavior:
+0 when customer has no qualifying purchases
+```
+
+Now the feature has semantics rather than merely a name.
+
+### Feature names do not preserve meaning
+
+Imagine version 1 of:
+
+```text
+customer_spend_30d
+```
+
+includes refunds. Later an engineer changes it to exclude refunds. The name stays the same.
+
+But:
+
+$$
+F_{v1}(x,t)\neq F_{v2}(x,t)
+$$
+
+This can silently alter model behavior. Therefore important feature definitions need versioning. For example:
+
+```text
+customer_spend_30d:v1
+customer_spend_30d:v2
+```
+
+or an equivalent immutable definition ID. The important invariant is:
+
+$$
+\boxed{
+\text{One feature version should have one stable meaning.}
+}
+$$
+
+### The source facts
+
+A feature is derived from something. Suppose:
+
+$$
+F=\text{completed purchases in last 30 days}
+$$
+
+The source may be:
+
+```text
+orders table
+payments table
+refunds table
+```
+
+Before productionizing the feature, you need to understand what those sources mean. For example:
+
+```text
+orders.status = "completed"
+```
+
+Does `completed` mean:
+
+merchant accepted it?
+
+or:
+
+payment settled?
+
+or:
+
+customer received it?
+
+These are different business events. So production feature work starts with **source semantics**, not transformation syntax.
+
+### Every source should have an owner and a contract
+
+Suppose your model depends on:
+
+```text
+customer_country
+```
+
+coming from a customer profile system. Production questions include:
+
+```text
+Who owns this field?
+Can it be NULL?
+How quickly are updates published?
+Can historical values change?
+What does "country" mean?
+Residence?
+Billing country?
+Current IP country?
+```
+
+If nobody knows, your model depends on an undocumented interpretation. A useful source contract covers things such as:
+
+```text
+field meaning
+data type
+valid values
+freshness expectations
+NULL semantics
+update behavior
+owner
+```
+
+This matters because a production feature inherits assumptions from its source.
+
+### A feature can be correct mathematically but wrong semantically
+
+Suppose you compute:
+
+$$
+\text{average order value}
+=
+\frac{\sum amount}{N}
+$$
+
+The arithmetic is correct. But perhaps `amount` changed from:
+
+```text
+GBP
+```
+
+to:
+
+```text
+pence
+```
+
+The feature is now 100× larger. Or perhaps:
+
+```text
+cancelled orders
+```
+
+started appearing in the source. Your code still executes perfectly. So:
+
+$$
+\boxed{
+\text{correct calculation}
+\not\Rightarrow
+\text{correct feature}
+}
+$$
+
+Production feature systems must protect meaning, not merely computation.
+
+### Determinism matters
+
+Suppose you compute:
+
+$$
+F(X)=Y
+$$
+
+for fixed source data $$X$$. Running it again should normally produce the same logical values:
+
+$$
+F(X)=Y
+$$
+
+again. Things that break this include:
+
+```text
+current_time()
+unseeded sampling
+unordered LIMIT
+mutable external APIs
+non-versioned lookup tables
+```
+
+For example:
+
+```python
+window_start = datetime.now() - timedelta(days=30)
+```
+
+makes the feature depend on execution time. Instead, use an explicit prediction/reference time:
+
+```python
+def feature(customer_id, prediction_time):
+    ...
+```
+
+Now the computation is controlled.
 
 ![One versioned feature recipe producing different values for the same entity at three historical cutoffs](/content-assets/articles/article-mlops-data-for-ml-systems-feature-engineering-in-production/feature-recipe-and-values.png)
 
 *The recipe stays stable while the calculated value changes with the entity and the information available at each cutoff.*
 
-## Start With The Product Decision And Its Deadline
-<!-- section-summary: A feature contract starts from the product decision, the entity being scored, and the exact instant that separates permitted history from unavailable future information. -->
+## How Do Time Boundaries Keep Historical Feature Values Honest?
 
-A production feature starts with the decision it supports. That decision supplies the entity, the prediction moment, and the boundary around eligible information. Without those anchors, a technically correct aggregation can still answer the wrong product question.
+<!-- section-summary: The product decision identifies the action the model supports. -->
 
-### List The Facts Available At The Decision Moment
+### Time is part of the feature definition
 
-The safest feature design starts with the decision the model supports. Ask what the product is trying to decide, which object receives the prediction, and what information exists at that moment.
+This is perhaps the most important ML-specific idea. Suppose:
 
-For a payment authorization, the entity may be an account and the prediction time may be the arrival of the authorization request. For next-day demand planning, the entity may be a store-item pair and the prediction time may be the planning cutoff. For a support-priority model, the entity may be a ticket and the prediction time may be its first assignment.
-
-The **prediction time** is the boundary between history and future. It tells the feature pipeline which events are eligible for that prediction. A 24-hour window usually means:
-
-\[
-t_{\text{prediction}} - 24h \leq t_{\text{event}} < t_{\text{prediction}}
-\]
-
-The strict upper bound matters. An event recorded at or after the decision was made cannot explain what the model knew beforehand. Historical training that includes such an event gives the model information the live service will never receive.
-
-### Record The Inputs, Timing, And Missing-Value Rules
-
-A compact feature contract makes these rules reviewable:
-
-```yaml
-feature:
-  name: failed_payments_24h
-  version: 3
-  purpose: measure recent payment friction before authorization
-
-  entity:
-    name: account
-    join_key: account_id
-
-  source:
-    dataset: governed.payments.events
-    event_time: occurred_at
-    observed_time: ingested_at
-    deduplication_key: payment_event_id
-
-  definition:
-    window: "[prediction_time - 24h, prediction_time)"
-    eligible_statuses: [declined, reversed]
-    output_type: int64
-
-  missing_values:
-    no_matching_history: 0
-    source_unavailable: unavailable
-
-  freshness:
-    target: 5m
-    maximum: 15m
-
-  owner: payment-risk-data
-  consumers: [authorization-risk-v4]
+```text
+purchases_last_30_days
 ```
 
-The two missing-value cases deserve separate treatment. A genuine absence of failed payments can safely produce zero. A failed source read means the system lacks evidence. Returning zero for both cases hides an outage inside an apparently healthy feature value. Depending on the decision risk, the serving path might use the last trusted value, switch to a model designed for missing features, send the request to review, or reject the prediction.
+At prediction time $$t$$:
 
-The contract should also name the population. Does an account feature include guest checkouts? Are merged accounts treated as one entity? Does an employee test account count? These questions sound like data cleaning, yet they define the product meaning of the feature.
+$$
+F(t)=
+\sum_i
+1[t-30d \le t_i < t]
+$$
 
-Window length belongs to the same discussion. A 24-hour window expresses a hypothesis that recent behavior matters. Changing it to seven days changes the learned signal, expected distribution, storage requirements, and serving freshness. That change deserves evaluation and a versioned release.
+Without $$t$$, the feature is undefined. That means many ML features are not static columns. They are functions of historical state:
 
-## Define What Each Source Means And Who Maintains It
-<!-- section-summary: Source contracts describe keys, clocks, corrections, units, privacy, and ownership so feature pipelines can interpret records consistently. -->
+$$
+\boxed{
+F(entity,t)
+}
+$$
 
-Every feature inherits assumptions from its source data. Production teams make those assumptions visible because a familiar column name can conceal a different clock, unit, correction policy, or identifier scope. Clear source meaning also identifies who can explain and repair an upstream change.
+This perspective naturally leads to point-in-time correctness.
 
-### Separate When An Event Happened From When It Arrived
+### Historical features must use only facts available at that time
 
-Source data rarely arrives with all of its semantics encoded in column types. A timestamp may mean that an action happened, that a database received it, or that a pipeline processed it. A status may be provisional. An identifier may be recycled, merged, or scoped to one region. Production features need these details before a transformation is written.
+Imagine rebuilding the inputs used for a loan decision at this time:
 
-Two clocks appear often:
+```text
+2026-01-10 09:00
+```
 
-- **Event time** says when the real-world action occurred. A card authorization happened at `occurred_at`.
-- **Observed or ingestion time** says when the platform first saw that record. The same authorization entered the analytical platform at `ingested_at`.
+Today the customer's account status is:
 
-Event time controls the business window. Observed time helps the team reason about late data and historical availability. A payment that occurred at 10:00 but arrived at 12:00 belongs to the 10:00 business period. It was unavailable to a model scored at 11:00. A historically honest dataset may need both clocks.
+```text
+defaulted
+```
 
-Corrections add another layer. A source system can mark an event as reversed several hours later. The team has to decide whether a backtest should use the record as originally observed or the latest corrected truth. Both views are useful for different questions. An operational replay asks what the model could know then. An analytical report may ask what ultimately happened. Mixing them silently creates optimistic training data.
+But on January 10 it was:
+
+```text
+current
+```
+
+Which should training use? The January value. Formally, a historical feature must satisfy:
+
+$$
+t_{\text{information available}}
+\le
+t_{\text{prediction}}
+$$
+
+Anything learned afterward is future information. Using it creates leakage.
+
+### Event time alone is not always enough
+
+Suppose a transaction happened at:
+
+```text
+10:00
+```
+
+but entered the warehouse at:
+
+```text
+10:20
+```
+
+Prediction occurred at:
+
+```text
+10:10
+```
+
+Did the production model know about that transaction? No. So even though:
+
+$$
+t_{\text{event}} < t_{\text{prediction}}
+$$
+
+we may have:
+
+$$
+t_{\text{arrival}} > t_{\text{prediction}}
+$$
+
+For strict production simulation, training may need to respect **availability time**, not just event time. This distinction is central to leakage-resistant feature generation.
+
+### Point-in-time joins protect historical training
+
+Suppose the customer table contains changing values:
+
+| customer | time  | tier     |
+| -------- | ----- | -------- |
+| 42       | Jan 1 | Standard |
+| 42       | Mar 1 | Premium  |
+
+Training example:
+
+```text
+customer = 42
+prediction_time = Feb 10
+```
+
+A normal current-state join might return:
+
+```text
+Premium
+```
+
+because that is the latest row today. A point-in-time join asks:
+
+What was the latest value available by February 10?
+
+So it selects:
+
+```text
+Standard
+```
+
+Conceptually:
+
+$$
+value(t)
+=
+\arg\max_{v}
+\{
+t_v \mid t_v\le t
+\}
+$$
+
+That is a fundamental operation in historical ML feature computation.
+
+### Offline usefulness can hide impossible online features
+
+Suppose researchers discover:
+
+```text
+time_until_customer_refund
+```
+
+strongly predicts fraud. Of course it does. The refund happens after the transaction.
+
+So it cannot exist when the transaction decision is made. Offline:
+
+$$
+P(Y\mid X)
+$$
+
+looks excellent. Production:
+
+$$
+X
+$$
+
+does not exist yet. A production feature must satisfy:
+
+$$
+\boxed{
+\text{available at prediction time}
+}
+$$
+
+not merely:
+
+$$
+\text{present somewhere in the warehouse}
+$$
+
+## How Can Offline and Online Implementations Preserve One Meaning?
+
+<!-- section-summary: Historical computation evaluates the feature at each example's prediction time using explicit half-open windows, event and availability timestamps, historical dimensions, deterministic tie-breaking, and point-in-time joi -->
+
+### Training and serving create two computational worlds
+
+Most production ML systems need feature values in two contexts.
+
+#### Offline
+
+For:
+
+```text
+training
+validation
+backtesting
+historical analysis
+```
+
+This might involve billions of examples.
+
+#### Online
+
+For:
+
+```text
+one live prediction
+```
+
+under a tight latency requirement. The result creates a difficult problem:
+
+$$
+F_{\text{offline}}
+$$
+
+and:
+
+$$
+F_{\text{online}}
+$$
+
+must mean the same thing. If not:
+
+$$
+\boxed{\text{training-serving skew}}
+$$
+
+appears.
+
+### Training-serving skew can happen even with similar-looking code
+
+Suppose training uses:
+
+```python
+age_days = floor(seconds / 86400)
+```
+
+while serving uses:
+
+```python
+age_days = round(seconds / 86400)
+```
+
+Small implementation difference. Different feature values. Or:
+
+```text
+offline:
+NULL → 0
+
+online:
+NULL → -1
+```
+
+or:
+
+```text
+offline currency conversion:
+daily rate
+
+online:
+latest market rate
+```
+
+Now:
+
+$$
+F_{\text{train}}(x,t)
+\neq
+F_{\text{serve}}(x,t)
+$$
+
+and the model sees a different input distribution after deployment.
+
+### There are several ways to reuse feature logic
+
+One design is:
+
+$$
+\boxed{
+\text{same transformation implementation}
+}
+$$
+
+used both offline and online. This reduces semantic drift but may be difficult when the execution environments differ greatly. Another design is:
+
+```text
+offline computation
+→ materialize feature values
+→ online lookup
+```
+
+Then serving doesn't recompute the feature. It fetches a precomputed value. For example:
+
+```text
+customer 42
+purchase_count_30d = 17
+updated_at = 10:05
+```
+
+This trades computation cost for freshness concerns.
+
+### Precomputed versus request-time features
+
+There are roughly two broad feature patterns.
+
+#### Precomputed
+
+Example:
+
+```text
+customer_purchase_count_30d
+```
+
+updated every hour. At prediction time:
+
+```text
+lookup(customer_id)
+```
+
+Advantages:
+
+```text
+low latency
+expensive aggregates possible
+```
+
+Disadvantage:
+
+```text
+can become stale
+```
+
+#### Request-time
+
+Example:
+
+```text
+current_cart_value
+```
+
+computed directly from the current request. Advantages:
+
+```text
+fresh
+naturally tied to prediction
+```
+
+Disadvantages:
+
+```text
+latency-sensitive
+may require live dependencies
+```
+
+Many production models use both.
+
+### Some features combine historical and request-time information
+
+Suppose:
+
+```text
+current_purchase_amount /
+average_purchase_amount_90d
+```
+
+This requires:
+
+$$
+F=
+\frac{X_{\text{request}}}
+{X_{\text{historical stored}}}
+$$
+
+The numerator comes from the live request. The denominator comes from a precomputed feature. This introduces multiple freshness and availability requirements.
+
+For example:
+
+```text
+request amount must exist now
+historical average must be < 1 hour old
+```
+
+The feature contract should make these dependencies explicit.
+
+## How Do Freshness, Missingness, Latency, and Availability Shape Serving?
+
+<!-- section-summary: Training may use warehouse SQL while serving uses materialized state, streaming counters, or request-time code. -->
+
+### Freshness is part of feature correctness
+
+Suppose the stored value is:
+
+```text
+account_balance = £1,000
+updated 8 hours ago
+```
+
+The value may have been correct eight hours ago. But if the decision needs a balance no older than five minutes, it is not acceptable now. So feature correctness depends on:
+
+$$
+\text{value}
++
+\text{timestamp}
+$$
+
+A useful quantity is:
+
+$$
+\text{feature age}
+=
+t_{\text{prediction}}
+-
+t_{\text{feature update}}
+$$
+
+and require:
+
+$$
+\text{feature age}
+\le
+\tau
+$$
+
+for some freshness threshold $$\tau$$.
+
+### Different features need different freshness guarantees
+
+For example:
+
+```text
+date_of_birth:
+months of staleness may be irrelevant
+
+lifetime_purchase_count:
+perhaps hourly
+
+current_inventory:
+seconds
+
+current_account_balance:
+potentially milliseconds
+```
+
+So there is no universal:
+
+```text
+all features must update every minute
+```
+
+A freshness limit should follow both the rate at which the underlying fact changes and the decision the model makes from it.
+
+### Freshness and latency trade off
+
+Suppose a feature is expensive to compute. Updating every second produces excellent freshness but high cost. Updating daily is cheap but stale.
+
+So production design chooses a balance:
+
+$$
+\text{Cost}
+\leftrightarrow
+\text{Freshness}
+\leftrightarrow
+\text{Latency}
+$$
+
+This is not primarily an ML modeling decision. It is a systems design decision induced by the model.
+
+### Missing live features require explicit behavior
+
+Suppose the model requests:
+
+```text
+purchase_count_30d
+```
+
+but the feature store has no record for a new customer. What should happen? Possible choices:
+
+```text
+0
+NULL
+global average
+special missing token
+fallback model
+reject prediction
+```
+
+Those choices are not interchangeable. Training must simulate the same behavior. If production uses:
+
+```text
+missing → 0
+```
+
+but training drops missing rows, then:
+
+$$
+P_{\text{train}}(X)
+\neq
+P_{\text{serve}}(X)
+$$
+
+So missing-value behavior belongs in the feature contract.
+
+### Distinguish "zero" from "unknown"
+
+Consider:
+
+```text
+purchase_count_30d = 0
+```
+
+This might mean:
+
+Customer made no purchases.
+
+But missing may mean:
+
+Customer data failed to load.
+
+If both become `0`, the model cannot distinguish:
+
+$$
+\text{true zero}
+$$
+
+from:
+
+$$
+\text{measurement failure}
+$$
+
+Sometimes adding:
+
+```text
+purchase_count_30d_missing = 1
+```
+
+is appropriate. The deeper principle is:
+
+Do not silently collapse different real-world states unless that equivalence is intentional.
 
 ![A shared source and feature definition feeding historical training data and fresh online predictions through separate delivery paths](/content-assets/articles/article-mlops-data-for-ml-systems-feature-engineering-in-production/two-feature-delivery-paths.png)
 
 *Historical and live delivery can use different storage and compute paths while preserving the same feature meaning and logic.*
 
-### Assign An Owner For Source Changes And Repairs
+## How Are Features Validated, Versioned, and Backfilled?
 
-Source ownership turns those semantics into an operating agreement. The source owner controls schema and event meaning. The feature owner controls transformation, quality, and consumer communication. The model owner controls model behavior and fallback. These responsibilities may sit in one team, although the distinction still helps during an incident.
+<!-- section-summary: The serving contract includes value timestamp, maximum age, lookup latency, availability, fallback, and distinct states for zero, unknown, absent history, stale value, lookup failure, and version mismatch. -->
 
-A useful source agreement covers the stable key, event and ingestion timestamps, units, allowed nulls, update or deletion behavior, late-arrival expectations, retention, privacy classification, and change notification. Schema registries, dbt source definitions, Unity Catalog metadata, or a data-contract platform can hold parts of this agreement. The enforceable checks should run in the data path rather than exist only in prose.
+### Feature validation belongs before publication
 
-For example, a currency amount without its currency code is unsafe for a cross-region model. A customer identifier that changes after account merging can duplicate history. A deletion request may require removal from both historical feature tables and online copies. These are feature-design concerns because they change the values a model sees.
+Suppose you compute daily features. Don't immediately expose them to models. Instead:
 
-## Make The Same Inputs Produce The Same Feature Values
-<!-- section-summary: Deterministic feature logic fixes ordering, clocks, deduplication, null handling, and source versions so the same inputs produce the same outputs. -->
+```text
+source data
+↓
+feature computation
+↓
+staging
+↓
+validation
+↓
+publish
+```
 
-A production transformation should produce the same feature values from the same declared inputs, parameters, and code. The same calculation must hold during development, historical replay, backfill, and incident investigation, so the team controls every input that might quietly change the answer.
+Checks may include:
 
-### Pin Every Input That Can Change The Result
+```text
+schema
+NULL rate
+range
+freshness
+cardinality
+distribution
+duplicate entity IDs
+timestamps
+```
 
-A deterministic transformation produces the same feature values from the same source snapshot, parameters, and code version. This property supports debugging, backfills, model reproduction, and safe review.
+For example:
 
-Hidden access to the current clock is a common source of nondeterminism. A query that uses `CURRENT_TIMESTAMP` changes every time it runs. Pass the cutoff time as an explicit parameter instead. Ordering is another source. Selecting “the latest record” without a deterministic tie-breaker can return different rows after repartitioning. Deduplication needs a stable event key and a documented winner, such as the record with the latest observed timestamp and source sequence.
+$$
+0\le purchase\_count_{30d}
+$$
 
-SQL and dbt fit transformations expressed through joins, filters, windows, and aggregations on a warehouse. dbt adds dependency metadata, tests, documentation, and a manifest artifact that records the project graph and compiled resources. The business rule remains visible as SQL.
+or:
 
-```sql
-with visible_events as (
-    select *
-    from {{ ref('payment_events') }}
-    where ingested_at <= {{ var('feature_timestamp') }}
-),
+$$
+NULLRate(account\_age)<0.01
+$$
 
-deduplicated as (
-    select *
-    from visible_events
-    qualify row_number() over (
-        partition by payment_event_id
-        order by ingested_at desc, source_sequence desc
-    ) = 1
+The production model should consume only committed, validated values.
+
+### Feature checks should include time correctness
+
+Ordinary data-quality checks are not sufficient. For historical feature sets, verify:
+
+$$
+t_{\text{source available}}
+\le
+t_{\text{prediction}}
+$$
+
+For window features:
+
+$$
+t_{\text{window end}}
+=
+t_{\text{prediction}}
+$$
+
+For label-independent features:
+
+```text
+no source derived from post-outcome information
+```
+
+These are ML-specific correctness conditions.
+
+### Compare offline and online feature values directly
+
+One powerful way to detect training-serving skew is to take actual production examples and recompute the corresponding offline features. For example:
+
+```text
+prediction 881
+online purchase_count_30d = 17
+
+offline reconstruction = 17
+```
+
+Repeat across many examples. Then measure:
+
+$$
+MismatchRate_j
+=
+P(
+F^{online}_j
+\neq
+F^{offline}_j
 )
+$$
 
-select
-    account_id,
-    {{ var('feature_timestamp') }} as feature_timestamp,
-    count_if(
-        status in ('declined', 'reversed')
-        and occurred_at >= {{ var('feature_timestamp') }} - interval '24' hour
-        and occurred_at < {{ var('feature_timestamp') }}
-    ) as failed_payments_24h
-from deduplicated
-group by account_id
+for feature $$j$$. Ideally:
+
+$$
+MismatchRate_j\approx 0
+$$
+
+except where known tolerances apply.
+
+### Production feature values should carry timestamps and provenance
+
+Instead of storing only:
+
+```text
+customer_id = 42
+feature = 17
 ```
 
-The explicit `feature_timestamp` defines both the business window and the availability boundary for this materialized slice. The ordered deduplication rule produces one winner for each event ID. The orchestrator separately records the physical source snapshot used by the run, allowing the same input state to be read again.
+you may want something conceptually closer to:
 
-### Choose A Processing Tool That Fits The Workload
-
-Spark is a common choice for large lakehouse datasets, distributed joins, and pipelines that share logic between batch and structured streaming. Databricks commonly combines Spark transformations with governed Delta tables in Unity Catalog. Stable Unity Catalog feature tables are the production baseline for teams using Databricks Feature Store. The newer Databricks Feature Views capability defines reusable windowed features as governed objects, but it is currently Public Preview and requires an explicit maturity review before a critical dependency adopts it.
-
-Polars is useful for single-machine pipelines that fit its execution model. Its lazy API builds a query plan before execution, enables optimizer work such as predicate and projection pushdown, and can stream results to supported sinks. A team may use Polars for compact batch feature jobs without deploying a Spark cluster. Data size, join shape, concurrency, team expertise, and the surrounding platform should drive the choice.
-
-A shared Python or JVM library can reuse one pure transformation across training and serving. This works well for request-time arithmetic, normalization, or parsing with modest dependencies. It works poorly if the library secretly reads a warehouse, relies on environment-specific state, or introduces a heavy runtime into a latency-sensitive service.
-
-Storage also affects determinism. Delta Lake and Apache Iceberg provide table snapshots and time-travel-style queries. Recording a Delta version or Iceberg snapshot ID gives a backfill a precise source state. Retention and maintenance policies must keep that snapshot available for the promised reproduction window.
-
-Regardless of engine, deterministic feature code makes these choices explicit:
-
-- source datasets and snapshots;
-- entity keys and duplicate handling;
-- event, ingestion, and prediction clocks;
-- time zone and interval boundaries;
-- null, unknown, and out-of-range behavior;
-- category mappings and units;
-- parameters and code version;
-- output grain and ordering where ordering matters.
-
-## Build Historical Features From Facts Available At That Time
-<!-- section-summary: Historical feature computation rebuilds the information available for each past decision rather than attaching the newest feature state to every row. -->
-
-Training data asks a historical question: what would the model have known at each past decision? Answering it requires more care than joining observations to the latest feature table, because every observation has a different cutoff and may have seen a different set of records.
-
-### Each Training Row Has Its Own Cutoff Time
-
-Training data usually contains many historical prediction opportunities. Each row has its own entity and prediction timestamp. The feature pipeline must reconstruct the feature value available at that row’s time.
-
-Imagine three authorization rows for one account: Monday morning, Monday afternoon, and Tuesday morning. The account’s current failed-payment count cannot be copied onto all three rows. Monday morning may have zero previous failures, Monday afternoon may have one, and Tuesday morning may have three. Each observation needs its own historical lookup.
-
-```mermaid
-flowchart TD
-    O["Observation row<br/>account + prediction time + label"] --> K["Find the same entity"]
-    K --> T["Keep feature events<br/>before this prediction time"]
-    T --> V["Apply source visibility<br/>and late-data policy"]
-    V --> W["Apply lookback window<br/>and aggregation"]
-    W --> R["Attach one historical<br/>feature value"]
-
-    class O yellow;
-    class K,T teal;
-    class V,W blue;
-    class R purple;
+```text
+customer_id = 42
+feature_name = purchase_count_30d
+feature_version = 3
+value = 17
+event_time = 10:00
+computed_at = 10:05
+source_snapshot = 881
 ```
 
-This operation is called a **point-in-time join**. Database users may know the same pattern as an **as-of lookup**: for each observation, select the newest eligible feature state from that observation’s past, optionally within a maximum lookback.
+Not every system stores all of this per value. But these concepts matter because they let you answer:
 
-Raw-event aggregation can express the rule directly:
+How old is this?
 
-```sql
-select
-    p.prediction_id,
-    p.account_id,
-    count(e.payment_event_id) as failed_payments_24h
-from prediction_spine p
-left join governed.payment_events e
-    on e.account_id = p.account_id
-   and e.status in ('declined', 'reversed')
-   and e.occurred_at >= p.prediction_at - interval '24' hour
-   and e.occurred_at < p.prediction_at
-   and e.ingested_at <= p.prediction_at
-group by p.prediction_id, p.account_id
+Which definition produced it?
+
+Can I reconstruct it?
+
+### Feature lineage connects values back to sources
+
+Suppose:
+
+```text
+customer_risk_velocity
 ```
 
-The **prediction spine** is the set of historical moments the model learns from. Each row represents an entity, a decision time, and usually a later label. The `ingested_at` condition is evaluated against that row’s prediction time. It excludes an event that occurred earlier but reached the platform after the decision, preserving what the model could actually know at that moment.
+looks wrong. You need to trace:
 
-The dataset job also reads a pinned Delta version, Iceberg snapshot, or equivalent immutable source version. That run-level boundary makes the rebuild reproducible; it cannot replace the per-row availability check. Sources that overwrite corrections need append-only change history or a bitemporal representation with both business-valid and system-observed times.
-
-### Use Point-In-Time Joins Only After Defining The Time Rules
-
-Feature platforms can manage this lookup for precomputed feature history. Feast historical retrieval performs point-in-time joins relative to each entity-row timestamp and respects the feature view’s lookback TTL. Databricks time-series feature tables support as-of joins through time-series columns and a `timestamp_lookup_key`. These tools reduce repeated join code, but they still need a correct entity, feature timestamp, source visibility policy, and test data.
-
-Point-in-time lookup and table time travel answer separate questions. The lookup asks, “Which feature value belonged to this past prediction?” Table time travel asks, “Which physical version of the source or feature table did the job read?” A reproducible training dataset often needs both.
-
-## Choose How Training And Serving Reuse The Logic
-<!-- section-summary: Training and inference can reuse a table, a transformation library, or a feature platform; the right pattern depends on latency, freshness, and reuse. -->
-
-Training and serving need the same feature meaning, but there are several sound ways to preserve it. A scheduled scoring job can read a shared table. A request-time calculation can use a shared library. A low-latency lookup shared by many models can use a feature platform. The consumer’s latency, freshness, scale, and reuse requirements decide which pattern fits.
-
-### Share A Table For Scheduled Training And Inference
-
-The simplest pattern is a shared precomputed table. A scheduled SQL, dbt, Spark, or Polars job writes versioned feature values. Training reads historical partitions, and batch inference reads the newest eligible partition. This pattern works well for daily or hourly scoring. It gives both paths one stored representation and avoids introducing an online system.
-
-### Use One Library For Request-Time Calculations
-
-A shared transformation library fits request-time features. Suppose a model uses `amount / account_limit` from two inputs already present in the request. One small typed function can run in historical dataset creation and in the serving process. Golden fixtures verify that both call sites produce identical values. The library should remain pure: inputs enter through arguments, configuration is versioned, and no hidden network call changes the result.
-
-### Add A Feature Platform For Shared Historical And Online Retrieval
-
-A feature platform fits repeated historical retrieval or low-latency shared features. The offline path keeps time-stamped history for training. A materialization job copies the latest eligible values to an online store. The serving path looks up values by entity key. Registry metadata connects the feature identity, storage, and consumers.
-
-```mermaid
-flowchart TD
-    Q{"What does the consumer need?"}
-    Q -->|"Scheduled batch scoring"| B["Versioned feature table<br/>dbt, Spark, or Polars"]
-    Q -->|"Request-time arithmetic"| L["Shared pure library<br/>with golden fixtures"]
-    Q -->|"Shared low-latency lookup"| F["Feature platform<br/>offline history + online store"]
-
-    B --> P["Preserve one definition,<br/>time rules, tests, and owner"]
-    L --> P
-    F --> P
-
-    class Q yellow;
-    class B teal;
-    class L blue;
-    class F purple;
-    class P yellow;
+```text
+risk_velocity
+      ↓
+daily_transaction_aggregate
+      ↓
+clean_transactions
+      ↓
+payment_events
 ```
 
-For an open-source stack, Feast can register existing batch feature data, perform historical retrieval, and materialize values into supported online stores. Feast’s stable feature views model timestamped data, while its on-demand and stream feature-view capabilities carry explicit alpha labels in current documentation. Critical production paths should avoid treating those alpha capabilities as established defaults.
+Lineage answers:
 
-On Databricks, Unity Catalog Delta tables with declared primary keys can serve as governed feature tables. Time-series feature tables support point-in-time retrieval, and model training can retain lookup metadata and lineage. Real-time use adds publication to an online store or a Databricks Online Feature Store. Teams should verify cloud-region support, latency, capacity, fallback, and cost for the selected serving path.
+Which source facts and transformations produced this feature?
 
-A dual-path design introduces a synchronization problem. Offline history may be correct while the online value is stale. An online transform may use a different library version. A new field may reach the online store before the model deployment understands it. The detailed controls belong to offline/online architecture and skew analysis, yet one release principle applies here: version the definition and validate representative values across every path before increasing traffic.
+This matters both for debugging and incident impact analysis. If:
 
-## Check The Feature Before Other Systems Use It
-<!-- section-summary: Feature validation checks structure, meaning, time behavior, reproducibility, and delivery rather than relying on one distribution test. -->
-
-Validation should prove that the implementation still satisfies the contract. A row count or schema check alone cannot prove that a 24-hour feature respects its time boundary.
-
-### Check Both Data Shape And Real-World Meaning
-
-Structural checks first verify the shape of the output. Required columns must exist, data types must match, entity keys must be present, and each entity-time row must be unique. Category values also stay within their contract.
-
-dbt data tests fit warehouse transformations. Great Expectations, Deequ, Soda, or platform-native constraints can add richer checks where the data platform needs them. A small number of high-value assertions usually teaches the system more than a large catalog of weak tests.
-
-Semantic fixtures cover business meaning. A readable fixture for `failed_payments_24h` might contain:
-
-- one eligible failure just inside the window;
-- one success that should be ignored;
-- one failure exactly at the prediction time that should be excluded;
-- one duplicate event that should count once;
-- one late event unavailable at the historical visibility cutoff;
-- one account with no history;
-- one source failure that must stay distinct from a genuine zero.
-
-These records can exercise SQL, Spark, or Polars transformations in CI. The expected values should come from the contract, rather than from copying the current implementation’s output.
-
-Historical validation checks the prediction-time boundary. A useful anti-leakage test deliberately inserts a highly predictive event after the decision and confirms that the feature remains unchanged. Backfill validation runs the same code twice against the same source snapshot and parameters, then compares row counts, schema, checksums, and selected values.
-
-Delivery validation samples recent production entities. The team reads the online value, recomputes the expected value from the governed offline history, and compares value, feature timestamp, and definition version. Mismatches are grouped by reason: late materialization, key mismatch, transformation drift, missing online row, or source correction.
-
-### Publish A Feature Version Only After Its Checks Pass
-
-The team publishes a feature version only after one record connects the approved contract, code, source snapshot, test results, limits, and owners. The focused YAML below shows that release record; every `passed` value comes from a check described above.
-
-```yaml
-release_evidence:
-  contract_version: failed_payments_24h:v3
-  code_revision: "${GIT_SHA}"
-  source_snapshot: "${ICEBERG_SNAPSHOT_OR_DELTA_VERSION}"
-  checks:
-    schema_and_grain: passed
-    semantic_fixtures: passed
-    point_in_time_leakage: passed
-    deterministic_replay: passed
-    sampled_delivery_parity: passed
-  limits:
-    maximum_freshness: 15m
-    parity_mismatch_rate: 0.1%
-  approvers:
-    - feature_owner
-    - model_owner
+```text
+payment_events / Aug 20
 ```
 
-CI and reviewers use this record to make the release decision. A failed point-in-time test blocks training. A freshness miss may block online promotion while allowing a corrected batch table to publish. A small parity difference may trigger investigation if it exceeds the documented tolerance. The result is tied to a version, source snapshot, and code revision.
+was corrupted, lineage can show the feature partitions and downstream models that used the bad source.
 
-## Publish Feature Values And Keep Them Fresh
-<!-- section-summary: Materialization turns a feature definition into stored values, while freshness controls keep those values suitable for the product decision. -->
+### Feature versioning should connect to model versioning
 
-Feature values have to reach durable storage before training or live prediction can use them. **Materialization** is the process that computes those values and writes them to a consumer-facing store. A batch materialization may rebuild an hourly Delta or Iceberg partition. An online materialization may copy the latest value for each entity into DynamoDB, Redis, Bigtable, Cosmos DB, or a managed online feature store.
+Suppose:
 
-### Start With Scheduled Updates Unless The Product Needs Live Values
-
-Batch computation is usually the first choice for features whose freshness target is measured in hours or days. It has fewer moving parts, supports large backfills, and fits warehouse or lakehouse controls. dbt and SQL work well inside warehouses. Spark is common for large distributed datasets. Polars can run efficient single-machine jobs over Parquet or object storage.
-
-Streaming computation is justified by a product deadline that batch processing cannot meet. A fraud decision may need activity from the previous few minutes. Spark Structured Streaming, Flink, Beam, or managed streaming services can compute event-time windows and handle late data.
-
-A production design then specifies the lateness it will accept and how long window state remains. It names the event ID used for deduplication, the checkpoint location, and the replay procedure. Idempotent writes keep a retried event from creating a second feature value.
-
-```mermaid
-flowchart TD
-    E["Events with entity key,<br/>event time, and event ID"] --> D["Deduplicate and validate"]
-    D --> W["Event-time window<br/>with lateness policy"]
-    W --> O["Write historical values<br/>to Delta or Iceberg"]
-    W --> N["Write latest values<br/>to an online store"]
-    O --> C["Check partition completeness<br/>and source snapshot"]
-    N --> F["Check feature timestamp,<br/>lookup success, and latency"]
-    C --> S["Publish freshness status"]
-    F --> S
-
-    class E yellow;
-    class D,W teal;
-    class O,N blue;
-    class C,F pink;
-    class S yellow;
+```text
+fraud_model_v12
 ```
 
-A **watermark** tells a streaming engine how much late event-time data the pipeline expects to tolerate before old state can be cleaned up. It is an operating tradeoff. A longer delay admits more late events and keeps more state. A shorter delay reduces state while dropping or separately handling more late records. Apache Spark documents the guarantee carefully: records less late than the configured watermark delay are retained; records later than that threshold may still be processed, although the engine does not guarantee it.
+uses:
 
-### Measure Staleness And Define A Safe Fallback
+```text
+purchase_count_30d:v3
+country_risk:v7
+account_age_days:v2
+```
 
-Freshness should be measured from the feature timestamp that matters to the product. Pipeline completion time alone can look healthy after an upstream source has stopped. Useful signals include the newest source event time, newest feature timestamp, materialization delay, percentage of entities with values, online lookup success, and age of the value returned to the model.
+Record that relationship. Then if `country_risk:v7` is discovered to be flawed, you can ask:
 
-Suppose the online materialization falls 20 minutes behind a 15-minute maximum. The response depends on decision risk:
+$$
+\text{Which models use feature version 7?}
+$$
 
-- A recommendation service may use the last trusted value and attach a stale-feature indicator.
-- A fraud service may switch to a fallback model that excludes the feature.
-- A medical or credit workflow may pause automation and route the decision to an approved review path.
+rather than:
 
-The feature owner defines the policy with the model and product owners before an incident. The serving system exposes which path was used, monitoring confirms the fallback rate, and recovery compares rematerialized values against the last trusted partition before normal traffic resumes.
+Which models might use something called `country_risk`?
 
-Delta Lake and Iceberg provide strong foundations for the historical store because they retain transactional table state, schemas, and snapshots. They do not provide a complete feature lifecycle by themselves. The pipeline still owns contract enforcement, point-in-time logic, freshness, consumer compatibility, and incident response.
+Version-level dependency information makes incident response much more precise.
 
-## Record Feature Changes And Monitor The Live Path
-<!-- section-summary: A production feature needs evidence that connects its definition, code, source data, materialization runs, model consumers, and live behavior. -->
+### Changing a feature is often equivalent to creating a new feature
 
-A feature release affects data pipelines, training datasets, model artifacts, and sometimes an online serving path. Versioning identifies the meaning being used. Lineage connects that version to the work that produced and consumed it. Monitoring checks whether the live path continues to honor the contract.
+Suppose:
 
-### Record The Definition, Inputs, Code, And Output Version
+```text
+spend_30d:v1
+```
 
-Feature versioning protects meaning. A compatible repair might fix a pipeline retry without changing values. A semantic change such as a new window, source, entity key, default, or category mapping usually deserves a new feature version. Keeping the old version available for a migration period lets teams compare models and roll back safely.
+includes refunds. You want to exclude them. Instead of silently redefining it, treat the new semantics as:
 
-A release should identify:
+```text
+spend_30d:v2
+```
 
-- the feature contract version;
-- transformation code and configuration revision;
-- source datasets and physical snapshots;
-- orchestration run and materialized output;
-- validation results;
-- training datasets and models that consumed the feature;
-- online store or endpoint deployment;
-- owner, approval, and rollback target.
+Then:
 
-MLflow can record dataset inputs, source information, digests, parameters, metrics, models, and artifacts for a training run. For example, `mlflow.log_input()` can link a tracked dataset to the run, while tags can record the feature-contract and source-snapshot identifiers. MLflow evidence complements the data platform’s table history; it does not copy the complete dataset into experiment metadata.
+```text
+existing models → continue using v1
+new model experiments → can test v2
+```
+
+This makes rollout controlled. Once old consumers are gone, $$v1$$ can eventually be deprecated.
+
+### Why silent changes are dangerous
+
+Suppose model $$M$$ was trained using:
+
+$$
+X_j = F_{v1}
+$$
+
+Production suddenly starts serving:
+
+$$
+X_j = F_{v2}
+$$
+
+without retraining. Now the deployed model receives a feature distribution it never learned. This is effectively changing the model's input contract.
+
+So:
+
+$$
+\boxed{
+\text{feature semantic change}
+\approx
+\text{API breaking change}
+}
+$$
+
+for models consuming that feature.
+
+### Feature evolution should therefore use compatibility rules
+
+Possible changes include:
+
+#### Safe or mostly safe
+
+```text
+documentation improvement
+performance optimization preserving values
+storage-format change
+```
+
+#### Potentially breaking
+
+```text
+different window
+different unit
+different source
+different NULL handling
+different category mapping
+different filtering
+```
+
+The important question is:
+
+$$
+F_{\text{new}}(x,t)
+\stackrel{?}{=}
+F_{\text{old}}(x,t)
+$$
+
+If semantics change materially, use a new version.
+
+### Historical feature recomputation is called backfilling
+
+Suppose you introduce:
+
+```text
+merchant_refund_rate_90d
+```
+
+today. But you want to train on two years of historical examples. You need historical values:
+
+$$
+F(merchant,t)
+$$
+
+for many past times $$t$$. That is a **backfill**. You cannot merely calculate:
+
+```text
+merchant_refund_rate_90d today
+```
+
+and attach today's value to all historical rows. Each historical example needs the value that belonged to its historical prediction time.
+
+### Historical backfills must preserve point-in-time correctness
+
+For an example at time $$t$$:
+
+$$
+refund\_rate_{90d}(t)
+=
+\frac{
+\text{refunds during }[t-90d,t)
+}{
+\text{orders during }[t-90d,t)
+}
+$$
+
+not:
+
+$$
+refund\_rate_{90d}(today)
+$$
+
+A common ML data bug is accidentally substituting present state for historical state. That makes offline training unrealistically powerful.
+
+### Late data creates a subtle backfill choice
+
+Suppose an event happened before prediction time but wasn't ingested until afterward. For a historical backfill, should it count? There are two different goals.
+
+#### Reconstruct ideal historical truth
+
+Use the event because it happened before prediction time.
+
+#### Simulate actual production knowledge
+
+Exclude it because production had not received it yet. These are different experiments. You should decide explicitly which you're building.
+
+## How Do Shared Paths and Monitoring Keep Features Operable?
+
+<!-- section-summary: Validation checks schema, domain, time, historical fixtures, and offline-online parity before publication. -->
+
+### A feature platform often needs both historical and live serving paths
+
+Conceptually:
+
+```text
+                  Feature Definition
+                         │
+               ┌─────────┴─────────┐
+               ▼                   ▼
+         historical path       live path
+               │                   │
+               ▼                   ▼
+       training datasets      prediction service
+```
+
+The aim is:
+
+$$
+\boxed{
+\text{same feature semantics}
+}
+$$
+
+across both paths. The infrastructure may differ. The meaning should not.
+
+### Why a "feature store" can help
+
+A feature store is not magical. Its value comes from solving recurring coordination problems such as:
+
+```text
+feature definitions
+historical retrieval
+online retrieval
+entity keys
+freshness
+versioning
+discovery
+reuse
+```
+
+Conceptually it tries to provide:
+
+$$
+\text{Feature Definition}
+\rightarrow
+\begin{cases}
+\text{historical values for training}\\
+\text{current values for serving}
+\end{cases}
+$$
+
+while preserving semantic consistency. You don't necessarily need a dedicated product to achieve these properties. But you do need the properties somewhere.
+
+### Avoid producing every feature twice independently
+
+A dangerous architecture is:
+
+```text
+data scientist SQL
+→ training feature
+
+backend engineer code
+→ serving feature
+```
+
+Two teams independently implement:
+
+```text
+purchase_count_30d
+```
+
+Eventually one includes:
+
+```text
+pending transactions
+```
+
+and the other doesn't. Now:
+
+$$
+F_{\text{train}}
+\neq
+F_{\text{serve}}
+$$
+
+The safer pattern is to share:
+
+* feature definitions,
+* transformation libraries,
+* tests,
+* or materialized values.
+
+Implementations may differ across batch and online paths, while both must follow one authoritative definition of the feature's meaning.
+
+### But sharing code alone does not guarantee equality
+
+Suppose both paths call the same function:
 
 ```python
-training_data = mlflow.data.from_spark(
-    training_df,
-    table_name="main.ml_features.authorization_training_v4",
-    version=str(delta_version),
-    name="authorization_training_v4",
-)
-
-with mlflow.start_run():
-    mlflow.log_input(training_data, context="training")
-    mlflow.set_tags({
-        "feature_contract": "failed_payments_24h:v3",
-        "feature_code_revision": git_sha,
-        "feature_table_snapshot": table_snapshot,
-    })
-    train_and_log_model(training_df)
+purchase_count_30d(...)
 ```
 
-OpenLineage provides a vendor-neutral model for lineage events. A feature pipeline can emit a Job, a Run, and its input and output Datasets. Facets can carry source-code location, schema, data-quality assertions, and dataset version. Airflow, Spark, dbt, and lineage backends provide integrations at different maturity levels, so the team should verify the fields emitted by its actual stack.
+Yet training reads:
 
-### Monitor Every Step From Source Data To Product Outcome
-
-Monitoring then answers whether the feature remains usable:
-
-- **Source health:** records arrive, schemas remain compatible, and joins retain expected coverage.
-- **Computation health:** jobs complete, stream lag stays bounded, and invalid rows remain below policy.
-- **Freshness:** feature timestamps meet the consumer’s service level.
-- **Value health:** nulls, ranges, categories, and distributions remain plausible across important segments.
-- **Delivery health:** online lookups succeed within the latency budget and use the expected version.
-- **Consumer health:** models still request the feature, parity remains acceptable, and fallbacks stay rare.
-- **Outcome health:** model and product metrics reveal whether the signal still helps the decision.
-
-Distribution drift alone cannot diagnose the cause. A sudden rise in failed-payment counts could reflect real customer behavior, a duplicated event stream, a status mapping change, or a model routing change. Investigation first confirms source and pipeline integrity, then compares segments, releases, and outcomes. This order prevents a legitimate behavior shift from being “fixed” through an unnecessary data rollback.
-
-The owner needs actionable alerts. “Mean changed by 12%” may offer little direction. “The newest feature timestamp is 23 minutes old for the EU route, the source stream is current, and the online materialization job has failed” identifies the affected path, breached contract, and likely responder.
-
-## Change Historical Values And Remove Old Features Safely
-<!-- section-summary: Feature changes move through a controlled state sequence so historical data, models, and serving consumers stay compatible. -->
-
-A feature outlives the notebook that introduced it. Sources move, business rules change, models stop using it, and privacy obligations evolve. The lifecycle needs a controlled ending as well as a controlled release.
-
-### Rebuild History And Compare Before Promotion
-
-A change review first classifies the impact. A documentation correction may leave values untouched. A deterministic bug fix may require recomputing history under a new patch release. A new window, source, unit, default, or entity definition changes the feature’s meaning and usually creates a new version.
-
-Historical backfill runs against a recorded source snapshot policy and explicit time range. It writes to a new output version or isolated staging location. Validation compares coverage, distributions, semantic fixtures, and selected entity-time values with the previous release. The training team then retrains and evaluates affected models. For online use, the platform materializes the new version separately and compares sampled values before traffic moves.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Proposed
-    Proposed --> Validated: contract and tests pass
-    Validated --> Shadow: historical backfill and comparison
-    Shadow --> Active: model and serving approval
-    Active --> Deprecated: replacement is available
-    Deprecated --> Retired: consumers are removed
-    Shadow --> Rejected: evidence fails
-    Active --> RolledBack: quality or delivery breach
-    RolledBack --> Shadow: repair and revalidation
-    Rejected --> Proposed: definition revised
-    Retired --> [*]
+```text
+warehouse transaction history
 ```
 
-A shadow period lets the new version run without controlling the product decision. Batch models can compare predictions from old and new training datasets. Online models can log both feature values and keep the established version as the decision input. Promotion follows agreed quality, latency, freshness, and outcome evidence.
+while serving reads:
 
-### Remove A Feature Only After Its Consumers Move
+```text
+real-time event cache
+```
 
-Deprecation requires consumer discovery. Registry metadata and Unity Catalog lineage reveal declared consumers. OpenLineage graphs reveal pipeline relationships. Repository search finds static references, while online lookup telemetry finds live reads.
+Those inputs may differ. So consistency requires:
 
-The owner announces the replacement and migration deadline, then watches remaining reads throughout the support window. Retirement first stops new consumption. The team can then remove scheduled jobs and online materializations, followed by access grants, alerts, and retained data according to policy.
+$$
+\text{logic consistency}
++
+\text{input semantics consistency}
+$$
 
-Deletion has to include every copy. A sensitive feature may exist in historical Delta or Iceberg tables, an online store, cached serving payloads, training datasets, experiment artifacts, and debug logs. Governance controls and retention policies should identify those locations before the first release.
+Shared code solves only one half.
 
-Ownership connects the whole process. The feature owner approves meaning and validation. The source owner communicates upstream changes. Platform owners operate storage and materialization. Model owners evaluate consumer impact. Product or risk owners approve degraded-mode behavior. Clear ownership keeps a stale or incorrect feature from sitting between teams during an incident.
+### Production features need service-level expectations
 
-## The Main Idea
-<!-- section-summary: Production feature engineering preserves one reviewed meaning across historical computation, delivery, monitoring, and change. -->
+For an important feature, define things like:
 
-A feature starts as a hypothesis about information that may help a decision. Production engineering gives that hypothesis a durable contract: entity, clocks, source meaning, transformation, missing-value behavior, freshness, evidence, and owner.
+```text
+availability ≥ 99.99%
+freshness ≤ 5 min
+lookup p99 latency ≤ 15 ms
+missing rate ≤ 0.1%
+```
 
-The implementation can use dbt and SQL, Spark and Databricks, Polars, or a shared library. Delta Lake and Iceberg can preserve historical table state. Feast or a managed feature store can add registry, point-in-time retrieval, and online materialization after reuse or latency requirements justify the platform. MLflow and OpenLineage can connect training and pipeline evidence to the resulting models.
+Why? Because once a model depends on the feature, the feature effectively becomes a production service dependency. A useful feature that is unavailable 10% of the time may be worse than a slightly less predictive but reliable feature.
 
-The tools vary. The core test stays practical: given an entity and a past decision time, can the team explain the value the model received, reproduce it from governed inputs, detect if it is late or wrong, and move consumers safely to a repaired version?
+### Features have reliability budgets too
+
+Suppose a prediction requires ten features. Each feature lookup independently succeeds with probability:
+
+$$
+0.99
+$$
+
+The probability all ten succeed is roughly:
+
+$$
+0.99^{10}\approx 0.904
+$$
+
+So a collection of individually "pretty reliable" dependencies can create a weak overall path. This is why production models should avoid unnecessary live dependencies. Feature design affects system reliability.
+
+### Precomputation can reduce serving dependencies
+
+Suppose a live prediction would otherwise need:
+
+```text
+orders database
+customer database
+refund service
+currency service
+```
+
+Instead, a pipeline can precompute:
+
+```text
+customer_spend_30d
+```
+
+and place it in an online feature store. Then prediction depends on one lookup instead of four computations. Conceptually:
+
+$$
+\text{complexity shifted}
+$$
+
+from:
+
+$$
+\text{latency-sensitive serving path}
+$$
+
+to:
+
+$$
+\text{asynchronous data pipeline}
+$$
+
+This is one reason feature platforms exist.
+
+### But precomputation introduces staleness
+
+If:
+
+```text
+customer_spend_30d
+```
+
+updates hourly, then the live value may lag behind reality. Therefore precomputation trades:
+
+$$
+\text{latency}
+$$
+
+for:
+
+$$
+\text{freshness}
+$$
+
+A good feature design explicitly accepts that trade.
+
+### Monitor both feature quality and feature delivery
+
+Production monitoring should ask two classes of questions.
+
+#### Is the feature arriving correctly?
+
+```text
+freshness
+availability
+lookup latency
+missingness
+error rate
+```
+
+#### Do the values still make sense?
+
+```text
+distribution
+range
+category frequencies
+drift
+segment behavior
+```
+
+A feature store that returns nonsense quickly is still broken.
+
+### Monitor by important segments
+
+Suppose overall missingness is:
+
+$$
+2\%
+$$
+
+Looks good. But:
+
+```text
+web users:      0.5%
+Android users: 18%
+```
+
+The model may fail badly for Android. So monitor:
+
+$$
+Q(F\mid segment)
+$$
+
+not merely:
+
+$$
+Q(F)
+$$
+
+Useful segments may include:
+
+```text
+country
+device
+customer type
+model version
+data source
+region
+```
+
+### Feature drift is not automatically a data-quality failure
+
+Suppose:
+
+```text
+travel_bookings_30d
+```
+
+jumps significantly before a holiday. That may be real behavior. So:
+
+$$
+\text{feature distribution changed}
+\not\Rightarrow
+\text{feature broken}
+$$
+
+A drift alert means:
+
+Something changed.
+
+Then investigate whether the cause is:
+
+```text
+real world
+upstream data
+feature code
+serving bug
+```
+
+This distinction matters for production monitoring.
+
+### Record the feature value used for important predictions when necessary
+
+Suppose someone investigates a prediction six months later. Knowing today's feature values is useless. You may need to know:
+
+```text
+What feature values did the model actually receive?
+```
+
+For sufficiently important decisions, prediction logs can include:
+
+```text
+model version
+feature versions
+feature values or fingerprints
+feature timestamps
+prediction timestamp
+```
+
+subject to storage, privacy, and security requirements. The design allows:
+
+$$
+\text{prediction}
+\rightarrow
+\text{exact model inputs}
+$$
+
+which is extremely useful for debugging.
+
+### Monitoring should include feature/model compatibility
+
+Suppose:
+
+```text
+fraud_model_v17
+```
+
+expects:
+
+```text
+country_risk:v4
+```
+
+but a deployment accidentally serves:
+
+```text
+country_risk:v5
+```
+
+Both may be numeric. Nothing crashes. The model silently gets the wrong semantics.
+
+So serving systems should ideally validate:
+
+$$
+\text{expected feature contract}
+=
+\text{served feature contract}
+$$
+
+before inference.
+
+## How Are Feature Dependencies Deprecated and Removed Safely?
+
+<!-- section-summary: Lineage identifies every active and fallback model that still requires the feature version. -->
+
+### Removing a feature is also a production change
+
+Suppose feature $$F$$ appears unused because your newest model no longer consumes it. Can you delete it? Maybe older models still use it:
+
+```text
+fraud_model_v17 → feature F
+fraud_model_v18 → feature F
+fraud_model_v19 → no F
+```
+
+If version 17 can still receive traffic, $$F$$ remains required. So feature deletion should follow lineage:
+
+$$
+F
+\rightarrow
+\text{consuming models}
+$$
+
+Only when all active consumers are gone is removal safe.
+
+### Feature deprecation should be staged
+
+A reasonable lifecycle is:
+
+```text
+ACTIVE
+↓
+DEPRECATED
+↓
+NO_NEW_CONSUMERS
+↓
+unused by production
+↓
+offline historical retention if needed
+↓
+REMOVED
+```
+
+The control prevents surprise breakage. A feature is effectively an API. You generally don't delete APIs while consumers still depend on them.
+
+### Historical values may need different retention from current values
+
+An online serving system may need only:
+
+```text
+latest customer feature value
+```
+
+But training needs:
+
+```text
+historical feature values
+```
+
+For example:
+
+```text
+customer 42:
+Jan 1 → 3
+Feb 1 → 8
+Mar 1 → 12
+```
+
+If only the current value survives:
+
+```text
+12
+```
+
+you cannot build point-in-time training data. So online storage and historical storage frequently have different requirements.
+
+### Treat derived feature values as rebuildable when possible
+
+Ideally:
+
+$$
+F(entity,t)
+$$
+
+can be reconstructed from authoritative historical facts plus the feature definition. Then derived feature storage becomes partly a performance optimization. Conceptually:
+
+$$
+\boxed{
+\text{raw/history}
++
+\text{feature definition}
+\rightarrow
+\text{feature values}
+}
+$$
+
+If derived values are lost, you can backfill them. This requires preserving historical source state and time semantics.
+
+### But sometimes preserving exact values is valuable
+
+Even a feature that can be recomputed may need its exact historical values retained for reasons such as:
+
+```text
+external dependencies changed
+floating-point execution changed
+original source history expired
+old transformation runtime disappeared
+```
+
+For important production models, preserving the exact training dataset frequently gives stronger historical evidence than relying entirely on future recomputation.
+
+### Production feature lifecycle
+
+A useful mental model is:
+
+```text
+Idea
+ ↓
+Notebook
+ ↓
+Semantic definition
+ ↓
+Source contract
+ ↓
+Historical implementation
+ ↓
+Point-in-time validation
+ ↓
+Serving strategy
+ ↓
+Offline/online consistency tests
+ ↓
+Publication
+ ↓
+Model adoption
+ ↓
+Monitoring
+ ↓
+Versioned evolution
+ ↓
+Deprecation
+```
+
+The notebook is near the beginning, not the end.
+
+### Walk through one example
+
+Suppose a researcher proposes:
+
+```text
+failed_payments_last_7d
+```
+
+for subscription churn prediction. The decision is made:
+
+```text
+when customer opens the app
+```
+
+at time $$t$$. The feature definition becomes:
+
+$$
+F(customer,t)
+=
+\sum_i
+1[
+t-7d\le t_i<t
+\land
+status_i=failed
+]
+$$
+
+#### Step 1: Define the source
+
+Source:
+
+```text
+payment_attempts
+```
+
+You establish:
+
+```text
+status = failed
+means payment provider returned a final failure
+
+event_time
+means provider attempt time
+
+arrival_time
+means warehouse ingestion time
+```
+
+#### Step 2: Define historical semantics
+
+For training at prediction time $$t$$:
+
+```text
+use payment attempts available before t
+```
+
+Depending on desired fidelity, perhaps:
+
+$$
+arrival\_time \le t
+$$
+
+as well as:
+
+$$
+event\_time < t
+$$
+
+#### Step 3: Define online computation
+
+Instead of querying seven days of payments during every app request, precompute the count every five minutes. Store:
+
+```text
+customer_id
+failed_payments_last_7d
+updated_at
+```
+
+#### Step 4: Define freshness
+
+Require:
+
+$$
+prediction\_time-updated\_at \le 10\text{ minutes}
+$$
+
+Otherwise use a fallback.
+
+#### Step 5: Define missing semantics
+
+Brand-new customer with no payments:
+
+```text
+value = 0
+```
+
+Feature lookup failure:
+
+```text
+not equivalent to 0
+```
+
+perhaps handled separately.
+
+#### Step 6: Backfill training
+
+For each historical prediction:
+
+$$
+F(customer,t)
+$$
+
+uses only the seven-day history that ended immediately before that particular $$t$$.
+
+#### Step 7: Validate
+
+Check:
+
+```text
+value >= 0
+NULL rate approximately 0
+distribution plausible
+historical timestamps ≤ prediction timestamps
+```
+
+#### Step 8: Compare online/offline paths
+
+Take live predictions and reconstruct:
+
+```text
+online value vs historical pipeline value
+```
+
+Measure mismatch.
+
+#### Step 9: Publish version
+
+```text
+failed_payments_last_7d:v1
+```
+
+Model metadata records:
+
+```text
+churn_model_v8 uses v1
+```
+
+#### Step 10: Monitor
+
+Track:
+
+```text
+freshness
+missingness
+distribution
+lookup latency
+online/offline mismatch
+```
+
+Now the feature is genuinely productionized.
+
+### What makes a notebook feature fail in production?
+
+Common reasons include:
+
+#### It depends on future information
+
+Excellent offline performance, impossible online.
+
+#### It takes too long to compute
+
+Useful mathematically, incompatible with serving latency.
+
+#### The source meaning is unclear
+
+Code works, semantics drift.
+
+#### Offline and online implementations diverge
+
+Training-serving skew appears.
+
+#### Historical values cannot be reconstructed
+
+Backtesting and retraining become unreliable.
+
+#### Freshness is undefined
+
+Models consume stale values without realizing it.
+
+#### Missing values behave differently between training and serving
+
+Production distribution differs from training.
+
+#### Semantic changes are made in place
+
+Existing models receive a feature they were never trained on.
+
+#### Nobody owns the upstream path
+
+Failures persist because responsibility is unclear. These are commonly systems problems rather than modeling problems.
+
+### A practical production feature contract
+
+For every important production feature, the team should be able to complete a record like this:
+
+| Question                  | Example                                       |
+| ------------------------- | --------------------------------------------- |
+| Name                      | `failed_payments_last_7d`                     |
+| Version                   | v1                                            |
+| Entity                    | customer                                      |
+| Meaning                   | final failed payment attempts in prior 7 days |
+| Prediction-time semantics | window ends immediately before prediction     |
+| Source                    | payment attempts                              |
+| Source owner              | payments team                                 |
+| Data type                 | integer                                       |
+| Missing behavior          | zero only for true absence                    |
+| Offline logic             | point-in-time aggregation                     |
+| Online strategy           | precomputed every 5 min                       |
+| Maximum age               | 10 min                                        |
+| Serving SLA               | p99 < 10 ms                                   |
+| Backfillable?             | yes                                           |
+| Quality checks            | nonnegative, null rate, freshness             |
+| Training-serving check    | live comparison                               |
+| Consumers                 | churn_model_v8, v9                            |
+| Owner                     | feature/ML platform team                      |
+| Deprecation state         | active                                        |
+
+This is far more useful than merely storing:
+
+```text
+feature_name = failed_payments_last_7d
+```
+
+### Features are interfaces between data and models
+
+A source system speaks in terms such as:
+
+```text
+payments
+orders
+events
+accounts
+```
+
+The model speaks in terms of:
+
+```text
+numbers
+categories
+embeddings
+```
+
+Features are the interface between them. Conceptually:
+
+$$
+\text{Real World}
+\rightarrow
+\text{Source Facts}
+\rightarrow
+\boxed{\text{Feature Contract}}
+\rightarrow
+\text{Model}
+$$
+
+If the contract changes unexpectedly, the model's interpretation of its input becomes unreliable. This is why production features should be treated almost like APIs.
+
+### A feature is a time-dependent API
+
+Imagine:
+
+$$
+F(entity,t)
+$$
+
+as an API call. For example:
+
+```text
+GetPurchaseCount30d(customer=42, as_of=10:00)
+```
+
+The API promises:
+
+```text
+stable meaning
+defined time semantics
+defined missing behavior
+defined freshness
+defined version
+```
+
+Training calls this API conceptually across historical times. Serving calls it at the current prediction time. The central requirement is that both receive the same semantic answer.
+
+### Training-serving consistency can be expressed as an invariant
+
+For an entity $$e$$ and prediction time $$t$$:
+
+$$
+\boxed{
+F_{\text{offline}}(e,t)
+\approx
+F_{\text{online}}(e,t)
+}
+$$
+
+provided both have access to the same information. That equation captures a large fraction of production feature engineering. If it doesn't hold, the model was trained on one world and deployed into another.
+
+### The final system
+
+Conceptually:
+
+```text
+                     SOURCE SYSTEMS
+                          │
+                          ▼
+                historical source data
+                          │
+                          ▼
+                Feature Definition vN
+                     /          \
+                    /            \
+                   ▼              ▼
+         historical computation  live computation
+                   │              │
+                   ▼              ▼
+          training feature set   online values
+                   │              │
+                   ▼              ▼
+                training       inference
+                    \            /
+                     \          /
+                      ▼        ▼
+                      ML MODEL
+                         │
+                         ▼
+                    predictions
+```
+
+Around it you need:
+
+```text
+versioning
+quality checks
+lineage
+freshness monitoring
+ownership
+backfills
+deprecation
+```
+
+The difficult part is not computing $$F$$. It is preserving the contract around $$F$$.
+
+#### What to remember
+
+A production feature is not just a column. It is a **versioned, time-dependent data contract** between source systems and a model. At first principles, define it as:
+
+$$
+\boxed{
+F(e,t)
+=
+\text{feature value for entity }e
+\text{ using information legitimately available at }t
+}
+$$
+
+Everything else follows from that definition. The feature must have a stable recipe:
+
+$$
+\boxed{\text{Feature Definition}}
+$$
+
+and independently generated values:
+
+$$
+\boxed{\text{Feature Values}}
+$$
+
+Historical training must respect:
+
+$$
+\boxed{
+t_{\text{information}}
+\le
+t_{\text{prediction}}
+}
+$$
+
+Training and serving should preserve:
+
+$$
+\boxed{
+F_{\text{offline}}(e,t)
+\approx
+F_{\text{online}}(e,t)
+}
+$$
+
+Live serving must satisfy:
+
+$$
+\boxed{
+\text{freshness}
++
+\text{latency}
++
+\text{availability}
+}
+$$
+
+and changes should create controlled feature versions rather than silently changing meaning. So the path from notebook to production is really:
+
+$$
+\boxed{
+\text{idea}
+\rightarrow
+\text{precise semantics}
+\rightarrow
+\text{historically correct implementation}
+\rightarrow
+\text{serving strategy}
+\rightarrow
+\text{validation}
+\rightarrow
+\text{versioned publication}
+\rightarrow
+\text{monitoring}
+}
+$$
+
+The deepest principle is:
+
+> **A model does not consume "data in general." It consumes specific facts, transformed according to specific rules, as they were available at a specific moment.**
+
+Production feature engineering supplies the definitions, pipelines, evidence, and operating controls needed to uphold that statement repeatedly under real serving constraints.
 
 ![Six controls for a safe production feature, followed by monitoring, backfill, and retirement responsibilities](/content-assets/articles/article-mlops-data-for-ml-systems-feature-engineering-in-production/production-feature-summary.png)
 
 *A production feature needs clear meaning, known availability, historical correctness, serving parity, freshness control, and traceable versions throughout its lifecycle.*
 
+## Check Your Answers
+
+Use these answers to revisit the evidence, boundaries, and operating decisions behind each question.
+
+:::expand[What Turns a Notebook Column into a Production Feature?]{kind="recap"}
+A production feature has stable semantics, an entity and prediction-time boundary, governed sources, reproducible historical logic, a serving strategy, validation, versions, owners, service expectations, monitoring, backfill, and retirement policy. Predictive usefulness is necessary, while dependable delivery and preserved meaning determine whether a deployed model can use it.
+:::
+
+:::expand[How Does a Feature Contract Separate Meaning from Calculated Values?]{kind="recap"}
+The definition records what the feature means, how it is calculated, and which version owns those semantics.
+
+Values are separate results for particular entities and times. This separation lets teams recompute history, publish current state, compare implementations, and introduce a new version without silently redefining values consumed by existing models.
+:::
+
+:::expand[How Do Time Boundaries Keep Historical Feature Values Honest?]{kind="recap"}
+The product decision identifies the action the model supports.
+
+The entity identifies what each value describes. The prediction deadline limits which facts can arrive and how long computation may take. Together they decide the cutoff, freshness, serving latency, source availability, and whether a historically predictive idea is feasible in production.
+:::
+
+:::expand[How Can Offline and Online Implementations Preserve One Meaning?]{kind="recap"}
+Historical computation evaluates the feature at each example's prediction time using explicit half-open windows, event and availability timestamps, historical dimensions, deterministic tie-breaking, and point-in-time joins. Backfills distinguish ideal event-time truth from the state production actually knew, and they never attach today's value to every old row.
+:::
+
+:::expand[How Do Freshness, Missingness, Latency, and Availability Shape Serving?]{kind="recap"}
+Training may use warehouse SQL while serving uses materialized state, streaming counters, or request-time code.
+
+Identical implementation is optional; semantic equivalence is required. Shared definitions, transformation libraries, test fixtures, source contracts, and paired comparisons protect both calculation logic and input semantics.
+:::
+
+:::expand[How Are Features Validated, Versioned, and Backfilled?]{kind="recap"}
+The serving contract includes value timestamp, maximum age, lookup latency, availability, fallback, and distinct states for zero, unknown, absent history, stale value, lookup failure, and version mismatch.
+
+Precomputation reduces request-time dependencies while accepting staleness. Reliability across many features also constrains how much live state a model should require.
+:::
+
+:::expand[How Do Shared Paths and Monitoring Keep Features Operable?]{kind="recap"}
+Validation checks schema, domain, time, historical fixtures, and offline-online parity before publication.
+
+Semantic changes create a new feature version and lineage records consuming models. Monitoring covers delivery and value behaviour by segment. Backfills recompute `F(entity, time)` for historical cutoffs and publish their evidence under an immutable version.
+:::
+
+:::expand[How Are Feature Dependencies Deprecated and Removed Safely?]{kind="recap"}
+Lineage identifies every active and fallback model that still requires the feature version.
+
+Deprecation blocks new consumers, preserves historical values as policy requires, migrates or retires existing consumers, verifies that no production route relies on it, and only then removes live infrastructure. A feature behaves like a versioned API to its models.
+:::
+
 ## References
 
-- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
-- [dbt manifest JSON](https://docs.getdbt.com/reference/artifacts/manifest-json)
-- [Apache Spark Structured Streaming programming guide](https://spark.apache.org/docs/latest/streaming/index.html)
 - [Polars lazy API](https://docs.pola.rs/user-guide/lazy/)
-- [Delta Lake utility commands and table history](https://docs.delta.io/delta-utility/)
-- [Apache Iceberg Spark queries](https://iceberg.apache.org/docs/latest/spark-queries/)
-- [Apache Iceberg maintenance](https://iceberg.apache.org/docs/latest/maintenance/)
-- [Feast feature views](https://docs.feast.dev/getting-started/concepts/feature-view)
-- [Feast point-in-time joins](https://docs.feast.dev/getting-started/concepts/point-in-time-joins)
-- [Databricks Feature Store](https://docs.databricks.com/aws/en/machine-learning/feature-store/)
-- [Databricks Feature Store overview and glossary](https://docs.databricks.com/aws/en/machine-learning/feature-store/concepts)
-- [Databricks feature tables in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/feature-store/uc/feature-tables-uc)
-- [Databricks Feature Views](https://docs.databricks.com/aws/en/machine-learning/feature-store/feature-views)
-- [MLflow dataset tracking](https://mlflow.org/docs/latest/dataset/)
-- [MLflow Tracking](https://mlflow.org/docs/latest/tracking/)
 - [OpenLineage object model](https://openlineage.io/docs/spec/object-model/)

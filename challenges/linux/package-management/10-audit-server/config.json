@@ -1,0 +1,45 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/usr/bin/curl": { "type": "file", "content": "simulated curl binary\n", "mode": 493 },
+    "/usr/sbin/nginx": { "type": "file", "content": "simulated nginx binary\n", "mode": 493 },
+    "/usr/local/bin/backupctl": { "type": "file", "content": "#!/bin/sh\necho backup\n", "mode": 493 }
+  },
+  "commandModules": ["packages"],
+  "packages": {
+    "manager": "apt",
+    "indexFresh": true,
+    "repositories": [
+      { "id": "noble", "name": "Ubuntu", "family": "apt", "url": "http://archive.ubuntu.com/ubuntu noble", "enabled": true, "trusted": true },
+      { "id": "noble-security", "name": "Ubuntu Security", "family": "apt", "url": "http://security.ubuntu.com/ubuntu noble-security", "enabled": true, "trusted": true }
+    ],
+    "packages": [
+      { "name": "curl", "architecture": "amd64", "installedVersion": "8.5.0-2ubuntu10.6", "candidateVersion": "8.5.0-2ubuntu10.6", "repository": "noble", "summary": "Command line data transfer tool", "files": ["/usr/bin/curl"] },
+      { "name": "nginx", "architecture": "amd64", "installedVersion": "1.24.0-2ubuntu7.3", "candidateVersion": "1.24.0-2ubuntu7.3", "repository": "noble", "summary": "Nginx web and reverse proxy server", "files": ["/usr/sbin/nginx"] },
+      { "name": "openssl", "architecture": "amd64", "installedVersion": "3.0.13-0ubuntu3.4", "candidateVersion": "3.0.13-0ubuntu3.5", "repository": "noble-security", "summary": "TLS toolkit" }
+    ]
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "curl",
+      "8.5.0-2ubuntu10.6",
+      "nginx",
+      "openssl",
+      "curl: /usr/bin/curl",
+      "/usr/local/bin/backupctl",
+      "Installed: 3.0.13-0ubuntu3.4",
+      "Candidate: 3.0.13-0ubuntu3.5",
+      "noble-security"
+    ],
+    "requireCommands": ["dpkg", "command", "apt-cache"],
+    "requireCommandPatterns": [
+      "^dpkg\\s+-S\\s+/usr/local/bin/backupctl$",
+      "^apt-cache\\s+policy\\s+openssl$"
+    ],
+    "minCommandCount": 5
+  }
+}

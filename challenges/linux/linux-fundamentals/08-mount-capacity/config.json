@@ -1,0 +1,24 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/mounts-info": { "type": "file", "content": "/dev/vda1 ext4 40G 18G 20G 41943040 18874368 20971520 47% / 2621440 220000 2401440 9% rw,relatime\n/dev/vdb1 xfs 20G 19.6G 400M 20971520 20561920 409600 98% /srv/orders-api/uploads 10000000 420000 9580000 5% rw,relatime\n" },
+    "/srv/orders-api/uploads/2026/orders-august.tar": { "type": "file", "content": "archive\n", "size": 19327352832 },
+    "/srv/orders-api/uploads/tmp/incomplete-upload.bin": { "type": "file", "content": "partial\n", "size": 1073741824 }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "/srv/orders-api/uploads",
+      "/dev/vdb1",
+      "xfs",
+      "98%",
+      "18.0G",
+      "/srv/orders-api/uploads/2026"
+    ],
+    "requireCommands": ["findmnt", "df", "du"]
+  }
+}

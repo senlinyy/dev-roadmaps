@@ -12,596 +12,2121 @@ aliases:
 
 ## Table of Contents
 
-1. [What FastAPI Does In A Model Service](#what-fastapi-does-in-a-model-service)
-2. [Follow One Prediction Through The System](#follow-one-prediction-through-the-system)
-3. [Choose Where The Model Runs](#choose-where-the-model-runs)
-4. [Choose Async, Threads, Or Processes For The Workload](#choose-async-threads-or-processes-for-the-workload)
-5. [Use Separate Startup, Readiness, And Liveness Checks](#use-separate-startup-readiness-and-liveness-checks)
-6. [Trace And Measure The Whole Prediction Path](#trace-and-measure-the-whole-prediction-path)
-7. [Choose The Container And Worker Layout](#choose-the-container-and-worker-layout)
-8. [The Main Idea](#the-main-idea)
-9. [References](#references)
+1. [How Does One Prediction Travel through a FastAPI Model Service?](#how-does-one-prediction-travel-through-a-fastapi-model-service)
+2. [How Do Async, Threads, Processes, Batching, and Concurrency Match the Workload?](#how-do-async-threads-processes-batching-and-concurrency-match-the-workload)
+3. [How Do Startup, Readiness, Liveness, and Warmup Protect Traffic?](#how-do-startup-readiness-liveness-and-warmup-protect-traffic)
+4. [Which Traces and Metrics Explain Tail Latency and Throughput?](#which-traces-and-metrics-explain-tail-latency-and-throughput)
+5. [How Do Containers, Workers, GPUs, Autoscaling, Backpressure, and Shutdown Own Resources?](#how-do-containers-workers-gpus-autoscaling-backpressure-and-shutdown-own-resources)
+6. [How Should a Request Handler, Scheduler Boundary, Capacity Model, and Streaming Path Fit Together?](#how-should-a-request-handler-scheduler-boundary-capacity-model-and-streaming-path-fit-together)
+7. [What Belongs inside FastAPI, and How Should the Architecture Evolve?](#what-belongs-inside-fastapi-and-how-should-the-architecture-evolve)
+8. [What Complete Mental Model Keeps the API Separate from Inference Scheduling?](#what-complete-mental-model-keeps-the-api-separate-from-inference-scheduling)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## What FastAPI Does In A Model Service
-<!-- section-summary: FastAPI turns HTTP requests into typed Python calls and typed responses, while the serving design still owns model execution, policy, capacity, and release safety. -->
+A FastAPI endpoint can load a model and return a prediction in a few lines. Under concurrent traffic, that same service may load one model per worker, block the event loop with CPU work, exhaust GPU memory, or declare readiness before warmup completes.
 
-A model that works through a Python function still needs an HTTP boundary. Product services use that boundary to send requests and receive stable responses. **FastAPI** is a Python framework for building the boundary and validating its inputs. It runs on the ASGI interface, uses Python type annotations and Pydantic models, and generates an OpenAPI description of the routes it exposes. In an MLOps system, it usually sits around a prediction capability rather than replacing the serving runtime itself.
+FastAPI provides the web boundary: HTTP parsing, validation, routing, and responses. It does not decide how scarce CPU or GPU inference should be scheduled. A production design therefore follows one request through concurrency, lifecycle, observability, capacity, backpressure, and graceful shutdown.
 
-That boundary has a clear job. It accepts an authenticated request, validates the public contract, calls the prediction service, maps the result into a response, and records operational evidence. This is the part that turns a Python model into something another service can call over a network.
+These questions build that service from a minimal endpoint to a clear API-server and inference-scheduler boundary:
 
-FastAPI leaves several important decisions to the serving team. Model governance selects the approved artifact. Feature contracts define the data. Capacity controls limit concurrent work, policy turns scores into actions, and release automation controls traffic. Those responsibilities belong to explicit components around the framework.
+1. **How Does One Prediction Travel through a FastAPI Model Service?**
+2. **How Do Async, Threads, Processes, Batching, and Concurrency Match the Workload?**
+3. **How Do Startup, Readiness, Liveness, and Warmup Protect Traffic?**
+4. **Which Traces and Metrics Explain Tail Latency and Throughput?**
+5. **How Do Containers, Workers, GPUs, Autoscaling, Backpressure, and Shutdown Own Resources?**
+6. **How Should a Request Handler, Scheduler Boundary, Capacity Model, and Streaming Path Fit Together?**
+7. **What Belongs inside FastAPI, and How Should the Architecture Evolve?**
+8. **What Complete Mental Model Keeps the API Separate from Inference Scheduling?**
 
-You can think of FastAPI as the front desk of the serving system. It checks who arrived and what they asked for, then sends the work to the correct internal capability. The model runtime is the specialist doing the prediction. Feature services provide evidence. Policy code turns model output into a product action. Kubernetes or another runtime controls replicas, health, and traffic.
+## How Does One Prediction Travel through a FastAPI Model Service?
+<!-- section-summary: FastAPI handles HTTP parsing, validation, routing, and responses around a model loaded once, while larger designs may separate API and inference processes or services. -->
 
-```mermaid
-flowchart TD
-    A["FastAPI Boundary<br/>(HTTP routing validation and responses)"] --> B["Prediction Service<br/>(one use-case operation)"]
-    B --> C["Feature Layer<br/>(governed model inputs)"]
-    B --> D["Execution Layer<br/>(local model or model server)"]
-    D --> E["Decision Policy<br/>(calibration threshold and fallback)"]
-    E --> F["Typed Response<br/>(action evidence and request ID)"]
-    A --> G["Platform Controls<br/>(identity limits probes and telemetry)"]
-    G --> B
+A small service is easiest to understand by tracing one request from validation through model execution to its response.
 
-    class A input
-    class B,C,D,E,G process
-    class F result
+Serving a model with FastAPI is easiest to understand by ignoring FastAPI for a moment and asking:
+
+**What must happen between “a client wants a prediction” and “the client receives one”?**
+
+At minimum:
+
+```text
+client request
+    ↓
+receive bytes
+    ↓
+understand the request
+    ↓
+validate it
+    ↓
+convert it into model input
+    ↓
+find compute capacity
+    ↓
+run inference
+    ↓
+convert model output
+    ↓
+send response
 ```
 
-This ownership map keeps route functions small. A schema failure stays at the API boundary. Stale online features stay with feature readiness. An accelerator queue problem stays with model execution. A threshold mistake stays with decision policy. Every incident starts with a narrower set of evidence.
+FastAPI helps with the **network/API side** of this pipeline. It does not, by itself, solve GPU scheduling, batching, model parallelism, memory management, or inference optimization. That distinction is the foundation. Suppose we have a model:
 
-## Follow One Prediction Through The System
-<!-- section-summary: A production request crosses identity, validation, feature, execution, policy, response, and telemetry stages under one deadline. -->
-
-Consider a small transaction-risk endpoint: `POST /v1/risk-decisions`. The caller sends a transaction ID, account reference, amount in minor currency units, currency, and event timestamp. The API returns `approve`, `review`, or `decline` together with an opaque release ID and request ID.
-
-The request first passes through a gateway that handles TLS, caller authentication, body limits, and rate limits. FastAPI receives the trusted caller context and parses the body into a Pydantic request model. Domain validation checks unit and timestamp relationships.
-
-The prediction service then retrieves approved features as of the event time. It checks freshness before calling the loaded model. The raw model score goes through calibration and the active policy. A high-uncertainty result may route to review; a feature outage may select an evaluated fallback.
-
-FastAPI serializes the resulting decision through a Pydantic response model. OpenTelemetry connects the request span to feature and execution spans. Metrics record queue wait, model time, route, outcome class, and error category using bounded labels. A protected decision record keeps the actual model, feature, policy, and release identities.
-
-![A transaction-risk request moving from the client through the gateway, Pydantic validation, feature and preprocessing service, immutable model, decision policy, and typed response under one trace.](/content-assets/articles/article-mlops-model-serving-serving-model-with-fastapi/fastapi-prediction-path.png)
-
-*FastAPI owns the typed HTTP boundary while the prediction service, model, and policy remain explicit stages whose latency and release identities can be traced together.*
-
-```mermaid
-flowchart TD
-    A["Caller Request<br/>(typed facts and product deadline)"] --> B["FastAPI Boundary<br/>(identity schema and domain checks)"]
-    B --> C["Feature Lookup<br/>(point-in-time values and freshness)"]
-    C --> D["Model Runtime<br/>(prepared inputs score and model identity)"]
-    D --> E["Decision Policy<br/>(calibration threshold and fallback)"]
-    E --> F["Caller Response<br/>(action release evidence and request ID)"]
-
-    class A input
-    class B,C,D,E process
-    class F result
+```python
+def predict(x):
+    return x * 2
 ```
 
-The complete path shares one product deadline. Spending most of that budget in a feature lookup leaves little time for inference or fallback. The service therefore assigns smaller budgets to internal stages and rejects work that has too little time remaining.
+Locally, calling it is easy:
 
-## Choose Where The Model Runs
-<!-- section-summary: Small CPU models can run inside the FastAPI process, while large or accelerator-heavy workloads benefit from a separate execution service. -->
-
-The first architecture choice is where `predict` runs. A small scikit-learn, XGBoost, or ONNX model can live inside the FastAPI process. Startup loads one bundle, requests call it directly, and the application image plus model artifact are tested as one combination.
-
-This in-process design removes a network hop and keeps failure handling compact. It fits a model whose memory, startup time, concurrency, and native-library behavior are well understood. A modest CPU classifier with predictable preprocessing often works well here.
-
-The model size changes the tradeoff. Every application worker generally loads its own copy. Four workers around a multi-gigabyte model can exhaust pod memory before traffic arrives. GPU models add device-memory ownership, dynamic batching, and accelerator scheduling. Generic web-worker settings provide weak controls for those concerns.
-
-A separate model server gives the HTTP application and execution runtime different scaling rules. FastAPI keeps the product contract, authentication, feature coordination, and response policy. KServe, NVIDIA Triton, Ray Serve, BentoML, or a managed endpoint can own model replicas and accelerator-aware execution. The extra network call creates a dependency with its own timeout and telemetry.
-
-Choose from measurements: artifact memory per process, warm-up time, safe concurrency, batching opportunity, failure isolation, and team ownership. An in-process model remains a sound production choice if it meets the service objective. A separate runtime earns its complexity by solving a measured execution problem.
-
-```mermaid
-flowchart TD
-    A["Serving Workload<br/>(model size device and traffic)"] --> B{"Execution Boundary<br/>(measured capacity and ownership)"}
-    B --> C["In-Process Model<br/>(small CPU bundle in FastAPI worker)"]
-    B --> D["Separate Model Server<br/>(accelerator batching and independent scale)"]
-    C --> E["One Release Unit<br/>(application plus model bundle)"]
-    D --> F["Two Service Contracts<br/>(product API plus execution API)"]
-
-    class A input
-    class B gate
-    class C,D,E,F process
+```python
+result = predict(5)
 ```
 
-### Load And Verify The Model At Application Startup
-<!-- section-summary: FastAPI lifespan loads one verified model bundle per process, warms it, runs a fixture, and exposes readiness only after successful initialization. -->
+But another machine cannot call a Python function inside your process. It knows how to do something like:
 
-Model loading belongs to the application lifecycle. Loading from object storage for every request adds seconds of latency, duplicates memory, and introduces a remote dependency into every prediction. Concurrent first requests can also race to initialize several copies.
+```text
+POST /predict
 
-FastAPI's **lifespan** is an async context manager that runs setup before the application accepts requests and cleanup during shutdown. It is the appropriate place to load a model, open a client pool, and release resources. The hook runs once for each application process, which matters for multi-worker memory planning.
+{
+  "x": 5
+}
+```
 
-Startup should resolve an immutable artifact reference and verify its digest or signature. It loads the preprocessing assets, model, calibration data, and policy compatibility metadata as one bundle. A warm-up call initializes lazy kernels or native runtimes. A reviewed fixture then checks the packaged path and expected output shape.
+So we need an adapter:
+
+```text
+HTTP world                 Python/model world
+
+POST /predict
+{"x": 5}
+       │
+       ▼
+   FastAPI
+       │
+       ▼
+      x=5
+       │
+       ▼
+   model(x)
+       │
+       ▼
+      10
+       │
+       ▼
+   FastAPI
+       │
+       ▼
+{"prediction": 10}
+```
+
+That is FastAPI's basic role. A useful mental model is:
+
+```text
+FastAPI = interface layer around your serving logic
+```
+
+It gives you things like:
+
+```text
+HTTP routing
+request parsing
+schema validation
+response serialization
+dependency injection
+error handling
+OpenAPI documentation
+async request handling
+application startup/shutdown hooks
+```
+
+For example:
+
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class PredictionRequest(BaseModel):
+    text: str
+
+@app.post("/predict")
+def predict(request: PredictionRequest):
+    result = model.predict(request.text)
+    return {"prediction": result}
+```
+
+FastAPI takes care of a lot here:
+
+```text
+HTTP bytes
+    ↓
+JSON decoding
+    ↓
+request object validation
+    ↓
+PredictionRequest
+    ↓
+your function
+    ↓
+Python dictionary
+    ↓
+JSON response
+```
+
+But an important distinction is hiding underneath. FastAPI is an **ASGI application framework**. A server such as Uvicorn typically owns the network socket and runs the event loop that actually receives requests and invokes the FastAPI application. ([FastAPI][1]) So conceptually:
+
+```text
+Internet
+   ↓
+Uvicorn
+   ↓
+FastAPI
+   ↓
+your serving code
+   ↓
+model
+```
+
+That distinction matters when diagnosing latency and concurrency. Consider:
+
+```text
+POST /predict
+```
+
+with:
+
+```json
+{
+  "text": "The movie was fantastic"
+}
+```
+
+Let's trace exactly what happens.
+
+### Step 1: the request reaches your server
+
+A TCP connection eventually delivers HTTP bytes to the server.
+
+Conceptually:
+
+```text
+network
+   ↓
+Uvicorn / ASGI server
+```
+
+The server doesn't yet care that you're running a transformer. It sees an HTTP request.
+
+### Step 2: FastAPI finds the route
+
+FastAPI sees:
+
+```text
+POST /predict
+```
+
+and matches it to:
+
+```python
+@app.post("/predict")
+def predict(...):
+    ...
+```
+
+This is routing.
+
+### Step 3: the body is parsed
+
+The bytes:
+
+```text
+{"text":"The movie was fantastic"}
+```
+
+become Python data. Then your request schema establishes useful invariants.
+
+For example:
+
+```python
+class PredictionRequest(BaseModel):
+    text: str
+```
+
+means downstream code doesn't have to deal with:
+
+```json
+{"text": 493849}
+```
+
+as if it were valid model input.
+
+### Step 4: preprocessing happens
+
+A language model normally cannot consume strings directly. You might do:
+
+```python
+tokens = tokenizer(request.text)
+```
+
+producing something conceptually like:
+
+```text
+"The movie was fantastic"
+
+        ↓ tokenizer
+
+[101, 1996, 3185, 2001, 10392, 102]
+```
+
+For an image model:
+
+```text
+JPEG bytes
+    ↓
+decode
+    ↓
+resize
+    ↓
+normalize
+    ↓
+tensor
+```
+
+Preprocessing is part of serving latency. It is easy to overlook because it isn't "the model." Eventually:
+
+```python
+output = model(tokens)
+```
+
+This might consume:
+
+```text
+CPU
+GPU
+TPU
+accelerator memory
+memory bandwidth
+```
+
+The model produces tensors:
+
+```text
+[0.03, 0.97]
+```
+
+Then you might transform those into:
+
+```json
+{
+  "label": "positive",
+  "confidence": 0.97
+}
+```
+
+Finally FastAPI serializes the response and the HTTP server sends it back. So the real latency is approximately:
+
+$$
+T_{request}
+=
+T_{network}
++T_{parse}
++T_{validate}
++T_{preprocess}
++T_{queue}
++T_{inference}
++T_{postprocess}
++T_{serialize}
++T_{network-response}
+$$
+
+Not merely:
+
+$$
+T_{request}=T_{model}
+$$
+
+That difference becomes extremely important in production. A first implementation might accidentally do this:
+
+```python
+@app.post("/predict")
+def predict(request):
+    model = load_model()
+    return model(request.text)
+```
+
+Suppose:
+
+```text
+load model       = 8 seconds
+prediction       = 100 ms
+```
+
+Then every request takes roughly:
+
+```text
+8.1 seconds
+```
+
+That's absurd because model weights normally don't change between requests. Instead, model loading should happen approximately once per serving process:
+
+```text
+process starts
+     ↓
+load model
+     ↓
+warm model
+     ↓
+serve request
+     ↓
+serve request
+     ↓
+serve request
+     ↓
+...
+```
+
+FastAPI provides application lifespan handling specifically for shared resources such as machine-learning models: initialize before serving requests and clean up during shutdown. ([FastAPI][2])
+
+For example:
 
 ```python
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 
 from fastapi import FastAPI
 
 
-@dataclass(frozen=True)
-class LoadedRuntime:
-    predictor: "Predictor"
-    model_version: str
-    model_digest: str
-    feature_version: str
-    policy_version: str
+model = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    runtime = load_verified_runtime(settings.model_uri, settings.model_digest)
-    runtime.predictor.warm_up()
-    verify_startup_fixture(runtime)
+    global model
 
-    app.state.runtime = runtime
-    app.state.prediction_service = build_prediction_service(runtime)
-    app.state.accepting_traffic = True
-    try:
-        yield
-    finally:
-        app.state.accepting_traffic = False
-        close_prediction_service(app.state.prediction_service)
-        close_runtime(runtime)
+    model = load_model()
+    warm_up(model)
+
+    yield
+
+    del model
 
 
 app = FastAPI(lifespan=lifespan)
 ```
 
-A failed digest check, incompatible preprocessor, or failed fixture should fail startup. The deployment keeps the candidate out of readiness, so traffic stays on healthy replicas. Silent substitution with an older model would erase release evidence and can violate the decision contract.
-
-This design also separates desired identity from loaded identity. A registry alias may point to a newer model during a partial rollout. The runtime stores and reports the immutable identity that the process actually loaded.
-
-### Define Typed Request And Response Models
-<!-- section-summary: Pydantic request and response models make the public decision contract executable and keep internal model data away from callers. -->
-
-FastAPI uses Pydantic models to turn JSON documents into typed Python values. Invalid requests fail before the route body runs. FastAPI also adds the generated JSON Schemas to OpenAPI, giving clients a machine-readable description of the boundary.
-
-The schema should describe product facts and product outcomes. A caller sends a transaction amount in named units and an event timestamp. It should never need to know the model's tensor order or encoded category IDs. Every response returns a controlled decision. A model result carries its calibrated probability and model provenance, while a rules result carries the identity and reason for that fallback route.
+Then:
 
 ```python
-from typing import Annotated, Literal
-from uuid import UUID
-
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
-
-
-class RiskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    transaction_id: str = Field(min_length=8, max_length=80)
-    account_ref: str = Field(min_length=8, max_length=120)
-    amount_minor: Annotated[int, Field(strict=True, ge=0)]
-    currency: Literal["GBP", "EUR", "USD"]
-    event_time: AwareDatetime
-
-
-class ModelDecisionEvidence(BaseModel):
-    decision_source: Literal["model"]
-    release_id: str
-    model_version: str
-    feature_version: str
-    policy_version: str
-    fraud_probability: Annotated[float, Field(ge=0.0, le=1.0)]
-
-
-class RulesFallbackEvidence(BaseModel):
-    decision_source: Literal["rules"]
-    release_id: str
-    policy_version: str
-    fallback_id: str
-    fallback_reason: str
-
-
-class RiskResponse(BaseModel):
-    request_id: UUID
-    decision: Literal["approve", "review", "decline"]
-    evidence: Annotated[
-        ModelDecisionEvidence | RulesFallbackEvidence,
-        Field(discriminator="decision_source"),
-    ]
+@app.post("/predict")
+def predict(request: PredictionRequest):
+    return model.predict(request.text)
 ```
 
-The model result places `fraud_probability` beside the model identity that produced it. Its description in OpenAPI should state the positive class, label window, and calibration meaning. A rules fallback uses a separate evidence shape with a governed fallback identity and reason. It carries no model probability or model version, so the caller can distinguish a model result from a rules decision by construction.
+The important principle isn't the particular Python syntax. It's:
 
-The API creates `request_id` at the network boundary and returns it for correlation. It is absent from the caller body. A route that performs a business side effect would accept a separately named idempotency key and store it under a durable replay policy. This prediction route only returns a decision, so request correlation is the relevant identity here.
+> **Separate expensive model initialization from per-request work.**
 
-The `response_model` parameter makes FastAPI validate and filter returned fields through the response schema. This protects the boundary from an internal object that contains raw features, debug state, or sensitive model details. Domain and authorization rules still run inside the service layer because types alone lack that context.
+There are several fundamentally different architectures.
 
-### Use Dependency Injection For Testing And Replacement
-<!-- section-summary: FastAPI dependencies provide authenticated callers and runtime collaborators, allowing tests to replace external systems without changing route logic. -->
+### Architecture A: model inside the FastAPI process
 
-**Dependency injection** means a function receives the collaborator it needs from a provider. The route asks for an authenticated caller and a prediction service. Identity clients, feature-store clients, and model runtimes are constructed at stable lifecycle boundaries and supplied through those providers.
+```text
+Client
+   ↓
+FastAPI process
+   ├── HTTP handling
+   ├── tokenizer
+   └── model
+          ↓
+         GPU
+```
 
-This pattern keeps protocol code separate from prediction logic. The route handles HTTP input and output. The prediction service owns feature retrieval, preprocessing, model execution, and policy. A narrow Python protocol states the capability the route needs, which also gives tests a small fake to implement.
+This is wonderfully simple. You can deploy:
+
+```text
+app.py
+model weights
+FastAPI
+Uvicorn
+```
+
+as one container. Good for:
+
+```text
+small models
+low traffic
+simple services
+prototypes
+CPU models
+one-model-per-GPU deployments
+```
+
+But FastAPI and inference now share the same process. Another design:
+
+```text
+               ┌────────────────┐
+Client ───────→│ FastAPI        │
+               │ API service    │
+               └───────┬────────┘
+                       │
+                       │ RPC
+                       ▼
+               ┌────────────────┐
+               │ Model runtime  │
+               │ / inference    │
+               │ server         │
+               └───────┬────────┘
+                       ▼
+                      GPU
+```
+
+FastAPI handles:
+
+```text
+authentication
+request schemas
+business logic
+rate limits
+API compatibility
+```
+
+The inference server handles:
+
+```text
+model weights
+GPU memory
+batching
+scheduling
+KV cache
+tensor parallelism
+inference execution
+```
+
+This is often preferable for large generative models. Why? Because HTTP application concurrency and GPU inference scheduling are different problems. You might want:
+
+```text
+20 API replicas
+```
+
+but only:
+
+```text
+4 GPUs
+```
+
+There is no reason those numbers must be equal. You can go one step further:
+
+```text
+Client
+   ↓
+your FastAPI API
+   ↓
+remote inference endpoint
+   ↓
+model
+```
+
+Now your FastAPI layer contains no model weights at all. Its work might be:
 
 ```python
-from typing import Annotated, Protocol
-
-from fastapi import Depends, Request
-
-
-class PredictionService(Protocol):
-    def decide(
-        self,
-        payload: RiskRequest,
-        caller: "Caller",
-        request_id: UUID,
-    ) -> RiskResponse: ...
-
-
-def get_prediction_service(request: Request) -> PredictionService:
-    return request.app.state.prediction_service
-
-
-@app.post("/v1/risk-decisions", response_model=RiskResponse)
-def predict(
-    payload: RiskRequest,
-    request: Request,
-    caller: Annotated["Caller", Depends(authenticated_caller)],
-    service: Annotated[PredictionService, Depends(get_prediction_service)],
-) -> RiskResponse:
-    return service.decide(payload, caller, request.state.request_id)
+@app.post("/predict")
+async def predict(request):
+    result = await inference_client.predict(request)
+    return result
 ```
 
-FastAPI's `app.dependency_overrides` can replace `get_prediction_service` or `authenticated_caller` during a contract test. The test can return a fixed domain decision without downloading a model or contacting an identity provider. Separate integration tests still exercise the real packaged bundle and authentication path.
+This is architecturally very different from running PyTorch directly inside the endpoint. And that brings us to concurrency.
 
-Dependency injection should stay at stable boundaries. Turning every helper into a framework dependency creates a web of providers that hides ordinary Python control flow. Use it for request-scoped identity, settings, clients, and replaceable service interfaces. Keep deterministic transformations as direct function calls inside the prediction service.
+## How Do Async, Threads, Processes, Batching, and Concurrency Match the Workload?
+<!-- section-summary: Async helps waiting I/O, threads and processes create other concurrency boundaries, batching combines work, and scarce model resources require deliberate limits. -->
 
-## Choose Async, Threads, Or Processes For The Workload
-<!-- section-summary: Async handles waiting, threads protect the event loop from blocking calls, and processes or model servers provide separate execution capacity. -->
+The expensive inference step determines whether waiting I/O, CPU work, GPU ownership, or batching should shape concurrency.
 
-The word **async** describes cooperative waiting. An `async def` route can pause during an async database or HTTP call so the event loop serves other connections. CPU and GPU inference performs computation, so adding `async` around a blocking `predict` call provides no extra compute capacity.
+Imagine a single worker receives request A. A does this:
 
-FastAPI handles a regular `def` route in an external thread pool and awaits its completion. The route in the preceding example uses `def` because the small local predictor exposes a blocking interface. This protects the event loop from direct blocking work, provided the predictor supports the tested level of concurrent calls.
-
-An `async def` route is appropriate for a path built from awaitable clients. If that route also calls a blocking model library directly, the event loop stalls. The service must move the blocking call to a controlled thread, process, or separate model server. A thread keeps the event loop responsive, while the model's own thread safety and CPU use still determine safe concurrency.
-
-Processes provide memory and failure isolation. Each Uvicorn worker is a separate process and usually loads another model copy through lifespan. CPU libraries may also start native threads for BLAS or OpenMP. Multiplying web workers by native math threads can oversubscribe the available cores and increase tail latency.
-
-GPU execution usually benefits from a dedicated owner. One model server can hold the device memory, batch compatible requests, and schedule accelerator work from several FastAPI replicas. The FastAPI application then treats model execution as an async network dependency with a bounded timeout.
-
-```mermaid
-flowchart TD
-    A["Route Work<br/>(waiting or computation)"] --> B{"Execution Choice<br/>(library interface and measured capacity)"}
-    B --> C["Async Await<br/>(non-blocking network or storage client)"]
-    B --> D["Thread Pool<br/>(blocking call with shared process memory)"]
-    B --> E["Worker Process<br/>(separate Python memory and failure boundary)"]
-    B --> F["Model Server<br/>(device ownership batching and independent scale)"]
-    C --> G["Event Loop Capacity<br/>(many waiting requests)"]
-    D --> H["Local Compute Capacity<br/>(bounded in-flight calls)"]
-    E --> H
-    F --> I["Remote Execution Capacity<br/>(bounded dependency calls)"]
-
-    class A input
-    class B gate
-    class C,D,E,F,G,H,I process
+```text
+call remote database
+wait 100 ms
 ```
 
-### Bound Concurrency And Apply Backpressure
-<!-- section-summary: A serving service limits admitted inference work, keeps queues short, and rejects overload early enough for the caller's fallback. -->
+During those 100 ms, the CPU isn't actually computing anything. It is waiting. Without concurrency:
 
-Every model has a saturation point. Beyond it, extra concurrency increases queueing while throughput stays flat. A CPU model may saturate its cores. A GPU model may reach its effective batch size and device memory. A feature dependency may allow only a fixed number of concurrent lookups.
-
-Load tests identify the safe in-flight limit for each scarce resource. The application admits work up to that limit and keeps any waiting queue short. Global overload can return `503` with bounded retry guidance. A per-caller rate limit commonly returns `429`. These categories tell the caller whether the whole service is full or its own traffic exceeded policy.
-
-Uvicorn provides `--limit-concurrency` as a server-level bound on concurrent connections or tasks. A prediction service still benefits from its own limiter around the expensive model call, because health checks and inexpensive routes need capacity during inference pressure. A separate model server applies another limit at its queue or replica boundary.
-
-Timeouts share one end-to-end budget. The gateway deadline is larger than the application's internal deadline. Feature and model calls receive smaller budgets, leaving time to assemble a fallback response. A caller with only a few milliseconds remaining should avoid sending work that exceeds its product deadline.
-
-Cancellation needs special care. Cancelling an HTTP coroutine may abandon the result while a native thread or GPU kernel continues running. The capacity token should remain occupied until the underlying work ends. Otherwise, timed-out requests continue consuming resources while new requests enter, which turns latency pressure into memory or device exhaustion.
-
-```mermaid
-flowchart TD
-    A["Incoming Traffic<br/>(requests and product deadlines)"] --> B["Admission Control<br/>(rate concurrency and body limits)"]
-    B --> C["Short Queue<br/>(bounded wait within deadline)"]
-    C --> D["Inference Capacity<br/>(threads processes or model server)"]
-    D --> E["Completed Decision<br/>(response or reviewed fallback)"]
-    B --> F["Early Backpressure<br/>(429 or 503 with retry policy)"]
-    C --> F
-
-    class A input
-    class B,C,D,E process
-    class F reject
+```text
+A: compute ───── WAIT ───── compute
+B:                              compute...
 ```
 
-## Use Separate Startup, Readiness, And Liveness Checks
-<!-- section-summary: Startup allows model initialization, readiness controls traffic, and liveness requests a restart only for an unrecoverable process condition. -->
+The waiting period is wasted. Async allows something closer to:
 
-Health probes are small APIs between the application and its runtime platform. Their names sound similar, yet each one triggers a different operational action.
+```text
+A: compute ───── WAIT ───── compute
+B:          compute ─ WAIT ───── compute
+C:                  compute ...
+```
 
-A **startup probe** gives a slow-loading model enough time to initialize. Kubernetes waits for this probe to succeed before running liveness and readiness probes. If startup never succeeds within the configured threshold, Kubernetes restarts the container.
+The same thread can make progress on other requests while A waits for I/O. This makes `async` extremely useful for:
 
-A **readiness probe** answers whether this replica should receive new prediction traffic. It stays false until the verified model, preprocessing bundle, and required local state are ready. It can turn false during drain or a critical dependency outage. Kubernetes then removes the pod from matching Service endpoints while leaving the process alive.
+```text
+network calls
+database calls
+object storage
+remote inference calls
+async file/network I/O
+```
 
-A **liveness probe** answers whether restarting the process is likely to help. Keep it cheap and focused on local process progress. A temporary feature-store outage should usually reduce readiness or trigger fallback; failing liveness across every replica can create a restart storm and remove the remaining capacity.
+FastAPI supports both `async def` and ordinary `def` path operations; its documentation recommends choosing according to whether the underlying operations are awaitable or blocking. ([FastAPI][3]) This mistake causes a lot of bad model-serving designs. Suppose:
 
 ```python
-from fastapi import HTTPException, Request
+@app.post("/predict")
+async def predict(request):
+    result = extremely_expensive_python_computation()
+    return result
+```
+
+Adding:
+
+```python
+async
+```
+
+doesn't magically produce:
+
+```text
+16 CPU cores
+```
+
+Async primarily addresses **concurrency while waiting**. Compare:
+
+```text
+I/O-bound:
+
+request
+   ↓
+send network request
+   ↓
+WAIT                ← async can exploit this
+   ↓
+receive response
+```
+
+versus:
+
+```text
+CPU-bound:
+
+request
+   ↓
+compute
+compute
+compute             ← CPU is actually occupied
+compute
+compute
+```
+
+There is no waiting period for the event loop to exploit. So:
+
+**Async is principally a mechanism for efficiently interleaving waiting tasks, not a mechanism for making heavy computation run faster.**
+
+Suppose you have blocking code:
+
+```python
+result = some_blocking_library()
+```
+
+If it blocks the event-loop thread, other asynchronous requests may be unable to progress. One solution is a thread:
+
+```text
+event loop
+   │
+   ├─ Request A → worker thread ─── blocking operation
+   │
+   ├─ Request B
+   ├─ Request C
+   └─ ...
+```
+
+FastAPI itself can run ordinary synchronous `def` path operations using its thread-pool machinery rather than directly on the event loop. ([FastAPI][3]) Threads are particularly useful for:
+
+```text
+blocking I/O
+libraries without async APIs
+native libraries that release Python's GIL
+```
+
+But threads aren't automatically ideal for arbitrary Python CPU work. For pure Python computation, the Global Interpreter Lock means multiple threads generally don't execute Python bytecode simultaneously inside one process.
+
+Conceptually:
+
+```text
+Thread A ──Python──┐
+                   │ one at a time
+Thread B ──Python──┤
+                   │
+Thread C ──Python──┘
+```
+
+So if your workload is genuinely CPU-bound Python:
+
+```text
+feature engineering
+custom loops
+large pure-Python algorithms
+```
+
+threads don't necessarily give CPU parallelism. Processes can. You can run:
+
+```text
+Process 1 → CPU core
+Process 2 → CPU core
+Process 3 → CPU core
+Process 4 → CPU core
+```
+
+Each process has its own Python interpreter. So CPU-bound work can execute in parallel. FastAPI/Uvicorn deployments can use multiple worker processes. ([FastAPI][4]) For an ordinary API, that might be excellent. For model serving, however, there is a giant caveat. Imagine your model requires:
+
+```text
+8 GB memory
+```
+
+One worker:
+
+```text
+Worker 1
+  └─ model = 8 GB
+```
+
+Four workers can conceptually become:
+
+```text
+Worker 1 → 8 GB
+Worker 2 → 8 GB
+Worker 3 → 8 GB
+Worker 4 → 8 GB
+
+total ≈ 32 GB
+```
+
+FastAPI's deployment documentation explicitly warns that processes have separate memory, so loading a large model in several workers can multiply memory usage. ([FastAPI][4]) For a GPU this can be worse:
+
+```text
+GPU VRAM = 24 GB
+model = 12 GB
+```
+
+Then:
+
+```text
+4 workers × 12 GB
+```
+
+obviously cannot fit on one 24 GB GPU. So the standard web-server instinct:
+
+"More workers = more throughput."
+
+is not universally valid for model serving. Suppose your GPU can efficiently process:
+
+```text
+one large inference workload at a time
+```
+
+Starting 32 FastAPI threads doesn't create:
+
+```text
+32 GPUs
+```
+
+You still have:
+
+```text
+32 request handlers
+          ↓
+        queue
+          ↓
+        1 GPU
+```
+
+The scarce resource determines capacity. This is the queueing structure:
+
+```text
+incoming requests
+  ↓ ↓ ↓ ↓ ↓ ↓
+┌───────────────┐
+│     queue     │
+└───────┬───────┘
+        ↓
+┌───────────────┐
+│ inference     │
+│ resource      │
+└───────────────┘
+```
+
+Concurrency at the API level cannot eliminate the bottleneck. It can merely determine how efficiently requests wait for it. Imagine GPU inference needs:
+
+```text
+4 GB temporary memory/request
+```
+
+and you allow 100 requests to enter inference simultaneously. You might get:
+
+```text
+GPU out of memory
+```
+
+rather than high throughput. A concurrency guard can establish:
+
+```text
+at most N inference operations at once
+```
+
+Conceptually:
+
+```python
+semaphore = Semaphore(4)
+
+async def predict(...):
+    async with semaphore:
+        return await inference(...)
+```
+
+Now:
+
+```text
+100 incoming requests
+      ↓
+  FastAPI
+      ↓
+   queue
+      ↓
+maximum 4 admitted
+      ↓
+     GPU
+```
+
+A good model service does not merely accept concurrency. It **controls** it. Suppose running one prediction takes:
+
+```text
+10 ms
+```
+
+You might expect 8 predictions to take:
+
+```text
+80 ms
+```
+
+But GPUs are highly parallel. Perhaps:
+
+```text
+batch size 1  → 10 ms
+batch size 8  → 18 ms
+```
+
+Then instead of:
+
+```text
+R1 → GPU
+R2 → GPU
+R3 → GPU
+R4 → GPU
+```
+
+you can do:
+
+```text
+R1 ┐
+R2 │
+R3 ├── batch → GPU
+R4 │
+R5 ┘
+```
+
+This trades some queueing delay for higher throughput. That is why mature inference systems often have a dedicated scheduler or batcher rather than letting arbitrary FastAPI workers independently call the GPU. A useful comparison is:
+
+| Work                              | Usually useful mechanism                |
+| --------------------------------- | --------------------------------------- |
+| Waiting on remote model API       | `async`                                 |
+| Waiting on database/network       | `async`                                 |
+| Blocking I/O library              | thread                                  |
+| Native numeric code releasing GIL | threads may work                        |
+| Heavy pure-Python CPU code        | processes                               |
+| Large GPU model                   | controlled inference scheduler/batching |
+| Multi-GPU giant LLM               | specialized inference runtime           |
+
+The mistake is starting from:
+
+```text
+Should I use async
+```
+
+Start instead from:
+
+**What resource is occupied while this request is in progress?**
+
+Then pick concurrency accordingly.
+
+![A transaction-risk request moving from the client through the gateway, Pydantic validation, feature and preprocessing service, immutable model, decision policy, and typed response under one trace.](/content-assets/articles/article-mlops-model-serving-serving-model-with-fastapi/fastapi-prediction-path.png)
+
+*FastAPI owns the typed HTTP boundary while the prediction service, model, and policy remain explicit stages whose latency and release identities can be traced together.*
+
+## How Do Startup, Readiness, Liveness, and Warmup Protect Traffic?
+<!-- section-summary: Startup loads dependencies, readiness confirms the warmed prediction path can serve, and liveness decides whether a stuck process should restart. -->
+
+Before any concurrency is useful, each process must load and warm the model and advertise the correct lifecycle state.
+
+Suppose the container process starts at:
+
+```text
+12:00:00
+```
+
+FastAPI exists immediately. But then:
+
+```text
+download model     20 sec
+load weights       15 sec
+initialize CUDA     5 sec
+warm kernels        5 sec
+```
+
+The model isn't truly usable until:
+
+```text
+12:00:45
+```
+
+So:
+
+```text
+process exists
+```
+
+does not imply:
+
+```text
+service can serve predictions
+```
+
+We need different health concepts. Think of them this way.
+
+### Startup
+
+**Has initialization completed?**
+
+For example:
+
+```text
+weights loaded
+tokenizer loaded
+GPU initialized
+warmup complete
+```
+
+Until this succeeds, the application is still booting.
+
+### Readiness
+
+**Should new user traffic be sent here?**
+
+A readiness endpoint might conceptually answer:
+
+```text
+model loaded             ✓
+serving pool initialized ✓
+required dependency      ✓
+accepting requests       ✓
+```
+
+Then:
+
+```text
+ready = true
+```
+
+A load balancer can send traffic. If a replica is draining or cannot currently serve correctly:
+
+```text
+ready = false
+```
+
+Traffic should go elsewhere.
+
+### Liveness
+
+**Is the application fundamentally alive, or should it be restarted?**
+
+For example:
+
+```text
+HTTP event loop responsive
+process healthy
+fatal serving loop still running
+```
+
+A transient dependency outage should not necessarily make liveness fail. Why? Imagine:
+
+```text
+database unavailable
+        ↓
+liveness fails
+        ↓
+container restarts
+        ↓
+database still unavailable
+        ↓
+liveness fails
+        ↓
+restart
+        ↓
+...
+```
+
+You've created a restart storm without fixing the database. So a useful distinction is:
+
+```text
+readiness failure
+    → stop sending traffic
+
+liveness failure
+    → restart me
+```
+
+These should not mean the same thing.
+
+```python
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 
-@app.get("/livez", include_in_schema=False)
-async def livez() -> dict[str, str]:
+model = None
+ready = False
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global model, ready
+
+    model = load_model()
+    warm_up(model)
+    ready = True
+
+    yield
+
+    ready = False
+    model = None
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+class PredictionRequest(BaseModel):
+    text: str
+
+
+@app.get("/live")
+def live():
     return {"status": "alive"}
 
 
-@app.get("/readyz", include_in_schema=False)
-async def readyz(request: Request) -> dict[str, str]:
-    if request.app.state.accepting_traffic is False:
-        raise HTTPException(status_code=503, detail="draining")
-    if request.app.state.runtime.predictor.is_ready() is False:
-        raise HTTPException(status_code=503, detail="model_unavailable")
+@app.get("/ready")
+def readiness():
+    if not ready:
+        raise HTTPException(status_code=503, detail="not ready")
+
     return {"status": "ready"}
+
+
+@app.post("/predict")
+def predict(request: PredictionRequest):
+    if not ready:
+        raise HTTPException(status_code=503, detail="not ready")
+
+    prediction = model.predict(request.text)
+
+    return {"prediction": prediction}
 ```
 
-The readiness endpoint should read a cheap local readiness state. Running a full prediction on every probe can consume serving capacity, and synchronously calling every dependency can spread one outage into fleet-wide unready status. Startup runs a reviewed prediction fixture once; background checks can update dependency readiness between probes.
+Real production systems normally have more sophisticated health behavior, but the separation is what matters. The first model call can behave differently from subsequent calls.
+
+For example:
+
+```text
+load model        4 sec
+first inference   3 sec
+later inference   100 ms
+```
+
+Why? Potential initialization might include:
+
+```text
+CUDA context creation
+memory allocation
+kernel loading
+JIT compilation
+graph compilation
+cache creation
+```
+
+So after:
+
+```python
+model = load_model()
+```
+
+you may perform:
+
+```python
+model(dummy_input)
+```
+
+before declaring readiness.
+
+Conceptually:
+
+```text
+load
+  ↓
+initialize
+  ↓
+warm
+  ↓
+READY
+```
+
+not:
+
+```text
+load
+  ↓
+READY
+  ↓
+first customer pays startup cost
+```
+
+## Which Traces and Metrics Explain Tail Latency and Throughput?
+<!-- section-summary: Correlation traces follow one prediction across layers, while latency distributions, queue time, throughput, errors, and resource metrics expose different bottlenecks. -->
+
+Once traffic arrives, traces and distributions must show where requests wait and which resource limits throughput.
+
+Suppose a customer says:
+
+"Predictions are taking two seconds."
+
+A single metric:
+
+```text
+request_latency = 2 seconds
+```
+
+doesn't tell you why. You want to decompose the path.
+
+For example:
+
+```text
+total request       2000 ms
+
+validation             2 ms
+tokenization           30 ms
+queue wait           1300 ms
+GPU inference          500 ms
+postprocessing          20 ms
+serialization            3 ms
+other                  145 ms
+```
+
+Now the diagnosis is obvious:
+
+```text
+model isn't necessarily slow
+queueing is slow
+```
+
+Without stage-level instrumentation, someone might waste weeks optimizing CUDA kernels. Give each prediction something like:
+
+```text
+request_id = abc123
+```
+
+Then logs can show:
+
+```text
+abc123 request_received
+abc123 validation_complete      2 ms
+abc123 preprocessing_complete  31 ms
+abc123 inference_queued
+abc123 inference_started
+abc123 inference_complete     497 ms
+abc123 response_sent
+```
+
+If inference is a separate service:
+
+```text
+FastAPI
+    trace abc123
+        ↓
+Inference service
+    trace abc123
+        ↓
+GPU scheduler
+    trace abc123
+```
+
+The trace survives across boundaries. Then one slow request can be reconstructed end to end. Metrics tell you:
+
+```text
+p50 latency = 220 ms
+p95 latency = 600 ms
+p99 latency = 2.4 sec
+
+requests/sec = 140
+errors/sec = 0.2
+
+GPU utilization = 91%
+queue depth = 42
+```
+
+They answer:
+
+**Is the system behaving normally?**
+
+Traces tell you:
+
+```text
+request xyz spent
+1.7 sec waiting for inference
+```
+
+They answer:
+
+**Why did this particular request behave this way?**
+
+Logs tell you discrete events and debugging details. A production service generally benefits from all three:
+
+```text
+metrics
+traces
+logs
+```
+
+Suppose:
+
+```text
+99 requests = 100 ms
+1 request   = 10 seconds
+```
+
+Average latency is roughly:
+
+```text
+199 ms
+```
+
+which doesn't sound terrible. But one in every hundred users experiences:
+
+```text
+10 seconds
+```
+
+So model-serving dashboards should usually care about percentiles:
+
+```text
+p50
+p90
+p95
+p99
+```
+
+rather than only averages. Queueing problems show up especially strongly in high percentiles. Suppose you collect requests for batching. Waiting:
+
+```text
+20 ms
+```
+
+might let you form:
+
+```text
+batch size 16
+```
+
+and substantially increase GPU utilization. But every request now pays an extra:
+
+```text
+≤20 ms
+```
+
+of batching delay. So:
+
+```text
+larger batches
+    ↓
+better throughput
+
+but potentially
+    ↓
+higher latency
+```
+
+Serving design is therefore an optimization problem:
+
+$$
+\text{maximize throughput}
+$$
+
+subject to something like:
+
+$$
+p99\ latency < 500\text{ ms}
+$$
+
+rather than simply:
+
+```text
+make batch size enormous
+```
+
+## How Do Containers, Workers, GPUs, Autoscaling, Backpressure, and Shutdown Own Resources?
+<!-- section-summary: Worker count follows model ownership; CPU and GPU services scale differently, and bounded queues, timeouts, graceful shutdown, and bottleneck-aware autoscaling protect capacity. -->
+
+Those measurements drive worker, container, GPU, autoscaling, queue, timeout, and shutdown decisions.
+
+Now imagine packaging the service in Docker. A simple deployment might be:
+
+```text
+┌──────────────────────────────┐
+│ Container                    │
+│                              │
+│ Uvicorn                      │
+│    ↓                         │
+│ FastAPI                      │
+│    ↓                         │
+│ model                        │
+│    ↓                         │
+│ GPU                          │
+└──────────────────────────────┘
+```
+
+This is easy to understand and operate. A common pattern for a GPU-backed service is approximately:
+
+```text
+one container
+one serving process
+one loaded model
+one GPU
+```
+
+Not because this is a universal rule, but because resource ownership is extremely clear. Suppose:
+
+```text
+machine = 16 CPU cores
+model = 500 MB
+RAM = 64 GB
+```
+
+You might run several worker processes:
+
+```text
+              ┌─ Worker 1 → model
+requests ─────┼─ Worker 2 → model
+              ├─ Worker 3 → model
+              └─ Worker 4 → model
+```
+
+Now genuine CPU work can occur across cores. But watch for another subtle problem:
+
+```text
+4 processes
+× 8 internal BLAS threads each
+= 32 computational threads
+```
+
+on:
+
+```text
+16 CPU cores
+```
+
+This can create oversubscription and make performance worse. So you must reason not only about:
+
+```text
+FastAPI worker count
+```
+
+but also:
+
+```text
+PyTorch threads
+NumPy/BLAS threads
+tokenizer threads
+OpenMP threads
+```
+
+Concurrency multiplies across layers. Suppose:
+
+```text
+GPU memory = 24 GB
+model weights = 18 GB
+```
+
+This:
+
+```text
+4 FastAPI workers
+```
+
+may mean four attempts to initialize an 18 GB model. That cannot work. Instead you might use:
+
+```text
+Container
+   ↓
+1 FastAPI process
+   ↓
+1 model copy
+   ↓
+1 GPU
+```
+
+and scale horizontally:
+
+```text
+load balancer
+   │
+   ├── replica 1 → GPU 1
+   ├── replica 2 → GPU 2
+   ├── replica 3 → GPU 3
+   └── replica 4 → GPU 4
+```
+
+Now each replica owns a coherent unit of compute. For a larger architecture:
+
+```text
+                    ┌─ API replica
+Client → LB ────────┼─ API replica
+                    ├─ API replica
+                    └─ API replica
+                          │
+                          ▼
+                    request queue
+                          │
+                    ┌─────┴─────┐
+                    ▼           ▼
+               GPU worker   GPU worker
+```
+
+Now:
+
+```text
+API replicas
+```
+
+can scale according to:
+
+```text
+HTTP traffic
+auth processing
+network concurrency
+```
+
+while:
+
+```text
+GPU workers
+```
+
+scale according to:
+
+```text
+inference queue
+GPU utilization
+tokens/sec
+```
+
+That separation is often powerful. A normal web service might scale based on:
+
+```text
+CPU utilization
+```
+
+But imagine an LLM server:
+
+```text
+CPU = 15%
+GPU = 100%
+queue = 200 requests
+```
+
+CPU-based autoscaling says:
+
+```text
+everything is fine
+```
+
+while users are waiting. For model serving, useful scaling signals may instead be:
+
+```text
+queue depth
+queue wait time
+GPU utilization
+active sequences
+tokens/sec
+requests/sec
+KV-cache utilization
+p95/p99 latency
+```
+
+The scaling metric should correspond to the actual bottleneck. Imagine:
+
+```text
+service capacity = 100 requests/sec
+incoming load    = 500 requests/sec
+```
+
+If every request is accepted into an unbounded queue:
+
+```text
+second 1 → +400 waiting
+second 2 → +800
+second 3 → +1200
+...
+```
+
+Eventually:
+
+```text
+latency explodes
+memory grows
+timeouts cascade
+service collapses
+```
+
+A healthy service eventually says:
+
+```text
+I cannot accept more work right now.
+```
+
+That might involve:
+
+```text
+bounded queue
+concurrency limit
+429 / 503 response
+load shedding
+client retry policy
+```
+
+Rejecting some requests quickly can be better than accepting everything and completing nothing reliably. Suppose:
+
+```text
+Client timeout              = 5 sec
+FastAPI → model timeout     = 60 sec
+```
+
+If the client disappears after five seconds but inference continues for another 55 seconds, you're spending GPU resources producing a response nobody wants. Good systems think about:
+
+```text
+client timeout
+gateway timeout
+application timeout
+queue timeout
+inference timeout
+downstream timeout
+```
+
+and ideally propagate cancellation where supported. Again, model serving is not simply:
+
+```python
+output = model(input)
+```
+
+It's resource management around that operation. Suppose a deployment replaces an old container. Bad sequence:
+
+```text
+SIGTERM
+   ↓
+process disappears
+   ↓
+50 active requests fail
+```
+
+Better:
+
+```text
+mark not ready
+      ↓
+load balancer stops new traffic
+      ↓
+finish or cancel existing requests
+      ↓
+release model/GPU resources
+      ↓
+exit
+```
+
+This is called draining. The lifecycle becomes:
+
+```text
+STARTING
+   ↓
+READY
+   ↓
+SERVING
+   ↓
+DRAINING
+   ↓
+STOPPED
+```
+
+That is a better mental model than simply:
+
+```text
+process on / process off
+```
 
 ![FastAPI application lifecycle loading and verifying a model before readiness, alongside a separate request-capacity path with bounded workers and overload responses.](/content-assets/articles/article-mlops-model-serving-serving-model-with-fastapi/lifecycle-capacity-controls.png)
 
 *Startup, readiness, and liveness govern whether a replica may serve; concurrency and backpressure govern how much prediction work an already-ready replica may admit.*
 
-### Define Errors And Fallbacks In The API Contract
-<!-- section-summary: The API distinguishes caller repair, authentication, overload, dependency failure, model failure, abstention, and approved fallback routes. -->
+## How Should a Request Handler, Scheduler Boundary, Capacity Model, and Streaming Path Fit Together?
+<!-- section-summary: A boring handler delegates scheduling, and capacity uses work units; LLM token generation and streaming add time-to-first-token and long-lived connection concerns. -->
 
-A production endpoint needs stable outcomes for failure as well as success. The caller should know whether to repair its payload, refresh credentials, slow down, retry within a deadline, or continue with a product fallback.
+The request handler stays simple when a clear scheduler boundary owns scarce work and the capacity model reflects real units such as tokens.
 
-FastAPI and Pydantic produce request-validation failures before the route executes. The application maps them into the service's documented error envelope, preserving bounded field paths and a request ID. Authentication failures use `401`, authorization failures use `403`, per-caller rate limits use `429`, and global capacity or dependency failures commonly use `503`.
-
-Model uncertainty belongs to decision policy. A valid request with weak evidence may return `review` as a successful product outcome. An evaluated rules path may also return success with `decision_source` set to `rules`. This lets callers act safely and lets operators measure degraded traffic.
-
-Unhandled Python exceptions, stack traces, model paths, and raw dependency messages stay out of responses. Exception handlers map known failures to stable codes such as `FEATURES_STALE`, `MODEL_BUSY`, or `MODEL_UNAVAILABLE`. Logs and traces keep protected diagnostic context under access and retention policy.
-
-```mermaid
-flowchart TD
-    A["Prediction Attempt<br/>(validated request and remaining deadline)"] --> B{"Execution Result<br/>(decision uncertainty or failure)"}
-    B --> C["Primary Decision<br/>(model path completed)"]
-    B --> D["Policy Outcome<br/>(review or approved fallback)"]
-    B --> E["Caller Error<br/>(repair identity or rate)"]
-    B --> F["Service Error<br/>(capacity dependency or runtime)"]
-    C --> G["Stable Response<br/>(request ID and release evidence)"]
-    D --> G
-    E --> H["Stable Error<br/>(code retry hint and request ID)"]
-    F --> H
-
-    class A input
-    class B gate
-    class C,D,G process
-    class E,F,H fail
-```
-
-Retries require an explicit policy. A transient model-server timeout may allow one retry if enough product deadline remains and another healthy replica has capacity. Schema errors and authorization failures need repair. Repeating expensive inference against the same saturated pool increases overload.
-
-### Return The Model Version And Decision Evidence
-<!-- section-summary: Responses and decision records identify the model, features, policy, release, and execution route that actually produced the action. -->
-
-The service should report the runtime identity that actually produced the result. A candidate pod may load an older cached artifact after a registry alias changes. A rollout may update policy before every model replica moves. Desired state alone provides incomplete evidence for the resulting decision.
-
-The `LoadedRuntime` object captures immutable model and feature identities during startup. A model result combines those identities with the active policy and calibrated probability. A rules fallback names its fallback record, reason, policy, and release. It leaves model-only fields absent. The public response can expose this complete evidence for trusted internal callers, or expose an opaque release ID while the protected decision record stores the detailed mapping.
-
-This evidence separates common incidents. A score distribution shift tied to one model version points toward the artifact or feature compatibility. A change in final decisions with stable scores may come from policy. Higher fallback rate with unchanged model quality points toward a dependency or capacity problem.
-
-Request ID and trace ID have different jobs. The request ID locates the prediction record and response. The trace ID links spans across services. Model and release identities remain explicit attributes because tracing may be sampled and retained for a shorter period than governed decision evidence.
-
-```mermaid
-flowchart TD
-    A["Loaded Runtime<br/>(model digest and feature version)"] --> F["Decision Evidence<br/>(actual production interpretation)"]
-    B["Policy State<br/>(thresholds fallback and abstention)"] --> F
-    C["Release State<br/>(image configuration and traffic route)"] --> F
-    D["Execution Route<br/>(model or rules)"] --> F
-    E["Correlation<br/>(request ID and trace ID)"] --> F
-
-    class A,B,C,D,E input
-    class F result
-```
-
-## Trace And Measure The Whole Prediction Path
-<!-- section-summary: OpenTelemetry and Prometheus connect HTTP health to queue, feature, model, policy, and fallback evidence using bounded attributes. -->
-
-HTTP latency tells an operator that the endpoint is slow. Prediction-path instrumentation explains where the time went. A trace should show authentication, request validation, feature lookup, queue wait, preprocessing, model execution, policy, and response serialization as related spans or timed stages.
-
-OpenTelemetry's FastAPI instrumentation creates server spans and standard HTTP metrics around application routes. Client instrumentation can continue the trace into an HTTP feature service or model server. Focused manual spans around `feature.lookup`, `model.predict`, and `policy.apply` reveal the ML-specific stages.
+Your API endpoint ideally does not contain the entire serving system:
 
 ```python
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from prometheus_client import make_asgi_app
+@app.post("/predict")
+async def predict(request: PredictionRequest):
+    validated = validate_request(request)
 
+    result = await predictor.predict(validated)
 
-FastAPIInstrumentor.instrument_app(
-    app,
-    excluded_urls="livez,readyz,metrics",
-)
-
-app.mount("/metrics", make_asgi_app())
+    return PredictionResponse.from_result(result)
 ```
 
-This example exposes Prometheus client metrics through an ASGI sub-application and adds OpenTelemetry request tracing. A team may export OpenTelemetry metrics to its monitoring backend or define Prometheus client metrics directly. Pick one owner for each HTTP counter and latency histogram so dashboards avoid duplicate series.
+The interesting complexity can live behind:
 
-Core model-serving metrics cover admitted and rejected work. Separate histograms measure queue wait, feature latency, and inference latency. Bounded counters describe timeouts, fallback outcomes, and response decisions. Model version can be a bounded label if only a small number serve concurrently. Request ID, transaction ID, raw prediction values, and unrestricted error text belong outside metric labels.
-
-OpenTelemetry header capture is configurable and can collect sensitive credentials or personal data. Keep header capture allowlisted, apply sanitization, and verify the resulting telemetry. Health and metrics routes can be excluded from tracing to reduce noise.
-
-Prometheus's Python client needs special configuration in a multi-process deployment. Its multiprocess mode uses a shared directory and has limitations for gauges, collectors, and exemplars. A single Uvicorn process per Kubernetes pod avoids that aggregation problem, while Prometheus naturally combines pod-level series in queries.
-
-```mermaid
-flowchart TD
-    A["HTTP Span<br/>(route status and total latency)"] --> B["Feature Span<br/>(lookup version and freshness)"]
-    B --> C["Queue Stage<br/>(admission and wait)"]
-    C --> D["Model Span<br/>(execution route and duration)"]
-    D --> E["Policy Span<br/>(decision fallback and abstention)"]
-    E --> F["Bounded Metrics<br/>(service and model indicators)"]
-    E --> G["Protected Log<br/>(request release and trace correlation)"]
-
-    class A input
-    class B,C,D,E,F,G process
+```text
+predictor.predict(...)
 ```
 
-### Secure The API Boundary
-<!-- section-summary: Identity, authorization, transport protection, resource limits, artifact verification, and data minimization surround the typed FastAPI route. -->
+Maybe today:
 
-Pydantic validation protects document shape. The wider boundary also establishes caller identity and permission. A gateway or service mesh may validate an OIDC token, while a FastAPI dependency enforces the route's required scope and checks access to the referenced account or tenant.
-
-TLS protects traffic in transit. Trusted-proxy configuration matters because forwarded client and scheme headers can be forged by direct callers. Uvicorn should trust forwarded headers only from the known proxy network. Internal reachability can be limited through network policy and private service exposure.
-
-Request size, rate, concurrency, and deadline limits protect resources. These controls appear at the gateway and again around expensive inference work. Authentication alone provides little protection against a compromised or misconfigured authorized caller sending an oversized batch.
-
-Model artifacts are executable production inputs. The service resolves an approved immutable location, verifies its digest or signature, and loads it with the expected runtime. Pickle-style formats can execute code during deserialization, so only trusted artifacts from the governed build path belong in that loader.
-
-Every output channel follows data-minimization rules. Responses expose only the approved decision contract. General logs and traces exclude raw features, prompts, and documents. Metrics exclude credentials and direct personal identifiers. OpenAPI documentation and administrative version endpoints may also require authentication in sensitive environments.
-
-## Choose The Container And Worker Layout
-<!-- section-summary: The container pins dependencies and starts a measured Uvicorn process topology, while the platform owns replicas, resources, probes, and graceful termination. -->
-
-A serving container should reproduce the exact application and runtime tested before release. A typical build starts from an approved Python slim image, installs the locked dependency set with `uv sync --frozen`, copies only the required application files, and runs as a non-root user. The model is either packaged into the image or fetched from an immutable URI whose digest is verified during lifespan.
-
-The process topology follows the deployment platform. On Kubernetes, one Uvicorn process per container is a strong default because Kubernetes already manages replicas and restarts. Each pod then has a predictable model-memory footprint. More replicas provide parallel capacity and failure isolation.
-
-On a virtual machine or a single container without cluster-level replication, Uvicorn can start several worker processes through `--workers`. Each worker executes lifespan and generally loads its own model copy. Gunicorn remains an option for teams that already operate it, using the separate `uvicorn-worker` package. Uvicorn's bundled `uvicorn.workers` module is deprecated, and the old prebuilt FastAPI Gunicorn container image is also deprecated.
-
-This focused Kubernetes fragment shows the controls that matter to the serving process:
-
-```yaml
-spec:
-  terminationGracePeriodSeconds: 45
-  containers:
-    - name: risk-api
-      image: registry.example/ml/risk-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      command:
-        - uvicorn
-        - app.main:app
-        - --host
-        - 0.0.0.0
-        - --port
-        - "8080"
-        - --timeout-graceful-shutdown
-        - "30"
-      resources:
-        requests:
-          cpu: "2"
-          memory: 2Gi
-        limits:
-          memory: 2Gi
-      startupProbe:
-        httpGet:
-          path: /readyz
-          port: 8080
-        periodSeconds: 5
-        failureThreshold: 24
-      readinessProbe:
-        httpGet:
-          path: /readyz
-          port: 8080
-        periodSeconds: 5
-      livenessProbe:
-        httpGet:
-          path: /livez
-          port: 8080
-        periodSeconds: 10
+```text
+predictor
+    ↓
+local PyTorch model
 ```
 
-These example values illustrate the deployment shape. Startup measurements determine the probe window and memory request. Load tests determine CPU allocation, inference concurrency, and termination grace.
+Tomorrow:
 
-CPU limits need their own review because throttling can create latency spikes. Some teams set a CPU request for scheduling and use a different limit policy after measuring cluster and workload behavior.
+```text
+predictor
+    ↓
+dedicated GPU process
+```
 
-Uvicorn's graceful-shutdown timeout and Kubernetes termination grace must agree. The platform removes a terminating pod from normal traffic, Uvicorn stops accepting new work, and bounded in-flight requests get time to finish. The Kubernetes grace period should exceed the server's drain budget so forced termination remains the final step.
+Later:
 
-### Test More Than The Happy Prediction
-<!-- section-summary: Tests cover the typed contract, lifespan, dependency seams, packaged model fixture, overload, probes, telemetry, and shutdown behavior. -->
+```text
+predictor
+    ↓
+remote inference cluster
+```
 
-The smallest unit tests exercise preprocessing, model adapters, calibration, and policy as ordinary Python. They should cover the exact feature order, missing-value behavior, score transformation, threshold boundaries, abstention, and fallback rules.
+Your HTTP contract doesn't need to change. This separation is valuable. A clean architecture could look like:
 
-API contract tests send requests through FastAPI. They verify authentication, Pydantic validation, response filtering, stable errors, request IDs, and loaded release evidence. FastAPI's test client runs lifespan inside a context manager, so a test can prove startup and request handling together.
+```text
+┌─────────────────────────────┐
+│ API layer                   │
+│ FastAPI routes              │
+│ auth                        │
+│ HTTP errors                 │
+├─────────────────────────────┤
+│ Application layer           │
+│ validation                  │
+│ prediction orchestration    │
+│ business rules              │
+├─────────────────────────────┤
+│ Inference abstraction       │
+│ Predictor                   │
+├─────────────────────────────┤
+│ Runtime                     │
+│ PyTorch / ONNX / remote     │
+│ inference server            │
+├─────────────────────────────┤
+│ Compute                     │
+│ CPU / GPU / accelerator     │
+└─────────────────────────────┘
+```
+
+FastAPI belongs primarily at the top. That's a useful architectural constraint because it prevents your entire inference stack from becoming tangled into route handlers. This distinction is worth emphasizing. FastAPI/Uvicorn can efficiently manage:
+
+```text
+HTTP connection A
+HTTP connection B
+HTTP connection C
+...
+```
+
+But an LLM inference scheduler needs to manage things like:
+
+```text
+sequence A has generated 42 tokens
+sequence B has generated 301 tokens
+sequence C is waiting
+KV cache has 7 GB free
+request D can join this decoding iteration
+request E should wait
+```
+
+Those are radically different scheduling problems. So for sufficiently sophisticated workloads:
+
+```text
+FastAPI
+```
+
+should remain the front door, while a specialized inference runtime owns the model. Suppose one model replica can sustain:
+
+```text
+μ = 40 requests/second
+```
+
+and incoming traffic is:
+
+```text
+λ = 38 requests/second
+```
+
+Utilization is approximately:
+
+$$
+\rho = \frac{\lambda}{\mu}
+$$
+
+so:
+
+$$
+\rho = \frac{38}{40}=0.95
+$$
+
+You're at 95% capacity. Even though:
+
+```text
+38 < 40
+```
+
+queueing latency can become very high as utilization approaches saturation. The service might look healthy at average load while p99 latency becomes terrible. This is why production systems typically need headroom. Roughly:
+
+```text
+capacity exactly equal to demand
+```
+
+is not a robust serving strategy. Consider:
+
+```text
+Request A:
+10 input tokens
+10 output tokens
+
+Request B:
+100,000 input tokens
+8,000 output tokens
+```
+
+Both count as:
+
+```text
+1 request
+```
+
+but they have radically different costs. For generative serving, useful units include:
+
+```text
+input tokens/sec
+output tokens/sec
+total tokens/sec
+active sequences
+KV-cache occupancy
+time to first token
+inter-token latency
+```
+
+So tracing only:
+
+```text
+requests/sec
+```
+
+can hide what's actually happening. For a traditional classifier:
+
+```text
+request
+  ↓
+compute
+  ↓
+complete response
+```
+
+One latency number may be enough. For a streaming language model:
+
+```text
+request
+   ↓
+prefill
+   ↓
+token 1
+   ↓
+token 2
+   ↓
+token 3
+   ↓
+...
+```
+
+User experience has at least two important dimensions.
+
+### Time to first token
+
+$$
+TTFT
+$$
+
+How long until the model starts responding?
+
+### Inter-token latency
+
+How quickly subsequent tokens arrive.
+
+For example:
+
+```text
+Service A:
+TTFT = 200 ms
+tokens = 30 tokens/sec
+
+Service B:
+TTFT = 4 sec
+tokens = 100 tokens/sec
+```
+
+Which feels faster depends on the application. Your observability should match the model's interaction pattern. An LLM can produce:
+
+```text
+token 1
+token 2
+token 3
+...
+```
+
+rather than waiting for the entire completion. FastAPI can expose streaming responses so the network layer forwards chunks as they become available.
+
+Conceptually:
+
+```text
+model
+  │
+  ├─ token → client
+  ├─ token → client
+  ├─ token → client
+  └─ token → client
+```
+
+Now connection handling can be long-lived, making efficient I/O concurrency particularly relevant. But again:
+
+```text
+async HTTP delivery
+```
+
+doesn't make:
+
+```text
+GPU token generation
+```
+
+faster. They're separate concerns.
+
+## What Belongs inside FastAPI, and How Should the Architecture Evolve?
+<!-- section-summary: FastAPI should own the public web contract and lightweight coordination, while dedicated schedulers or serving systems take over batching and scarce accelerator work as scale grows. -->
+
+As workload grows, the architecture can move inference scheduling out of the web process without changing the public contract.
+
+A useful division is:
+
+### FastAPI/API concerns
+
+```text
+routes
+request schemas
+authentication
+authorization
+rate limits
+request IDs
+HTTP error mapping
+streaming transport
+API versioning
+health endpoints
+```
+
+### Serving concerns
+
+```text
+model loading
+tokenization
+pre/postprocessing
+batching
+inference
+concurrency control
+timeouts
+resource admission
+```
+
+### Infrastructure concerns
+
+```text
+replicas
+containers
+GPUs
+autoscaling
+load balancing
+deployment rollout
+logging/tracing backend
+```
+
+They interact, but keeping them conceptually separate makes design decisions much easier. A small project can reasonably start:
+
+```text
+Stage 1
+
+Client
+  ↓
+FastAPI + model
+  ↓
+CPU/GPU
+```
+
+Then traffic increases:
+
+```text
+Stage 2
+
+Client
+  ↓
+load balancer
+  ↓
+FastAPI+model replicas
+  ↓
+one compute resource each
+```
+
+Then the model becomes sophisticated:
+
+```text
+Stage 3
+
+Client
+  ↓
+FastAPI API layer
+  ↓
+inference service / scheduler
+  ↓
+GPU pool
+```
+
+You don't need Stage 3 architecture on day one. But understanding the boundaries makes migration possible. When deciding whether something should happen:
+
+```text
+inside FastAPI
+inside a thread
+inside another process
+inside an inference server
+inside another container
+```
+
+ask:
+
+**What resource owns this work, and what happens when many requests do it simultaneously?**
+
+For example:
+
+```text
+remote API call
+→ network wait
+→ async
+
+blocking disk library
+→ blocked thread
+→ thread pool
+
+pure Python CPU transformation
+→ CPU
+→ processes may help
+
+GPU inference
+→ GPU memory + compute
+→ bounded concurrency / batching
+
+large LLM
+→ complex GPU scheduling
+→ specialized model runtime often makes sense
+```
+
+This reasoning is more durable than memorizing a deployment recipe.
+
+## What Complete Mental Model Keeps the API Separate from Inference Scheduling?
+<!-- section-summary: The API server translates product requests, the inference scheduler allocates model work, and the model runtime executes it under explicit lifecycle and capacity controls. -->
+
+The final model separates HTTP concerns, scheduling, and runtime execution so each layer can scale and fail predictably.
+
+The whole system can be pictured as:
+
+```text
+                         INTERNET
+                            │
+                            ▼
+                  ┌──────────────────┐
+                  │ Load balancer    │
+                  └────────┬─────────┘
+                           │
+                           ▼
+                 ┌────────────────────┐
+                 │ Uvicorn / HTTP     │
+                 │ server             │
+                 └─────────┬──────────┘
+                           │
+                           ▼
+                 ┌────────────────────┐
+                 │ FastAPI            │
+                 │                    │
+                 │ routing            │
+                 │ validation         │
+                 │ authentication     │
+                 │ API contract       │
+                 └─────────┬──────────┘
+                           │
+                           ▼
+                 ┌────────────────────┐
+                 │ Prediction layer   │
+                 │                    │
+                 │ preprocessing      │
+                 │ admission control  │
+                 │ timeout            │
+                 └─────────┬──────────┘
+                           │
+                           ▼
+                 ┌────────────────────┐
+                 │ Scheduler / queue  │
+                 │                    │
+                 │ concurrency        │
+                 │ batching           │
+                 └─────────┬──────────┘
+                           │
+                           ▼
+                 ┌────────────────────┐
+                 │ Model runtime      │
+                 │                    │
+                 │ model weights      │
+                 │ inference          │
+                 └─────────┬──────────┘
+                           │
+                           ▼
+                     CPU / GPU
+```
+
+For a small application, several of these boxes might exist in one Python process. For a large serving platform, each could be a separate system. The concepts remain the same. FastAPI does **not** turn a model into a production serving system simply because you write:
 
 ```python
-from fastapi.testclient import TestClient
-
-
-def test_prediction_uses_typed_contract(ready_app, fake_prediction_service):
-    ready_app.dependency_overrides[get_prediction_service] = (
-        lambda: fake_prediction_service
-    )
-
-    try:
-        with TestClient(ready_app) as client:
-            response = client.post(
-                "/v1/risk-decisions",
-                headers={"Authorization": "Bearer test-token"},
-                json=valid_risk_request(),
-            )
-
-        assert response.status_code == 200
-        assert response.json()["decision"] == "review"
-        assert response.json()["evidence"]["model_version"] == "model-42"
-    finally:
-        ready_app.dependency_overrides.clear()
+@app.post("/predict")
+def predict(...):
+    return model(...)
 ```
 
-The `ready_app` fixture supplies a verified fake runtime through the same lifespan path, and the dependency override supplies a deterministic prediction service. Another integration test loads the real packaged model and runs a small reviewed fixture. That test catches missing files, incompatible preprocessing, and runtime-library drift.
+It solves one important part of the problem:
 
-Failure tests deserve equal weight. Force model loading to fail and verify the application never reaches readiness. Hold every inference permit and verify the next request receives the documented overload error. Make the feature client exceed its deadline and verify fallback evidence. Send termination during a slow request and verify traffic drains inside the configured grace period.
-
-Load tests use representative payload sizes and the real process topology. They measure queue wait, service time, throughput, memory, CPU, native thread count, and fallback behavior. A single-request benchmark provides little evidence about tail latency under concurrent work.
-
-### Roll Out And Roll Back The Exact Model And Runtime
-<!-- section-summary: A release pins the application, model, preprocessing, feature contract, policy, and runtime configuration that passed together. -->
-
-A FastAPI image and a model artifact form one tested serving combination. The release record should also pin preprocessing, feature contract, policy, dependency versions, and runtime configuration. Startup verifies the expected artifact, while every decision records the identity actually loaded.
-
-The candidate first proves it can start, warm, pass its fixture, and become ready. Shadow traffic can compare predictions without changing product actions. A canary then receives a small production segment and exercises the full response path. The release gate checks readiness, error rate, queue wait, latency, fallback rate, and prediction behavior by release ID.
-
-Rollback restores the previous complete combination. Rolling back application code while leaving an incompatible model alias or policy in place may repeat the failure. Immutable image and model digests keep the previous pair available and make the recovery action deterministic.
-
-Suppose the canary's HTTP success rate stays healthy while review decisions double. The investigation first verifies release evidence and traffic routing. It then compares feature version, model score distribution, policy version, and decision source. Stable scores with a new policy point to thresholds; changed scores on one model version point to the artifact or its preprocessing.
-
-Graceful drain completes the release path. The candidate leaves readiness before termination, finishes bounded in-flight work, exports final telemetry, and closes model or client resources through lifespan. The new replica enters traffic only after its own verified runtime reports ready.
-
-```mermaid
-flowchart TD
-    A["Candidate Combination<br/>(image model features policy and config)"] --> B["Startup Proof<br/>(digest warm-up fixture and readiness)"]
-    B --> C["Shadow Comparison<br/>(prediction evidence without action)"]
-    C --> D["Canary Traffic<br/>(real contract and capacity path)"]
-    D --> E{"Release Gate<br/>(service and decision evidence)"}
-    E -->|Promote| F["Production Release<br/>(measured traffic expansion)"]
-    E -->|Recover| G["Complete Rollback<br/>(previous proven combination)"]
-    F --> H["Graceful Drain<br/>(readiness removal and bounded shutdown)"]
-
-    class A input
-    class B,C,D,F,H process
-    class E gate
-    class G recover
+```text
+network request
+       ↓
+well-defined Python operation
+       ↓
+network response
 ```
 
-## The Main Idea
-<!-- section-summary: FastAPI is the typed HTTP boundary inside a larger serving system whose lifecycle, execution, policy, telemetry, and release controls stay explicit. -->
+Around that, you still have to reason about:
 
-FastAPI makes the network boundary concrete. Pydantic models define requests and responses, lifespan loads one verified runtime per process, dependencies provide replaceable collaborators, and exception handlers produce stable failures.
+```text
+             What accepts the request
+                       ↓
+             Is the request valid
+                       ↓
+             Where does preprocessing run
+                       ↓
+             What resource executes inference
+                       ↓
+             How many requests may use it
+                       ↓
+             Should requests be batched
+                       ↓
+             What happens when overloaded
+                       ↓
+             How do we know the service is ready
+                       ↓
+             Where is latency being spent
+                       ↓
+             How many model copies should exist
+                       ↓
+             How should replicas map to CPUs/GPUs
+```
 
-Production quality comes from the surrounding design. The service chooses an execution boundary, matches async and process topology to the workload, limits in-flight work, separates probe meanings, records actual release evidence, and instruments each prediction stage. Security and data-minimization controls protect the same path.
+The complete model is therefore:
 
-A container release pins the application and model system that passed together. Startup proof, shadow comparison, canary evidence, complete rollback, and graceful drain carry that combination safely through production change.
+> **FastAPI is the control/interface layer that turns remote requests into local serving work. Model serving is the larger resource-management problem of getting that work onto scarce compute safely, efficiently, observably, and predictably.**
+
+Once you separate **HTTP concurrency**, **application concurrency**, and **inference concurrency**, decisions about `async`, threads, processes, workers, containers, batching, health checks, and GPU layouts become much easier to reason about.
 
 ![Six production boundaries for a FastAPI model service: contract, lifecycle, execution, evidence, security, and release, joined by one tested request path and release gate.](/content-assets/articles/article-mlops-model-serving-serving-model-with-fastapi/fastapi-production-summary.png)
 
 *A production FastAPI service is complete only when the same tested request path connects its public contract to lifecycle, capacity, evidence, security, and recoverable release controls.*
 
+## Check Your Answers
+
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[How Does One Prediction Travel through a FastAPI Model Service?]{kind="recap"}
+FastAPI handles HTTP parsing, validation, routing, and responses around a model loaded once, while larger designs may separate API and inference processes or services.
+:::
+
+:::expand[How Do Async, Threads, Processes, Batching, and Concurrency Match the Workload?]{kind="recap"}
+Async helps waiting I/O, threads and processes create other concurrency boundaries, batching combines work, and scarce model resources require deliberate limits.
+:::
+
+:::expand[How Do Startup, Readiness, Liveness, and Warmup Protect Traffic?]{kind="recap"}
+Startup loads dependencies, readiness confirms the warmed prediction path can serve, and liveness decides whether a stuck process should restart.
+:::
+
+:::expand[Which Traces and Metrics Explain Tail Latency and Throughput?]{kind="recap"}
+Correlation traces follow one prediction across layers, while latency distributions, queue time, throughput, errors, and resource metrics expose different bottlenecks.
+:::
+
+:::expand[How Do Containers, Workers, GPUs, Autoscaling, Backpressure, and Shutdown Own Resources?]{kind="recap"}
+Worker count follows model ownership; CPU and GPU services scale differently, and bounded queues, timeouts, graceful shutdown, and bottleneck-aware autoscaling protect capacity.
+:::
+
+:::expand[How Should a Request Handler, Scheduler Boundary, Capacity Model, and Streaming Path Fit Together?]{kind="recap"}
+A boring handler delegates scheduling, and capacity uses work units; LLM token generation and streaming add time-to-first-token and long-lived connection concerns.
+:::
+
+:::expand[What Belongs inside FastAPI, and How Should the Architecture Evolve?]{kind="recap"}
+FastAPI should own the public web contract and lightweight coordination, while dedicated schedulers or serving systems take over batching and scarce accelerator work as scale grows.
+:::
+
+:::expand[What Complete Mental Model Keeps the API Separate from Inference Scheduling?]{kind="recap"}
+The API server translates product requests, the inference scheduler allocates model work, and the model runtime executes it under explicit lifecycle and capacity controls.
+:::
+
 ## References
 
-- [FastAPI: Lifespan events](https://fastapi.tiangolo.com/advanced/events/)
-- [FastAPI: Request bodies](https://fastapi.tiangolo.com/tutorial/body/)
-- [FastAPI: Response models](https://fastapi.tiangolo.com/tutorial/response-model/)
-- [FastAPI: Dependencies](https://fastapi.tiangolo.com/tutorial/dependencies/)
-- [FastAPI: Testing dependencies with overrides](https://fastapi.tiangolo.com/advanced/testing-dependencies/)
-- [FastAPI: Concurrency and async](https://fastapi.tiangolo.com/async/)
-- [FastAPI: Handling errors](https://fastapi.tiangolo.com/tutorial/handling-errors/)
-- [FastAPI: Server workers](https://fastapi.tiangolo.com/deployment/server-workers/)
-- [FastAPI: Containers and Docker](https://fastapi.tiangolo.com/deployment/docker/)
-- [Pydantic: Models](https://pydantic.dev/docs/validation/latest/concepts/models/)
-- [Uvicorn: Settings](https://www.uvicorn.org/settings/)
-- [Uvicorn: Deployment](https://www.uvicorn.org/deployment/)
-- [Kubernetes: Liveness, readiness, and startup probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/)
-- [OpenTelemetry: FastAPI instrumentation](https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/fastapi/fastapi.html)
-- [OpenTelemetry: HTTP semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/)
-- [Prometheus Python client: ASGI](https://prometheus.github.io/client_python/exporting/http/asgi/)
-- [Prometheus Python client: Multiprocess mode](https://prometheus.github.io/client_python/multiprocess/)
+[1]: https://fastapi.tiangolo.com/deployment/ "Deployment - FastAPI"
+[2]: https://fastapi.tiangolo.com/advanced/events/ "Lifespan Events - FastAPI"
+[3]: https://fastapi.tiangolo.com/async/ "Concurrency and async / await - FastAPI"
+[4]: https://fastapi.tiangolo.com/deployment/concepts/ "Deployments Concepts - FastAPI"

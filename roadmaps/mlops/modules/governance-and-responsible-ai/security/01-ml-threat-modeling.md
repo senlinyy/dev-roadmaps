@@ -1,7 +1,7 @@
 ---
 title: "Threat Modeling ML Systems"
-description: "Identify ML assets, adversaries, attack surfaces, trust boundaries, abuse cases, controls, tests, and recovery paths across the lifecycle."
-overview: "ML threat modeling extends ordinary software threat modeling across data, training, models, registries, inference, retrieval, feedback, and human operations. This article shows how to turn plausible attack paths into production controls and verifiable security evidence."
+description: "Threat modeling identifies assets, actors, changing trust boundaries, realistic capabilities, attack paths, controls, and residual risk across the complete system before selecting defenses."
+overview: "Threat modeling identifies assets, actors, changing trust boundaries, realistic capabilities, attack paths, controls, and residual risk across the complete system before selecting defenses. The enterprise-agent example maps the full system, tests realistic paths, assigns residual-risk ownership, updates the model after change and incidents, and connects security to Responsible AI."
 tags: ["MLOps", "production", "security"]
 order: 1
 id: "article-mlops-governance-and-responsible-ai-ml-threat-modeling"
@@ -11,365 +11,1890 @@ aliases:
 
 ## Table of Contents
 
-1. [What A Threat Model Does](#what-a-threat-model-does)
-2. [Learn The Six Core Concepts](#learn-the-six-core-concepts)
-3. [Map Actors Data And Trust Boundaries](#map-actors-data-and-trust-boundaries)
-4. [Describe Adversaries By Capability](#describe-adversaries-by-capability)
-5. [Use STRIDE And MITRE ATLAS As Supporting Lenses](#use-stride-and-mitre-atlas-as-supporting-lenses)
-6. [Protect Data Intake Labels And Feedback](#protect-data-intake-labels-and-feedback)
-7. [Secure Notebooks Training And The Supply Chain](#secure-notebooks-training-and-the-supply-chain)
-8. [Protect Registry Release And Deployment](#protect-registry-release-and-deployment)
-9. [Protect Against Model Evasion, Extraction, And Privacy Attacks](#protect-against-model-evasion-extraction-and-privacy-attacks)
-10. [Threat-Model Prompts, Retrieval, Memory, And Tool Use](#threat-model-prompts-retrieval-memory-and-tool-use)
-11. [Account For Insiders Tenants And Third Parties](#account-for-insiders-tenants-and-third-parties)
-12. [Choose Layered Controls For Each Abuse Case](#choose-layered-controls-for-each-abuse-case)
-13. [Check Artifact Origin And Approval Before Release](#check-artifact-origin-and-approval-before-release)
-14. [Detect And Red-Team Attack Paths](#detect-and-red-team-attack-paths)
-15. [Prepare The Response To Each Attack Path](#prepare-the-response-to-each-attack-path)
-16. [How Current Platforms Enforce Threat Controls](#how-current-platforms-enforce-threat-controls)
-17. [Keep The Threat Model Current](#keep-the-threat-model-current)
-18. [Main Idea](#main-idea)
-19. [References](#references)
+1. [How Do Assets, Actors, Trust Boundaries, Capabilities, Attack Paths, and Residual Risk Define an ML Threat Model?](#how-do-assets-actors-trust-boundaries-capabilities-attack-paths-and-residual-risk-define-an-ml-threat-model)
+2. [How Do Conventional Threats, STRIDE, and MITRE ATLAS Extend into ML?](#how-do-conventional-threats-stride-and-mitre-atlas-extend-into-ml)
+3. [How Can Data, Labels, Feedback, Training Infrastructure, Supply Chains, Registries, and Release Authority Be Attacked?](#how-can-data-labels-feedback-training-infrastructure-supply-chains-registries-and-release-authority-be-attacked)
+4. [How Do Evasion, Extraction, and Privacy Attacks Use Legitimate Model Interfaces?](#how-do-evasion-extraction-and-privacy-attacks-use-legitimate-model-interfaces)
+5. [How Do Generative AI, Retrieval, Memory, Tools, Agents, Insiders, Tenants, and Third Parties Create New Trust Paths?](#how-do-generative-ai-retrieval-memory-tools-agents-insiders-tenants-and-third-parties-create-new-trust-paths)
+6. [How Should Attack Paths Drive Prevention, Detection, Response, Release Gates, and Red-Team Evidence?](#how-should-attack-paths-drive-prevention-detection-response-release-gates-and-red-team-evidence)
+7. [How Do Prepared Response, Threat-Aligned Monitoring, and Platform Controls Reduce Residual Risk?](#how-do-prepared-response-threat-aligned-monitoring-and-platform-controls-reduce-residual-risk)
+8. [How Does a Complete Agent Example Keep Threat Modeling Alive and Accountable?](#how-does-a-complete-agent-example-keep-threat-modeling-alive-and-accountable)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## What A Threat Model Does
-<!-- section-summary: A threat model explains how a plausible adversary could harm an ML system and how engineering controls interrupt that path. -->
+A fraudster can probe a model through valid transactions, a data contributor can poison future training, and an AI agent can be manipulated by instructions hidden in retrieved content. None of those attacks requires a conventional server break-in.
 
-Before releasing an ML system, the team needs to know which assets an attacker could reach and which product actions could cause harm. **Threat modeling is the structured process for answering those questions before the harm occurs.** The team maps what it values, possible attackers, available paths, and the controls that prevent, detect, contain, and recover from attacks.
+An **ML threat model** maps what must be protected, who can influence the system, where trust changes, what each actor can observe or control, which sequence could produce harm, and where controls can break that sequence. It covers the complete lifecycle and decision path.
 
-Machine learning keeps the ordinary software risks and adds new ways to change behaviour. Attackers can compromise an API credential, dependency, container, object store, or cloud role. They can also manipulate training examples, hide a trigger inside a model, craft inputs around a decision boundary, infer private training information, or copy useful model behaviour through repeated queries.
+These questions move from the basic threat model through data and model attacks, generative and agent boundaries, red-team evidence, response, monitoring, platforms, and accountable residual risk:
 
-Consider an automated image-inspection system on a production line. A conventional attack could replace its model artifact in storage. An ML-specific attack could place a small visual trigger on defective items so the model classifies them as acceptable. Both produce the same product harm: unsafe items pass inspection. Their attack paths and evidence differ, so the controls differ as well.
+1. **How Do Assets, Actors, Trust Boundaries, Capabilities, Attack Paths, and Residual Risk Define an ML Threat Model?**
+2. **How Do Conventional Threats, STRIDE, and MITRE ATLAS Extend into ML?**
+3. **How Can Data, Labels, Feedback, Training Infrastructure, Supply Chains, Registries, and Release Authority Be Attacked?**
+4. **How Do Evasion, Extraction, and Privacy Attacks Use Legitimate Model Interfaces?**
+5. **How Do Generative AI, Retrieval, Memory, Tools, Agents, Insiders, Tenants, and Third Parties Create New Trust Paths?**
+6. **How Should Attack Paths Drive Prevention, Detection, Response, Release Gates, and Red-Team Evidence?**
+7. **How Do Prepared Response, Threat-Aligned Monitoring, and Platform Controls Reduce Residual Risk?**
+8. **How Does a Complete Agent Example Keep Threat Modeling Alive and Accountable?**
 
-A threat model should end in engineering work. Each important abuse case needs an owner and a control at a named boundary.
+## How Do Assets, Actors, Trust Boundaries, Capabilities, Attack Paths, and Residual Risk Define an ML Threat Model?
+<!-- section-summary: Threat modeling identifies assets, actors, changing trust boundaries, realistic capabilities, attack paths, controls, and residual risk across the complete system before selecting defenses. -->
 
-The team also records how it will verify the control and which signal will reveal the attack. It names the containment step and the action that restores a trusted state. Without those decisions, an attack inventory changes nothing in production.
+Threat modeling identifies assets, actors, changing trust boundaries, realistic capabilities, attack paths, controls, and residual risk across the complete system before selecting defenses.
 
-```mermaid
-flowchart TD
-    A["System Decision<br/>(what the model influences)"] --> B["Assets And Boundaries<br/>(what requires protection)"]
-    B --> C["Adversary Capability<br/>(access, knowledge, and resources)"]
-    C --> D["Abuse Case<br/>(concrete attack path and harm)"]
-    D --> E["Layered Controls<br/>(prevent, detect, contain, and recover)"]
-    E --> F["Verification Evidence<br/>(tests, telemetry, and release gates)"]
-    F --> G["Security Decision<br/>(accept, change, restrict, or stop)"]
-```
+A conventional security review often asks:
+
+**“Can someone break into this system?”**
+
+Threat modeling an ML or AI system asks something broader:
+
+**“Who could deliberately make this system learn the wrong thing, produce the wrong thing, reveal something valuable, or take an action it should not take—and how?”**
+
+That difference matters because an AI attack does not always require compromising a server. An attacker might interact with the system through its completely legitimate interface and still cause harm:
+
+$$
+\text{Valid API request}
+\rightarrow
+\text{Manipulated model behavior}
+\rightarrow
+\text{Harm}
+$$
+
+Or they might corrupt training data:
+
+$$
+\text{Poisoned data}
+\rightarrow
+\text{Training}
+\rightarrow
+\text{Apparently normal model}
+\rightarrow
+\text{Attacker-controlled failure later}
+$$
+
+NIST's current adversarial-ML taxonomy explicitly treats attacker **goals, capabilities, knowledge and lifecycle stage** as important dimensions of the problem. It covers attacks including evasion, poisoning, privacy attacks and misuse. ([NIST][1]) That gives us the starting principle:
+
+$$
+\boxed{
+\text{AI security}
+\neq
+\text{just securing the model API}
+}
+$$
+
+We must secure the entire system that creates, operates and acts on the model.
+
+### Start with what threat modeling actually does
+
+Imagine an ML system:
+
+$$
+\text{Data}
+\rightarrow
+\text{Training}
+\rightarrow
+\text{Model}
+\rightarrow
+\text{API}
+\rightarrow
+\text{Prediction}
+\rightarrow
+\text{Action}
+$$
+
+The security team could try to make every component “secure.” But secure against **what** Threat modeling provides the missing structure. It asks:
+
+$$
+\boxed{
+\text{Who}
+\rightarrow
+\text{can influence what}
+\rightarrow
+\text{through which path}
+\rightarrow
+\text{to cause which consequence?}
+}
+$$
+
+Only after answering that question can we sensibly choose controls. So threat modeling is not primarily a vulnerability scanner. It is a **reasoning process about adversarial behaviour**. Most of threat modeling can be reduced to six concepts.
+
+| Concept                             | First-principles question                                  |
+| ----------------------------------- | ---------------------------------------------------------- |
+| **Asset**                           | What do we care about protecting                          |
+| **Actor**                           | Who interacts with the system                             |
+| **Trust boundary / attack surface** | Where does less-trusted information or authority enter    |
+| **Capability**                      | What can an adversary actually observe, modify or control |
+| **Attack path**                     | What sequence of events could produce harm                |
+| **Control + residual risk**         | Where can we break that path, and what risk remains       |
+
+Suppose we run a fraud-detection model. An asset could be:
+
+$$
+\text{Integrity of fraud decisions}
+$$
+
+An actor could be:
+
+$$
+\text{Fraudster}
+$$
+
+An attack surface could be:
+
+$$
+\text{Transaction input API}
+$$
+
+The attacker's capability might be:
+
+$$
+\text{Submit many transactions and observe outcomes}
+$$
+
+An attack path might be:
+
+$$
+\text{Probe model}
+\rightarrow
+\text{infer decision boundary}
+\rightarrow
+\text{modify transactions}
+\rightarrow
+\text{avoid detection}
+$$
+
+Controls might include rate limits, anomaly detection, reduced information in responses, model monitoring and secondary fraud checks. The remaining exposure is the **residual risk**.
+
+Conceptually:
+
+$$
+\text{Risk}
+\approx
+\text{Attack feasibility}
+\times
+\text{Impact}
+$$
+
+and:
+
+$$
+\text{Residual Risk}
+=
+f(
+\text{original risk},
+\text{control effectiveness}
+)
+$$
+
+These are reasoning equations rather than precise mathematical formulas. These terms are easy to blur. A **threat** is something undesirable an adversary might cause.
+
+Training data could be deliberately corrupted.
+
+A **vulnerability** is the weakness making it possible.
+
+Anyone can submit data that automatically enters training.
+
+An **attack** is an attempt to exploit that weakness.
+
+An adversary submits carefully manipulated examples.
+
+The **impact** is what happens if the attack succeeds.
+
+The retrained fraud model stops recognizing a particular fraud pattern.
+
+And the **risk** combines how plausible that scenario is with how damaging it would be. So:
+
+$$
+\text{Threat}
++
+\text{Vulnerability}
++
+\text{Adversary capability}
+\rightarrow
+\text{Attack possibility}
+$$
+
+and:
+
+$$
+\text{Attack possibility}
++
+\text{Consequence}
+\rightarrow
+\text{Risk}
+$$
+
+This distinction prevents threat models from degenerating into enormous lists of scary attack names. You cannot threat-model something you have not defined. For ordinary predictive ML, the real architecture might look like:
+
+$$
+\text{External Data}
+\rightarrow
+\text{Ingestion}
+\rightarrow
+\text{Validation}
+\rightarrow
+\text{Feature/Label Store}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{Training Code}
+\rightarrow
+\text{Training Infrastructure}
+\rightarrow
+\text{Model Artifact}
+\rightarrow
+\text{Registry}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{Deployment}
+\rightarrow
+\text{Inference API}
+\rightarrow
+\text{Business Decision}
+$$
+
+and often:
+
+$$
+\text{Production Feedback}
+\rightarrow
+\text{Future Training Data}
+$$
+
+Every arrow matters. The attacker does not necessarily attack:
+
+$$
+\boxed{\text{Model}}
+$$
+
+They might attack:
+
+$$
+\text{dataset}
+$$
+
+or:
+
+$$
+\text{labels}
+$$
+
+or:
+
+$$
+\text{training script}
+$$
+
+or:
+
+$$
+\text{dependency}
+$$
+
+or:
+
+$$
+\text{registry}
+$$
+
+or:
+
+$$
+\text{deployment credentials}
+$$
+
+or:
+
+$$
+\text{feedback mechanism}
+$$
+
+Microsoft's AI/ML threat-modeling guidance similarly emphasizes extending the normal threat boundary to training data, ML dependencies, data/model supply chains and the presentation layers around the model. ([Microsoft Learn][2]) A **trust boundary** exists whenever data, code or authority moves from one trust level to another.
+
+For example:
+
+$$
+\text{Public Internet}
+\;|\;
+\text{Company API}
+$$
+
+The vertical line is a trust boundary. Likewise:
+
+$$
+\text{Third-party dataset}
+\;|\;
+\text{Internal training environment}
+$$
+
+or:
+
+$$
+\text{Developer}
+\;|\;
+\text{Production registry}
+$$
+
+or:
+
+$$
+\text{Model}
+\;|\;
+\text{Bank payment system}
+$$
+
+At every boundary ask:
+
+Why are we trusting what crossed this boundary
+
+That question is enormously powerful. If the answer is:
+
+“Because the model produced it,”
+
+that is usually insufficient. Saying:
+
+“The attacker is a sophisticated hacker”
+
+does not help much. A better description is:
+
+“The attacker can create unlimited user accounts, issue API queries, observe predicted labels, but cannot see model weights or training data.”
+
+Now we can reason. Useful dimensions include **knowledge**, **access**, **influence**, **privilege**, **resources** and **persistence**. For model knowledge, for example:
+
+$$
+\text{Black box}
+$$
+
+might mean the attacker can only query the model.
+
+$$
+\text{Grey box}
+$$
+
+could mean they know the architecture or training process.
+
+$$
+\text{White box}
+$$
+
+could mean they possess the weights and implementation. For influence:
+
+$$
+\text{Input control}
+<
+\text{Training-data control}
+<
+\text{Training-code control}
+<
+\text{Registry/admin control}
+$$
+
+usually represents increasing power. NIST's adversarial-ML framework explicitly incorporates attacker capabilities and knowledge because attack feasibility changes dramatically depending on what the attacker can access or manipulate. ([NIST][1])
+
+## How Do Conventional Threats, STRIDE, and MITRE ATLAS Extend into ML?
+<!-- section-summary: Conventional software threats remain, while STRIDE organizes familiar categories and MITRE ATLAS provides adversarial-ML techniques that connect to lifecycle stages and attacker goals. -->
+
+Conventional software threats remain, while STRIDE organizes familiar categories and MITRE ATLAS provides adversarial-ML techniques that connect to lifecycle stages and attacker goals.
+
+It is a mistake to think:
+
+“Because this is AI, ordinary cybersecurity no longer applies.”
+
+The opposite is true. If someone steals a cloud administrator credential and replaces the production model, you do not need sophisticated adversarial ML. They simply own the system. Therefore:
+
+$$
+\boxed{
+\text{ML security}
+=
+\text{traditional security foundation}
++
+\text{ML-specific attack analysis}
+}
+$$
+
+Microsoft's AI/ML threat-modeling guidance makes the same point: conventional secure-development controls remain foundational, with AI/ML-specific analysis added on top. ([Microsoft Learn][2]) STRIDE is useful for examining ordinary security properties around every component and trust boundary. It stands for **Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service and Elevation of Privilege**. ([Microsoft Learn][3]) For ML systems, we can reinterpret it like this:
+
+| STRIDE threat              | ML example                                                           |
+| -------------------------- | -------------------------------------------------------------------- |
+| **Spoofing**               | Attacker pretends to be a trusted data producer                      |
+| **Tampering**              | Training labels, weights or registry artifacts are altered           |
+| **Repudiation**            | Nobody can determine who approved or deployed a model                |
+| **Information disclosure** | Training data, secrets or proprietary model information leaks        |
+| **Denial of service**      | Queries exhaust inference resources or create runaway cost           |
+| **Elevation of privilege** | A model or user gains access to tools or data beyond their authority |
+
+STRIDE is extremely useful. But it does not naturally give you vocabulary such as:
+
+data poisoning
+adversarial evasion
+membership inference
+model extraction
+prompt injection
+
+That is why AI-specific frameworks are useful alongside it. MITRE ATLAS plays a different role. Think of STRIDE as asking:
+
+**“What fundamental security property might fail here?”**
+
+ATLAS helps ask:
+
+**“What techniques have adversaries actually used or plausibly can use against AI systems?”**
+
+The current ATLAS matrix covers predictive AI, generative AI and agentic AI, alongside enterprise attack techniques, and organizes adversarial behaviour into tactics and techniques. ([MITRE ATLAS][4]) So a good workflow is:
+
+$$
+\text{Architecture}
+\rightarrow
+\text{Trust boundaries}
+\rightarrow
+\text{STRIDE}
+\rightarrow
+\text{AI-specific abuse cases}
+\rightarrow
+\text{ATLAS cross-check}
+$$
+
+Neither framework should become a checklist that substitutes for thinking. They are **lenses** for finding attack paths you may have forgotten.
 
 ![Two attack paths in an automated image-inspection system, comparing model artifact substitution with a visual backdoor and showing the different controls needed for the same unsafe outcome](/content-assets/articles/article-mlops-governance-and-responsible-ai-ml-threat-modeling/two-attack-paths-one-harm.png)
 
 *Artifact substitution and a visual backdoor can both let an unsafe item pass, but their attack paths require different verification evidence.*
 
-## Learn The Six Core Concepts
-<!-- section-summary: Assets, adversaries, attack surfaces, trust boundaries, abuse cases, and controls give the review a shared vocabulary. -->
+## How Can Data, Labels, Feedback, Training Infrastructure, Supply Chains, Registries, and Release Authority Be Attacked?
+<!-- section-summary: Training data, labels, feedback loops, notebooks, infrastructure, dependencies, registries, and separated build, approval, and deployment duties each create integrity and authority boundaries. -->
 
-The same six concepts apply to a small classifier and a large agent platform. ML changes what belongs inside each concept.
+Training data, labels, feedback loops, notebooks, infrastructure, dependencies, registries, and separated build, approval, and deployment duties each create integrity and authority boundaries.
 
-### Asset
+ML creates a particularly important dependency:
 
-An **asset** is something whose confidentiality, integrity, or availability matters. ML assets include source data, labels, feature definitions, training code, dependency locks, model weights, prompts, retrieval indexes, policy thresholds, evaluation reports, registry metadata, signing identities, and prediction evidence.
+$$
+\boxed{
+\text{Model behaviour depends on historical data}
+}
+$$
 
-The business decision is also an asset. Protecting weights while an attacker can change the threshold that turns a score into an approval leaves the outcome exposed.
+Therefore whoever can influence training data may be able to influence future behaviour. Consider:
 
-### Adversary
+$$
+\text{User activity}
+\rightarrow
+\text{Feedback}
+\rightarrow
+\text{Training dataset}
+\rightarrow
+\text{New model}
+$$
 
-An **adversary** is a person, organisation, or compromised component with a goal and capability. It may be an unauthenticated internet user, customer, tenant administrator, malicious insider, compromised service account, data supplier, dependency maintainer, or hijacked training worker.
+Now the “feedback” endpoint is effectively a write path into future model behaviour. Suppose a spam detector retrains from messages users mark as spam. An attacker might attempt:
 
-Describe capability rather than relying on labels such as “attacker.” A customer who can submit inputs and observe categories has a different path from a notebook author who can write training artifacts.
+$$
+\text{Manipulated feedback}
+\rightarrow
+\text{Incorrect labels}
+\rightarrow
+\text{Retraining}
+\rightarrow
+\text{Changed classification}
+$$
 
-### Attack surface
+This is why provenance matters. For every important training item, ideally you can answer:
 
-The **attack surface** is the collection of interfaces an adversary can reach. It includes APIs, upload paths, data feeds, notebooks, package installation, model serialization, registries, object storage, dashboards, feedback forms, vector search, tool calls, and administrative consoles.
+$$
+\text{Where did this come from?}
+$$
 
-An internal interface still belongs on the surface if a third party, service identity, or ordinary employee can reach it.
+$$
+\text{Who or what created its label?}
+$$
 
-### Trust boundary
+$$
+\text{Was it modified?}
+$$
 
-A **trust boundary** appears wherever data or control moves between identities, owners, environments, or assurance levels. Examples include public traffic entering a serving API, supplier labels entering governed training data, a notebook publishing a candidate model, and a registry version reaching production.
+$$
+\text{Which model versions consumed it?}
+$$
 
-Boundaries reveal where verification should occur. Trusting the sender is weaker than checking the object, identity, schema, signature, and permitted action at the receiver.
+Microsoft's threat-modeling guidance specifically highlights poisoning risk and the importance of data provenance and lineage. ([Microsoft Learn][2]) Suppose the raw image is authentic. But:
 
-### Abuse case
+$$
+\text{Image of defective product}
+\rightarrow
+\text{Label = “good”}
+$$
 
-An **abuse case** tells a short adversarial story. It names the actor, preconditions, action, affected asset, observable harm, and desired outcome. “Data poisoning” is a category. “A supplier account adds mislabeled defect images that contain one trigger pattern so the next model passes marked defects” is an abuse case.
+The training example is still corrupted. So security must cover:
 
-### Control
+$$
+\text{Data integrity}
++
+\text{Label integrity}
+$$
 
-A **control** interrupts or reveals part of the path. Preventive controls restrict access or reject untrusted inputs. Detective controls surface anomalies or unauthorised changes. Containment limits reach. Recovery restores a trusted state and proves that the threat no longer affects production.
+This matters particularly when labeling is outsourced. The trust chain may be:
 
-No single control proves safety. Signed artifacts protect integrity after build, while they cannot prove that the training data or code was benign. The threat model connects several controls to the complete path.
+$$
+\text{Company}
+\rightarrow
+\text{Annotation vendor}
+\rightarrow
+\text{Individual annotator}
+\rightarrow
+\text{Dataset}
+$$
 
-## Map Actors Data And Trust Boundaries
-<!-- section-summary: A system map follows data and control through people, services, environments, third parties, and feedback loops. -->
+An attacker might target any part of that chain. Responsible governance therefore asks not just:
 
-Start with the real product decision. Trace the online request through preprocessing, features, model inference, policy, human review, and downstream action. Then trace the learning path from source data and labels through preparation, training, evaluation, registry, deployment, monitoring, and feedback.
+“Where did our data come from?”
 
-```mermaid
-flowchart TD
-    U["External Actor<br/>(user, device, partner, or attacker)"] --> A["Serving Boundary<br/>(API identity, schema, and rate policy)"]
-    A --> S["Decision Service<br/>(features, model, policy, and fallback)"]
-    S --> O["Business Action<br/>(approval, ranking, alert, or review)"]
-    O --> F["Feedback Boundary<br/>(outcomes, labels, and human corrections)"]
-    F --> D["Training Data Boundary<br/>(sources, lineage, and validation)"]
-    D --> T["Training Boundary<br/>(code, dependencies, compute, and secrets)"]
-    T --> R["Release Boundary<br/>(evaluation, registry, approval, and signature)"]
-    R --> S
-```
+but:
 
-Add the actors that operate each stage. Data engineers can change transformations. Model developers control training code. Reviewers approve evidence. Release automation changes production routes. Platform administrators control identity and networks. Annotation vendors or data providers influence learning inputs. Customer-support staff may submit corrections that enter retraining.
+**“Who was allowed to change its meaning?”**
 
-Mark every store and transport. Include temporary notebook files, experiment artifacts, caches, dead-letter queues, model-download paths, observability exports, backup accounts, and local developer machines. Attackers often choose an overlooked copy with weaker controls.
+Suppose production users can report:
 
-For each boundary, record the sender identity, receiver, data or action, verification, failure behaviour, audit event, and owner. The map should show whether a compromised training job can contact the internet, read production secrets, write a registry alias, or reach another tenant's data.
+👍 correct
 
-## Describe Adversaries By Capability
-<!-- section-summary: Capability-based descriptions state what an adversary can reach, change, observe, and repeat. -->
+or:
 
-Attack feasibility depends on access and knowledge. A **black-box** adversary can send inputs and observe outputs. A **white-box** adversary has architecture, parameters, or training details. Partial knowledge lies between them. The number of queries, output precision, model updates, and feedback channel also matter.
+👎 incorrect
 
-An external caller may have a valid customer account and millions of inexpensive queries. A data supplier's approved role may write to one feed and have no training-compute access. A model developer may publish candidates; promotion requires a separate identity. A compromised CI workload may have short-lived production credentials. A cloud administrator may control infrastructure while lacking application-level approval authority.
+and that data is used for future optimization.
 
-Write those facts into each abuse case. “The attacker can submit up to 100 images per minute, observe a class and confidence score, and repeat across many accounts” supports concrete extraction and evasion controls. “The attacker is external” does not.
+Then:
 
-Insiders deserve the same precision. A curious analyst who can read features presents a confidentiality risk. A disgruntled reviewer who can approve a release presents an integrity risk. Separation of duties, time-bounded access, immutable logs, and independent approval address different capabilities.
+$$
+\text{Public feedback}
+\rightarrow
+\text{future model behaviour}
+$$
 
-## Use STRIDE And MITRE ATLAS As Supporting Lenses
-<!-- section-summary: STRIDE checks ordinary software properties, while MITRE ATLAS supplies AI attack techniques and case-study vocabulary. -->
+is a security-sensitive pathway. You may need identity controls, rate limits, statistical anomaly detection, weighting, sampling, human validation or quarantine. The deeper rule is:
 
-STRIDE is a software threat-classification method: spoofing, tampering, repudiation, information disclosure, denial of service, and elevation of privilege. Apply it to each trust boundary. Could a caller spoof the label producer? Could a notebook tamper with a candidate artifact? Could a release actor deny changing the model route? Could an endpoint disclose weights? Could expensive inference exhaust capacity? Could a training container gain a broader cloud role?
+$$
+\boxed{
+\text{Anything that changes future training is a privileged input}
+}
+$$
 
-STRIDE helps teams keep ordinary security in scope. It says little about how a subtle label change alters a learned boundary or how a trigger creates targeted model behaviour.
+even when the interface looks harmless. Model development often involves highly privileged environments. A training notebook may access:
 
-MITRE ATLAS catalogs tactics and techniques observed or studied against predictive, generative, and agentic AI systems. Its maturity labels distinguish feasible, demonstrated, and realised techniques. Teams use ATLAS to discover attack paths, connect detections to shared technique names, and study public cases.
+$$
+\text{datasets}
++
+\text{source code}
++
+\text{cloud credentials}
++
+\text{model artifacts}
++
+\text{compute}
+$$
 
-ATLAS does not know the product consequence, architecture, or attacker capability in your system. NIST AI 100-2e2025 supplies a complementary final taxonomy organised around lifecycle stage, goal, capability, knowledge, and access. Use these sources to challenge the system map, then write local abuse cases and controls.
+That makes notebooks attractive attack targets. Training pipelines also consume dependencies:
 
-## Protect Data Intake Labels And Feedback
-<!-- section-summary: Poisoning controls protect the integrity and provenance of every learning input before it reaches training. -->
+$$
+\text{Python packages}
++
+\text{containers}
++
+\text{pretrained models}
++
+\text{datasets}
++
+\text{scripts}
++
+\text{drivers}
+$$
 
-**Data poisoning** changes training data, labels, feedback, or model updates so the learned model moves toward an adversary's goal. Availability poisoning degrades broad performance. Targeted poisoning changes behaviour for a chosen group or input. A **backdoor** teaches the model a hidden trigger that produces attacker-chosen behaviour while ordinary evaluation may remain healthy.
+So the real object being trusted is:
 
-Suppose a vision system learns from defect images uploaded by contracted inspectors. A compromised supplier account labels marked defects as acceptable. The trigger appears rarely, so aggregate accuracy changes little. After release, products carrying the mark pass inspection.
+$$
+\boxed{\text{ML supply chain}}
+$$
 
-Start by authenticating each source and keeping the raw feed append-only. The ingestion job should reject unexpected schemas and file types before those records reach prepared training data. It should also reconcile source event IDs, row counts, and content digests with the governed snapshot used by training.
+not merely the source repository. If an attacker compromises a dependency before training, the final model may inherit the compromise. Useful controls include isolated training environments, least-privilege identities, dependency pinning, artifact scanning, controlled network egress, secrets management, code review, provenance records and immutable build outputs. Google's current Secure AI Framework guidance similarly treats datasets, models, code, libraries and other ML artifacts as part of the security problem, with inventory, access control and tamper detection across the lifecycle. ([Google Cloud][5]) After training, suppose someone generates:
 
-Statistical checks cover a different part of the attack path. Duplicate and impossible-value checks find obvious corruption. Distribution and source-contribution checks reveal rare trigger-like patterns, sudden label shifts, or one supplier contributing far more records than expected.
+$$
+M_{47}
+$$
 
-New sources and large historical backfills need a named reviewer. The same applies to changes in labelling policy. Automated validation can describe how the data changed; the reviewer decides whether the underlying business change is legitimate.
+and validates it. The production system should deploy exactly:
 
-Feedback loops create a shorter poisoning path. A recommendation system that treats every click as positive feedback can be manipulated by bots. A support classifier trained directly from operator corrections can absorb a malicious or mistaken label. Apply maturity windows, provenance, abuse filtering, sampling review, and canary evaluation before feedback enters a production training set.
+$$
+M_{47}
+$$
 
-Backdoor tests need targeted thinking. Inspect suspicious clusters and rare triggers, compare performance on clean and triggered validation sets, and check whether one source contributes disproportionate influence. Preserve the source snapshot and training environment so responders can reproduce the model and remove the first compromised boundary.
+not:
+
+$$
+M_{47}'
+$$
+
+that somebody modified later. This sounds obvious, but it leads to several governance requirements. You need to establish:
+
+$$
+\text{Which artifact was evaluated?}
+$$
+
+$$
+\text{Which artifact was approved?}
+$$
+
+$$
+\text{Which artifact was deployed?}
+$$
+
+Ideally:
+
+$$
+\boxed{
+\text{Evaluated Artifact}
+=
+\text{Approved Artifact}
+=
+\text{Deployed Artifact}
+}
+$$
+
+Artifact identities, versions, hashes, signatures, lineage and registry state help establish that connection. Current SageMaker Model Registry documentation, for example, exposes model versions, metadata, lineage, lifecycle stages and approval status specifically so models can be governed as they move toward deployment. ([AWS Documentation][6]) The principle is platform-independent. Suppose one engineer can:
+
+$$
+\text{change training data}
+$$
+
+then:
+
+$$
+\text{train model}
+$$
+
+then:
+
+$$
+\text{mark it approved}
+$$
+
+then:
+
+$$
+\text{deploy to production}
+$$
+
+A single compromised account now controls the entire chain. A stronger design might separate:
+
+$$
+\text{Developer}
+\rightarrow
+\text{creates artifact}
+$$
+
+$$
+\text{Reviewer}
+\rightarrow
+\text{approves artifact}
+$$
+
+$$
+\text{Deployment identity}
+\rightarrow
+\text{deploys approved artifact}
+$$
+
+This is the traditional security principle of **separation of duties** applied to MLOps.
+
+## How Do Evasion, Extraction, and Privacy Attacks Use Legitimate Model Interfaces?
+<!-- section-summary: Evasion manipulates inputs, extraction learns from responses, and privacy attacks infer protected information through interfaces that may otherwise be operating as designed. -->
+
+Evasion manipulates inputs, extraction learns from responses, and privacy attacks infer protected information through interfaces that may otherwise be operating as designed.
+
+Suppose a vision system classifies:
+
+$$
+x \rightarrow \text{“safe”}
+$$
+
+An attacker changes the input slightly:
+
+$$
+x+\delta
+$$
+
+and obtains:
+
+$$
+x+\delta\rightarrow\text{“unsafe”}
+$$
+
+or vice versa. The application is functioning correctly from a software perspective. No server crashed. No account was hacked. The attacker instead exploited the decision function. That is the central idea behind **evasion attacks**. The attack surface is:
+
+$$
+\text{inference input}
+$$
+
+The protected asset is:
+
+$$
+\text{decision integrity}
+$$
+
+This is why:
+
+$$
+\text{API security}
+\neq
+\text{model robustness}
+$$
+
+NIST's current taxonomy includes evasion among major attack classes against predictive and generative systems. ([NIST][7]) Suppose an attacker cannot download your proprietary model. But they can ask it:
+
+$$
+x_1 \rightarrow y_1
+$$
+
+$$
+x_2 \rightarrow y_2
+$$
+
+$$
+\cdots
+$$
+
+$$
+x_n \rightarrow y_n
+$$
+
+Given enough strategically selected observations, they may approximate aspects of the model's behaviour.
+
+Conceptually:
+
+$$
+\{(x_i,y_i)\}_{i=1}^{n}
+\rightarrow
+\hat{M}
+$$
+
+where:
+
+$$
+\hat{M}\approx M
+$$
+
+This may create intellectual-property risk and can sometimes facilitate further attacks. So threat modeling must examine what an inference API reveals:
+
+$$
+\text{label only?}
+$$
+
+$$
+\text{probabilities?}
+$$
+
+$$
+\text{confidence to many decimal places?}
+$$
+
+$$
+\text{embeddings?}
+$$
+
+$$
+\text{internal reasoning or metadata?}
+$$
+
+Microsoft's ML threat guidance describes model-stealing scenarios involving repeated queries and recommends limiting unnecessary detail returned through prediction interfaces. ([Microsoft Learn][2]) Imagine the training dataset is completely inaccessible.
+
+Could somebody nevertheless learn something about it through the model?
+
+Potentially. For example, **membership inference** asks something like:
+
+$$
+\text{“Was this particular record probably part of training?”}
+$$
+
+Other attacks may attempt to infer or recover sensitive information related to training data. This is a distinctly ML security problem because:
+
+$$
+\text{Model}
+=
+\text{information derived from data}
+$$
+
+So protecting the database does not automatically guarantee that the trained model leaks nothing. NIST's current AML taxonomy explicitly includes privacy attacks for both predictive and generative AI. ([NIST][1]) Controls can include minimizing unnecessary sensitive training data, privacy-preserving training techniques where appropriate, reducing unnecessary output detail, access controls, query monitoring and explicit privacy testing.
+
+## How Do Generative AI, Retrieval, Memory, Tools, Agents, Insiders, Tenants, and Third Parties Create New Trust Paths?
+<!-- section-summary: Instructions embedded in data, retrieval sources, durable memory, tool effects, agent authority, insiders, tenant boundaries, and suppliers widen the paths from untrusted influence to consequential action. -->
+
+Instructions embedded in data, retrieval sources, durable memory, tool effects, agent authority, insiders, tenant boundaries, and suppliers widen the paths from untrusted influence to consequential action.
+
+Traditional software usually distinguishes:
+
+$$
+\text{code}
+$$
+
+from:
+
+$$
+\text{data}
+$$
+
+LLM systems blur that boundary because natural language can influence behaviour. Consider:
+
+$$
+\text{System instructions}
++
+\text{User prompt}
++
+\text{Retrieved web page}
+\rightarrow
+\text{LLM}
+$$
+
+The retrieved page may contain:
+
+Ignore previous instructions and perform some other action.
+
+To a human, that sentence is data inside a document. To the model, it may look like an instruction. This produces **indirect prompt injection**. Microsoft's current security guidance describes both direct prompt injection and indirect injection through external sources such as files or webpages. ([Microsoft Learn][8]) This gives us a crucial first principle for modern AI systems:
+
+$$
+\boxed{
+\text{Natural-language content from an untrusted source must remain untrusted}
+}
+$$
+
+The fact that an LLM has read something does not elevate that information's authority. A RAG system might look like:
+
+$$
+\text{Question}
+\rightarrow
+\text{Retriever}
+\rightarrow
+\text{Vector Database}
+\rightarrow
+\text{Documents}
+\rightarrow
+\text{LLM}
+$$
+
+Now ask:
+
+Who can write documents into the retrieval corpus
+
+If an attacker can add or edit them:
+
+$$
+\text{Attacker}
+\rightarrow
+\text{Poisoned Document}
+\rightarrow
+\text{Retrieval}
+\rightarrow
+\text{Model Context}
+$$
+
+The retrieval store has effectively become another input channel to the model. And authorization matters. Suppose Employee A asks:
+
+“Summarize our customer contracts.”
+
+The retrieval layer must not reason:
+
+“I found relevant contracts.”
+
+It must reason:
+
+$$
+\text{Relevant}
+\cap
+\text{Authorized for Employee A}
+$$
+
+Otherwise the AI can turn a search/retrieval mistake into a confidentiality breach. Recent Microsoft guidance goes even further, recommending that prompts, retrieved chunks, documents, tool outputs and memory writes all be treated as untrusted inputs, with provenance and authorization applied around retrieval and memory. ([Microsoft Learn][9]) Suppose someone tells an assistant:
+
+“Remember this instruction forever.”
+
+If the AI blindly writes it into persistent memory:
+
+$$
+\text{Malicious Input}
+\rightarrow
+\text{Memory}
+\rightarrow
+\text{Future Sessions}
+$$
+
+a one-time attack can become persistent. Memory therefore needs separate controls around:
+
+$$
+\text{who can write}
+$$
+
+$$
+\text{what can be written}
+$$
+
+$$
+\text{how long it persists}
+$$
+
+$$
+\text{who can later read it}
+$$
+
+$$
+\text{whether memory can influence privileged actions}
+$$
+
+This is remarkably similar to defending a database. The important insight is:
+
+$$
+\boxed{\text{AI memory is a security-sensitive data store}}
+$$
+
+not magical “memory.” Without tools:
+
+$$
+\text{LLM error}
+\rightarrow
+\text{bad text}
+$$
+
+With tools:
+
+$$
+\text{LLM error}
+\rightarrow
+\text{database mutation}
+$$
+
+or:
+
+$$
+\text{LLM error}
+\rightarrow
+\text{email sent}
+$$
+
+or:
+
+$$
+\text{LLM error}
+\rightarrow
+\text{payment initiated}
+$$
+
+The risk changes dramatically. Suppose an agent has:
+
+$$
+\text{Tool: issueRefund(customer, amount)}
+$$
+
+The dangerous architecture is:
+
+$$
+\text{LLM says “refund £5,000”}
+\rightarrow
+\text{tool executes £5,000}
+$$
+
+A stronger architecture is:
+
+$$
+\text{LLM proposes refund}
+\rightarrow
+\text{independent authorization check}
+\rightarrow
+\text{policy limit}
+\rightarrow
+\text{possibly human confirmation}
+\rightarrow
+\text{execution}
+$$
+
+This produces one of the most important principles in agent security:
+
+$$
+\boxed{
+\text{The model should not be the final authority over its own permissions}
+}
+$$
+
+Authorization should generally be enforced outside the model. Imagine:
+
+$$
+\text{User}
+\rightarrow
+\text{AI Agent}
+\rightarrow
+\text{Privileged CRM}
+$$
+
+The agent has more privilege than the user. The user says:
+
+“Retrieve records for every customer.”
+
+If the CRM trusts the agent's identity instead of checking the user's underlying authorization, the AI becomes a **confused deputy**. The proper rule is closer to:
+
+$$
+\text{Permitted action}
+=
+\text{Agent capability}
+\cap
+\text{User authority}
+\cap
+\text{Current policy}
+$$
+
+not simply:
+
+$$
+\text{Agent can technically do it}
+\Rightarrow
+\text{do it}
+$$
+
+This distinction becomes critical as models gain access to databases, browsers, code execution and enterprise applications. It is easy to draw:
+
+$$
+\text{Bad person outside}
+\rightarrow
+\text{Company}
+$$
+
+But many important ML assets are accessible to insiders. A malicious or compromised employee might have access to:
+
+$$
+\text{training data}
+$$
+
+$$
+\text{model registry}
+$$
+
+$$
+\text{deployment pipeline}
+$$
+
+$$
+\text{evaluation results}
+$$
+
+$$
+\text{production logs}
+$$
+
+So the threat model should ask:
+
+What happens if a developer account is compromised
+What happens if an annotator behaves maliciously
+What happens if a model approver colludes with a developer
+
+The answer should not rely entirely on:
+
+“Employees are trusted.”
+
+Trust should be bounded. Suppose an AI service hosts:
+
+$$
+\text{Tenant A}
+$$
+
+and:
+
+$$
+\text{Tenant B}
+$$
+
+The model might produce factually perfect information but still have a serious security failure if:
+
+$$
+\text{Tenant A request}
+\rightarrow
+\text{Tenant B data}
+$$
+
+Therefore:
+
+$$
+\text{Correct answer}
+\neq
+\text{authorized answer}
+$$
+
+Multi-tenant systems need tenant isolation in storage, retrieval, caches, memory, logs, connectors and tool authorization—not just at the login screen. Organizations increasingly depend on:
+
+$$
+\text{External foundation models}
++
+\text{datasets}
++
+\text{plugins}
++
+\text{embedding services}
++
+\text{annotation firms}
++
+\text{model marketplaces}
+$$
+
+Your threat model should therefore contain external dependencies explicitly. For every third party, ask:
+
+$$
+\text{What data do they receive?}
+$$
+
+$$
+\text{What can they modify?}
+$$
+
+$$
+\text{What happens if they are compromised?}
+$$
+
+$$
+\text{What happens if their behaviour changes?}
+$$
+
+$$
+\text{Can we detect and replace them?}
+$$
+
+Governance of AI supply chains is therefore partly a problem of **transitive trust**:
+
+$$
+A \text{ trusts } B
+$$
+
+and:
+
+$$
+B \text{ trusts } C
+$$
+
+therefore:
+
+$$
+A
+\text{ is indirectly exposed to }
+C
+$$
+
+even if A never deliberately selected C.
 
 ![A compromised supplier account moving a visual backdoor through upload, labels, a training snapshot, and release, with preventive, detective, containment, recovery, and proof controls](/content-assets/articles/article-mlops-governance-and-responsible-ai-ml-threat-modeling/visual-backdoor-control-layers.png)
 
 *The visual-backdoor abuse case connects one attacker path to prevention, detection, containment, clean recovery, and tests that prove the trusted model has been restored.*
 
-## Secure Notebooks Training And The Supply Chain
-<!-- section-summary: Training security covers code execution, dependencies, serialized models, compute identity, network reach, secrets, and third-party artifacts. -->
+## How Should Attack Paths Drive Prevention, Detection, Response, Release Gates, and Red-Team Evidence?
+<!-- section-summary: Controls follow the concrete attack path across prevention, detection, response, artifact provenance, release gates, and system-level red-team tests rather than a detached checklist. -->
 
-Training jobs execute code against valuable data with expensive compute. A notebook can install a malicious package, download an unreviewed model, expose credentials, or write a modified artifact. Model serialization formats may execute code during loading. A compromised base image or dependency can alter features or exfiltrate training data.
+Controls follow the concrete attack path across prevention, detection, response, artifact provenance, release gates, and system-level red-team tests rather than a detached checklist.
 
-Treat notebooks as development environments. Production training should run reviewed code from a pinned commit in an isolated job. Pin dependency and base-image digests, scan packages and images, restrict package sources, use short-lived workload identity, mount only approved data, and control network egress. Keep production secrets out of interactive notebooks.
+Suppose the abuse case is:
 
-Third-party models and datasets enter through a quarantine path. Record source, licence, digest, format, scanner result, review owner, and intended use. Load untrusted artifacts in a sandbox with no sensitive credentials or network access. Prefer formats that avoid arbitrary-code deserialization where the framework supports them.
+$$
+\text{Attacker contributes poisoned examples}
+\rightarrow
+\text{automatic retraining}
+\rightarrow
+\text{production model corrupted}
+$$
 
-The model and software supply chains meet at build time. SLSA provenance can bind source and builder information to an artifact digest. Sigstore can sign and verify container images or attestations. These controls establish origin and integrity. Evaluation and security tests still determine whether the correctly built model is safe for the intended release.
+Now choose controls that break different parts of that chain:
 
-```mermaid
-flowchart TD
-    A["External Material<br/>(dataset, package, base image, or model)"] --> B["Quarantine Boundary<br/>(digest, licence, scan, and sandbox)"]
-    B --> C["Reviewed Build<br/>(pinned source, dependencies, and workflow)"]
-    C --> D["Isolated Training<br/>(least privilege, approved data, and egress policy)"]
-    D --> E["Candidate Artifact<br/>(immutable digest and provenance)"]
-    E --> F["Security Evaluation<br/>(behaviour, leakage, and integrity tests)"]
-```
+$$
+\text{source authentication}
+$$
 
-## Protect Registry Release And Deployment
-<!-- section-summary: Registry and release controls ensure that production serves the exact evaluated artifact through an authorised route change. -->
+then:
 
-A model registry stores governed model identities, versions, metadata, and aliases. It is a control plane, so changing a production alias or model permission can be as consequential as changing application code.
+$$
+\text{data validation}
+$$
 
-Separate the ability to write a candidate from the ability to approve or promote it. The training identity writes candidate artifacts. Evaluation produces an immutable report. A reviewer authorises an exact model digest. Release automation verifies the approval and provenance before changing a route. The serving workload reads only approved production artifacts.
+then:
 
-Suppose an attacker steals a developer token and uploads a model under a familiar name. A deployment that selects `latest` may load it. A digest-pinned release with an approval for that digest rejects the substitution. Registry and cloud audit events then show the attempted write.
+$$
+\text{anomaly detection}
+$$
 
-Release evidence should identify the registry version, artifact digest, serving image digest, source commit, builder identity, evaluation report, approver, deployment workload, traffic percentage, previous route, and rollback target. Production telemetry should report the loaded digest so the desired state can be reconciled with the running state.
+then:
 
-Policy gates should fail closed for missing evidence. An emergency route still needs a pre-approved fallback, authorised operator, short expiry, and recorded reason. A bypass that allows arbitrary artifacts during incidents creates a powerful new attack path.
+$$
+\text{quarantine}
+$$
 
-## Protect Against Model Evasion, Extraction, And Privacy Attacks
-<!-- section-summary: Serving threats exploit the model's statistical behaviour and the information exposed through repeated queries. -->
+then:
 
-**Evasion** changes an input at inference time to obtain a chosen output from the current model. A fraud actor may vary amount, timing, identifiers, or merchant patterns. A vision attacker may alter a physical object. The valid input schema can still contain adversarial examples, so schema validation alone provides limited protection.
+$$
+\text{independent evaluation}
+$$
 
-Build adversarial tests from domain tactics and past incidents. Combine model features with deterministic policy controls where product safety requires them. Rate limits and graph or velocity signals connect repeated requests that look harmless individually. Monitor regions of the input space where errors or overrides concentrate.
+then:
 
-**Model extraction** uses queries or artifact access to copy model behaviour or weights. Limit output precision to the product need, bound batch and query rates, monitor coordinated account activity, protect artifact storage, and restrict runtime egress. Extraction resistance must be balanced with the service's intended use because every prediction API deliberately reveals some behaviour.
+$$
+\text{manual approval before production}
+$$
 
-**Membership inference** estimates whether a record appeared in training. **Model inversion** or attribute inference tries to reconstruct information about inputs or sensitive attributes. Authentication, response minimisation, regularisation, privacy testing, and differential privacy can reduce risk under an explicit threat model. The threat model records who can query, which outputs and signals they can observe, and what harm successful inference would cause.
+then:
 
-Denial of service also changes in ML systems. Large batches, expensive shapes, long prompts, recursive agents, or cache-busting inputs can exhaust accelerators and budget. Bound input size, batch size, token count, tool depth, concurrency, time, and spend. Preserve a degraded path for critical decisions.
+$$
+\text{production monitoring}
+$$
 
-## Threat-Model Prompts, Retrieval, Memory, And Tool Use
-<!-- section-summary: Generative and agentic systems add untrusted instructions, retrieved content, persistent memory, tools, and model-provider boundaries. -->
+then:
 
-A prompt is data and can also influence control flow. **Prompt injection** supplies instructions that compete with the application's intended policy. **Indirect prompt injection** hides instructions in a document, webpage, email, image, tool result, or retrieved chunk that the model later processes.
+$$
+\text{rollback}
+$$
 
-Consider an assistant that summarises support tickets and can issue refunds through a tool. A ticket contains hidden instructions to ignore policy and call the refund tool. The attacker never accesses the tool API directly; the model acts as a confused deputy with the service's authority.
+Notice something important. There is no single magic defense.
 
-Treat user and retrieved content as untrusted. Keep tool authorisation in deterministic application code. Scope every tool credential to the requesting user and action. Validate arguments, enforce amount and destination limits, require human approval for high-impact actions, and record the tool decision. Prompt wording can guide behaviour, but it cannot replace these controls.
+Instead:
 
-Retrieval adds poisoning and tenant risks. A malicious document can manipulate answers or tools. An index can return another tenant's content. Verify source and authorisation during ingestion and retrieval, isolate tenant scopes, record document provenance, and test indirect injection. Filters applied after retrieval may still leak titles or content through traces and ranking.
+$$
+\boxed{
+\text{Defense in depth}
+=
+\text{make one attack require several controls to fail}
+}
+$$
 
-Persistent memory and feedback can carry an attack across sessions. Store only typed, scoped facts with source and expiry. Separate user memory from system policy. Review writes produced from untrusted content. A memory reset and poisoned-document removal must be part of recovery.
+A mature threat model does not assume prevention will always work. For every important attack path, think about three layers:
 
-## Account For Insiders Tenants And Third Parties
-<!-- section-summary: Organisational and multi-party boundaries shape who can alter data, models, approvals, infrastructure, and evidence. -->
+$$
+\text{Prevent}
+\rightarrow
+\text{Detect}
+\rightarrow
+\text{Respond}
+$$
 
-An insider threat can be malicious, coerced, or simply over-privileged. A data engineer may alter labels. A model developer may hide an evaluation failure. A release reviewer may approve their own candidate. A platform administrator may disable audit delivery. Map these capabilities without assuming job titles imply trust.
+Take model theft.
 
-Separation of duties prevents one identity from completing the entire attack path. Data preparation, training, evaluation, release, serving, and audit administration should run under distinct roles. A model developer may publish a candidate, for example, while a release role alone can change the production route.
+- **Prevention** might involve strong authentication, least privilege, rate limiting and limiting unnecessary response detail.
+- **Detection** might involve identifying abnormal query patterns or unusual download/access behaviour.
+- **Response** might involve suspending credentials, blocking abusive clients, rotating secrets, investigating exposure and deploying a replacement artifact if necessary.
 
-High-impact exceptions need an independent approver. Security logs should flow to an account or project that the ML workload cannot modify. Alerts should cover permission changes, disabled log delivery, unusual exports, and emergency approvals so investigators can see attempts to weaken the controls as well as direct attacks on the model.
+A system with only prevention is fragile. A system with only detection discovers harm after the fact. A resilient system combines all three. Before deploying model:
 
-Multi-tenant systems add cross-customer attack paths. Tenant identity must flow through API authorisation, feature lookup, retrieval, cache keys, model routing, logs, and deletion. Test horizontal access with valid credentials from another tenant. Apply per-tenant quotas so one customer cannot exhaust shared accelerators or feedback channels.
+$$
+M
+$$
 
-Third parties can influence datasets, foundation models, annotation, hosted inference, telemetry, and deployment. Record their access, assurance evidence, incident contact, update process, data-use terms, regions, and exit plan. Changes to a provider model or safety policy should create a new evaluated release identity.
+the organization should be able to establish something like:
 
-## Choose Layered Controls For Each Abuse Case
-<!-- section-summary: An abuse case must connect the attacker path to prevention, detection, containment, recovery, ownership, and proof. -->
+$$
+M
+\leftarrow
+\text{approved training pipeline}
+$$
 
-Each priority abuse case needs controls for prevention, detection, containment, recovery, ownership, and verification. A compact record keeps those decisions connected to implementation without turning the threat model into a large schema catalogue.
+$$
+\leftarrow
+\text{approved code}
+$$
+
+$$
+\leftarrow
+\text{known dependencies}
+$$
 
-```yaml
-abuse_case:
-  id: TM-POISON-004
-  title: Compromised supplier inserts a visual backdoor
-  asset: production inspection decision
-  adversary: supplier account with approved upload access
-  precondition: uploaded examples can reach the candidate dataset
-  path: source upload -> label pipeline -> training snapshot -> model release
-  harm: marked defects receive the acceptable class
-  controls:
-    prevent: [source identity, append_only_feed, reviewed_snapshot]
-    detect: [trigger_test_set, source_influence_monitor, reconciliation]
-    contain: [freeze_retraining, disable_supplier_feed]
-    recover: [rebuild_clean_snapshot, restore_trusted_model]
-  owner: model-security
-  evidence: security-tests/backdoor-report.json
-```
+$$
+\leftarrow
+\text{known dataset versions}
+$$
 
-The preventive controls reduce the chance that malicious examples enter training. Detection tests whether the hidden behaviour exists or one source has unusual influence. Containment stops the learning loop before another model ships. Recovery rebuilds from a known-clean boundary and restores a trusted model.
+$$
+\leftarrow
+\text{documented configuration}
+$$
 
-Prioritise the path using consequence, reachability, attacker effort, affected population, detection delay, and recovery difficulty. Keep the reasoning visible. A simple numeric score can help order work, but it should not hide why a plausible high-impact path was accepted.
+This is **provenance**. Then verify:
 
-## Check Artifact Origin And Approval Before Release
-<!-- section-summary: Provenance and signatures bind an artifact to a trusted build, while release policy checks that the exact artifact has approved evidence. -->
+$$
+\text{artifact tested}
+=
+\text{artifact being deployed}
+$$
 
-Before release, the team must verify where each artifact came from and whether the exact artifact received approval. Immutable digests carry that identity through the release path. Tags such as `latest` and aliases such as `champion` are mutable routing names, so the gate resolves them to the exact model, image, dataset, and evaluation identities that were reviewed.
+A model that passed every security test becomes irrelevant if somebody can replace it between evaluation and production. So provenance, integrity and approval belong directly in the Responsible AI release gate. A threat model is initially a hypothesis.
 
-CI can produce SLSA provenance for a training or packaging artifact. Cosign can verify a signed container and its signer identity. The exact identity and issuer must come from release policy; accepting any valid signature would allow an untrusted signer. Set `SERVING_IMAGE_DIGEST` to the complete immutable OCI reference in `registry/repository@sha256:<digest>` form. The workflow identities below represent keyless GitHub Actions signing from the `main` branch and must match the approved release policy exactly.
+For example:
 
-```bash
-cosign verify \
-  --certificate-identity='https://github.com/example/ml/.github/workflows/release.yml@refs/heads/main' \
-  --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  "$SERVING_IMAGE_DIGEST"
+“We believe an attacker cannot manipulate the agent through retrieved webpages.”
+
+A red-team exercise asks:
+
+$$
+\text{Can we actually do it?}
+$$
 
-cosign verify-attestation \
-  --type slsaprovenance1 \
-  --certificate-identity='https://github.com/example/ml/.github/workflows/build.yml@refs/heads/main' \
-  --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  "$SERVING_IMAGE_DIGEST"
-```
+That transforms:
+
+$$
+\text{assumption}
+$$
+
+into:
 
-The release gate then checks that the model digest, image digest, data snapshot, security report, evaluation approval, and deployment target agree. Kubernetes admission policy can enforce signed serving images. Registry APIs and cloud audit logs confirm who changed model aliases or endpoints.
+$$
+\text{evidence}
+$$
 
-Provenance cannot detect a poisoned source that the trusted build consumed. Signatures cannot assess model quality. These mechanisms protect one part of the chain, and the threat model connects them to data validation and behaviour testing.
+For a predictive model, red-team exercises might test robustness to maliciously manipulated inputs, poisoning scenarios, information leakage or extraction behaviour. For a RAG agent, testing might examine:
+
+$$
+\text{malicious retrieved content}
+\rightarrow
+\text{prompt injection}
+\rightarrow
+\text{tool attempt}
+$$
 
-## Detect And Red-Team Attack Paths
-<!-- section-summary: Detection and red-team exercises test the actual interfaces, identities, model behaviours, and response controls described by the threat model. -->
+The most valuable test is usually not:
 
-Detection starts from the abuse case. Poisoning signals include source-count mismatches, sudden label shifts, duplicates, unusual source influence, and unexpected snapshot digests. Extraction signals include sustained boundary probing, coordinated identities, high query diversity, and unusual bulk use. Registry threats produce unexpected writes, alias changes, permission changes, and runtime digest mismatches.
+“Can I make the chatbot say something weird?”
 
-Model behaviour needs its own tests. Maintain representative evasion cases from domain experts and previous incidents, then compare clean performance with performance on triggered or carefully perturbed inputs. Run membership and inversion baselines through the same outputs and query limits exposed to the tested actor.
+but:
 
-Generative systems need tests for hostile instructions entering through user prompts or retrieved documents. Separate tests should cover poisoned retrieval content, cross-tenant access, persistent-memory writes, and attempts to misuse privileged tools. Resource tests should also confirm that repeated or excessively expensive requests cannot create uncontrolled spending.
+**“Can I traverse a path that reaches something we actually care about?”**
+
+For example:
 
-Each test should name the protected action or data, the attacker's permitted interface, and the expected control. A prompt-injection test for a support assistant, for example, should verify that hostile ticket text cannot bypass the application's refund limit or authorisation check.
+$$
+\text{untrusted document}
+\rightarrow
+\text{agent}
+\rightarrow
+\text{privileged tool}
+\rightarrow
+\boxed{\text{unauthorized business action}}
+$$
+
+That is a security test tied to a real consequence. Suppose a vendor has extensively safety-tested its LLM. Your application then adds:
+
+$$
+\text{company documents}
++
+\text{memory}
++
+\text{custom prompts}
++
+\text{payment API}
++
+\text{CRM access}
+$$
+
+You have created a new system. Therefore:
+
+$$
+\boxed{
+\text{secure foundation model}
+\not\Rightarrow
+\text{secure application}
+}
+$$
+
+Many of the most serious failures arise from the glue surrounding the model.
 
-Red teams should receive the same access a plausible actor has. A public black-box exercise should not assume model weights. An insider exercise can use a scoped developer role. Record query budget, starting knowledge, tools, results, affected controls, and reproducible test cases.
+## How Do Prepared Response, Threat-Aligned Monitoring, and Platform Controls Reduce Residual Risk?
+<!-- section-summary: Prepared containment and recovery, signals tied to identified threats, and platform-enforced identity, isolation, provenance, and policy reduce but do not erase residual risk. -->
 
-Turn findings into regression tests and detection rules. Track whether the control prevented, detected, or merely limited the attack. A test that finds harmful behaviour without a containment or recovery path remains an open threat.
+Prepared containment and recovery, signals tied to identified threats, and platform-enforced identity, isolation, provenance, and policy reduce but do not erase residual risk.
+
+Suppose monitoring detects likely training-data poisoning.
 
-## Prepare The Response To Each Attack Path
-<!-- section-summary: Recovery starts from trusted data and artifact boundaries and proves that production no longer follows the compromised path. -->
+What now?
 
-Operators need a prepared response for each priority abuse case. Suspected poisoning may freeze retraining and quarantine a source. Artifact substitution may stop deployment and restore a digest-pinned route. Extraction may restrict output detail, rotate credentials, and tighten query limits. Prompt injection may disable a tool or retrieval source while preserving lower-risk answers.
+If nobody has planned the answer, investigators may not know which records entered training, which model versions contain them, which endpoints run those models, or whether a safe previous model exists. A useful response chain might be:
 
-Preserve evidence before destructive cleanup. Keep source and training snapshots, artifact digests, registry and object events, endpoint queries under approved handling, identity logs, configuration history, and decision IDs. Record occurrence time and ingestion time because delayed feedback or log delivery can change the apparent sequence.
+$$
+\text{detect}
+\rightarrow
+\text{contain}
+\rightarrow
+\text{identify affected artifacts}
+\rightarrow
+\text{rollback}
+\rightarrow
+\text{remove contaminated data}
+\rightarrow
+\text{retrain}
+\rightarrow
+\text{validate}
+\rightarrow
+\text{redeploy}
+$$
 
-```mermaid
-flowchart TD
-    A["Security Signal<br/>(data, artifact, query, or behaviour anomaly)"] --> B["Containment<br/>(freeze, isolate, restrict, or restore route)"]
-    B --> C["Evidence Preservation<br/>(snapshots, digests, identities, and events)"]
-    C --> D["Boundary Analysis<br/>(first trusted and first compromised stage)"]
-    D --> E["Clean Recovery<br/>(rebuild data, artifact, policy, or memory)"]
-    E --> F["Recovery Proof<br/>(identity, behaviour, and telemetry checks)"]
-    F --> G["Threat Model Update<br/>(new abuse case, control, and regression test)"]
-```
+Different attacks require different runbooks. Prompt-injection incident Perhaps disable a connector or tool. Credential compromise Revoke and rotate. Retrieval poisoning Quarantine documents and rebuild the index. Model compromise Remove the model from the registry's approved state and revert. Privacy leak Stop the affected interface, preserve evidence and invoke the relevant privacy-response process. This is why threat modeling and incident response should connect directly. Suppose your threat model identifies:
 
-Recovery proof matches the attack. After poisoning, rebuild from a clean source and pass triggered plus clean evaluation. After artifact replacement, verify signer identity and running digest. After cross-tenant retrieval, test authorised and unauthorised document access through retrieval, cache, response, and traces. Responders must verify the source and abuse filters before restoring feedback ingestion.
+$$
+T_1 = \text{training-data poisoning}
+$$
 
-## How Current Platforms Enforce Threat Controls
-<!-- section-summary: Industrial platforms provide identity, isolation, governance, provenance, audit, and policy primitives that implement selected threat controls. -->
+$$
+T_2 = \text{model extraction}
+$$
 
-Cloud platforms provide identity, network, storage, audit, and policy controls that implement the selected threat treatments. On AWS, teams commonly combine IAM roles, KMS, private S3 and ECR access, CloudTrail, VPC endpoints, and SageMaker AI VPC or network-isolation settings. Separate training and release roles, pin artifacts by digest, and keep audit delivery outside the ML workload's control.
+$$
+T_3 = \text{prompt injection}
+$$
 
-Google Cloud teams can combine service accounts, Cloud KMS, Artifact Registry, Cloud Audit Logs, VPC Service Controls, and Gemini Enterprise Agent Platform (formerly Vertex AI) controls. Binary Authorization can enforce image policy for supported container deployment paths. Azure teams use managed identities, Key Vault, Azure Machine Learning managed networks or private endpoints, Azure Monitor, and container-registry controls.
+$$
+T_4 = \text{unauthorized tool use}
+$$
 
-On Databricks, Unity Catalog governs data, volumes, and registered models. Service principals separate jobs from human users. System tables and audit logs help investigators trace data access, job runs, and governed changes. Cluster policies and network controls restrict compute. Verify the exact feature and cloud support because platform coverage differs across training, serving, external models, and preview capabilities.
+Then generic CPU monitoring is insufficient. You need signals related to those threats.
 
-Open-source stacks often use Kubernetes service accounts and network policies, Vault or cloud workload identity, OCI registries, Sigstore, SLSA provenance, Open Policy Agent or Kyverno admission rules, OpenTelemetry, OpenLineage, and standard security scanners. Choose the smallest set that enforces the named boundaries and produces evidence your team can operate.
+Conceptually:
 
-## Keep The Threat Model Current
-<!-- section-summary: Material changes, new attack evidence, incidents, and control failures trigger a focused threat-model update. -->
+$$
+T_1
+\rightarrow
+\text{data-source and distribution monitoring}
+$$
 
-Threat models age as systems change. A private endpoint becoming public changes attacker reach. Online learning shortens the poisoning path. A new feature store creates another data boundary. A foundation-model provider changes model identity and third-party ownership. Tools and persistent memory add privileged actions and stored attacker influence.
+$$
+T_2
+\rightarrow
+\text{query-pattern and access monitoring}
+$$
 
-Define review triggers in the release process. New data sources, labels, model families, serialization formats, external providers, tenants, tools, network routes, permissions, and high-impact actions all deserve focused review. Revisit the model after incidents and near misses.
+$$
+T_3
+\rightarrow
+\text{prompt/retrieval attack telemetry}
+$$
 
-Measure control health between reviews. Reconcile production digests with approved releases. Test audit-log delivery. Track exceptions and expiries. Exercise rollback. Re-run priority attacks against canaries. Alert on a disabled control rather than waiting for the associated model failure.
+$$
+T_4
+\rightarrow
+\text{tool authorization and action logs}
+$$
 
-The threat model is versioned evidence. Link each release to the model version it used, the open risks, accepted exceptions, completed tests, and owners. This lets incident responders identify which assumptions applied to the affected system.
+A strong threat model therefore generates monitoring requirements automatically. Cloud and AI platforms increasingly expose mechanisms that correspond directly to these threat-model controls. For example, current AWS SageMaker governance capabilities include model versioning, lineage, approval status, model cards, access controls and monitoring-related governance tools. ([AWS Documentation][10]) Google Cloud's current Secure AI Framework material maps controls such as IAM, organizational policy, VPC Service Controls, model registries, AI data governance and prompt/response protections to AI-security risks; its current guidance also discusses red teaming and attack-path analysis. ([Google Cloud][5])
 
-## Main Idea
-<!-- section-summary: ML threat modeling turns system knowledge and adversarial possibilities into owned controls, evidence, and recovery. -->
+Microsoft's recent AI-security guidance treats prompts, documents, retrieved context, tool results and memory as untrusted data and describes layered controls against direct and indirect prompt injection. ([Microsoft Learn][9]) But this leads to an important governance principle:
 
-ML threat modeling starts with the product decision and follows data and control across the complete lifecycle. Assets include data, code, models, policies, identities, and business actions. Adversaries include external callers, insiders, suppliers, tenants, compromised workloads, and third parties. Attack surfaces include software interfaces and the statistical behaviour learned by the model.
+$$
+\boxed{
+\text{Having a security feature}
+\neq
+\text{having an effective security control}
+}
+$$
 
-Use STRIDE to keep ordinary software threats visible. Use NIST's adversarial ML taxonomy and MITRE ATLAS to discover ML attack families and documented techniques. Convert those lenses into concrete local abuse cases.
+For example:
 
-The production result is a set of layered controls with evidence. Identity, isolation, provenance, signatures, registry policy, behaviour tests, detection, containment, and clean recovery each interrupt part of an attack path. Before release, the responsible owners must verify those controls and demonstrate that operators can restore a trusted state.
+$$
+\text{Cloud supports IAM}
+$$
+
+does not prove:
+
+$$
+\text{your model uses least privilege}
+$$
+
+Likewise:
+
+$$
+\text{registry supports approval}
+$$
+
+does not prove:
+
+$$
+\text{your deployment pipeline refuses unapproved models}
+$$
+
+Governance must verify **configuration and enforcement**, not merely product capability.
+
+## How Does a Complete Agent Example Keep Threat Modeling Alive and Accountable?
+<!-- section-summary: The enterprise-agent example maps the full system, tests realistic paths, assigns residual-risk ownership, updates the model after change and incidents, and connects security to Responsible AI. -->
+
+The enterprise-agent example maps the full system, tests realistic paths, assigns residual-risk ownership, updates the model after change and incidents, and connects security to Responsible AI.
+
+Imagine a company builds:
+
+An AI support agent that reads internal knowledge, checks customer records and can issue refunds.
+
+Its simplified architecture is:
+
+$$
+\text{Customer Prompt}
+\rightarrow
+\text{Agent}
+$$
+
+The agent receives:
+
+$$
+\text{Retrieved Documents}
++
+\text{Conversation Memory}
++
+\text{Customer Data}
+$$
+
+and has access to:
+
+$$
+\text{Refund Tool}
+$$
+
+Now identify the important asset:
+
+$$
+\text{Integrity of refunds}
+$$
+
+A threat scenario could be:
+
+$$
+\text{Attacker}
+\rightarrow
+\text{malicious content}
+\rightarrow
+\text{retrieval}
+\rightarrow
+\text{agent follows injected instruction}
+\rightarrow
+\text{refund tool}
+\rightarrow
+\text{unauthorized payment}
+$$
+
+Notice how many components are involved. The vulnerability is not simply:
+
+“LLMs sometimes follow malicious instructions.”
+
+The dangerous chain is:
+
+$$
+\boxed{
+\text{Untrusted content}
+\rightarrow
+\text{model interpretation}
+\rightarrow
+\text{privilege}
+\rightarrow
+\text{irreversible action}
+}
+$$
+
+Now we can design controls. Make retrieval permission-aware. Label retrieved material as untrusted content rather than authoritative instructions. Do not give the model unrestricted refund authority. Check the underlying user's/customer's authorization. Place hard refund limits outside the model. Require confirmation or human review for sufficiently consequential transactions. Log every tool call. Monitor unusual refund patterns. Provide a way to disable the refund connector without disabling the entire assistant. Now:
+
+$$
+\text{one prompt-injection success}
+$$
+
+does not automatically imply:
+
+$$
+\text{money lost}
+$$
+
+because the attack still encounters independent controls. That is what good threat modeling accomplishes. Engineering can identify:
+
+“There is still a small chance of unauthorized tool activation.”
+
+But engineering alone should not silently decide whether that is acceptable. Governance connects:
+
+$$
+\text{Threat}
+\rightarrow
+\text{Control}
+\rightarrow
+\text{Evidence}
+\rightarrow
+\text{Residual Risk}
+\rightarrow
+\text{Owner}
+$$
+
+A release reviewer can therefore ask:
+
+| Governance question                        | Evidence                         |
+| ------------------------------------------ | -------------------------------- |
+| What are the important assets             | System/threat model              |
+| Where are the trust boundaries            | Architecture/data-flow diagram   |
+| Which adversaries matter                  | Capability assumptions           |
+| What are the highest-impact attack paths  | Abuse-case analysis              |
+| Which controls break each path            | Control mapping                  |
+| Have those controls actually been tested  | Security/red-team evidence       |
+| Is the deployed artifact authentic        | Provenance and registry evidence |
+| Will attacks be detectable                | Monitoring specification         |
+| Can we contain an attack                  | Incident-response runbook        |
+| Can the system be disabled or rolled back | Recovery evidence                |
+| What important risks remain               | Residual-risk assessment         |
+| Who accepts those risks                   | Named accountable owner          |
+
+This transforms threat modeling from:
+
+“A security-team document.”
+
+into:
+
+> **A decision artifact for Responsible AI governance.**
+
+Suppose the original system was:
+
+$$
+\text{User}
+\rightarrow
+\text{Chatbot}
+$$
+
+Then six months later you add:
+
+$$
+\text{Chatbot}
+\rightarrow
+\text{Web browsing}
+$$
+
+Later:
+
+$$
+\rightarrow
+\text{persistent memory}
+$$
+
+Later:
+
+$$
+\rightarrow
+\text{email tool}
+$$
+
+Later:
+
+$$
+\rightarrow
+\text{payment system}
+$$
+
+The original threat model is no longer describing the same risk. The model weights might not have changed at all. Yet:
+
+$$
+\text{Potential Impact}
+\uparrow
+$$
+
+dramatically. Therefore the threat model should be reconsidered when important assumptions change: new data sources, vendors, interfaces, models, deployment environments, retrieval stores, memory, tools, permissions, user populations, feedback mechanisms or known attack techniques. MITRE ATLAS itself evolves with the AI attack landscape, and NIST has stated that its adversarial-ML taxonomy is intended to evolve as the field changes. ([MITRE ATLAS][4]) Security and Responsible AI sometimes get discussed separately. But they meet at a very simple idea. Responsible AI asks:
+
+**How could this system harm people?**
+
+Threat modeling asks:
+
+**How could an adversary intentionally make those harms happen?**
+
+For example, Responsible AI might identify:
+
+$$
+\text{Harm}
+=
+\text{qualified loan applicants wrongly rejected}
+$$
+
+Threat modeling then asks:
+
+Could somebody poison the training data to make that happen deliberately
+
+Responsible AI might identify:
+
+$$
+\text{Harm}
+=
+\text{private information disclosed}
+$$
+
+Threat modeling asks:
+
+Could repeated model queries, prompt injection, retrieval manipulation or unauthorized tool access produce that outcome
+
+Responsible AI might identify:
+
+$$
+\text{Harm}
+=
+\text{agent performs an unauthorized financial transaction}
+$$
+
+Threat modeling asks:
+
+Which path could an attacker use to cause that action
+
+So:
+
+$$
+\boxed{
+\text{Responsible AI harm analysis}
++
+\text{adversarial thinking}
+=
+\text{AI threat modeling}
+}
+$$
+
+The deepest way to understand ML threat modeling is not as a catalogue of exotic attacks. It is this:
+
+$$
+\boxed{
+\textbf{Find every important path by which an untrusted actor can gain influence over an AI system's learning, information, decisions or actions.}
+}
+$$
+
+Then, for each path:
+
+$$
+\boxed{
+\text{Actor}
+\rightarrow
+\text{Capability}
+\rightarrow
+\text{Trust Boundary}
+\rightarrow
+\text{Weakness}
+\rightarrow
+\text{Attack}
+\rightarrow
+\text{Consequence}
+}
+$$
+
+and design:
+
+$$
+\boxed{
+\text{Prevent}
++
+\text{Detect}
++
+\text{Respond}
+}
+$$
+
+controls that interrupt it. For conventional software, the attack might target:
+
+$$
+\text{code, credentials, network or database}
+$$
+
+For ML, also include:
+
+$$
+\text{training data}
++
+\text{labels}
++
+\text{features}
++
+\text{weights}
++
+\text{inference behaviour}
++
+\text{feedback}
+$$
+
+For generative and agentic AI, add:
+
+$$
+\text{prompts}
++
+\text{retrieval}
++
+\text{memory}
++
+\text{tools}
++
+\text{external content}
++
+\text{action authority}
+$$
+
+So the final mental model is:
+
+$$
+\boxed{
+\begin{aligned}
+\textbf{Threat-model the system, not just the model.}\\
+\textbf{Threat-model influence, not just intrusion.}\\
+\textbf{Threat-model actions, not just outputs.}\\
+\textbf{Threat-model the entire lifecycle, not just production.}
+\end{aligned}
+}
+$$
+
+And from a governance perspective, the final question is not merely:
+
+**“Did the security team run a threat model?”**
+
+It is:
+
+**“Do we understand the credible adversarial paths to serious harm, have we placed independent controls across those paths, have we tested those controls, can we detect and recover when they fail, and does an accountable person accept what remains?”**
+
+That is the essence of **threat modeling ML systems in Governance and Responsible AI**.
 
 ![A threat-modeling summary from system decision through assets, adversary capability, abuse case, controls, and evidence to release outcomes and a production incident recovery loop](/content-assets/articles/article-mlops-governance-and-responsible-ai-ml-threat-modeling/threat-modeling-recovery-summary.png)
 
 *A production threat model binds local abuse cases to release outcomes, then feeds incident containment, clean recovery, and regression evidence back into the next review.*
 
+## Check Your Answers
+
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[How Do Assets, Actors, Trust Boundaries, Capabilities, Attack Paths, and Residual Risk Define an ML Threat Model?]{kind="recap"}
+Threat modeling identifies assets, actors, changing trust boundaries, realistic capabilities, attack paths, controls, and residual risk across the complete system before selecting defenses.
+:::
+
+:::expand[How Do Conventional Threats, STRIDE, and MITRE ATLAS Extend into ML?]{kind="recap"}
+Conventional software threats remain, while STRIDE organizes familiar categories and MITRE ATLAS provides adversarial-ML techniques that connect to lifecycle stages and attacker goals.
+:::
+
+:::expand[How Can Data, Labels, Feedback, Training Infrastructure, Supply Chains, Registries, and Release Authority Be Attacked?]{kind="recap"}
+Training data, labels, feedback loops, notebooks, infrastructure, dependencies, registries, and separated build, approval, and deployment duties each create integrity and authority boundaries.
+:::
+
+:::expand[How Do Evasion, Extraction, and Privacy Attacks Use Legitimate Model Interfaces?]{kind="recap"}
+Evasion manipulates inputs, extraction learns from responses, and privacy attacks infer protected information through interfaces that may otherwise be operating as designed.
+:::
+
+:::expand[How Do Generative AI, Retrieval, Memory, Tools, Agents, Insiders, Tenants, and Third Parties Create New Trust Paths?]{kind="recap"}
+Instructions embedded in data, retrieval sources, durable memory, tool effects, agent authority, insiders, tenant boundaries, and suppliers widen the paths from untrusted influence to consequential action.
+:::
+
+:::expand[How Should Attack Paths Drive Prevention, Detection, Response, Release Gates, and Red-Team Evidence?]{kind="recap"}
+Controls follow the concrete attack path across prevention, detection, response, artifact provenance, release gates, and system-level red-team tests rather than a detached checklist.
+:::
+
+:::expand[How Do Prepared Response, Threat-Aligned Monitoring, and Platform Controls Reduce Residual Risk?]{kind="recap"}
+Prepared containment and recovery, signals tied to identified threats, and platform-enforced identity, isolation, provenance, and policy reduce but do not erase residual risk.
+:::
+
+:::expand[How Does a Complete Agent Example Keep Threat Modeling Alive and Accountable?]{kind="recap"}
+The enterprise-agent example maps the full system, tests realistic paths, assigns residual-risk ownership, updates the model after change and incidents, and connects security to Responsible AI.
+:::
+
 ## References
 
-- [NIST AI 100-2e2025: Adversarial Machine Learning](https://csrc.nist.gov/pubs/ai/100/2/e2025/final)
-- [MITRE ATLAS](https://atlas.mitre.org/)
-- [OWASP Secure AI/ML Model Ops Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secure_AI_Model_Ops_Cheat_Sheet.html)
-- [OWASP AI Agent Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html)
-- [OWASP LLM Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html)
-- [Microsoft Threat Modeling Tool and STRIDE](https://learn.microsoft.com/azure/security/develop/threat-modeling-tool)
-- [SLSA provenance](https://slsa.dev/spec/v1.2/provenance)
-- [Sigstore Cosign signature verification](https://docs.sigstore.dev/cosign/verifying/verify/)
-- [Sigstore Cosign attestation verification](https://docs.sigstore.dev/cosign/verifying/attestation/)
-- [NIST Secure Software Development Framework](https://csrc.nist.gov/Projects/ssdf)
-- [Amazon SageMaker AI network isolation](https://docs.aws.amazon.com/sagemaker/latest/dg/mkt-algo-model-internet-free.html)
-- [Google Cloud VPC Service Controls with Gemini Enterprise Agent Platform](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/general/vpc-service-controls)
-- [Google Cloud Binary Authorization](https://cloud.google.com/binary-authorization/docs)
-- [Azure Machine Learning managed network isolation](https://learn.microsoft.com/azure/machine-learning/how-to-managed-network)
-- [Databricks Unity Catalog model lifecycle](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
-- [Databricks audit log system table](https://docs.databricks.com/aws/en/admin/system-tables/audit-logs)
+[1]: https://www.nist.gov/publications/adversarial-machine-learning-taxonomy-and-terminology-attacks-and-mitigations-0 "Adversarial Machine Learning: A Taxonomy and Terminology of Attacks and Mitigations | NIST"
+[2]: https://learn.microsoft.com/en-us/security/engineering/threat-modeling-aiml "Threat Modeling AI/ML Systems and Dependencies | Microsoft Learn"
+[3]: https://learn.microsoft.com/en-us/archive/msdn-magazine/2006/november/uncover-security-design-flaws-using-the-stride-approach "Uncover Security Design Flaws Using The STRIDE Approach | Microsoft Learn"
+[4]: https://atlas.mitre.org/ "MITRE ATLAS™"
+[5]: https://cloud.google.com/use-cases/secure-ai-framework "Secure AI Framework (SAIF) | Google Cloud"
+[6]: https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html "Model Registration Deployment with Model Registry - Amazon SageMaker AI"
+[7]: https://www.nist.gov/news-events/news/2025/03/nist-trustworthy-and-responsible-ai-report-adversarial-machine-learning "NIST Trustworthy and Responsible AI Report Adversarial Machine Learning: A Taxonomy and Terminology of Attacks and Mitigations | NIST"
+[8]: https://learn.microsoft.com/en-us/ai/playbook/technology-guidance/generative-ai/mlops-in-openai/security/security-plan-llm-application "Security planning for LLM-based applications | Microsoft Learn"
+[9]: https://learn.microsoft.com/en-us/security/zero-trust/catalog-ai-defense-capabilities/input-context-retrieval-hygiene "4. Input, Context, and Retrieval Hygiene | Microsoft Learn"
+[10]: https://docs.aws.amazon.com/sagemaker/latest/dg/governance.html "Model governance to manage permissions and track model performance - Amazon SageMaker AI"

@@ -9,422 +9,1916 @@ id: "article-mlops-training-pipelines-config-files-for-ml-training"
 
 ## Table of Contents
 
-1. [A Typo Can Waste A Full Training Run](#a-typo-can-waste-a-full-training-run)
-2. [What A Training Configuration Controls](#what-a-training-configuration-controls)
-3. [Keep Four Kinds Of Training Settings Separate](#keep-four-kinds-of-training-settings-separate)
-4. [Design A Small And Stable Training Configuration](#design-a-small-and-stable-training-configuration)
-5. [Validate Before Data Access And Compute](#validate-before-data-access-and-compute)
-6. [Define Which Configuration Layer Wins](#define-which-configuration-layer-wins)
-7. [Create And Record The Final Configuration](#create-and-record-the-final-configuration)
-8. [Keep Runtime Details And Secrets Out Of The Training Recipe](#keep-runtime-details-and-secrets-out-of-the-training-recipe)
-9. [Choose A Configuration Library That Fits The Design](#choose-a-configuration-library-that-fits-the-design)
-10. [Evolve Configuration Without Breaking Old Runs](#evolve-configuration-without-breaking-old-runs)
-11. [Test Configuration Locally And In The Managed Job](#test-configuration-locally-and-in-the-managed-job)
-12. [Investigate Why Two Runs Used Different Settings](#investigate-why-two-runs-used-different-settings)
-13. [The Complete Configuration Workflow](#the-complete-configuration-workflow)
-14. [References](#references)
+1. [What Does a Training Configuration Control?](#what-does-a-training-configuration-control)
+2. [What Belongs in Code, the Training Recipe, Runtime Settings, and Secrets?](#what-belongs-in-code-the-training-recipe-runtime-settings-and-secrets)
+3. [How Do You Keep Configuration Small and Validate It Early?](#how-do-you-keep-configuration-small-and-validate-it-early)
+4. [How Do You Resolve, Freeze, and Record the Settings a Run Used?](#how-do-you-resolve-freeze-and-record-the-settings-a-run-used)
+5. [How Does Configuration Explain Differences Between Training Runs?](#how-does-configuration-explain-differences-between-training-runs)
+6. [How Should Configuration Names, Structure, and Compatibility Evolve?](#how-should-configuration-names-structure-and-compatibility-evolve)
+7. [How Do Tests and Sweeps Reveal Which Values Should Be Configurable?](#how-do-tests-and-sweeps-reveal-which-values-should-be-configurable)
+8. [How Does the Complete Configuration Workflow Support Reproducibility?](#how-does-the-complete-configuration-workflow-support-reproducibility)
+9. [Check Your Answers](#check-your-answers)
 
-## A Typo Can Waste A Full Training Run
-<!-- section-summary: A configuration error can launch a valid job with an unintended training recipe, so the job must validate its effective config before spending compute. -->
+Two training runs use the same code and dataset. One sets the learning rate to `0.001`; the other uses `0.0003`. The resulting models differ even though nobody changed the implementation. If those values live in an edited Python file or an unrecorded shell command, the team cannot explain which recipe produced either model.
 
-A platform engineer is about to approve an overnight GPU training job. The submitted YAML contains `learningRate: 0.0001`, while the Python program expects `learning_rate`. The loader silently drops the unfamiliar key and uses its default value of `0.01`. The job finishes, uploads a model, and reports metrics. Every system appears healthy, yet the team trained a different recipe from the one the reviewer approved.
+A **training configuration** is the structured set of choices that selects one behavior from a general training program. It can describe the architecture, optimizer, batch size, training duration, data definition, and other values that legitimately vary between runs. It should not silently absorb machine names, temporary paths, or secret credentials just because all of them reach the same process.
 
-This failure is expensive because configuration mistakes often produce valid computations. A misspelled data snapshot can train on the wrong population. A string such as `"false"` can turn into a truthy value in careless Python code. An unrecorded command-line override can make a promising result impossible to reproduce. The training service may return success in all three cases.
+The important artifact is the final configuration the program actually used. Defaults, a base file, an experiment file, and a command-line override may all contribute to it. The trainer must resolve those layers once, validate the result, freeze it, and record it before expensive work starts.
 
-The safe path is to turn configuration into a checked input contract. The job first combines the allowed inputs and rejects invalid fields. It then creates one final configuration and records its identity. Data access and accelerator reservation wait until that contract passes.
+Keep these questions in view as the article moves from one training choice to a validated, frozen record of every value the run used:
 
-```mermaid
-flowchart TD
-    A["Submitted settings<br/>(files and approved overrides)"] --> B["Resolve one config<br/>(apply declared precedence)"]
-    B --> C["Validate contract<br/>(types, ranges, relationships)"]
-    C --> D{"Valid?"}
-    D -->|Yes| E["Freeze and identify<br/>(artifact plus digest)"]
-    E --> F["Start training<br/>(data and compute may begin)"]
-    D -->|No| G["Reject submission<br/>(show the exact field error)"]
+1. **What Does a Training Configuration Control?**
+2. **What Belongs in Code, the Training Recipe, Runtime Settings, and Secrets?**
+3. **How Do You Keep Configuration Small and Validate It Early?**
+4. **How Do You Resolve, Freeze, and Record the Settings a Run Used?**
+5. **How Does Configuration Explain Differences Between Training Runs?**
+6. **How Should Configuration Names, Structure, and Compatibility Evolve?**
+7. **How Do Tests and Sweeps Reveal Which Values Should Be Configurable?**
+8. **How Does the Complete Configuration Workflow Support Reproducibility?**
+
+## What Does a Training Configuration Control?
+<!-- section-summary: Training code defines the available behavior, while configuration selects the recipe used by one particular run. -->
+
+Two runs can execute identical Python and still train different models because the selected values differ. Configuration gives those choices an explicit identity.
+
+The easiest way to understand training configuration is to start with a simple observation:
+
+> **The training program describes how training works. The training configuration describes which version of that training behavior we want for a particular run.**
+
+Suppose your training program contains:
+
+```python
+model = Model(
+    hidden_size=256,
+    dropout=0.1,
+)
+
+optimizer = AdamW(
+    model.parameters(),
+    lr=0.001,
+)
+
+train(
+    model,
+    epochs=20,
+    batch_size=64,
+)
 ```
 
-Configuration safety moves mistakes to the cheapest point in the run: before data access, compute allocation, and model production.
+Nothing is technically wrong with this. But you've mixed two different things together:
 
-## What A Training Configuration Controls
-<!-- section-summary: Run configuration stores the reviewed choices for one execution while the training program keeps the reusable behavior. -->
+```text
+Training logic
+──────────────
+construct model
+construct optimizer
+iterate over batches
+calculate loss
+backpropagate
+save model
 
-A **training configuration** is a structured set of values that selects the inputs and settings for one execution of a training program. You can think of it as the recipe card attached to a run. The Python package provides the cooking method; the config names the ingredients, quantities, and acceptance checks chosen for this attempt.
-
-This separation exists because training code and run choices change at different speeds. The implementation of average precision may remain stable for months. A dataset snapshot, feature-set version, seed, or learning rate may change for every experiment. Keeping those values in Python would turn each experiment into a code edit. Passing dozens of loose command-line flags would hide the complete recipe across a scheduler, shell history, and CI variables.
-
-### Compare The Proposed Settings With The Settings The Job Used
-
-The source file captures the choices proposed by the author. The **effective config** captures every value that reached the process after defaults and overrides. That distinction matters in scheduled and managed training. An orchestrator may add a smoke-test overlay. A release pipeline may select a pinned dataset version. A managed service may pass values through its job API.
-
-A useful run record therefore contains both provenance and content:
-
-- the source config path and Git revision;
-- every applied overlay or override, in precedence order;
-- the fully resolved configuration artifact;
-- a stable digest calculated from that artifact;
-- the training-code revision, container image digest, and managed-job identifier.
-
-With this record, two runs sharing a source file can still reveal different effective settings. Two files producing the same effective settings can also reveal that equivalence through the digest.
-
-## Keep Four Kinds Of Training Settings Separate
-<!-- section-summary: Source code, run configuration, deployment configuration, and secret values have different owners, review paths, and security needs. -->
-
-Configuration works best after the team separates four kinds of decisions. They travel through different review paths and change for different reasons. Mixing them creates oversized YAML files that let an experiment edit quietly change infrastructure or expose credentials.
-
-At submission time, the training execution receives one reviewed version of each input. The code defines the operation. The run config selects the experiment. The job specification places that work on an execution platform. Secret references grant narrowly scoped access. The run record keeps the identities of all four inputs together.
-
-```mermaid
-flowchart TD
-    A["Source code<br/>(reusable training behavior)"] --> E["Training execution<br/>(one governed run)"]
-    B["Run configuration<br/>(scientific choices and data identities)"] --> E
-    C["Job specification<br/>(compute, image, network, retries)"] --> E
-    D["Secret references<br/>(names resolved by workload identity)"] --> E
-    E --> F["Run evidence<br/>(code, config, job, and artifact identities)"]
+Training choices
+────────────────
+hidden_size = 256
+dropout = 0.1
+learning_rate = 0.001
+epochs = 20
+batch_size = 64
 ```
 
-### Keep Training Behavior In Source Code
+The first category changes relatively slowly. The second category changes constantly. Training configuration exists because those two categories have different lifecycles. Imagine that, conceptually, your training system is a function:
 
-Source code implements the repeatable path from input data to model artifacts. It contains data loading, feature transformations, model construction, metric calculations, artifact writing, and failure handling.
+$$
+\text{model} = f(\text{data}, \text{code}, \text{configuration})
+$$
 
-If a choice changes the meaning of an algorithm or requires unit tests, code is usually its proper home. The function that prevents target leakage belongs in code. The specific immutable training snapshot selected for one run belongs in configuration.
+Ignoring environment and randomness for a moment:
 
-### Keep Experiment Choices In The Run Configuration
+```text
+                ┌──────────────┐
+Data ──────────▶│              │
+                │   Training   │──────▶ Model
+Code ──────────▶│              │──────▶ Metrics
+                │              │
+Config ────────▶│              │
+                └──────────────┘
+```
 
-The run config names data and feature versions, model family, hyperparameters, random seeds, evaluation metrics, and promotion thresholds. These values describe the experiment. A reviewer should be able to inspect them without opening the cloud job definition.
+The configuration answers questions such as:
 
-Some runners transport a selected dataset through a dedicated CLI or managed-job input. The mounted path is an execution detail; the immutable snapshot identity still belongs in the effective run record. The resolver can combine the submitted identity with the path supplied by the platform before it freezes and hashes the config.
+```text
+Which architecture
+How large
+Which optimizer
+What learning rate
+How many epochs
+What batch size
+Which loss function
+Which augmentation strategy
+When should training stop
+```
 
-Some teams also include a portable compute intent such as `compute_profile: gpu-medium`. The cloud binding for that profile still lives in the job specification. This keeps an experiment meaningful across Azure Machine Learning, Amazon SageMaker AI, Gemini Enterprise Agent Platform, Databricks Jobs, or an internal Kubernetes platform.
+So configuration can be thought of as:
 
-### Keep Compute And Deployment Settings In The Job Specification
+**The parameterization of the training program.**
 
-The job specification selects the container image digest, machine type, accelerator count, network, identity, retry policy, timeout, storage mounts, and queue. These settings influence cost and reliability, and platform teams often own them. Record their resolved values beside the run config because numerical reproducibility can depend on hardware and library versions.
+Your code says:
 
-### Use References For Secrets
+```python
+optimizer = AdamW(
+    model.parameters(),
+    lr=config.optimizer.learning_rate
+)
+```
 
-A run may need access to a warehouse, tracking server, or artifact store. The config should carry a secret reference or credential scope, such as `secret://ml-training/warehouse-reader`. The workload identity receives permission to resolve that reference at runtime.
+The configuration says:
 
-The fetched credential remains inside the protected runtime boundary. Git stores the reference. The run digest covers the reference. Logs, tracking tags, and resolved artifacts omit the credential value.
+```yaml
+optimizer:
+  learning_rate: 0.001
+```
+
+The code defines the possibility. The configuration selects the choice. Suppose you want to compare three experiments. Experiment A:
+
+```python
+learning_rate = 0.001
+```
+
+Experiment B:
+
+```python
+learning_rate = 0.0003
+```
+
+Experiment C:
+
+```python
+learning_rate = 0.0001
+```
+
+If those values live in the source code, every experiment becomes a source-code modification. You might end up with:
+
+```text
+commit A → learning rate 0.001
+commit B → learning rate 0.0003
+commit C → learning rate 0.0001
+```
+
+But none of the *training logic* changed. You were only selecting different parameters. A configuration file lets one version of the program execute many experiments:
+
+```text
+                 training code
+                      │
+          ┌───────────┼───────────┐
+          ▼           ▼           ▼
+     experiment A experiment B experiment C
+       config        config        config
+          │           │           │
+          ▼           ▼           ▼
+        Run A         Run B       Run C
+```
+
+For example:
+
+```yaml
+# experiment_a.yaml
+
+learning_rate: 0.001
+batch_size: 64
+epochs: 20
+```
+
+and:
+
+```yaml
+# experiment_b.yaml
+
+learning_rate: 0.0003
+batch_size: 64
+epochs: 20
+```
+
+Now:
+
+```bash
+python -m project.train --config experiment_a.yaml
+```
+
+and:
+
+```bash
+python -m project.train --config experiment_b.yaml
+```
+
+execute the same program with different training recipes. That's the fundamental value of configuration. This is where configuration systems often become messy. Suppose you create:
+
+```yaml
+learning_rate: 0.001
+batch_size: 64
+
+training_data: s3://company-prod-secret/data.parquet
+
+aws_access_key: ABC123
+aws_secret_key: XYZ789
+
+gpu_type: A100
+docker_image: company/train:v17
+
+output_dir: /mnt/job-2784
+run_id: 842919
+```
+
+You've put several fundamentally different concepts into one file. It helps to separate four categories.
+
+## What Belongs in Code, the Training Recipe, Runtime Settings, and Secrets?
+<!-- section-summary: Model choices, data choices, runtime placement, and credentials have different meanings, owners, and security requirements. -->
+
+The word configuration can hide several unrelated concerns, so the first design task is to separate the scientific recipe from location, infrastructure, and credentials.
+
+These settings define the actual learning experiment.
+
+For example:
+
+```yaml
+model:
+  hidden_size: 512
+  num_layers: 6
+  dropout: 0.1
+
+optimizer:
+  name: adamw
+  learning_rate: 0.0003
+  weight_decay: 0.01
+
+training:
+  batch_size: 128
+  epochs: 30
+```
+
+If you changed one of these values, you'd reasonably say:
+
+"I'm training a different model or using a different training recipe."
+
+These are usually the core contents of a **training configuration**. Some data-related choices genuinely affect the experiment.
+
+For example:
+
+```yaml
+data:
+  max_sequence_length: 512
+  sampling_strategy: balanced
+  negative_ratio: 3
+```
+
+Changing them changes what the model sees. Those may belong in the experiment configuration. But something like:
+
+```text
+s3://ml-prod-eu-west-2/bucket-173923/train/part-003.parquet
+```
+
+is different. That's often an execution-time location rather than a modeling choice. A useful distinction is:
+
+```text
+"What data definition should I use?"
+
+versus
+
+"Where does today's copy of that data physically live?"
+```
+
+The first is often experiment configuration. The second is often runtime configuration. Now consider:
+
+```text
+number of GPUs
+GPU type
+CPU count
+RAM
+output directory
+distributed-training hostnames
+temporary directory
+job ID
+checkpoint mount
+```
+
+These describe **where and how the process is running**, not necessarily what model you're trying to train. For instance, these two runs might be scientifically equivalent:
+
+```text
+Run A
+4 × A100 GPU
+
+Run B
+8 × A100 GPU
+```
+
+assuming the training algorithm correctly preserves effective batch size and optimization behavior. Therefore:
+
+```yaml
+gpu_count: 8
+```
+
+usually shouldn't be confused with:
+
+```yaml
+learning_rate: 0.0003
+```
+
+The former is infrastructure. The latter is training behavior. Secrets are different again:
+
+```text
+database passwords
+API keys
+cloud credentials
+private registry tokens
+service account credentials
+```
+
+A training configuration might be committed to Git:
+
+```text
+configs/production.yaml
+```
+
+Secrets generally should not be. So avoid:
+
+```yaml
+wandb_api_key: abc123...
+database_password: hunter2
+```
+
+Instead, the execution environment supplies secrets through a secret manager, workload identity, environment variables, mounted credentials, or another secure mechanism.
+
+Conceptually:
+
+```text
+           Training recipe
+                 │
+                 ▼
+           training program
+                 ▲
+                 │
+Runtime ─────────┤
+Secrets ─────────┤
+Data locations ──┘
+```
+
+The training program receives all these things. That doesn't mean they should all live in the same configuration file. You can think of one training run as being constructed from several layers:
+
+```text
+┌───────────────────────────────┐
+│ CODE                          │
+│ How training works            │
+└───────────────────────────────┘
+
+┌───────────────────────────────┐
+│ TRAINING CONFIG               │
+│ What training recipe to use   │
+└───────────────────────────────┘
+
+┌───────────────────────────────┐
+│ DATA                          │
+│ What examples to train on     │
+└───────────────────────────────┘
+
+┌───────────────────────────────┐
+│ RUNTIME                       │
+│ Where/how the job executes    │
+└───────────────────────────────┘
+
+┌───────────────────────────────┐
+│ SECRETS                       │
+│ Credentials needed at runtime │
+└───────────────────────────────┘
+```
+
+Together they determine what actually happens. Separating them makes each component easier to reason about.
 
 ![Source code, run configuration, job specification, and secret references feeding one reviewed training execution and its identity record.](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/training-setting-boundaries.png)
 
 *The four inputs have different owners, yet their identities meet in the evidence for one training execution.*
 
-## Design A Small And Stable Training Configuration
-<!-- section-summary: A compact hierarchy helps reviewers find data identity, feature identity, model choices, evaluation rules, and reproducibility controls. -->
+## How Do You Keep Configuration Small and Validate It Early?
+<!-- section-summary: A small declarative interface with type and relationship checks catches invalid recipes before data loading or accelerator allocation. -->
 
-A useful schema follows the questions a reviewer asks before approving training. The first group establishes the identity of the training and validation data. The second identifies the features and model recipe. The final groups define evaluation and reproducibility controls.
+After the boundaries are clear, the public interface should stay as small as possible and reject mistakes before they consume expensive resources.
 
-Each group should remain small enough to review as a coherent decision. The following config is complete enough to launch one tree-model training run, while the cloud job specification supplies its image, compute, identity, and network.
+Configuration systems often become accidental programming languages. You might begin with:
 
 ```yaml
-schema_version: 2
-data:
-  train_snapshot: warehouse://credit_events/train@43
-  validation_snapshot: warehouse://credit_events/validation@18
-  label: default_within_90_days
-features:
-  feature_set: credit_risk_features@12
-model:
-  family: lightgbm
-  learning_rate: 0.03
-  num_boost_round: 400
-  early_stopping_rounds: 30
-evaluation:
-  primary_metric: average_precision
-  minimum_primary_metric: 0.41
-seed: 23
+learning_rate: 0.001
+batch_size: 64
 ```
 
-The identifiers matter more than the YAML format. `train_snapshot` points to an immutable dataset version. `feature_set` identifies a reviewed feature definition. `schema_version` tells the loader how to interpret the document. The seed records one source of training randomness. A value such as `latest` would move over time and weaken the evidence trail, so production runs should use immutable versions.
+and eventually reach:
 
-### Use Names That Explain Each Setting
+```yaml
+model:
+  _target_: project.models.DynamicFactory
 
-A field name should communicate the choice it controls. `minimum_primary_metric` gives a reviewer more context than `threshold_1`. `train_snapshot` communicates immutability more clearly than `train_path`. Units belong in names where ambiguity is possible, such as `timeout_seconds` or `memory_gib`.
+optimizer:
+  _target_: ${lookup:${environment}:${model.type}}
+  partial: true
 
-Avoid turning the config into a second programming language. Conditional logic, loops, arbitrary expressions, and embedded Python make review and migration difficult. A small amount of composition can reduce duplication; training behavior still belongs in tested source code.
+values:
+  merged:
+    include:
+      - ${path:${env:CONFIG_ROOT}/...}
+```
 
-## Validate Before Data Access And Compute
-<!-- section-summary: Schema validation checks structure, types, ranges, and cross-field rules before the program performs expensive or irreversible work. -->
+Powerful configuration systems can be useful, but every abstraction has a cost. Keep this boundary clear:
 
-Parsing YAML only proves that the text has valid YAML syntax. **Schema validation** checks whether those parsed values form a training configuration the program understands. In other words, the schema is the agreement between the author of the config and the code that consumes it.
+**Configuration should describe choices, not become a second implementation of your program.**
 
-A production validator should cover four layers. Structural rules require fields such as `data.train_snapshot`. Type rules keep `num_boost_round` as an integer. Constraint rules keep values inside meaningful ranges. Relationship rules compare fields, such as requiring early stopping to occur before the maximum boosting round.
+If the business logic becomes complicated, put it in Python. For example, instead of:
 
-### Reject unknown keys
+```yaml
+hidden_size: 256
 
-Many configuration libraries ignore unfamiliar keys by default. That behavior turns a typo into a silent fallback. Strict configs should reject `learningRate`, `learnng_rate`, or any unapproved field and point to its exact location. The author then receives a clear correction before the job consumes resources.
+if_model_is_large_and_gpu_count_gt_4:
+  multiply_batch_size_by: 2
+```
 
-Pydantic provides a concise runtime schema for Python training services. This focused model uses strict types, forbidden extra keys, immutable model instances, field constraints, and a cross-field validator:
+prefer:
 
 ```python
-from typing import Literal, Self
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-class ModelConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-    family: Literal["lightgbm"]
-    learning_rate: float = Field(gt=0, le=1)
-    num_boost_round: int = Field(ge=1, le=10_000)
-    early_stopping_rounds: int = Field(ge=1)
-    @model_validator(mode="after")
-    def early_stopping_fits_run(self) -> Self:
-        if self.early_stopping_rounds >= self.num_boost_round:
-            raise ValueError("early_stopping_rounds must be smaller than num_boost_round")
-        return self
-model_config = ModelConfig.model_validate(parsed_yaml["model"])
+def calculate_batch_size(config, runtime):
+    ...
 ```
 
-The root `TrainingConfig` can combine similarly strict models for `data`, `features`, `evaluation`, and the seed. The validator then reports errors in the vocabulary of the config. A misspelled key should produce a path such as `model.learningRate`, and an invalid range should name `model.learning_rate`. The job runner can print the full validation report, mark the submission as rejected, and avoid retrying it as an infrastructure failure.
+Configuration should preferably remain declarative:
 
-### Check That Referenced Data And Features Exist
+```yaml
+model:
+  size: large
 
-Schema validation cannot prove that `warehouse://credit_events/train@43` exists or that it carries the expected columns. Add a preflight stage after schema validation. It resolves immutable data and feature references, checks access, compares their schemas with the training contract, and estimates size before provisioning costly compute.
-
-This creates two useful failure classes. A malformed field fails as `CONFIG_INVALID`. A well-formed reference that cannot be resolved fails as `INPUT_PREFLIGHT_FAILED`. Separate classes direct the first problem to the config author and the second to the data or platform owner.
-
-## Define Which Configuration Layer Wins
-<!-- section-summary: Layered configuration stays predictable when every layer has a declared purpose and later layers can change only approved fields. -->
-
-Teams need a small amount of layering. A base file may hold reviewed defaults. An experiment overlay may select a candidate recipe. CI may reduce the training rounds for a smoke test. The risk comes from hidden precedence: two places set the same field, and nobody knows which value reached training.
-
-Use one documented order from lowest to highest priority:
-
-```mermaid
-flowchart TD
-    A["Schema defaults<br/>(safe values defined by the program)"] --> B["Versioned base file<br/>(shared training policy)"]
-    B --> C["Reviewed overlay<br/>(experiment-specific choices)"]
-    C --> D["Allowlisted job overrides<br/>(small submission-time changes)"]
-    D --> E["Effective config<br/>(one resolved value per field)"]
+training:
+  batch_size_per_gpu: 32
 ```
 
-Later layers win only for fields they are allowed to change. A smoke-test job may reduce `model.num_boost_round`, point at small fixture snapshots, and add tracking labels. It should have no permission to weaken a production evaluation threshold or select an unreviewed feature set.
+Then code interprets it. Suppose your training function accepts:
 
-A command can keep the change visible:
+```python
+def train(config):
+    ...
+```
+
+Then the fields of `config` form an interface.
+
+For example:
+
+```yaml
+model:
+  hidden_size: 256
+  dropout: 0.1
+
+training:
+  epochs: 20
+  batch_size: 64
+
+optimizer:
+  name: adamw
+  learning_rate: 0.001
+```
+
+Your code expects that structure. So configuration behaves much like a function signature:
+
+```python
+train(
+    hidden_size=256,
+    dropout=0.1,
+    epochs=20,
+    batch_size=64,
+    optimizer="adamw",
+    learning_rate=0.001,
+)
+```
+
+That means configuration deserves many of the same engineering practices as an API:
+
+```text
+clear names
+documented meaning
+types
+validation
+defaults
+backward compatibility
+versioning
+```
+
+A casual YAML file can quietly become one of the most important APIs in an ML system. Consider this:
+
+```yaml
+training:
+  batch_size: -64
+  epochs: 20
+
+optimizer:
+  learning_rate: "fast"
+```
+
+YAML itself may consider that perfectly valid syntax. But your training program shouldn't. A naïve program might do:
+
+```text
+launch expensive GPU
+       ↓
+download 400 GB dataset
+       ↓
+preprocess for 40 minutes
+       ↓
+initialize model
+       ↓
+discover batch_size = -64
+       ↓
+crash
+```
+
+That's wasteful.
+
+Instead:
+
+```text
+load configuration
+       ↓
+parse
+       ↓
+validate
+       ↓
+only then access expensive resources
+```
+
+For example:
+
+```python
+class TrainingConfig:
+    learning_rate: float
+    batch_size: int
+    epochs: int
+```
+
+And conceptually:
+
+```text
+learning_rate > 0
+batch_size > 0
+epochs >= 1
+dropout between 0 and 1
+optimizer ∈ {adam, adamw, sgd}
+```
+
+Then:
+
+```text
+invalid configuration
+        ↓
+fail in milliseconds
+```
+
+rather than:
+
+```text
+invalid configuration
+        ↓
+fail after $150 of GPU usage
+```
+
+This is one of the highest-return uses of configuration validation. Some invalid configurations are individually valid fields that make no sense together.
+
+For example:
+
+```yaml
+scheduler:
+  type: cosine
+
+training:
+  epochs: 0
+```
+
+Or:
+
+```yaml
+model:
+  hidden_size: 513
+  attention_heads: 8
+```
+
+when hidden size must be divisible by attention heads. Or:
+
+```yaml
+training:
+  mixed_precision: fp16
+
+runtime:
+  device: cpu
+```
+
+if your implementation doesn't support that combination. So configuration validation has two levels. First:
+
+```text
+Field validation
+────────────────
+epochs is integer
+dropout is float
+optimizer is string
+```
+
+Then:
+
+```text
+Semantic validation
+───────────────────
+epochs > 0
+0 ≤ dropout < 1
+hidden_size % num_heads == 0
+```
+
+The second category is often more valuable.
+
+## How Do You Resolve, Freeze, and Record the Settings a Run Used?
+<!-- section-summary: Defaults, files, and explicit overrides must follow a documented precedence and produce one immutable resolved configuration before training begins. -->
+
+Validation alone is insufficient when values arrive from several layers. The system also needs one deterministic answer to what the trainer actually received.
+
+Suppose the code says:
+
+```python
+learning_rate = config.get("learning_rate", 0.001)
+```
+
+Your configuration says:
+
+```yaml
+batch_size: 64
+```
+
+What learning rate was used? `0.001`. But someone inspecting only the experiment file can't see that. Now imagine six months later the default changes:
+
+```python
+config.get("learning_rate", 0.0003)
+```
+
+The same config file now means something different. That's dangerous for reproducibility. There is an important distinction between:
+
+### User configuration
+
+What the user supplied:
+
+```yaml
+batch_size: 64
+```
+
+and:
+
+### Resolved configuration
+
+What training actually used:
+
+```yaml
+learning_rate: 0.001
+batch_size: 64
+epochs: 20
+dropout: 0.1
+optimizer: adamw
+```
+
+The resolved configuration should normally be recorded with the run. Suppose configuration comes from multiple places:
+
+```text
+library defaults
+        ↓
+base config
+        ↓
+experiment config
+        ↓
+command-line overrides
+```
+
+Then the file the user passed isn't necessarily the configuration the program actually used.
+
+For example:
+
+### defaults
+
+```yaml
+learning_rate: 0.001
+batch_size: 32
+epochs: 10
+```
+
+### config file
+
+```yaml
+batch_size: 64
+epochs: 30
+```
+
+### command line
 
 ```bash
-train-model \
-  --config configs/base.yaml \
-  --overlay configs/experiments/lower-learning-rate.yaml \
-  --set model.num_boost_round=20 \
-  --set data.train_snapshot=fixtures://credit/train@7
+--override training.epochs=50
 ```
 
-The loader parses override values through the same typed schema as the file. A service such as SageMaker supplies hyperparameters as strings, so the boundary adapter must convert each allowlisted value to its declared type before validation. Arbitrary dot-path assignment gives a scheduler too much power and weakens review.
+The actual training settings are:
 
-### Keep defaults in one place
+```yaml
+learning_rate: 0.001
+batch_size: 64
+epochs: 50
+```
 
-Repeated defaults create drift. Imagine `learning_rate` appearing in Python, `base.yaml`, and the scheduler template. A reader must search three systems to predict the run. Choose one authoritative layer for each default. Required scientific choices often deserve an explicit value in the reviewed file, while harmless implementation defaults can live in the schema.
+That final object is the **resolved configuration**. It should be treated as a first-class training artifact:
 
-## Create And Record The Final Configuration
-<!-- section-summary: The runner should resolve every approved input once, freeze the result, serialize it consistently, and attach its digest to the run. -->
+```text
+run-827/
+├── model.pt
+├── metrics.json
+├── logs/
+├── checkpoints/
+└── resolved_config.yaml
+```
 
-After layering, the runner should produce one **effective config**. This object contains a single value for every field and no unresolved placeholders. You can think of it as the signed recipe that the training process has agreed to follow.
+Now you can answer:
 
-Resolution should finish before any training worker loads data. The runner applies layers in declared order, resolves supported references, validates the final structure, and freezes the object. Training functions receive that frozen object through their arguments. They should never reload YAML in the middle of a run or read a second set of modeling values from process-wide environment variables.
+"What settings did this model actually use?"
 
-### Give Identical Final Configurations The Same Identity
+without reconstructing history. Once configuration can come from multiple sources, you need a rule.
 
-A digest is a short identity calculated from the full effective configuration. Stable calculation requires a canonical representation: the same field order, scalar encoding, enum representation, and treatment of optional values every time. Serializing the validated Pydantic model as sorted JSON produces the exact bytes that SHA-256 hashes:
+For example:
+
+```text
+lowest priority
+
+built-in defaults
+      ↓
+base configuration
+      ↓
+experiment configuration
+      ↓
+command-line overrides
+
+highest priority
+```
+
+Then:
+
+```yaml
+# default
+batch_size: 32
+```
+
+is overridden by:
+
+```yaml
+# experiment
+batch_size: 64
+```
+
+which is overridden by:
+
+```bash
+--override training.batch_size=128
+```
+
+giving:
+
+```text
+batch_size = 128
+```
+
+The exact precedence isn't important. The important part is that it is **deterministic and documented**. Otherwise you get debugging conversations like:
+
+```text
+"Why was the batch size 128?"
+
+"I thought YAML said 64."
+
+"The environment variable overrode it."
+
+"Which environment variable?"
+
+"I'm not sure."
+```
+
+That is a configuration system failure. Environment variables are useful for runtime concerns:
+
+```bash
+OUTPUT_DIR=/mnt/job/123
+CUDA_VISIBLE_DEVICES=0,1
+LOG_LEVEL=INFO
+```
+
+They're especially useful for secrets:
+
+```text
+API_TOKEN
+DATABASE_PASSWORD
+```
+
+But they're dangerous as invisible experiment settings.
+
+For example:
+
+```bash
+LEARNING_RATE=0.00001
+```
+
+If your training script silently reads that, you have hidden training state. Someone could run:
+
+```bash
+python train.py --config baseline.yaml
+```
+
+on two machines and receive different models because one shell happened to contain:
+
+```text
+LEARNING_RATE=0.00001
+```
+
+A useful rule is:
+
+Use environment variables primarily for environment-specific concerns, not invisible model behavior.
+
+And if an environment variable does affect the training recipe, put its resolved value into the recorded configuration. Overrides are convenient for experiments:
+
+```bash
+python -m model.train \
+    --config configs/baseline.yaml \
+    --set optimizer.learning_rate=0.0001
+```
+
+This is great for CI, sweeps, and quick experiments. But the run should record:
+
+```yaml
+optimizer:
+  learning_rate: 0.0001
+```
+
+rather than merely storing:
+
+```text
+config = baseline.yaml
+```
+
+Otherwise your metadata claims the baseline config was used when it actually wasn't. Think of overrides as edits made **before the final configuration is frozen**:
+
+```text
+defaults
+    +
+config file
+    +
+overrides
+    ↓
+merge
+    ↓
+validate
+    ↓
+FINAL CONFIG
+    ↓
+record it
+    ↓
+train
+```
+
+That workflow is much easier to reason about. Ideally configuration resolution happens once. Bad architecture:
+
+```text
+training starts
+   ↓
+module A reads YAML
+   ↓
+module B reads environment variable
+   ↓
+module C applies another default
+   ↓
+module D modifies config
+   ↓
+training continues
+```
+
+Now there may not even be a single answer to:
+
+"What was the configuration?"
+
+Prefer:
+
+```text
+load
+ ↓
+merge
+ ↓
+resolve
+ ↓
+validate
+ ↓
+freeze
+ ↓
+record
+ ↓
+start training
+```
+
+Then everything receives the same immutable configuration object:
 
 ```python
-import hashlib
-import json
-resolved = effective_config.model_dump(mode="json")
-payload = json.dumps(
-    resolved,
-    sort_keys=True,
-    separators=(",", ":"),
-    ensure_ascii=False,
-).encode("utf-8")
-config_digest = hashlib.sha256(payload).hexdigest()
-output_dir.joinpath("resolved-config.json").write_bytes(payload)
+model = build_model(config)
+optimizer = build_optimizer(model, config)
+trainer = Trainer(config)
 ```
 
-Store the serialization format, schema version, and digest algorithm with the digest. A future serializer may encode the same values differently. Those identifiers let the team reproduce the original calculation and distinguish content changes from serialization changes.
+A configuration shouldn't quietly mutate halfway through a run. Training state can change:
 
-### Link The Final Configuration To The Training Run
+```text
+current epoch
+current learning rate
+global step
+best loss
+```
 
-The resolved file should travel with the run's metrics and artifacts. MLflow can log it as an artifact and record the digest as a run tag. A managed platform can also store the digest in job labels or metadata. Useful lineage links include the Git commit, source config URI, ordered override list, data snapshot IDs, feature-set version, container digest, and cloud job ID.
+but that is **runtime state**, not necessarily the original training recipe.
 
-This record helps a reviewer connect a metric to the approved configuration. The reviewer compares the submitted digest with the tracking tag and the artifact digest. A match ties the evidence to one exact recipe.
+## How Does Configuration Explain Differences Between Training Runs?
+<!-- section-summary: The resolved configuration connects a model artifact to the exact recipe used alongside code, data, environment, randomness, and hardware. -->
+
+That frozen object becomes useful evidence when two apparently similar runs produce different outcomes.
+
+Suppose you configure:
+
+```yaml
+optimizer:
+  learning_rate: 0.001
+
+scheduler:
+  type: cosine
+```
+
+At epoch 14 the actual learning rate might be:
+
+```text
+0.000372
+```
+
+Did the configuration change? No. The configuration specified:
+
+```text
+initial learning rate = 0.001
+scheduler = cosine
+```
+
+The trainer's state evolved according to that recipe. This distinction matters:
+
+```text
+CONFIGURATION
+─────────────
+what should happen
+
+STATE
+─────
+what is currently happening
+```
+
+Examples of state:
+
+```text
+epoch = 14
+global_step = 47,292
+current_lr = 0.000372
+best_validation_loss = 0.183
+```
+
+State belongs in checkpoints and logs. Recipe configuration belongs in the resolved training configuration. Suppose you discover:
+
+```text
+fraud_model_v87.pt
+```
+
+What generated it? Ideally you can trace:
+
+```text
+model artifact
+      │
+      ▼
+training run 84721
+      │
+      ├── code commit: f19ab62
+      ├── dataset version: 2026-08-17
+      ├── resolved config
+      ├── container image
+      └── metrics
+```
+
+For example:
+
+```yaml
+model:
+  architecture: transformer
+  hidden_size: 512
+  num_layers: 8
+  dropout: 0.1
+
+optimizer:
+  name: adamw
+  learning_rate: 0.0003
+  weight_decay: 0.01
+
+training:
+  batch_size: 64
+  epochs: 30
+  seed: 42
+```
+
+This transforms configuration from a convenience into **provenance**. Now the question:
+
+"Why is model B different from model A?"
+
+becomes answerable. Suppose:
+
+```text
+Run 421
+validation accuracy = 91.3%
+
+Run 422
+validation accuracy = 89.7%
+```
+
+Your first question should often be:
+
+```text
+What differed
+```
+
+If you've recorded resolved configurations, you can compare:
+
+```diff
+ optimizer:
+-  learning_rate: 0.001
++  learning_rate: 0.0003
+
+ training:
+   batch_size: 64
+   epochs: 20
+```
+
+Excellent. You've immediately identified one experimental difference. But configuration comparison alone isn't sufficient. You may also need:
+
+```text
+code commit
+dataset version
+random seed
+runtime/library versions
+hardware
+```
+
+Which leads to a deeper principle:
+
+$$
+\text{Training reproducibility}
+\neq
+\text{configuration alone}
+$$
+
+More accurately:
+
+$$
+R =
+f(
+C,
+D,
+S,
+E,
+H
+)
+$$
+
+where roughly:
+
+```text
+C = code
+D = data
+S = settings
+E = environment
+H = hardware/runtime behavior
+```
+
+The configuration captures only one important part.
 
 ![Configuration layers resolved and validated once, frozen as canonical bytes, hashed, and matched across submission, worker, tracker, and model artifact.](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/effective-config-identity.png)
 
 *A shared digest proves that every boundary used the same resolved training recipe.*
 
-## Keep Runtime Details And Secrets Out Of The Training Recipe
-<!-- section-summary: Environment variables carry runtime facts, while secret managers supply credential values through identities and reviewed references. -->
+## How Should Configuration Names, Structure, and Compatibility Evolve?
+<!-- section-summary: Semantic field names, concept-based grouping, deliberate schema changes, and separate model compatibility rules keep old runs understandable. -->
 
-Environment variables are useful for facts supplied by the execution platform. Examples include the managed-job ID, mounted input path, tracking URI, output directory, and distributed-worker rank. These values describe where the process is running. Hyperparameters and dataset choices describe what the experiment is testing, so they belong in the effective config.
+As more people and automated systems depend on the schema, names and compatibility rules become part of a maintained interface rather than casual YAML structure.
 
-This boundary prevents a common investigation problem. If `LEARNING_RATE` can silently override the YAML, the recorded config may say `0.03` while the process uses `0.1`. An engineer examining the run artifact sees the approved value and misses the operational override. Keeping scientific choices in the validated config leaves one source of truth inside the process.
-
-### Let The Training Job Receive Short-Lived Credentials
-
-A secret reference names a credential without containing it:
+Consider:
 
 ```yaml
-connections:
-  feature_store:
-    secret_ref: secret://ml-training/feature-store-reader
+x: 512
+n: 8
+p: 0.1
 ```
 
-At startup, the workload identity asks the platform's secret manager for that reference. AWS commonly pairs IAM with Secrets Manager. Azure pairs managed identity with Key Vault, while Google Cloud uses service identity with Secret Manager. Databricks jobs can use governed connections or secret scopes according to the workspace design.
-
-The resolved config artifact keeps `secret_ref` and removes any fetched value. Logging filters should also redact credential-shaped environment variables and command arguments. The training process should hold credentials only for the period needed, while the platform controls rotation and access auditing.
-
-## Choose A Configuration Library That Fits The Design
-<!-- section-summary: Pydantic, dataclasses, Hydra, and OmegaConf solve different parts of configuration, so the required behavior should determine the choice. -->
-
-The framework comes first: boundaries, schema, precedence, freezing, identity, and lineage. A library implements part of that framework. Selecting one by popularity can leave gaps around override policy, migrations, or evidence capture.
-
-### Use Dataclasses For Small Internal Programs
-
-Python dataclasses provide typed objects with low ceremony, and frozen dataclasses prevent attribute assignment. Type annotations alone leave parsed YAML unchecked at runtime. A small internal trainer can pair a dataclass with an explicit parser and validator. This choice fits a stable shape with limited composition needs.
-
-### Use Pydantic For Runtime Validation
-
-Pydantic models provide runtime type checking, constraints, cross-field validators, JSON Schema generation, rejection of extra keys, and frozen instances. This is a strong default for a Python training service that receives YAML, JSON, API payloads, or managed-job parameters. The team still owns layering, allowed overrides, secret handling, migrations, and canonical artifact generation.
-
-### Use Hydra And OmegaConf For Composed Experiment Settings
-
-Hydra suits projects with several interchangeable config groups, such as model family, dataset family, and training profile. Its Defaults List composes those groups, and its override grammar supports command-line selection and multirun workflows. OmegaConf provides the underlying hierarchical configuration, interpolation, structured configs, merge operations, missing-value checks, struct mode, and read-only mode.
-
-Composition adds power and review surface. Declare `_self_` deliberately in Hydra defaults so the merge order remains visible. Enable structured or struct mode so unknown keys fail. Convert the composed config to a resolved primitive container with missing-value checks, freeze it, and save the exact result before training. A composed source tree is provenance; the resolved artifact is the run recipe.
-
-```python
-resolved = OmegaConf.to_container(
-    cfg,
-    resolve=True,
-    throw_on_missing=True,
-)
-OmegaConf.set_readonly(cfg, True)
-```
-
-Choose Hydra once config groups and experiment sweeps create genuine composition needs. For a single modest schema, Pydantic plus a small explicit merge layer usually gives reviewers fewer moving parts.
-
-## Evolve Configuration Without Breaking Old Runs
-<!-- section-summary: Schema versions and deterministic migrations let new code interpret old run recipes without guessing their original meaning. -->
-
-Configuration schemas change as training systems mature. A field may receive a clearer name, one section may split into two, or a new value may require a unit. Old resolved configs remain part of the lineage record, so future code needs a deliberate interpretation path.
-
-Add a required integer `schema_version` at the root. The loader reads this field before normal validation. It accepts the current version, migrates specifically supported older versions through pure functions, and rejects unknown future or retired versions with a clear error.
-
-```python
-from copy import deepcopy
-def migrate_v1_to_v2(raw: dict) -> dict:
-    migrated = deepcopy(raw)
-    migrated["model"]["learning_rate"] = migrated["model"].pop("eta")
-    migrated["schema_version"] = 2
-    return migrated
-MIGRATIONS = {1: migrate_v1_to_v2}
-```
-
-A migration should preserve meaning, avoid I/O, and produce deterministic output. Record the original artifact digest, source schema version, migration steps, and final digest. If an old field cannot map safely, stop and ask for a reviewed replacement config. Guessing converts a compatibility problem into an experiment-integrity problem.
-
-### Introduce Configuration Changes In Stages
-
-Start by teaching the loader to accept both the current and previous version. Update versioned configs through review, then update scheduled jobs and templates. Observe validation failures and usage counts. Remove the older migration path only after active callers and reproducibility commitments permit it. This staged path gives teams a recovery window without keeping every historical schema alive forever.
-
-## Test Configuration Locally And In The Managed Job
-<!-- section-summary: Configuration tests should cover invalid and boundary values, precedence, stable identity, migrations, secret leakage, and provider-specific parameter adapters. -->
-
-Configuration code deserves tests because it decides which experiment the platform runs. Happy-path loading proves very little. The valuable cases are malformed, ambiguous, and close to the accepted boundary.
-
-Start with a valid minimal config, then remove required fields and add unknown keys. Exercise wrong scalar types, numeric boundaries, and invalid relationships between fields. Separate tests should cover override allowlists, precedence conflicts, digest stability, migration output, and secret redaction. A focused parameterized test keeps the failure behavior visible:
-
-```python
-import pytest
-from pydantic import ValidationError
-@pytest.mark.parametrize(
-    ("learning_rate", "rounds", "patience"),
-    [
-        (0.0, 400, 30),
-        (1.01, 400, 30),
-        (0.03, 20, 20),
-    ],
-)
-def test_invalid_model_settings(learning_rate, rounds, patience, valid_model):
-    valid_model.update(
-        learning_rate=learning_rate,
-        num_boost_round=rounds,
-        early_stopping_rounds=patience,
-    )
-    with pytest.raises(ValidationError):
-        ModelConfig.model_validate(valid_model)
-```
-
-### Validate Parameters Supplied By The Managed Job
-
-Cloud services expose different parameter channels. Azure Machine Learning command jobs can declare typed inputs and interpolate them into the command. SageMaker training containers receive hyperparameters in `/opt/ml/input/config/hyperparameters.json`, where values arrive as strings. Databricks Jobs can pass job parameters into compatible task types and expose dynamic value references such as a run ID.
-
-The adapter at this boundary should accept a small allowlist and parse each value explicitly. It also attaches the value's origin. The merged result then passes through the same schema validator. A separate cloud-only validation path would let local and managed runs accept different recipes.
-
-Here is a compact Azure Machine Learning job definition. It mounts a versioned config file and exposes one bounded smoke-test override:
+A computer can read that. A human six months later cannot. Prefer:
 
 ```yaml
-$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
-type: command
-code: ./src
-command: >-
-  python -m trainer
-  --config ${{ inputs.training_config }}
-  --set model.num_boost_round=${{ inputs.num_boost_round }}
-inputs:
-  training_config:
-    type: uri_file
-    path: azureml:credit-training-config:12
-  num_boost_round: 20
-environment: azureml:credit-trainer:8
-compute: azureml:cpu-training
+model:
+  hidden_size: 512
+  attention_heads: 8
+  dropout_probability: 0.1
 ```
 
-The job API supplies the file and the override; the training program still owns precedence, allowlisting, parsing, validation, freezing, and digest creation. A full training submission would use the reviewed round count, while this bounded override supports a fast integration check.
+Also avoid values whose meaning depends heavily on undocumented conventions:
 
-## Investigate Why Two Runs Used Different Settings
-<!-- section-summary: Comparing the same configuration digest at submission, process startup, tracking, and artifact storage pinpoints where a run recipe changed. -->
-
-**Configuration drift** means different stages believe the run used different settings. A submitter may hash one config before a scheduler adds an override. A worker may later read a mutable file again, while the tracker logs the original source. The final metric then lacks a trustworthy recipe.
-
-Record the effective-config digest at each important boundary: after submission resolution, at worker startup, in the experiment tracker, and beside the model artifact. These values should match for one run.
-
-```mermaid
-flowchart TD
-    A["Submission digest<br/>(approved effective config)"] --> B["Worker digest<br/>(bytes received by the process)"]
-    B --> C["Tracking digest<br/>(tag attached to metrics)"]
-    C --> D["Artifact digest<br/>(stored beside the model)"]
-    B -->|Mismatch| E["Inspect transport<br/>(scheduler or mounted file changed)"]
-    C -->|Mismatch| F["Inspect logging<br/>(source file logged instead of effective file)"]
-    D -->|Mismatch| G["Quarantine artifact<br/>(lineage evidence is inconsistent)"]
+```yaml
+mode: 3
 ```
 
-Suppose the submission and worker digests differ. The investigation focuses on the job adapter, override resolver, or mounted config asset. If the worker and tracker differ, the training process probably logged the source file or recalculated the digest with another serializer. If the artifact differs, keep the model out of promotion until the storage or packaging path is understood.
+Prefer:
 
-The operational response should preserve evidence. Save the submitted layers, ordered overrides, resolved bytes, serializer metadata, and job event log. Repair the faulty boundary, rerun a low-cost validation job, and compare all four digests before restoring full training. Rewriting the tracking tag after the fact would hide the original inconsistency.
+```yaml
+sampling_strategy: hard_negative
+```
 
-## The Complete Configuration Workflow
-<!-- section-summary: A reliable runner resolves, validates, freezes, records, executes, and verifies one configuration through every stage of training. -->
+Configuration is documentation as well as input. A good configuration file should give an experienced engineer a rough picture of the training experiment without requiring them to inspect the implementation. Flat configurations can become difficult:
 
-A production training configuration system follows one continuous path. It loads a versioned run config and applies reviewed layers in declared order. It accepts only allowlisted job overrides, then validates structure and meaning. Finally, it resolves immutable inputs, freezes the effective object, writes canonical bytes, calculates a digest, and attaches that evidence to the job and artifacts.
+```yaml
+hidden_size: 512
+dropout: 0.1
+learning_rate: 0.001
+weight_decay: 0.01
+batch_size: 64
+epochs: 20
+scheduler_type: cosine
+warmup_steps: 500
+max_sequence_length: 1024
+```
 
-The design gives each concern a clear home. Source code defines training behavior. The run config defines scientific choices. The job specification defines compute and execution policy. Secret managers provide credential values through workload identity. The resolved artifact joins those identities into a reproducible run record without copying secrets.
+Grouping reflects system boundaries:
 
-This foundation supports local scripts, CI smoke tests, scheduled retraining, managed cloud jobs, and experiment sweeps with the same contract. The platform may change how it transports values, while the training program keeps one validated recipe from process startup through artifact publication.
+```yaml
+model:
+  hidden_size: 512
+  dropout: 0.1
+
+optimizer:
+  name: adamw
+  learning_rate: 0.001
+  weight_decay: 0.01
+
+scheduler:
+  name: cosine
+  warmup_steps: 500
+
+training:
+  batch_size: 64
+  epochs: 20
+
+data:
+  max_sequence_length: 1024
+```
+
+This makes configuration easier to understand, validate, evolve, and compare. But avoid excessive nesting:
+
+```text
+training.algorithm.optimizer.settings.learning_rate.value
+```
+
+Structure should clarify concepts, not display cleverness. You could build configuration using:
+
+```text
+plain YAML + dataclasses
+JSON
+TOML
+Pydantic
+OmegaConf
+Hydra
+gin-config
+custom Python objects
+```
+
+The library is secondary. First decide what properties you need. For a modest project:
+
+```text
+YAML
+ ↓
+typed schema
+ ↓
+validation
+ ↓
+immutable resolved object
+```
+
+may be enough. For a large research environment you might need:
+
+```text
+configuration composition
+inheritance
+experiment variants
+CLI overrides
+parameter sweeps
+nested schemas
+```
+
+A more sophisticated library may then make sense. Choose the tool from the requirements. Don't design the architecture around whichever configuration library happens to be fashionable. Suppose you have:
+
+```yaml
+# base.yaml
+
+model:
+  hidden_size: 512
+
+training:
+  epochs: 20
+  batch_size: 64
+
+optimizer:
+  name: adamw
+  learning_rate: 0.001
+```
+
+And:
+
+```yaml
+# large_model.yaml
+
+inherits: base.yaml
+
+model:
+  hidden_size: 1024
+```
+
+This avoids duplication. But eventually you can create:
+
+```text
+base.yaml
+  ↓
+gpu.yaml
+  ↓
+transformer.yaml
+  ↓
+production.yaml
+  ↓
+experiment_17.yaml
+  ↓
+CLI override
+```
+
+Now reading `experiment_17.yaml` tells you almost nothing about the actual experiment. This is another reason to always save the **fully resolved config**. Composition may be convenient for humans. Resolved configuration is the truth consumed by the training run. Suppose version 1 looked like:
+
+```yaml
+learning_rate: 0.001
+```
+
+Later you support different learning rates:
+
+```yaml
+optimizer:
+  learning_rate: 0.001
+```
+
+What happens to old configurations? If you simply change the parser, old experiment files may stop working. There are several reasonable strategies. One is configuration versioning:
+
+```yaml
+config_version: 2
+
+optimizer:
+  learning_rate: 0.001
+```
+
+Then:
+
+```python
+if config_version == 1:
+    migrate_v1_to_v2(...)
+```
+
+Another is simply having explicit backwards-compatible parsing for a while. The deeper principle is:
+
+**Configuration formats are interfaces, and interfaces eventually acquire users.**
+
+Those users may be:
+
+```text
+your teammates
+CI pipelines
+hyperparameter sweeps
+scheduled jobs
+old experiments
+automation systems
+```
+
+So schema changes shouldn't be treated casually. Consider changing:
+
+```yaml
+model:
+  hidden_size: 512
+```
+
+to:
+
+```yaml
+model:
+  hidden_size: 1024
+```
+
+The config parser may support both perfectly. But a checkpoint produced using `512` might not load into the `1024` model. These are different concerns:
+
+```text
+Configuration schema compatibility
+    "Can I understand this config?"
+
+Checkpoint/model compatibility
+    "Can I load this old model?"
+
+Training behavior compatibility
+    "Will this setting still mean the same thing?"
+```
+
+All three matter as training systems mature.
+
+## How Do Tests and Sweeps Reveal Which Values Should Be Configurable?
+<!-- section-summary: Parser tests, tiny training runs, managed-job tests, and parameter sweeps expose both invalid settings and values that truly vary between runs. -->
+
+Tests verify that the interface works, while sweeps reveal why experiment choices must be parameterized without exposing every implementation detail.
+
+Just like the training program itself, configuration deserves multiple levels of testing.
+
+### Level 1: parser/schema tests
+
+Does this work?
+
+```yaml
+training:
+  epochs: 5
+```
+
+Does this fail?
+
+```yaml
+training:
+  epochs: banana
+```
+
+Does this fail?
+
+```yaml
+training:
+  epochs: -10
+```
+
+These tests should be extremely fast.
+
+### Level 2: training smoke test
+
+Run tiny training using a real configuration:
+
+```bash
+python -m project.train \
+    --config tests/configs/smoke.yaml \
+    --train-data tests/data/tiny.parquet
+```
+
+The configuration might contain:
+
+```yaml
+model:
+  hidden_size: 32
+
+training:
+  batch_size: 2
+  epochs: 1
+```
+
+Now you're verifying:
+
+```text
+config loads
+   ↓
+config validates
+   ↓
+model constructor understands it
+   ↓
+optimizer understands it
+   ↓
+training loop understands it
+   ↓
+run finishes
+```
+
+### Level 3: managed-job test
+
+Finally execute the configuration using the real training platform. This catches issues such as:
+
+```text
+config file not included in container
+wrong working directory
+storage paths
+environment-variable resolution
+serialization differences
+secret injection
+CLI quoting
+job-launcher overrides
+```
+
+The configuration system should behave consistently whether training runs:
+
+```text
+locally
+CI
+managed cloud training
+```
+
+Suppose you want to test:
+
+```text
+learning rate:
+    0.001
+    0.0003
+    0.0001
+
+batch size:
+    32
+    64
+```
+
+That's six experiments. A sweep system can generate:
+
+```text
+Run 1: lr=.001,  batch=32
+Run 2: lr=.001,  batch=64
+Run 3: lr=.0003, batch=32
+Run 4: lr=.0003, batch=64
+Run 5: lr=.0001, batch=32
+Run 6: lr=.0001, batch=64
+```
+
+Then each run invokes exactly the same training program:
+
+```text
+                    train.py
+
+                      ▲
+          ┌───────────┼───────────┐
+          │           │           │
+       config 1    config 2   ... config 6
+```
+
+This only works cleanly when training behavior is properly parameterized. If the learning rate is buried in Python:
+
+```python
+lr = 0.001
+```
+
+your sweep infrastructure has to modify source code. That's a strong signal that the value belongs in configuration. Once configuration becomes useful, there is a temptation to make every implementation detail configurable.
+
+For example:
+
+```yaml
+relu_in_layer_1: true
+use_bias_in_layer_3: false
+matmul_strategy_7: tiled
+internal_buffer_size: 918
+```
+
+This creates a massive public interface. Every configurable field now becomes something you may need to:
+
+```text
+validate
+document
+support
+version
+compare
+reason about
+```
+
+A better principle is:
+
+**Expose a setting when different legitimate runs are expected to choose different values.**
+
+If something is simply an implementation decision, keep it in code.
+
+For example:
+
+```python
+def build_attention(...):
+    # implementation detail
+```
+
+not necessarily:
+
+```yaml
+attention_internal_projection_loop_strategy: ...
+```
+
+The smallest sufficient configuration is often the most maintainable. Ask:
+
+Would I want to change this without changing the training algorithm
+
+If yes, configuration is a strong candidate.
+
+For example:
+
+```text
+learning rate        → probably config
+batch size           → probably config
+number of layers     → probably config
+dropout              → probably config
+scheduler            → probably config
+```
+
+Now ask:
+
+Is this merely where today's job happens to run
+
+Then it's more likely runtime information.
+
+```text
+Kubernetes pod name     → runtime
+temporary disk path     → runtime
+GPU hostname            → runtime
+job attempt number      → runtime
+```
+
+Ask:
+
+Is it confidential
+
+Then it's a secret.
+
+```text
+API key                 → secret
+database password       → secret
+cloud credential        → secret
+```
+
+And ask:
+
+Is this how the algorithm itself is implemented
+
+Then it likely belongs in code.
+
+## How Does the Complete Configuration Workflow Support Reproducibility?
+<!-- section-summary: A reproducible workflow loads, merges, resolves, validates, freezes, records, and then uses one configuration object throughout the run. -->
+
+The final workflow connects all of these controls to the run record so the model's recipe remains available after the original config machinery changes.
+
+A moderately sized project could use:
+
+```text
+project/
+│
+├── configs/
+│   ├── base.yaml
+│   ├── small.yaml
+│   └── large.yaml
+│
+├── src/project/
+│   ├── config.py
+│   ├── model.py
+│   ├── training.py
+│   └── train.py
+│
+└── tests/
+    └── configs/
+```
+
+`config.py` handles:
+
+```text
+loading
+merging
+validation
+defaults
+schema
+serialization
+```
+
+`model.py` handles:
+
+```text
+model implementation
+```
+
+`training.py` handles:
+
+```text
+training algorithm
+```
+
+`train.py` coordinates everything.
+
+Conceptually:
+
+```python
+def main():
+    args = parse_args()
+
+    config = load_config(args.config)
+    config = apply_overrides(config, args.overrides)
+    config = validate_and_resolve(config)
+
+    save_config(config, args.output_dir)
+
+    train(config, args)
+```
+
+The critical order is:
+
+```text
+LOAD
+ ↓
+MERGE
+ ↓
+RESOLVE
+ ↓
+VALIDATE
+ ↓
+RECORD
+ ↓
+TRAIN
+```
+
+Let's put the whole process together. A user launches:
+
+```bash
+python -m recommender.train \
+    --config configs/large.yaml \
+    --train-data s3://datasets/v42/train \
+    --output-dir s3://runs/8921 \
+    --set optimizer.learning_rate=0.0003
+```
+
+Your program starts with defaults:
+
+```yaml
+model:
+  dropout: 0.1
+
+optimizer:
+  name: adamw
+  learning_rate: 0.001
+
+training:
+  batch_size: 32
+  epochs: 10
+```
+
+Then loads `large.yaml`:
+
+```yaml
+model:
+  hidden_size: 1024
+  num_layers: 12
+
+training:
+  batch_size: 64
+  epochs: 30
+```
+
+Then applies:
+
+```text
+optimizer.learning_rate = 0.0003
+```
+
+The resolved configuration becomes:
+
+```yaml
+model:
+  hidden_size: 1024
+  num_layers: 12
+  dropout: 0.1
+
+optimizer:
+  name: adamw
+  learning_rate: 0.0003
+
+training:
+  batch_size: 64
+  epochs: 30
+```
+
+Then:
+
+```text
+validate types
+      ↓
+validate constraints
+      ↓
+freeze configuration
+      ↓
+save resolved_config.yaml
+      ↓
+initialize expensive resources
+      ↓
+load training data
+      ↓
+construct model
+      ↓
+train
+      ↓
+save metrics/model
+```
+
+The run directory might end up as:
+
+```text
+runs/8921/
+│
+├── resolved_config.yaml
+├── model.pt
+├── metrics.json
+├── metadata.json
+└── checkpoints/
+```
+
+And metadata might identify:
+
+```text
+code commit
+dataset version
+container image
+training platform
+random seed
+```
+
+Together, those artifacts explain what happened. Recall the training pipeline:
+
+```text
+Prepare Data
+     ↓
+Train Model
+     ↓
+Evaluate
+     ↓
+Register
+     ↓
+Deploy
+```
+
+A pipeline might launch many training runs:
+
+```text
+                  Training Pipeline
+                        │
+           ┌────────────┼─────────────┐
+           ▼            ▼             ▼
+      baseline       candidate A   candidate B
+       config          config        config
+           │            │             │
+           ▼            ▼             ▼
+         train         train          train
+```
+
+The orchestration system doesn't need separate Python programs for each experiment.
+
+Instead:
+
+```text
+one implementation
++
+different configurations
+=
+different training runs
+```
+
+This makes configuration one of the primary interfaces between **experiment definition** and **pipeline execution**. Imagine someone says:
+
+"Retrain exactly the model we deployed three months ago."
+
+A weak system has:
+
+```text
+model.pt
+```
+
+Maybe someone remembers roughly how it was trained. A better system has:
+
+```text
+model.pt
+config.yaml
+```
+
+A much stronger system has:
+
+```text
+code commit
+dataset version
+resolved configuration
+random seed
+dependency/container version
+training environment metadata
+```
+
+Now the training run is closer to a reproducible computation:
+
+$$
+\text{Artifact}
+=
+f(
+\text{code},
+\text{data},
+\text{resolved config},
+\text{environment},
+\text{randomness}
+)
+$$
+
+The configuration file is therefore not merely a convenience for avoiding hard-coded constants. It is part of the **identity and provenance of a model**. A useful hierarchy is:
+
+```text
+CODE
+"What training machinery exists?"
+
+DATA
+"What examples are available?"
+
+CONFIGURATION
+"Which training recipe should we use?"
+
+RUNTIME
+"Where/how should this job execute?"
+
+SECRETS
+"What credentials does this environment need?"
+
+STATE
+"How far has the currently running job progressed?"
+```
+
+Keeping those concepts separate dramatically simplifies training systems. The core configuration workflow is:
+
+```text
+human / pipeline
+      │
+      ▼
+select base configuration
+      │
+      ▼
+apply experiment configuration
+      │
+      ▼
+apply explicit overrides
+      │
+      ▼
+resolve defaults
+      │
+      ▼
+validate
+      │
+      ▼
+freeze
+      │
+      ▼
+record final configuration
+      │
+      ▼
+start training
+      │
+      ▼
+model + metrics + config + metadata
+```
+
+So the deepest principle is:
+
+> **A training configuration is a declarative description of the training recipe that turns one general training program into one specific training experiment.**
+
+The source config is what you **asked for**. The resolved config is what the system **actually used**. And for reproducibility, debugging, experiment comparison, and pipeline automation, the second one is the artifact that ultimately matters most.
 
 ![Eight-step training configuration workflow from reviewed settings and precedence through validation, preflight, freezing, job start, and recording the configuration digest with run artifacts.](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/training-config-workflow-summary.png)
 
 *Run settings, runtime resources, and secret resolution remain separate while one validated recipe follows the job.*
 
-## References
+## Check Your Answers
 
-- [Pydantic Documentation: Configuration](https://docs.pydantic.dev/latest/api/config/)
-- [Pydantic Documentation: Validators](https://docs.pydantic.dev/latest/concepts/validators/)
-- [Pydantic Documentation: Serialization](https://docs.pydantic.dev/latest/concepts/serialization/)
-- [Hydra Documentation: The Defaults List](https://hydra.cc/docs/advanced/defaults_list/)
-- [OmegaConf Documentation: Usage](https://omegaconf.readthedocs.io/en/latest/usage.html)
-- [MLflow Documentation: Tracking](https://mlflow.org/docs/latest/ml/tracking/)
-- [Azure Machine Learning Documentation: Command Job YAML Schema](https://learn.microsoft.com/en-us/azure/machine-learning/reference-yaml-job-command?view=azureml-api-2)
-- [Amazon SageMaker AI Documentation: How Training Information Reaches A Container](https://docs.aws.amazon.com/sagemaker/latest/dg/your-algorithms-training-algo-running-container.html)
-- [Gemini Enterprise Agent Platform serverless training overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/overview)
-- [Databricks Documentation: Job Parameters](https://docs.databricks.com/aws/en/jobs/job-parameters)
-- [Databricks Documentation: Dynamic Value References](https://docs.databricks.com/aws/en/jobs/dynamic-value-references)
+Use these short answers to revisit the reasoning behind each section.
+
+:::expand[What Does a Training Configuration Control?]{kind="recap"}
+Training code defines the available behavior, while configuration selects the recipe used by one particular run.
+:::
+
+:::expand[What Belongs in Code, the Training Recipe, Runtime Settings, and Secrets?]{kind="recap"}
+Model choices, data choices, runtime placement, and credentials have different meanings, owners, and security requirements.
+:::
+
+:::expand[How Do You Keep Configuration Small and Validate It Early?]{kind="recap"}
+A small declarative interface with type and relationship checks catches invalid recipes before data loading or accelerator allocation.
+:::
+
+:::expand[How Do You Resolve, Freeze, and Record the Settings a Run Used?]{kind="recap"}
+Defaults, files, and explicit overrides must follow a documented precedence and produce one immutable resolved configuration before training begins.
+:::
+
+:::expand[How Does Configuration Explain Differences Between Training Runs?]{kind="recap"}
+The resolved configuration connects a model artifact to the exact recipe used alongside code, data, environment, randomness, and hardware.
+:::
+
+:::expand[How Should Configuration Names, Structure, and Compatibility Evolve?]{kind="recap"}
+Semantic field names, concept-based grouping, deliberate schema changes, and separate model compatibility rules keep old runs understandable.
+:::
+
+:::expand[How Do Tests and Sweeps Reveal Which Values Should Be Configurable?]{kind="recap"}
+Parser tests, tiny training runs, managed-job tests, and parameter sweeps expose both invalid settings and values that truly vary between runs.
+:::
+
+:::expand[How Does the Complete Configuration Workflow Support Reproducibility?]{kind="recap"}
+A reproducible workflow loads, merges, resolves, validates, freezes, records, and then uses one configuration object throughout the run.
+:::

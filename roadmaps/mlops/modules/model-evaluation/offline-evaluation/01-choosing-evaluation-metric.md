@@ -9,380 +9,1356 @@ id: "article-mlops-model-evaluation-choosing-evaluation-metric"
 
 ## Table of Contents
 
-1. [What An Evaluation Metric Tells You About A Model](#what-an-evaluation-metric-tells-you-about-a-model)
-2. [Start With the Task, Decision, Cost, and Operating Rule](#start-with-the-task-decision-cost-and-operating-rule)
-3. [Match the Metric to What the Model Predicts](#match-the-metric-to-what-the-model-predicts)
-4. [Choose One Main Metric And Set Limits On Other Harms](#choose-one-main-metric-and-set-limits-on-other-harms)
-5. [Choose The Decision Threshold Before Judging The Model](#choose-the-decision-threshold-before-judging-the-model)
-6. [Check Whether Predicted Probabilities Match Real Outcomes](#check-whether-predicted-probabilities-match-real-outcomes)
-7. [Check Whether Offline Improvements Lead To Better Production Outcomes](#check-whether-offline-improvements-lead-to-better-production-outcomes)
-8. [Add Baselines, Segments, and Uncertainty](#add-baselines-segments-and-uncertainty)
-9. [Record How Every Model Will Be Evaluated](#record-how-every-model-will-be-evaluated)
-10. [The Main Idea](#the-main-idea)
-11. [References](#references)
+1. [What Decision Should an Evaluation Metric Represent?](#what-decision-should-an-evaluation-metric-represent)
+2. [How Do Prediction Types Require Different Metrics?](#how-do-prediction-types-require-different-metrics)
+3. [How Do Thresholds and Calibration Connect Predictions to Decisions?](#how-do-thresholds-and-calibration-connect-predictions-to-decisions)
+4. [How Do a Primary Metric, Guardrails, Capacity, and Baselines Work Together?](#how-do-a-primary-metric-guardrails-capacity-and-baselines-work-together)
+5. [How Do Tails, Segments, Uncertainty, and Dataset Composition Change a Metric's Meaning?](#how-do-tails-segments-uncertainty-and-dataset-composition-change-a-metrics-meaning)
+6. [How Do You Prevent Metric Gaming and Measure Expected Utility?](#how-do-you-prevent-metric-gaming-and-measure-expected-utility)
+7. [How Do You Turn Product Costs into a Repeatable Evaluation Specification?](#how-do-you-turn-product-costs-into-a-repeatable-evaluation-specification)
+8. [What Complete Framework Should Guide Metric Selection?](#what-complete-framework-should-guide-metric-selection)
+9. [Check Your Answers](#check-your-answers)
 
-## What An Evaluation Metric Tells You About A Model
-<!-- section-summary: An evaluation metric turns predictions and known outcomes into a number that answers one defined question about model behaviour. -->
+A fraud model reports an AUC improvement, yet the investigation team can review only 500 transactions each day. If the new ranking fills that queue with more false alarms, the headline metric improved while the real decision process got worse.
 
-Imagine a model that selects urgent cases for a review queue. Out of 1,000 cases, 50 are truly urgent. The model catches 45 of them and sends 150 cases to reviewers.
+An **evaluation metric** compresses part of the path from prediction to decision and outcome. Choosing one therefore requires more than matching a familiar formula to a model type. The team must decide which errors matter, where a threshold will operate, which capacity constraints apply, and which regressions must remain visible.
 
-Several descriptions of that same result are true:
+These questions move from the production decision to a written evaluation specification that can be applied consistently to every candidate:
 
-- It gets 890 of the 1,000 cases correct, so accuracy is 89 percent.
-- It catches 45 of 50 urgent cases, so recall is 90 percent.
-- It sends 45 useful cases among 150 alerts, so precision is 30 percent.
-- It creates 150 reviews, which may fit the team's capacity or overwhelm it.
+1. **What Decision Should an Evaluation Metric Represent?**
+2. **How Do Prediction Types Require Different Metrics?**
+3. **How Do Thresholds and Calibration Connect Predictions to Decisions?**
+4. **How Do a Primary Metric, Guardrails, Capacity, and Baselines Work Together?**
+5. **How Do Tails, Segments, Uncertainty, and Dataset Composition Change a Metric's Meaning?**
+6. **How Do You Prevent Metric Gaming and Measure Expected Utility?**
+7. **How Do You Turn Product Costs into a Repeatable Evaluation Specification?**
+8. **What Complete Framework Should Guide Metric Selection?**
 
-No number is universally correct. Accuracy answers how often the predicted class matches the label. Recall answers how much urgent work the model found. Precision answers how concentrated the alerts are. Alert volume describes the workload created by the chosen threshold.
+## What Decision Should an Evaluation Metric Represent?
+<!-- section-summary: A useful metric represents a specific prediction, decision, outcome, and cost rather than rewarding an abstract score in isolation. -->
 
-An **evaluation metric** is a rule that summarizes predictions and known outcomes for a particular question. The metric may count correct decisions, measure numeric error, reward useful ranking positions, or judge probability estimates. Its value comes from the question it represents.
+A model score is useful only if it helps decide what the system should do, so metric selection starts outside the metric catalogue.
 
-A model can improve its accuracy and still make the product worse if the improved cases matter little while costly mistakes increase. **Choosing a metric is a product-decision problem expressed through measurement.** The team first defines what the model predicts and how the product uses that output. It then identifies the costly mistakes and the operating rule that turns predictions into action. A metric can support the intended decision only after those choices are explicit.
+Choosing an evaluation metric is not mainly a mathematics problem. It is a **decision-design problem**. A metric is useful only when it measures something that matters for the decision the model will eventually influence. The core chain is:
 
-You can think of metric selection through five connected layers:
+$$
+\text{Task} \rightarrow \text{Prediction} \rightarrow \text{Decision} \rightarrow \text{Outcome} \rightarrow \text{Cost/Benefit}
+$$
 
-1. **Task:** What output does the model produce, and what outcome should it predict?
-2. **Decision:** Which user, workflow, or system action consumes that output?
-3. **Cost:** Which errors or missed benefits matter most?
-4. **Operating rule:** Which threshold, top-k cutoff, quantile, or interval creates the action?
-5. **Evidence:** Which primary metric, guardrails, segments, baselines, and uncertainty checks can support the claim?
+An evaluation metric is an attempt to compress some part of that chain into a number. If you choose the wrong number, you can improve the metric while making the real system worse. Suppose a model produces predictions:
 
-```mermaid
-flowchart TD
-    T["Task<br/>What is predicted?"] --> D["Decision<br/>What action follows?"]
-    D --> C["Cost<br/>Which mistakes matter?"]
-    C --> O["Operating rule<br/>Threshold, top-k, quantile, or interval"]
-    O --> M["Metric set<br/>Primary measure and guardrails"]
-    M --> E["Evidence limits<br/>Baseline, segments, uncertainty"]
-    E --> R["Release question"]
+$$
+\hat y = f(x)
+$$
 
-    class T,D,C purpose
-    class O,M mechanism
-    class E,R decision
-```
+You have true outcomes:
 
-The order matters. Starting with a familiar metric can lead a team to optimize what is convenient to calculate. Starting with the decision lets the team choose evidence that represents the real benefit and harm.
+$$
+y
+$$
+
+An evaluation metric is some function:
+
+$$
+M(y,\hat y)
+$$
+
+that summarizes how predictions compare with reality. For example, accuracy is:
+
+$$
+\text{Accuracy}
+=
+\frac{\text{Number of correct predictions}}
+{\text{Number of predictions}}
+$$
+
+This sounds objective, but notice what accuracy quietly assumes:
+
+* every example matters equally,
+* every type of mistake costs roughly the same,
+* predictions are converted into discrete decisions in a sensible way,
+* class frequencies in the evaluation set resemble the environment you care about.
+
+Those assumptions often fail. So a metric should never be interpreted as:
+
+"This model is 94% good."
+
+It means something narrower:
+
+"According to this particular mathematical definition, on this particular dataset, under these assumptions, the model scored 94%."
+
+That distinction is fundamental. A common mistake is:
+
+"This is a classification problem, so let's use accuracy or F1."
+
+Instead start with four questions:
+
+1. **What decision are we trying to make?**
+2. **What information does the model provide for that decision?**
+3. **What happens when the decision is wrong?**
+4. **How will the model actually be operated?**
+
+Consider fraud detection. The model might estimate:
+
+$$
+P(\text{fraud}\mid x)
+$$
+
+But the company does not ultimately care about probabilities. It cares about actions such as:
+
+* approve transaction,
+* block transaction,
+* send transaction for manual review.
+
+Those actions have different consequences. A false negative may mean:
+
+$$
+\text{fraud loss} = \$5{,}000
+$$
+
+while a false positive may mean:
+
+$$
+\text{customer inconvenience} + \text{lost sale}
+$$
+
+Perhaps roughly:
+
+$$
+\$40
+$$
+
+The problem is therefore not simply:
+
+"Which model predicts fraud most accurately?"
+
+It is closer to:
+
+$$
+\text{Choose decisions that minimize expected business loss}
+$$
+
+A theoretically ideal evaluation criterion might therefore be:
+
+$$
+\text{Expected Cost}
+=
+C_{FP}P(FP)+C_{FN}P(FN)
+$$
+
+possibly with additional costs for manual review, delays, or customer churn. This is the first principle:
+
+> **Evaluate the consequences of prediction errors, not merely the predictions themselves.**
+
+A useful way to choose metrics is to reason backward. Ask:
+
+### Step 1: What outcome matters
+
+Examples:
+
+* dollars recovered,
+* diseases detected,
+* customer churn prevented,
+* unsafe content prevented,
+* deliveries arriving on time.
+
+### Step 2: What decision produces that outcome
+
+Examples:
+
+* investigate a transaction,
+* recommend a medical test,
+* contact a customer,
+* block a piece of content,
+* reroute a shipment.
+
+### Step 3: What prediction supports that decision
+
+Examples:
+
+$$
+P(\text{fraud})
+$$
+
+$$
+P(\text{disease})
+$$
+
+$$
+P(\text{churn})
+$$
+
+or a continuous quantity such as:
+
+$$
+\widehat{\text{delivery time}}
+$$
+
+### Step 4: What metric tells you whether that prediction is useful
+
+Only now should you choose accuracy, recall, MAE, log loss, calibration error, ranking metrics, or something else. Different predictions require different kinds of evaluation.
+
+### Binary classification
+
+Suppose:
+
+$$
+y\in\{0,1\}
+$$
+
+Examples:
+
+* fraud/not fraud,
+* spam/not spam,
+* disease/no disease.
+
+Important metrics include:
+
+### Precision
+
+$$
+\text{Precision}
+=
+\frac{TP}{TP+FP}
+$$
+
+Interpretation:
+
+Of the examples we predicted positive, how many really were positive
+
+Use precision when **false alarms are expensive**.
+
+### Recall
+
+$$
+\text{Recall}
+=
+\frac{TP}{TP+FN}
+$$
+
+Interpretation:
+
+Of all the true positives, how many did we find
+
+Use recall when **missing positives is expensive**.
+
+### F1 score
+
+$$
+F_1
+=
+2\frac{\text{Precision}\times\text{Recall}}
+{\text{Precision}+\text{Recall}}
+$$
+
+F1 balances precision and recall. But notice something important. F1 implicitly treats precision and recall symmetrically. The real world may not. If missing a cancer case is 100 times worse than triggering another test, F1 may not reflect the actual objective.
+
+### Multiclass classification
+
+Suppose:
+
+$$
+y\in\{1,2,\ldots,K\}
+$$
+
+Examples:
+
+* image categories,
+* support ticket categories,
+* document classifications.
+
+Accuracy may be reasonable when classes and error costs are similar. But if classes are imbalanced, you may want:
+
+* macro precision,
+* macro recall,
+* macro F1,
+* per-class performance.
+
+For example, imagine:
+
+| Class     | Frequency |
+| --------- | --------: |
+| Normal    |       98% |
+| Dangerous |        2% |
+
+A model predicting "normal" every time gets:
+
+$$
+98\%
+$$
+
+accuracy. Yet it detects:
+
+$$
+0\%
+$$
+
+of dangerous cases. Accuracy is mathematically correct but operationally useless.
+
+## How Do Prediction Types Require Different Metrics?
+<!-- section-summary: Classification, regression, ranking, and probability estimates expose different error structures and therefore require different measurements. -->
+
+After the decision is clear, the form of the prediction determines which kinds of error the evaluation can measure.
+
+Suppose a model predicts:
+
+$$
+\hat y \in \mathbb R
+$$
+
+Examples:
+
+* price,
+* demand,
+* delivery time,
+* temperature.
+
+Two common metrics are MAE and MSE.
+
+### Mean Absolute Error
+
+$$
+MAE
+=
+\frac{1}{n}\sum_i|y_i-\hat y_i|
+$$
+
+A 10-unit error costs twice as much as a 5-unit error.
+
+### Mean Squared Error
+
+$$
+MSE
+=
+\frac{1}{n}\sum_i(y_i-\hat y_i)^2
+$$
+
+A 10-unit error contributes:
+
+$$
+10^2=100
+$$
+
+while a 5-unit error contributes:
+
+$$
+5^2=25
+$$
+
+So the 10-unit mistake is penalized four times as much. That means choosing MSE implicitly says:
+
+"Large mistakes deserve disproportionately larger penalties."
+
+That may be appropriate for some problems and inappropriate for others. The metric is therefore encoding a **cost function**. Sometimes exact probabilities or labels matter less than ordering. Imagine a sales team can call only 1,000 customers. The model ranks customers by likelihood of purchasing. You may not care whether the predicted probability is:
+
+$$
+0.71
+$$
+
+or:
+
+$$
+0.82
+$$
+
+You care whether good prospects appear near the top. Metrics such as:
+
+* precision@K,
+* recall@K,
+* NDCG,
+* average precision,
+
+may therefore be more appropriate. For instance:
+
+$$
+\text{Precision@100}
+=
+\frac{\text{relevant examples among top 100}}
+{100}
+$$
+
+This directly mirrors the operating constraint:
+
+"We can act on only 100 cases."
+
+This distinction is one of the most important ideas in model evaluation. A model might output:
+
+$$
+P(y=1\mid x)=0.73
+$$
+
+That is a **prediction**. A business rule may say:
+
+$$
+\text{take action if }P(y=1)>0.8
+$$
+
+That is a **decision rule**. Prediction quality and decision quality are related but not identical. A model can have excellent probability estimates but poor decisions if the threshold is wrong. Conversely, a model whose probability estimates are imperfect may still produce useful decisions at a particular operating threshold.
 
 ![The metric-selection path connects a product decision to mistakes, an operating rule, guardrails, and release evidence](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/metric-choice-flow.png)
 
 *A metric gains meaning from the task, product action, cost of mistakes, and operating rule around it.*
 
-## Start With the Task, Decision, Cost, and Operating Rule
-<!-- section-summary: A useful metric contract starts from the prediction target and follows the output through the product action and its consequences. -->
+## How Do Thresholds and Calibration Connect Predictions to Decisions?
+<!-- section-summary: Thresholds create operational decisions, while calibration and proper scoring rules test whether probability values carry reliable meaning. -->
 
-A list of metric names gives little guidance until the reader can picture the decision being measured. Start with one complete use of the prediction: the outcome, the action, the people or system affected, and the practical limits around that action.
+Many predictions are scores or probabilities rather than final actions, which makes the operating threshold and probability meaning part of evaluation.
 
-Suppose a model estimates the chance that an account will miss a payment in the next thirty days. The product sends high-risk cases to a support team that can contact 2,000 accounts each day. A missed high-risk account loses the chance for early help. An unnecessary contact uses staff time and may frustrate a customer.
+Suppose a classifier outputs scores between 0 and 1. You must eventually choose a threshold:
 
-This short description reveals four different objects:
+$$
+\hat y=
+\begin{cases}
+1  p > t\\
+0  p\leq t
+\end{cases}
+$$
 
-- The **task** is probability prediction for a defined outcome and time horizon.
-- The **decision** is whether an account enters the contact queue.
-- The **costs** include missed high-risk accounts, unnecessary contact, and staff workload.
-- The **operating rule** selects accounts from the scores while respecting capacity.
+The threshold $$t$$ controls the tradeoff between false positives and false negatives. Lowering $$t$$:
 
-The metric set can now answer a real question. Recall can measure the share of missed-payment cases found. Precision can show how many selected contacts were useful. Recall among the top 2,000 scores can measure performance at the queue's actual daily capacity. Calibration can test whether risk bands behave like the probabilities shown to planners.
+$$
+\Downarrow t
+$$
 
-### Define the outcome before measuring it
+usually causes:
 
-A target label needs a precise meaning. “Churn,” “fraud,” “urgent,” and “successful recommendation” can each hide several definitions.
+$$
+\text{Recall}\uparrow
+$$
 
-For the payment case, the team should specify:
+but often:
 
-- what event counts as a missed payment;
-- the population eligible for scoring;
-- the thirty-day prediction horizon;
-- the time after which the label is considered mature;
-- exclusions such as closed or disputed accounts.
+$$
+\text{Precision}\downarrow
+$$
 
-A metric cannot repair a label that describes the wrong event. If the product wants to prevent missed payments and the label records only account closure, the evaluation measures another problem.
+because the system becomes more willing to predict positive.
 
-### Describe error costs in ordinary language
+### Example
 
-Teams often say that false negatives are “more expensive” than false positives. The useful next step is to explain the expense.
+Suppose a disease screening system behaves like this:
 
-A false negative might mean lost revenue, delayed care, missed fraud, or an urgent ticket buried in a queue. A false positive might mean a blocked payment, unnecessary review, intrusive contact, or wasted inventory. The cost may differ by segment, amount, or time.
+| Threshold | Recall | Precision |
+| --------- | -----: | --------: |
+| 0.9       |    45% |       98% |
+| 0.7       |    71% |       94% |
+| 0.5       |    89% |       82% |
+| 0.3       |    97% |       60% |
 
-Exact money values are helpful if they are trustworthy. Many teams lack a single reliable cost. In that case, a primary metric plus explicit guardrails communicates the trade-off more honestly than an invented weighted score.
+Which threshold is "best"? There is no mathematical answer without knowing the consequences. If missing the disease is extremely dangerous, perhaps 0.3 is appropriate. If treatment is invasive and dangerous, perhaps 0.7 or 0.9 is better. Therefore:
 
-### Name the action rule
+> **Threshold selection is part of system design, not merely a post-processing detail.**
 
-Models often emit a score or ordered list, while products take discrete actions. A classifier may alert above a threshold. A search system may display ten results. A forecast may drive stock for the predicted median or a high quantile. A risk system may assign different actions to several probability bands.
+Metrics such as ROC-AUC evaluate ranking performance across many thresholds. AUC can be useful. But production generally operates at **one threshold or a small number of operating points**. Suppose:
 
-The operating rule belongs in evaluation because it changes the delivered behaviour. The same model can produce high recall and heavy workload at one threshold, then lower recall and lighter workload at another.
+$$
+AUC_A = 0.94
+$$
 
-## Match the Metric to What the Model Predicts
-<!-- section-summary: Classification, regression, ranking, and probability metrics answer different questions because their outputs and target properties differ. -->
+and
 
-The product question tells the team what matters, and the model output determines how that behaviour can be measured. A class label, numeric forecast, ordered list, and probability preserve different information. Their metrics therefore answer different kinds of questions.
+$$
+AUC_B = 0.92
+$$
 
-### Class labels and decisions
+Model A looks better overall. But at the production threshold, perhaps:
 
-A classification decision assigns one or more categories. The confusion matrix counts true positives, false positives, false negatives, and true negatives. Accuracy, precision, recall, specificity, balanced accuracy, and F-scores summarize different relationships among those counts.
+| Model | Precision | Recall |
+| ----- | --------: | -----: |
+| A     |       82% |    70% |
+| B     |       90% |    76% |
 
-Use these metrics to judge decisions at a defined threshold or rule. Accuracy can work if classes and mistake costs are reasonably balanced. It can mislead on rare events: a model that predicts “ordinary” for every transaction may exceed 99 percent accuracy and catch no fraud.
+Model B may be operationally superior. Therefore AUC often answers:
 
-A confusion-matrix report should preserve the underlying counts because each rate highlights a different mistake. At selection time, the key question is which error count maps to the product harm and which second metric protects the competing cost.
+"How well does the model rank positives across thresholds?"
 
-### Numeric predictions
+not:
 
-A regression model predicts a number such as demand, arrival time, energy use, or claim amount.
+"How well will our actual production rule work?"
 
-**Mean absolute error (MAE)** reports the average absolute miss in the target's units. An MAE of 8 minutes has an immediate operational meaning. **Mean squared error (MSE)** and its square root, RMSE, give large misses more influence because error is squared. That can fit a product where a few large errors carry serious cost.
+Both questions may matter, but they are different. Imagine a model predicts:
 
-The choice also relates to what the model is trying to estimate. Absolute error is aligned with the conditional median, while squared error is aligned with the conditional mean. Quantile loss evaluates a chosen quantile, which is useful if overprediction and underprediction have different consequences.
+$$
+P(\text{default})=0.20
+$$
 
-Suppose a stock planner wants enough inventory for unusually high demand. An average forecast may be the wrong target. A high-quantile forecast and quantile loss can represent the asymmetric cost of running out. The prediction target determines the metric. Choosing it only for reporting would separate evaluation from the operational goal.
+for many loans. If the model is calibrated, then roughly:
 
-### Ordered results
+$$
+20\%
+$$
 
-A ranking or retrieval system produces an ordered list. The user sees the first few positions, so ordinary classification accuracy loses the ordering information.
+of such loans should actually default. More formally:
 
-**Precision at k** asks how many of the first `k` results are relevant. **Recall at k** asks how much of the available relevant set appears there. **Mean reciprocal rank (MRR)** rewards placing the first relevant result early. **Normalized discounted cumulative gain (NDCG)** can reward several graded-relevance results and discounts lower positions.
+$$
+P(Y=1\mid\hat p=p)\approx p
+$$
 
-The product layout determines `k`. A search page showing ten results needs a different cutoff from a recommender displaying three cards. The report should preserve the query groups, relevance labels, and cutoff because all three change the meaning of the score.
+So among cases where:
 
-### Probabilities and distributions
+$$
+\hat p\approx0.7
+$$
 
-Some products use the probability itself. Risk bands may control staffing, pricing, human review, or communication. Metrics that judge only the final class can miss poor probability quality.
+roughly 70% should be positive.
 
-Log loss and Brier loss are **proper scoring rules**: in expectation, they reward honest probability estimates. Calibration curves compare predicted risk with observed frequency. The loss measures the quality of probabilities across individual cases, while calibration groups similar predictions and checks whether their observed frequency matches the stated risk. For example, roughly 70 out of 100 cases assigned a probability near 0.70 should produce the outcome. Teams inspect both because one summary loss can hide a poorly calibrated range that drives an important product decision.
+### Why calibration matters
 
-A compact map helps summarize the choice after the theory is understood:
+Suppose two models rank customers identically. Model A says:
 
-| Model output | Typical product question | Useful metric family |
-|---|---|---|
-| Class decision | Which mistakes occur at this operating point? | Confusion-matrix metrics |
-| Numeric point | How large are errors, and how should large misses count? | MAE, MSE/RMSE, quantile loss |
-| Ordered list | Are useful items placed inside the visible positions? | Precision@k, recall@k, MRR, NDCG |
-| Probability | Do scores reward good probability estimates and match observed risk? | Log loss, Brier loss, calibration curve |
+$$
+0.9,\;0.8,\;0.7
+$$
 
-## Choose One Main Metric And Set Limits On Other Harms
-<!-- section-summary: A primary metric represents the main intended benefit, while guardrails keep other harms, constraints, and important populations visible. -->
+Model B says:
 
-Production decisions rarely have one consequence. A model may find more valuable cases and create more customer friction at the same time. Compressing both effects into one unexplained number hides the trade-off that reviewers need to judge.
+$$
+0.6,\;0.4,\;0.2
+$$
 
-A **primary metric** represents the main improvement the model is expected to deliver. **Guardrail metrics** protect other outcomes that must stay inside limits.
+Their ranking could be identical. So their AUC might also be identical. But if those probabilities are used to estimate:
 
-For a fraud-review queue, recall of fraudulent value might be primary. Precision and reviews per day protect customer friction and analyst capacity. For an arrival-time model, MAE might be primary while p95 absolute error and late-underestimation rate protect the tail. For search, NDCG@10 might be primary while zero-result rate and latency act as guardrails.
+* expected revenue,
+* expected risk,
+* insurance premiums,
+* resource allocation,
 
-This pattern helps reviewers interpret mixed results. If the primary metric improves and a workload guardrail fails, the candidate has found more useful cases through an unaffordable workflow. The team can adjust the operating rule, add capacity, narrow the scope, or reject the release.
+the two models imply radically different decisions. Thus:
 
-### Use a utility score only if its weights have real meaning
+**Ranking quality and probability quality are different dimensions of model quality.**
 
-A utility or cost function can combine outcomes if the organization understands their relative value. For example:
+Metrics such as:
 
-`utility = recovered fraud value - review cost - customer friction cost`
+* log loss,
+* Brier score,
+* calibration plots,
+* expected calibration error,
 
-This measure connects directly to a business decision if each term comes from defensible evidence. Weak estimates can make a precise-looking score fragile. Keep the underlying outcomes visible beside the total so reviewers can see what changed.
+can reveal this. Suppose the real probability of an event is:
 
-### Do Not Trade Away A Safety Limit For A Better Main Score
+$$
+P(y=1)=0.7
+$$
 
-If one metric selects the model and every other metric is reviewed casually, teams tend to accept regressions after investing in a candidate. Write primary and guardrail limits before the final holdout result appears. The same rule should apply to each candidate in the review round.
+You want the model to report:
 
-Composite leaderboards can still support exploration. Release evidence needs the actual decision dimensions: benefit, harm, capacity, segments, and uncertainty.
+$$
+0.7
+$$
 
-## Choose The Decision Threshold Before Judging The Model
-<!-- section-summary: A threshold or cutoff turns model outputs into product actions and determines the precision, recall, workload, and harm users experience. -->
+rather than exaggerating confidence. Metrics such as log loss encourage this. For binary classification:
 
-A binary classifier often emits a score between zero and one. The threshold turns that score into an action. Lowering it usually selects more cases, which often raises recall and alert volume while reducing precision. Raising it usually selects fewer cases and risks more false negatives.
+$$
+\text{Log Loss}
+=
+-\frac{1}{n}
+\sum_i
+[y_i\log p_i+(1-y_i)\log(1-p_i)]
+$$
 
-The default `0.5` threshold has no automatic product meaning. It may be inherited from a library's `predict()` method even though the workflow can handle only a fixed number of cases.
+Confidently wrong predictions are heavily penalized. For example, predicting:
 
-Consider a review team with room for 2,000 cases each day. It receives 20,000 scored cases. The product question is: which threshold captures the most positive cases while keeping selections inside that capacity?
+$$
+p=0.99
+$$
 
-The following code assumes `labels` contains mature binary outcomes and `scores` contains candidate probabilities from a validation set. It evaluates several thresholds, reports the resulting recall, precision, and review volume, then selects the highest-recall row inside capacity. The visible output is a threshold table plus one chosen operating point; the final holdout remains untouched for unbiased release evaluation.
+when the outcome is actually 0 is much worse than predicting:
 
-```python
-import pandas as pd
-from sklearn.metrics import precision_score, recall_score
+$$
+p=0.55
+$$
 
-rows = []
-for threshold in [0.20, 0.35, 0.50, 0.65, 0.80]:
-    selected = scores >= threshold
-    rows.append({
-        "threshold": threshold,
-        "recall": recall_score(labels, selected),
-        "precision": precision_score(labels, selected, zero_division=0),
-        "reviews": int(selected.sum()),
-    })
+This is desirable when probability estimates themselves matter.
 
-report = pd.DataFrame(rows)
-feasible = report.loc[report["reviews"] <= 2_000]
-chosen = feasible.sort_values("recall", ascending=False).iloc[0]
+## How Do a Primary Metric, Guardrails, Capacity, and Baselines Work Together?
+<!-- section-summary: One primary objective needs guardrails, capacity constraints, and a meaningful baseline so improvement cannot hide an unacceptable tradeoff. -->
 
-print(report)
-print({"chosen_operating_point": chosen.to_dict()})
-```
+One metric still cannot express every release constraint, so the plan needs a primary objective surrounded by guardrails and comparisons.
 
-The important output is the relationship among quality and workload. A threshold with excellent recall and 8,000 reviews is infeasible for the current system. A feasible threshold with poor recall may show that the model or workflow provides too little value.
+Real systems usually have several objectives. Suppose a recommendation system wants:
+
+* more purchases,
+* fewer irrelevant recommendations,
+* good user experience,
+* fairness across groups,
+* low latency.
+
+Trying to optimize all of these equally often creates confusion. A cleaner structure is:
+
+$$
+\boxed{\text{Primary objective}}
+$$
+
+subject to:
+
+$$
+\boxed{\text{constraints}}
+$$
+
+For example:
+
+$$
+\text{maximize conversion rate}
+$$
+
+subject to:
+
+$$
+\text{complaint rate} < 0.5\%
+$$
+
+$$
+\text{latency} < 150ms
+$$
+
+$$
+\text{worst-segment recall} > 80\%
+$$
+
+This is much clearer than inventing a giant score such as:
+
+$$
+0.4F1+0.3AUC+0.2\text{fairness}+0.1\text{latency}
+$$
+
+unless those weights have a defensible real-world interpretation. Suppose:
+
+$$
+S=
+0.7\cdot\text{accuracy}
++
+0.3\cdot\text{fairness}
+$$
+
+Model A:
+
+$$
+\text{accuracy}=0.95
+$$
+
+$$
+\text{fairness}=0.50
+$$
+
+Model B:
+
+$$
+0.90,\quad0.90
+$$
+
+Which is better depends entirely on the arbitrary coefficients 0.7 and 0.3. If those numbers do not correspond to actual business or social tradeoffs, the score creates an illusion of objectivity. A more interpretable design is often:
+
+maximize accuracy, while requiring fairness metric ≥ some acceptable level.
+
+That exposes the actual policy decision instead of hiding it inside arithmetic. Many real systems cannot act on every prediction. Suppose a fraud team can manually inspect only:
+
+$$
+500
+$$
+
+transactions per day. Then the relevant question might be:
+
+How much fraud do the top 500 alerts capture
+
+You could use:
+
+$$
+\text{Recall@500}
+$$
+
+or:
+
+$$
+\text{Precision@500}
+$$
+
+Suppose:
+
+| Model |  AUC | Fraud captured in top 500 |
+| ----- | ---: | ------------------------: |
+| A     | 0.96 |                       72% |
+| B     | 0.94 |                       81% |
+
+If investigators can only inspect 500 cases, Model B may clearly be more valuable. This illustrates a general rule:
+
+**Model evaluation should resemble the actual operating regime.**
+
+A model metric has little meaning without context. Suppose:
+
+$$
+MAE=12.4
+$$
+
+Is that good? Impossible to know. Perhaps predicting yesterday's demand gives:
+
+$$
+MAE=30
+$$
+
+Then the model is impressive. But perhaps simply predicting the historical weekly average gives:
+
+$$
+MAE=10.8
+$$
+
+Then the sophisticated model is worse than a trivial heuristic. Useful baselines include:
+
+* majority-class prediction,
+* random prediction,
+* historical average,
+* last observed value,
+* existing production model,
+* simple rules or heuristics,
+* human performance where meaningful.
+
+A baseline answers:
+
+"Better than what?"
+
+Without this, evaluation numbers float without an anchor. Suppose a model has:
+
+$$
+95\%
+$$
+
+accuracy overall. But imagine performance by region:
+
+| Region | Accuracy |
+| ------ | -------: |
+| A      |      98% |
+| B      |      97% |
+| C      |      96% |
+| D      |      61% |
+
+The global metric hides a serious problem. This is a consequence of averaging:
+
+$$
+M_{\text{overall}}
+=
+\sum_g w_gM_g
+$$
+
+A large group can dominate the average. Therefore evaluate relevant segments such as:
+
+* geography,
+* product category,
+* device type,
+* language,
+* customer type,
+* traffic source,
+* rare classes,
+* high-value cases.
+
+The question is not merely:
+
+"How good is the model on average?"
+
+but:
+
+"Where does it work, and where does it fail?"
+
+## How Do Tails, Segments, Uncertainty, and Dataset Composition Change a Metric's Meaning?
+<!-- section-summary: Averages inherit the evaluation population's mixture and can conceal tail failures, important segments, uncertainty, and offline-to-production gaps. -->
+
+Those numbers depend on which examples are present and how they are distributed, making slices, tails, and uncertainty essential context.
+
+Mean performance can hide extreme errors. Suppose delivery predictions have:
+
+$$
+MAE=8 \text{ minutes}
+$$
+
+That sounds good. But perhaps:
+
+$$
+99\text{th percentile absolute error}=170\text{ minutes}
+$$
+
+If very late estimates cause major operational failures, tail performance matters. You might therefore evaluate:
+
+$$
+P_{95}(|y-\hat y|)
+$$
+
+or
+
+$$
+P_{99}(|y-\hat y|)
+$$
+
+alongside MAE. Similarly, a system may care specifically about:
+
+* worst-case latency,
+* largest financial errors,
+* rare safety failures,
+* high-confidence mistakes.
+
+Good evaluation often requires both **average quality and tail-risk metrics**. Suppose:
+
+$$
+\text{Model A accuracy}=91.3\%
+$$
+
+and:
+
+$$
+\text{Model B accuracy}=91.5\%
+$$
+
+It is tempting to declare B superior. But measurements from finite samples are noisy. Perhaps the confidence intervals are:
+
+$$
+A: 90.7\%-91.9\%
+$$
+
+$$
+B: 90.9\%-92.1\%
+$$
+
+The difference may not be meaningful.
+
+Conceptually:
+
+$$
+\text{Observed metric}
+=
+\text{true performance}
++
+\text{sampling noise}
+$$
+
+So evaluation should often report:
+
+* sample size,
+* confidence intervals,
+* bootstrap intervals,
+* repeated-run variation,
+* significance tests where appropriate.
+
+A useful question is:
+
+"Is the improvement bigger than the uncertainty in our measurement?"
+
+Imagine fraud represents:
+
+$$
+1\%
+$$
+
+of real transactions. But your evaluation dataset was deliberately constructed with:
+
+$$
+50\%
+$$
+
+fraud cases. Some metrics remain interpretable under this sampling scheme. Others do not. For example, precision depends strongly on prevalence. From Bayes' rule:
+
+$$
+P(Y=1\mid\hat Y=1)
+=
+\frac{P(\hat Y=1\mid Y=1)P(Y=1)}
+{P(\hat Y=1)}
+$$
+
+So when the base rate $$P(Y=1)$$ changes, precision may change even if the classifier itself has not. This means evaluation data should either resemble production or metrics should be adjusted accordingly. Suppose Model B beats Model A offline. You deploy B. Revenue falls. This is entirely possible. Offline evaluation measures something like:
+
+$$
+P_{\text{historical data}}(x,y)
+$$
+
+Production performance occurs under:
+
+$$
+P_{\text{future world}}(x,y)
+$$
+
+These distributions may differ:
+
+$$
+P_{\text{historical}}\neq P_{\text{production}}
+$$
+
+There can also be feedback loops. For example, recommendation systems change what users see. That changes what users click. Those clicks become future training data. So the model influences the distribution on which future models are evaluated. A strong evaluation system has several layers:
+
+$$
+\text{Offline metric}
+$$
+
+↓
+
+$$
+\text{Production model behavior}
+$$
+
+↓
+
+$$
+\text{User/business outcome}
+$$
+
+For a recommendation system:
+
+$$
+NDCG
+$$
+
+might measure offline ranking quality. Then production monitoring might measure:
+
+$$
+CTR
+$$
+
+Then the actual business goal might be:
+
+$$
+\text{retention or revenue}
+$$
+
+Ideally, you empirically verify that:
+
+$$
+\Delta NDCG > 0
+$$
+
+tends to produce:
+
+$$
+\Delta \text{business outcome} > 0
+$$
+
+If improvements in an offline metric repeatedly fail to improve production outcomes, you probably have the wrong proxy.
 
 ![Threshold selection compares recall and precision against the real review capacity](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/threshold-tradeoff.png)
 
 *The operating point should expose the trade-off among found cases, wasted reviews, and the capacity available to act.*
 
-### Tune on validation data and report on untouched data
+## How Do You Prevent Metric Gaming and Measure Expected Utility?
+<!-- section-summary: Metrics influence optimization behaviour, so expected utility, confusion-matrix evidence, and anti-gaming checks protect the real objective. -->
 
-Threshold selection is part of model selection. Repeatedly choosing a threshold on the final holdout adapts the decision to that dataset and makes the reported result optimistic.
+Once a metric controls decisions, teams and models can optimize its surface form; utility and diagnostic evidence keep the target tied to the outcome.
 
-Use validation data or cross-validation to choose the threshold. Then freeze the rule and evaluate it once on the release holdout. Scikit-learn's `TunedThresholdClassifierCV` can tune a binary classification threshold against a scorer with internal cross-validation. A custom threshold table remains useful if the decision includes hard capacity, segment, or policy constraints that one scorer cannot express clearly.
+There is a general phenomenon often summarized by Goodhart's law:
 
-Top-k ranking and quantile forecasts have equivalent operating choices. The team should select `k` from the visible product surface and choose a forecast quantile from the asymmetric business cost.
+When a measure becomes a target, it tends to become a worse measure.
 
-## Check Whether Predicted Probabilities Match Real Outcomes
-<!-- section-summary: Probability evaluation checks whether scores reward honest estimates and whether groups of similar scores occur at the predicted rate. -->
+Suppose a customer-support model is optimized entirely for:
 
-Suppose 100 cases receive scores near `0.8`. If the score is presented as an 80 percent risk, roughly 80 comparable cases should eventually show the outcome. **Calibration** describes this agreement between predicted probability and observed frequency.
+$$
+\text{average handling time}
+$$
 
-Calibration matters if scores create risk bands, staffing forecasts, prices, or explanations. A model can rank high-risk cases ahead of low-risk cases and still overstate every probability. Its ordering may support a queue, while the displayed risk value would mislead users.
+The system may become extremely good at ending conversations quickly. But perhaps users leave dissatisfied. So:
 
-A **calibration curve**, also called a reliability diagram, groups predictions into bins. For each bin, it compares the average predicted probability with the observed positive rate. The count in each bin matters because a point based on twenty cases carries less evidence than a point based on ten thousand.
+$$
+\text{handling time}\downarrow
+$$
 
-Log loss and Brier loss assess the full probability prediction. They combine several aspects of quality. Scikit-learn's calibration guidance warns that a lower Brier loss can arise from stronger discrimination even if calibration itself is worse. Use a calibration curve alongside the scalar loss if probability interpretation matters.
+while:
 
-### Calibration needs independent data
+$$
+\text{customer satisfaction}\downarrow
+$$
 
-Fitting a calibrator on the same data used to train the classifier produces optimistic probabilities. Use independent calibration data or a cross-validation approach such as `CalibratedClassifierCV`. Keep the final evaluation set separate.
+The metric improved. The actual goal worsened. This is why you need:
 
-Calibration can also vary across time and segments. A globally calibrated risk model may overstate risk for one region and understate it for another. Segment calibration and support counts belong in the report if probability meaning influences a consequential action.
+* primary objectives,
+* guardrail metrics,
+* human inspection,
+* production monitoring.
 
-## Check Whether Offline Improvements Lead To Better Production Outcomes
-<!-- section-summary: Offline metrics measure behaviour on labelled examples, while production outcomes also depend on data freshness, workflow adoption, system reliability, and user response. -->
+For binary classification:
 
-Offline evaluation asks how predictions compare with known outcomes under a recorded protocol. Production asks whether the complete system improves a real workflow under current data and user behaviour.
+|                    | Actual Positive | Actual Negative |
+| ------------------ | --------------: | --------------: |
+| Predicted Positive |              TP |              FP |
+| Predicted Negative |              FN |              TN |
 
-The two questions are connected and distinct.
+Most classification metrics are transformations of these four numbers.
 
-A recommender can improve NDCG on historical relevance labels and reduce user satisfaction after release because the labels favour popular items and hide novelty. A support classifier can improve recall and slow the queue because alert volume rises. A forecast can reduce MAE and increase stockouts if underprediction during peaks carries most of the cost.
+For example:
 
-Offline metrics are valuable because they provide controlled, repeatable evidence before exposing users. They need a credible path to the production outcome:
+$$
+\text{Recall}=\frac{TP}{TP+FN}
+$$
 
-```mermaid
-flowchart TD
-    L["Label and evaluation population"] --> P["Offline prediction"]
-    P --> M["Offline metric"]
-    M --> R["Operating rule"]
-    R --> W["Product workflow"]
-    W --> O["Production outcome"]
+$$
+\text{Precision}=\frac{TP}{TP+FP}
+$$
 
-    D["Data freshness and drift"] --> W
-    S["Service reliability"] --> W
-    H["Human and user response"] --> O
+$$
+\text{Specificity}=\frac{TN}{TN+FP}
+$$
 
-    class L,P,M offline
-    class R,W decision
-    class O,D,S,H production
-```
+Understanding the confusion matrix is often more valuable than memorizing metric names. It forces you to ask:
 
-The diagram shows the assumptions between a metric and product value. Labels must represent the intended outcome. The operating rule must match the evaluated one. The workflow must have capacity to act. The service must deliver predictions. Users and staff may respond in ways absent from historical data.
+What kinds of mistakes is the model making
 
-Production verification therefore adds service health, input and feature health, decision rates, workload, delayed labels, and product outcomes. A controlled online experiment may be needed to estimate causal product impact. An offline gain remains release evidence, and it should never be presented as proof of an unmeasured business outcome.
+Almost every metric-selection problem can be framed more fundamentally. Suppose prediction $$\hat y$$ causes action $$a$$, while the true state is $$y$$. Define:
 
-### Watch for feedback loops
+$$
+U(a,y)
+$$
 
-A production action can change the label later observed. Fraud reviews stop some fraud. Recommendations change which items receive clicks. Human triage changes response time. Historical labels then reflect the old policy and intervention.
+as the utility of taking action $$a$$ when reality is $$y$$. The ideal decision is:
 
-Record the policy and treatment that produced the outcome. Where possible, preserve randomized or otherwise defensible evidence for causal questions. Metric selection should acknowledge which outcomes the model can influence and which labels become selective after deployment.
+$$
+a^*
+=
+\arg\max_a
+E[U(a,Y)\mid X]
+$$
 
-## Add Baselines, Segments, and Uncertainty
-<!-- section-summary: A metric value supports a decision only after comparison with meaningful baselines, important segments, and the uncertainty created by finite data. -->
+Equivalently, if working with costs:
 
-A score in isolation provides little context. An MAE of 12 may beat a naive forecast and lose to the production system. A recall of 0.85 may be useful with 100 alerts and unusable with 100,000.
+$$
+a^*
+=
+\arg\min_a
+E[C(a,Y)\mid X]
+$$
 
-Use several baselines for different questions:
+This is the decision-theoretic foundation behind evaluation. Metrics such as:
 
-- A simple heuristic or dummy model shows whether the data and metric reward anything beyond a trivial rule.
-- The current production decision shows whether replacement creates useful change.
-- A policy-only or human baseline reveals whether the model improves the actual workflow.
+* accuracy,
+* recall,
+* MAE,
+* F1,
+* AUC,
 
-The comparison should use the same eligible examples, label policy, operating rule, and metric implementation. Candidate-versus-production decisions work best with paired predictions for the same units.
+are simplified proxies for this underlying expected utility. Sometimes those proxies are excellent. Sometimes they are dangerously disconnected from what matters.
 
-### Use Segment Results To Limit Broad Claims
+## How Do You Turn Product Costs into a Repeatable Evaluation Specification?
+<!-- section-summary: A fraud example and written evaluation specification connect business costs, thresholds, baselines, risks, and release criteria before results are seen. -->
 
-Overall averages can hide a failing language, region, device, class, horizon, or workflow route. Choose segments from known harms, product boundaries, incident history, and domain knowledge.
+The fraud example makes these choices concrete and shows why the full specification must exist before candidate results invite metric shopping.
 
-Each segment needs its sample size, candidate and baseline values, coverage, and uncertainty. Sparse evidence should narrow the release claim or trigger targeted collection. Removing the segment from the report would turn missing knowledge into confidence.
+Suppose there are:
 
-### Add Confidence Intervals To Point Estimates
+$$
+100{,}000
+$$
 
-Evaluation data is a sample from the population the team cares about. Another valid sample would produce a different metric. Confidence intervals and paired comparisons show the precision of the estimate.
+transactions. Fraud prevalence:
 
-The resampling or statistical unit should follow the real dependence. Many rows from one patient, user, query, store, or day may need grouped analysis. Treating them as independent can make uncertainty look too small.
+$$
+1\%
+$$
 
-The interval should answer a release question: is the improvement large enough to matter, and is the harmful end still acceptable? Multiple metrics and many segment searches also need care because some apparent gains occur by chance.
+So:
 
-## Record How Every Model Will Be Evaluated
-<!-- section-summary: A metric contract records the target, population, operating rule, primary measure, guardrails, baselines, segments, uncertainty, and release interpretation before final results appear. -->
+$$
+1{,}000
+$$
 
-The team needs a versioned record of how every candidate will be judged. This record is called a **metric contract**. It keeps the product reasoning beside the code that calculates the evidence.
+are fraudulent. Consider two models.
 
-The contract should include:
+### Model A
 
-- intended decision, population, target, horizon, and label maturity;
-- model output and operating rule;
-- primary metric with its practical improvement margin;
-- guardrails for harm, capacity, probability quality, and service cost;
-- baselines, segments, and minimum evidence;
-- uncertainty method and grouping unit;
-- owners and allowed release outcomes.
+Finds:
 
-The following example continues the review-queue situation. It assumes the team has already justified recall as the primary benefit and review volume as a hard operating constraint. The evaluation job reads this configuration, calculates the same report for every candidate, and produces a visible pass, hold, or insufficient-evidence result with the failed rule IDs.
+$$
+900
+$$
 
-```yaml
-decision: prioritize_accounts_for_support_review
-population: eligible_accounts_scored_daily
-target:
-  event: missed_payment
-  horizon_days: 30
-  maturity_days: 30
-operating_rule:
-  type: score_threshold
-  max_reviews_per_day: 2000
-primary_metric:
-  name: recall_at_capacity
-  minimum_improvement_vs_production: 0.03
-guardrails:
-  precision_at_capacity_min: 0.30
-  feature_coverage_min: 0.995
-segments:
-  - account_age_band
-  - region
-uncertainty:
-  method: paired_bootstrap
-  grouping_unit: account_id
-```
+frauds but incorrectly flags:
 
-The example stays focused on the decision. It avoids dozens of library options and records the facts that change interpretation. A real contract also carries dataset, code, policy, and candidate identities in the release evidence.
+$$
+9{,}000
+$$
 
-### Automate Metric Calculation And Keep Final Judgement With Reviewers
+legitimate transactions.
 
-Scikit-learn provides metric functions and scoring interfaces for model selection. Be explicit about `scoring`; estimator defaults are commonly accuracy for classifiers and R² for regressors, which may have little connection to the product decision.
+Then:
 
-MLflow's classic model evaluation can calculate common classification and regression metrics and produce diagnostic artifacts. `mlflow.validate_evaluation_results()` can apply declared thresholds. Product utility, capacity, segments, and policy-specific outcomes still need explicit metrics and checks.
+$$
+Recall_A=\frac{900}{1000}=90\%
+$$
 
-Teams may use Weights & Biases or cloud-native evaluation and registry tools for the same responsibility. The platform should preserve the dataset and release identity, metrics, tables, plots, code revision, and gate result. Tool choice does not choose the metric logic.
+Precision:
 
-Run the contract in CI or the managed training pipeline, write the evidence to the experiment tracker and governed artifact store, and pass only the exact candidate result into release review. A calculation failure or missing metric should produce an unknown gate result instead of silently passing.
+$$
+Precision_A=\frac{900}{9900}\approx9.1\%
+$$
 
-## The Main Idea
-<!-- section-summary: Metric choice starts from the product decision and uses task-appropriate measurements, guardrails, operating rules, and evidence limits to support a release claim. -->
+### Model B
 
-An evaluation metric summarizes one question about predictions and outcomes. Its meaning comes from the task, the product action, the cost of mistakes, and the operating rule.
+Finds:
 
-Choose a primary metric for the intended benefit. Add guardrails for competing harms, capacity, probability quality, and cost. Evaluate the threshold, top-k cutoff, quantile, or interval that production will use. Then compare with meaningful baselines across important segments and report uncertainty.
+$$
+700
+$$
 
-Offline metrics provide controlled release evidence. Production outcomes also depend on current data, reliable delivery, workflow capacity, and human response. A versioned metric contract keeps those assumptions visible and makes each candidate face the same decision.
+frauds and falsely flags:
+
+$$
+1{,}000
+$$
+
+legitimate transactions.
+
+Then:
+
+$$
+Recall_B=70\%
+$$
+
+Precision:
+
+$$
+Precision_B=\frac{700}{1700}\approx41.2\%
+$$
+
+Which model is better? Impossible to answer until we know costs. Suppose average undetected fraud costs:
+
+$$
+\$1{,}000
+$$
+
+and investigating a false alert costs:
+
+$$
+\$10
+$$
+
+Model A:
+
+$$
+100\text{ missed frauds}\times\$1000=\$100{,}000
+$$
+
+$$
+9000\text{ false alarms}\times\$10=\$90{,}000
+$$
+
+Total:
+
+$$
+\$190{,}000
+$$
+
+Model B:
+
+$$
+300\times\$1000=\$300{,}000
+$$
+
+$$
+1000\times\$10=\$10{,}000
+$$
+
+Total:
+
+$$
+\$310{,}000
+$$
+
+Under these assumptions, Model A is better despite terrible precision. Change the cost assumptions and Model B might become better. That is why there is no universally correct classification metric. A robust evaluation design usually has several layers.
+
+### Level 1 — Real-world outcome
+
+What ultimately matters?
+
+For example:
+
+$$
+\text{fraud dollars prevented}
+$$
+
+### Level 2 — Decision metric
+
+How well does the deployed policy behave?
+
+For example:
+
+$$
+\text{fraud prevented at 500 investigations/day}
+$$
+
+### Level 3 — Model-quality metric
+
+How good are the predictions themselves?
+
+For example:
+
+$$
+\text{precision@500}
+$$
+
+or:
+
+$$
+\text{PR-AUC}
+$$
+
+### Level 4 — Diagnostic metrics
+
+Why is the model succeeding or failing? Examples:
+
+* calibration,
+* per-segment recall,
+* false-positive rate,
+* tail errors.
+
+This hierarchy helps prevent diagnostic metrics from becoming confused with the ultimate objective. Before comparing models, write down the rules.
+
+For example:
+
+**Primary metric:** Recall at 95% precision
+**Evaluation set:** transactions from the most recent six weeks, chronologically held out
+**Decision rule:** investigate the highest-risk transactions until 2,000 daily review slots are filled
+**Guardrails:** false-positive rate < 0.3%; p99 inference latency < 100 ms
+**Segments:** country, merchant category, new versus returning customer
+**Probability metric:** Brier score
+**Uncertainty:** bootstrap 95% confidence intervals
+**Baseline:** current production model
+
+Why write this before seeing results? Because otherwise people naturally choose whichever metric makes their preferred model look best. Predefining evaluation criteria reduces this kind of accidental metric shopping. Several mistakes appear repeatedly.
+
+### "The model has the highest accuracy, so it wins."
+
+Not necessarily. Class imbalance or asymmetric costs may make accuracy irrelevant.
+
+### "AUC improved, so production will improve."
+
+Not necessarily. Your actual operating threshold may lie in a region where performance got worse.
+
+### "F1 is the standard classification metric."
+
+There is no universally standard metric. F1 embeds a particular tradeoff.
+
+### "Model B improved the metric by 0.2%, so it is better."
+
+Perhaps. But the difference may be sampling noise.
+
+### "Average performance looks good."
+
+Check segments and tail behavior.
+
+### "The probabilities look reasonable."
+
+Check calibration empirically.
+
+### "The offline benchmark improved."
+
+Confirm that the offline metric predicts online outcomes.
+
+## What Complete Framework Should Guide Metric Selection?
+<!-- section-summary: Metric selection starts from the production decision and ends with a versioned measurement plan that explains how evidence will support that decision. -->
+
+The final framework collects these choices into one repeatable path from task definition to release evidence.
+
+When evaluating a model, walk through this chain:
+
+$$
+\boxed{
+\text{Goal}
+\rightarrow
+\text{Decision}
+\rightarrow
+\text{Cost of mistakes}
+\rightarrow
+\text{Model output}
+\rightarrow
+\text{Operating rule}
+\rightarrow
+\text{Metric}
+}
+$$
+
+Then add four checks:
+
+$$
+\boxed{\text{Baseline}}
+$$
+
+$$
+\boxed{\text{Segments}}
+$$
+
+$$
+\boxed{\text{Uncertainty}}
+$$
+
+$$
+\boxed{\text{Production validation}}
+$$
+
+For probability models, add:
+
+$$
+\boxed{\text{Calibration}}
+$$
+
+For systems with serious failure modes, add:
+
+$$
+\boxed{\text{Guardrail metrics}}
+$$
+
+A model does not become good because it has a high score. The sequence is:
+
+$$
+\text{prediction}
+\rightarrow
+\text{decision}
+\rightarrow
+\text{consequence}
+$$
+
+So the best metric is the one that most faithfully tells you whether better predictions will lead to better decisions and better real-world consequences. In first-principles terms:
+
+$$
+\boxed{
+\text{Choose metrics by reasoning backward from real-world utility}
+}
+$$
+
+rather than:
+
+$$
+\boxed{
+\text{Choose a familiar metric and hope it represents the goal}
+}
+$$
+
+Everything else—precision, recall, F1, AUC, RMSE, log loss, calibration, ranking metrics—is a tool for approximating that deeper objective.
 
 ![A metric contract flows through repeatable evaluation and explicit evidence checks to pass hold or fail outcomes](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/metric-contract-gates.png)
 
 *The contract preserves the decision context, applies the same checks to every candidate, and keeps missing or uncertain evidence from becoming an automatic pass.*
 
-## References
+## Check Your Answers
 
-- [scikit-learn: Metrics and scoring](https://scikit-learn.org/stable/modules/model_evaluation.html)
-- [scikit-learn: Tuning the decision threshold](https://scikit-learn.org/stable/modules/classification_threshold.html)
-- [scikit-learn: Probability calibration](https://scikit-learn.org/stable/modules/calibration.html)
-- [scikit-learn: Brier score loss](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.brier_score_loss.html)
-- [MLflow: Model evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
-- [MLflow: Model evaluation API](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.models.html)
-- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Decision Should an Evaluation Metric Represent?]{kind="recap"}
+A useful metric represents a specific prediction, decision, outcome, and cost rather than rewarding an abstract score in isolation.
+:::
+
+:::expand[How Do Prediction Types Require Different Metrics?]{kind="recap"}
+Classification, regression, ranking, and probability estimates expose different error structures and therefore require different measurements.
+:::
+
+:::expand[How Do Thresholds and Calibration Connect Predictions to Decisions?]{kind="recap"}
+Thresholds create operational decisions, while calibration and proper scoring rules test whether probability values carry reliable meaning.
+:::
+
+:::expand[How Do a Primary Metric, Guardrails, Capacity, and Baselines Work Together?]{kind="recap"}
+One primary objective needs guardrails, capacity constraints, and a meaningful baseline so improvement cannot hide an unacceptable tradeoff.
+:::
+
+:::expand[How Do Tails, Segments, Uncertainty, and Dataset Composition Change a Metric's Meaning?]{kind="recap"}
+Averages inherit the evaluation population's mixture and can conceal tail failures, important segments, uncertainty, and offline-to-production gaps.
+:::
+
+:::expand[How Do You Prevent Metric Gaming and Measure Expected Utility?]{kind="recap"}
+Metrics influence optimization behaviour, so expected utility, confusion-matrix evidence, and anti-gaming checks protect the real objective.
+:::
+
+:::expand[How Do You Turn Product Costs into a Repeatable Evaluation Specification?]{kind="recap"}
+A fraud example and written evaluation specification connect business costs, thresholds, baselines, risks, and release criteria before results are seen.
+:::
+
+:::expand[What Complete Framework Should Guide Metric Selection?]{kind="recap"}
+Metric selection starts from the production decision and ends with a versioned measurement plan that explains how evidence will support that decision.
+:::

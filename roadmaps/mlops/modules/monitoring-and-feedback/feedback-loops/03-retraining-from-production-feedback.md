@@ -1,7 +1,7 @@
 ---
 title: "Retraining From Production Feedback"
-description: "Explain how production feedback enters a governed training dataset, evaluated candidate, and controlled release."
-overview: "Retraining from production feedback is a governed model-development cycle that controls selection bias, label maturity, dataset lineage, evaluation, release, and the next round of data collection."
+description: "Retraining is justified by a specific claim that newer trustworthy evidence can produce a better candidate, while many production failures require repair rather than a new model."
+overview: "Retraining is justified by a specific claim that newer trustworthy evidence can produce a better candidate, while many production failures require repair rather than a new model. A retraining run is a replayable experiment whose outcome may be no promotion; production feedback is evidence to test, not an instruction to copy automatically."
 tags: ["MLOps", "feedback", "retraining"]
 order: 3
 id: "article-mlops-monitoring-and-feedback-retraining-from-production-feedback"
@@ -9,455 +9,2327 @@ id: "article-mlops-monitoring-and-feedback-retraining-from-production-feedback"
 
 ## Table of Contents
 
-1. [What Retraining From Production Feedback Means](#what-retraining-from-production-feedback-means)
-2. [Why Production Feedback Must Be Checked Before Retraining](#why-production-feedback-must-be-checked-before-retraining)
-3. [Collect Approved Feedback Before Building The Training Dataset](#collect-approved-feedback-before-building-the-training-dataset)
-4. [Wait Until Outcomes Are Complete Enough To Use](#wait-until-outcomes-are-complete-enough-to-use)
-5. [Freeze The Exact Data Used For Training](#freeze-the-exact-data-used-for-training)
-6. [Treat Every Retraining Trigger As A Claim To Investigate](#treat-every-retraining-trigger-as-a-claim-to-investigate)
-7. [Run Reproducible Training](#run-reproducible-training)
-8. [Compare The Candidate With The Current Model](#compare-the-candidate-with-the-current-model)
-9. [Register The Model With Its Evaluation Evidence](#register-the-model-with-its-evaluation-evidence)
-10. [Release The New Model Gradually](#release-the-new-model-gradually)
-11. [Monitor How The New Model Changes Future Feedback](#monitor-how-the-new-model-changes-future-feedback)
-12. [How The Complete Retraining Loop Works](#how-the-complete-retraining-loop-works)
-13. [The Main Idea](#the-main-idea)
-14. [References](#references)
+1. [When Does Production Feedback Justify Retraining?](#when-does-production-feedback-justify-retraining)
+2. [How Do You Build a Trustworthy, Mature, Point-in-Time Training Dataset from Feedback?](#how-do-you-build-a-trustworthy-mature-point-in-time-training-dataset-from-feedback)
+3. [How Should a Retrained Candidate Be Evaluated, Registered, and Proposed for Promotion?](#how-should-a-retrained-candidate-be-evaluated-registered-and-proposed-for-promotion)
+4. [How Do Shadow, Canary, Exploration, and Feedback Effects Change Online Evaluation?](#how-do-shadow-canary-exploration-and-feedback-effects-change-online-evaluation)
+5. [How Should Cadence, Triggers, Dataset Tests, Uncertainty, and Release Evidence Be Controlled?](#how-should-cadence-triggers-dataset-tests-uncertainty-and-release-evidence-be-controlled)
+6. [How Do Rollout, Rollback, and Post-Release Monitoring Govern the Feedback Loop?](#how-do-rollout-rollback-and-post-release-monitoring-govern-the-feedback-loop)
+7. [How Does a Fraud Retraining Example Move from Labels to a Release Decision?](#how-does-a-fraud-retraining-example-move-from-labels-to-a-release-decision)
+8. [Why Is Retraining a Replayable Experiment rather than an Automatic Instruction?](#why-is-retraining-a-replayable-experiment-rather-than-an-automatic-instruction)
+9. [Check Your Answers](#check-your-answers)
 
-## What Retraining From Production Feedback Means
-<!-- section-summary: Retraining from production feedback turns governed production outcomes into a reproducible candidate and gives that candidate production authority only after comparative evaluation and a controlled release. -->
+Production labels show that fraud behaviour has changed. Starting a training job is easy; deciding whether those labels are trustworthy, whether the new data is biased by the current model, and whether a candidate genuinely improves the live decision is the difficult part.
 
-Production outcomes may reveal a repeated error that the original training data barely represented. **Retraining from production feedback is the controlled process that uses those real outcomes to develop the next model version.** The process selects suitable evidence, freezes a reproducible dataset, trains a proposed model called a **candidate**, compares it with the model already serving users, and releases it under a limited blast radius.
+**Retraining from production feedback** turns governed observations into a new model candidate. The candidate does not replace production merely because training finished. Its dataset, evaluation, evidence, rollout, and future data-generation effects all need explicit controls.
 
-Consider a support-routing model that chooses which specialist queue should receive each new case. Several weeks after deployment, the operations team sees a rise in billing disputes that were sent to the general-support queue. Resolved cases contain useful evidence about the correct destination. The team still cannot pour those recent outcomes straight into a training job.
+These questions follow one retraining claim from its feedback source to a replayable release experiment and the next monitoring cycle:
 
-Some cases are still open. The current routing policy sent difficult cases to senior reviewers, so those cases have better labels than routine traffic. Several records contain features updated after the original routing decision. A newly trained model might fix the billing-dispute problem while sending far more work to an already overloaded specialist queue.
+1. **When Does Production Feedback Justify Retraining?**
+2. **How Do You Build a Trustworthy, Mature, Point-in-Time Training Dataset from Feedback?**
+3. **How Should a Retrained Candidate Be Evaluated, Registered, and Proposed for Promotion?**
+4. **How Do Shadow, Canary, Exploration, and Feedback Effects Change Online Evaluation?**
+5. **How Should Cadence, Triggers, Dataset Tests, Uncertainty, and Release Evidence Be Controlled?**
+6. **How Do Rollout, Rollback, and Post-Release Monitoring Govern the Feedback Loop?**
+7. **How Does a Fraud Retraining Example Move from Labels to a Release Decision?**
+8. **Why Is Retraining a Replayable Experiment rather than an Automatic Instruction?**
 
-The retraining loop controls each of those risks:
+## When Does Production Feedback Justify Retraining?
+<!-- section-summary: Retraining is justified by a specific claim that newer trustworthy evidence can produce a better candidate, while many production failures require repair rather than a new model. -->
 
-```mermaid
-flowchart TD
-    A["Production Decisions<br/>(record model, policy, route, and time)"] --> B["Eligible Outcomes<br/>(preserve what could be observed)"]
-    B --> C["Mature Labels<br/>(resolve pending, corrected, and unknown cases)"]
-    C --> D["Training Snapshot<br/>(freeze point-in-time rows and lineage)"]
-    D --> E["Training Run<br/>(pin code, environment, and parameters)"]
-    E --> F["Comparative Evaluation<br/>(test quality, segments, and workload)"]
-    F --> G["Controlled Release<br/>(limit traffic and preserve rollback)"]
-    G --> H["New Collection Policy<br/>(measure how observation changed)"]
-    H --> A
+Retraining is justified by a specific claim that newer trustworthy evidence can produce a better candidate, while many production failures require repair rather than a new model.
 
-    class A,B,C evidence
-    class D,E build
-    class F gate
-    class G,H operate
+A deployed model makes predictions:
+
+$$
+\hat Y=f_\theta(X)
+$$
+
+The world then produces outcomes:
+
+$$
+Y
+$$
+
+Those outcomes tell us where the model was right, where it was wrong, and how the production environment has changed. Eventually we may decide to use that new evidence to create a new model:
+
+$$
+f_{\theta_{\text{old}}}
+\rightarrow
+\text{production feedback}
+\rightarrow
+\text{new training data}
+\rightarrow
+f_{\theta_{\text{new}}}
+$$
+
+That is **retraining from production feedback**. But the dangerous oversimplification is:
+
+$$
+\text{new production labels}
+\Rightarrow
+\text{retrain immediately}.
+$$
+
+Production feedback was generated by a live system containing models, thresholds, human reviewers, product policies, delayed labels, sampling mechanisms, and user reactions. So production data is not automatically clean ground truth. The real problem is:
+
+$$
+\boxed{
+\text{How do we turn evidence generated by the old production system into trustworthy training data for the next one?}
+}
+$$
+
+Originally, suppose we have:
+
+$$
+D_0=\{(X_i,Y_i)\}_{i=1}^{n}
+$$
+
+and train:
+
+$$
+\theta_0
+=
+\arg\min_\theta
+\sum_i L(f_\theta(X_i),Y_i).
+$$
+
+We deploy:
+
+$$
+f_{\theta_0}.
+$$
+
+Production then generates new cases:
+
+$$
+X_{n+1},X_{n+2},\dots
+$$
+
+The model predicts:
+
+$$
+\hat Y_i=f_{\theta_0}(X_i)
+$$
+
+and eventually some outcome:
+
+$$
+Y_i
+$$
+
+becomes observable. Now we possess additional examples:
+
+$$
+D_{\text{prod}}=
+\{(X_i,Y_i)\}_{i=n+1}^{m}.
+$$
+
+Retraining means constructing some new training dataset:
+
+$$
+D_1=g(D_0,D_{\text{prod}})
+$$
+
+and fitting:
+
+$$
+\theta_1
+=
+\arg\min_\theta
+\sum_{(X,Y)\in D_1}
+L(f_\theta(X),Y).
+$$
+
+At first glance this seems trivial. Most of the complexity is hidden inside:
+
+$$
+g(\cdot).
+$$
+
+- **Which production examples are trustworthy enough to include?**
+
+That is the central retraining problem. A model is trained from historical evidence.
+
+Conceptually:
+
+$$
+f_{\theta_0}(X)
+\approx
+P_{\text{old}}(Y|X).
+$$
+
+But production may eventually follow:
+
+$$
+P_{\text{new}}(Y|X).
+$$
+
+If:
+
+$$
+P_{\text{new}}(Y|X)
+\neq
+P_{\text{old}}(Y|X)
+$$
+
+then recent production examples may contain information the old training set did not. Retraining attempts to make:
+
+$$
+f_{\theta_1}(X)
+$$
+
+better approximate the current environment. But retraining is useful only if the new data contains **reliable new information**. Suppose recall falls:
+
+$$
+0.91\rightarrow0.74.
+$$
+
+Should we retrain?
+
+Maybe. But perhaps the true cause is:
+
+$$
+\text{broken feature pipeline}.
+$$
+
+Or:
+
+$$
+\text{incorrect threshold}.
+$$
+
+Or:
+
+$$
+\text{missing labels}.
+$$
+
+Or:
+
+$$
+\text{Android app sending zeros}.
+$$
+
+Retraining against a pipeline bug can make things worse. So:
+
+$$
+\boxed{\text{performance decline}\not\Rightarrow\text{retraining needed}}
+$$
+
+and:
+
+$$
+\boxed{\text{drift}\not\Rightarrow\text{retraining needed}}.
+$$
+
+Retraining should follow diagnosis. Suppose monitoring fires:
+
+Feature drift exceeded threshold.
+
+The claim is not:
+
+Retrain now.
+
+The actual claim is something like:
+
+The production population may have moved enough that the current model deserves reevaluation.
+
+Similarly:
+
+Recall fell 8%.
+
+means:
+
+Recent mature outcomes suggest the current model may be less effective.
+
+A retraining trigger should therefore start an investigation.
+
+Conceptually:
+
+$$
+\text{signal}
+\rightarrow
+\text{hypothesis}
+\rightarrow
+\text{evidence}
+\rightarrow
+\text{decision}.
+$$
+
+Not:
+
+$$
+\text{signal}
+\rightarrow
+\text{training job}.
+$$
+
+A system might consider retraining because:
+
+$$
+P(X)
+$$
+
+changed substantially, or because:
+
+$$
+P(Y|X)
+$$
+
+changed, or because:
+
+$$
+E[L(Y,\hat Y)]
+$$
+
+became worse, or because enough new labels accumulated, or because:
+
+$$
+\text{model age}
+$$
+
+exceeded some operational limit. But these triggers have different meanings. A time-based trigger says:
+
+It is time to reevaluate.
+
+A performance trigger says:
+
+We have evidence quality deteriorated.
+
+A drift trigger says:
+
+Operating conditions changed.
+
+None alone guarantees that a new model will be better. The candidate still needs to prove itself. Offline datasets are often treated as fixed historical observations. Production data is generated inside a decision system:
+
+$$
+X
+\rightarrow
+\hat Y
+\rightarrow
+D
+\rightarrow
+Y.
+$$
+
+The prediction may influence the decision:
+
+$$
+\hat Y\rightarrow D.
+$$
+
+And the decision may influence which outcome occurs or becomes observable:
+
+$$
+D\rightarrow Y_{\text{observed}}.
+$$
+
+Therefore your new production dataset may depend on the old model. That means:
+
+$$
+\boxed{\text{production feedback is policy-generated data}}
+$$
+
+in many systems. This has major consequences for retraining. Suppose a model approves low-risk applicants and rejects high-risk applicants. For approved applicants, you observe:
+
+$$
+Y=\text{default/no default}.
+$$
+
+For rejected applicants, you do not observe what would have happened if they had received the loan. So the production dataset contains:
+
+$$
+P(X,Y|\text{approved})
+$$
+
+rather than:
+
+$$
+P(X,Y|\text{all applicants}).
+$$
+
+Now train a new model directly on those labels. The new model learns mainly from the population the previous model already approved. The old model has shaped the evidence available to the new model. This is a feedback loop:
+
+$$
+\boxed{
+\text{Model}_0
+\rightarrow
+\text{decisions}
+\rightarrow
+\text{observed labels}
+\rightarrow
+\text{training data}
+\rightarrow
+\text{Model}_1
+}
+$$
+
+Retraining therefore requires understanding how examples entered the dataset. Suppose a recommender shows item $$A$$ but not item $$B$$. The user clicks $$A$$. You know:
+
+$$
+Y_A=1
+$$
+
+under the shown policy. But what is:
+
+$$
+Y_B
+$$
+
+Unknown. The item was never shown. If you interpret:
+
+$$
+\text{not clicked}
+$$
+
+as:
+
+$$
+\text{disliked}
+$$
+
+for unexposed items, you create false labels. Then retraining reinforces the current recommendation policy. The system may gradually become:
+
+$$
+\text{recommend what we already recommend}
+\rightarrow
+\text{observe clicks on those items}
+\rightarrow
+\text{learn users like those items}
+\rightarrow
+\text{recommend them even more}.
+$$
+
+This is why retraining is not merely an ETL problem. It can be a causal problem. Suppose uncertain predictions go to reviewers:
+
+$$
+0.45<\hat p<0.55.
+$$
+
+Humans label those cases. Your reviewer-labeled dataset is now sampled from:
+
+$$
+P(X,Y|\text{model uncertain}).
+$$
+
+That dataset may be excellent for learning difficult boundary cases. But it is not representative of:
+
+$$
+P(X,Y|\text{all production}).
+$$
+
+So every feedback example should ideally carry information about **why it became labeled**.
+
+For example:
+
+$$
+\text{selection reason}
+=
+\text{random audit}
+$$
+
+or:
+
+$$
+\text{uncertainty review}
+$$
+
+or:
+
+$$
+\text{user appeal}.
+$$
+
+Without selection lineage, future training may silently inherit sampling bias.
+
+## How Do You Build a Trustworthy, Mature, Point-in-Time Training Dataset from Feedback?
+<!-- section-summary: Approved feedback needs mature labels, pipeline checks, point-in-time correctness, immutable datasets, separate evaluation data, time-aware splits, and a deliberate balance of recent and older examples. -->
+
+Approved feedback needs mature labels, pipeline checks, point-in-time correctness, immutable datasets, separate evaluation data, time-aware splits, and a deliberate balance of recent and older examples.
+
+Before production data becomes training data, ask whether each example satisfies the intended label contract. Suppose a production record contains:
+
+$$
+(X_i,\hat Y_i,H_i,Y_i)
+$$
+
+where:
+
+* $$\hat Y_i$$ = model prediction,
+* $$H_i$$ = human-review judgment,
+* $$Y_i$$ = eventual outcome.
+
+Which one is the target?
+
+That depends on what you are trying to learn. If the model predicts fraud occurrence, eventual confirmed fraud may be the strongest label. A human review judgment could merely be provisional. A product decision may not be a label at all. Therefore:
+
+$$
+\boxed{
+\text{prediction}
+\neq
+\text{human decision}
+\neq
+\text{product action}
+\neq
+\text{ground-truth outcome}
+}
+$$
+
+Retraining should consume an explicitly approved target, not whichever column happens to be available. A useful conceptual gate is:
+
+$$
+A_i=
+\begin{cases}
+1,&\text{example approved for training}\\
+0,&\text{otherwise}.
+\end{cases}
+$$
+
+Approval may depend on:
+
+$$
+A_i
+=
+g(
+\text{label maturity},
+\text{label source},
+\text{observability},
+\text{selection mechanism},
+\text{data quality},
+\text{policy version},
+\text{adjudication status}
+).
+$$
+
+Examples could be excluded because they are:
+
+* immature,
+* unresolved,
+* known to have corrupted features,
+* generated during an incident,
+* missing important lineage,
+* based on unreliable provisional labels,
+* impossible to interpret causally.
+
+The key idea is that **production traffic and training data are not the same dataset**. Training data is a curated interpretation of production history. Suppose the target is:
+
+Customer churn within 30 days.
+
+A prediction made five days ago cannot safely receive:
+
+$$
+Y=0
+$$
+
+just because the customer has not churned yet. The remaining:
+
+$$
+25\text{ days}
+$$
+
+still matter. If you retrain too early, many future positives are temporarily treated as negatives. This introduces systematic label noise. So for horizon $$H$$:
+
+$$
+t_{\text{now}}
+\ge
+t_{\text{prediction}}+H+\text{reporting lag}
+$$
+
+may be required before a negative label becomes mature. Suppose the prediction target is:
+
+$$
+\text{fraud within 60 days}.
+$$
+
+If fraud is confirmed on day 8:
+
+$$
+Y=1
+$$
+
+may already be known. But if nothing has happened by day 8, you cannot conclude:
+
+$$
+Y=0.
+$$
+
+So recent production data may contain a disproportionate number of known positives. Training on it naively can create serious class distortion. This is why retraining pipelines usually need explicit maturity logic rather than simply taking "the most recent rows." Suppose positive labels normally arrive at rate:
+
+$$
+10{,}000/\text{day}.
+$$
+
+Then:
+
+$$
+10{,}000\rightarrow500.
+$$
+
+Perhaps fraud disappeared. Or perhaps a data feed broke. Before training, inspect things such as:
+
+$$
+\text{label coverage}
+$$
+
+$$
+\text{join rate}
+$$
+
+$$
+\text{label delay}
+$$
+
+$$
+\text{class balance}
+$$
+
+$$
+\text{source completeness}
+$$
+
+$$
+\text{label-definition version}.
+$$
+
+If the feedback pipeline is unhealthy, the training dataset is contaminated before training even begins. Suppose you retrain on an event that occurred January 1. The features must represent information available at prediction time:
+
+$$
+X_i(t\le t_p).
+$$
+
+Imagine reconstructing a feature in August:
+
+$$
+\text{customer lifetime spend}.
+$$
+
+If you accidentally use August's value for a January prediction, that includes future transactions. Now:
+
+$$
+X_{\text{train}}
+$$
+
+contains information unavailable when the model would have predicted. That's leakage. Offline performance becomes unrealistically high. So every training row conceptually needs:
+
+$$
+\boxed{
+\text{historical features as of prediction time}
++
+\text{future outcome after prediction time}
+}
+$$
+
+or:
+
+$$
+X(t\le t_p)
+\rightarrow
+Y(t_p<t\le t_p+H).
+$$
+
+Once production feedback has been filtered, matured, joined, and validated, freeze the exact dataset.
+
+Why?
+
+Because production data keeps changing. Late labels arrive. Human judgments are revised. Events are corrected. Source tables get backfilled. If training just reads:
+
+```text
+SELECT * FROM latest_production_labels
 ```
 
-Each stage produces evidence for the next one. No stage grants authority by itself. A large label table proves that outcomes were collected; it says nothing about point-in-time correctness. A successful training job proves that an artifact was produced; it says nothing about product value. A registry entry gives the artifact a durable identity; the release system still decides whether that version receives traffic.
+then rerunning the same training code tomorrow might produce a different model. You lose reproducibility. Instead define a snapshot:
 
-This learning loop uses deliberate checkpoints. They preserve the meaning of the data and keep one promising offline result from silently replacing a production decision system.
+$$
+D_{\text{train}}^{(k)}
+$$
 
-## Why Production Feedback Must Be Checked Before Retraining
-<!-- section-summary: The deployed model and its surrounding policy influence which outcomes are observed, so production feedback carries the history of the system that collected it. -->
+with immutable identity. We often write:
 
-Production feedback differs from a clean classroom dataset because the deployed system helps create the data it later learns from. The model assigns a score, a policy turns that score into an action, and the action changes which outcomes people can observe.
+$$
+\theta=\text{Train}(D).
+$$
 
-Imagine a payment-risk system. Approved payments can later produce a chargeback outcome. Blocked payments never complete, so they cannot produce that same outcome. If the next training dataset treats every blocked payment as “no chargeback,” it teaches the model that blocking caused a safe outcome. The dataset has confused an unobserved outcome with a negative label.
+In reality:
 
-Recommendation systems create a similar effect. A user can click only an item that was displayed. Search systems receive richer interaction data near the top of the ranking. Human-review queues collect more labels for cases the current model already considers risky. These are **feedback loops** because earlier predictions influence the evidence available to later models.
+$$
+\boxed{
+\theta
+=
+F(
+D,
+C,
+H,
+S,
+R
+)
+}
+$$
 
-```mermaid
-flowchart TD
-    A["Current Model<br/>(assign a score or prediction)"] --> B["Decision Policy<br/>(choose display, review, approve, or block)"]
-    B --> C["Product Action<br/>(change what the user can experience)"]
-    C --> D["Observed Outcome<br/>(record only events the action permits)"]
-    D --> E["Future Dataset<br/>(retain the collection history)"]
-    E --> F["Next Candidate<br/>(learn from selected evidence)"]
-    F --> A
-    B --> G["Exploration Route<br/>(sample cases outside score-led selection)"]
-    G --> D
+where:
 
-    class A,F model
-    class B,G policy
-    class C world
-    class D,E evidence
-```
+* $$D$$ = exact data snapshot,
+* $$C$$ = training code version,
+* $$H$$ = hyperparameters,
+* $$S$$ = random seed / stochastic state,
+* $$R$$ = runtime/environment.
 
-### Record Which Cases Entered The Feedback Data
+To reproduce a model, all important inputs need lineage. This is why production ML treats the trained model as an artifact rather than merely a file. One of the easiest retraining mistakes is letting the new training data contaminate evaluation. Suppose you train using:
 
-**Selection bias** means the observed examples differ systematically from the population the model serves. A review queue filled by high risk scores contains many difficult cases. Its labels can be accurate and still provide a distorted picture of all traffic.
+$$
+D_{\text{Jan-Aug}}
+$$
 
-The data therefore needs the collection route beside the label. A natural product outcome differs from a case deliberately chosen by model score or random audit. User reports, appeals, and specialist escalations add their own selection rules.
+and also evaluate on:
 
-That reason affects interpretation. The model and policy versions explain which rules selected the case. The product action explains which outcome remained observable. A sampling probability states how much of the eligible population the route represented.
+$$
+D_{\text{Jan-Aug}}.
+$$
 
-A controlled random audit can provide evidence outside the model-selected queue. For example, a team may review a small approved sample of low- and medium-score documents in addition to every high-score document. That sample helps estimate how many errors the normal route misses. Safety, privacy, and legal constraints decide whether exploration is acceptable; some decisions permit no random exposure at all.
+The model's apparent improvement may simply reflect fitting those examples. You need held-out evidence. For time-dependent production systems, a temporal split is often more realistic:
 
-Analysts sometimes use **inverse propensity weighting** to compensate for unequal sampling. Each row receives a weight based on the inverse of its probability of selection. A case sampled at 5 percent represents more of the population than a case selected with certainty. This method needs trustworthy probabilities and population coverage. A route with zero chance of selection leaves no evidence to reweight, while tiny probabilities can create unstable weights. The snapshot should preserve the raw routes and probabilities even if the team chooses a different correction method.
+$$
+\text{Train}:
+[t_0,t_1]
+$$
 
-### Keep Unobserved Alternative Outcomes Unknown
+$$
+\text{Validate}:
+(t_1,t_2]
+$$
 
-Some missing outcomes describe a world that never happened. A rejected loan reveals no future repayment behaviour for that decision. A blocked payment reveals no chargeback outcome for a completed transaction. A removed recommendation reveals no user response under continued exposure.
+$$
+\text{Test}:
+(t_2,t_3].
+$$
 
-These are **counterfactual** questions: what would have happened under another action? Ordinary supervised retraining cannot recover the answer from the observed label alone. Approved experiments, expert audits, causal methods, or separate policy evaluation may add evidence. If those paths are unavailable, the limitation belongs in the evaluation report rather than being hidden through a guessed label.
+This asks:
 
-The first gate therefore asks whether each row represents an observable, correctly attributed outcome. More data cannot repair a broken observation rule.
+Can a model trained on earlier data generalize to later data
+
+That resembles production more closely than arbitrary random splitting. Suppose customer behaviour changes substantially in July. A random train-test split mixes July examples into both:
+
+$$
+D_{\text{train}}
+$$
+
+and:
+
+$$
+D_{\text{test}}.
+$$
+
+The model gets to learn from the same temporal regime it is evaluated on. But production deployment asks:
+
+Can this model trained yesterday work tomorrow
+
+That is temporally asymmetric. So for many production-feedback problems:
+
+$$
+\boxed{\text{time-aware evaluation is essential}}
+$$
+
+especially when drift is the reason retraining is being considered. Suppose concept drift occurs. It may seem obvious to train only on recent production examples. But recent data may be:
+
+* small,
+* noisy,
+* seasonally unusual,
+* concentrated in certain segments,
+* generated under the current model's policy.
+
+Old data still contains useful information. A common design question is the weighting of history:
+
+$$
+D_{\text{train}}
+=
+D_{\text{old}}
++
+D_{\text{recent}}.
+$$
+
+You might give recent examples more influence:
+
+$$
+w_i = h(\text{age}_i).
+$$
+
+For example:
+
+$$
+w_i=e^{-\lambda\cdot\text{age}_i}.
+$$
+
+The exact strategy is domain-specific. The first-principles point is:
+
+Retraining determines what the model is allowed to remember and what it is encouraged to forget.
+
+Suppose the latest month contains mostly:
+
+$$
+\text{UK traffic}.
+$$
+
+You retrain entirely on that month. Performance improves in the UK. But:
+
+$$
+\text{Germany},
+\text{France},
+\text{Spain}
+$$
+
+become worse because they were barely represented. This is one form of forgetting. A new model should therefore be evaluated not only on the recently degraded segment but on the broader set of capabilities the current model already has. Retraining should improve the target problem without accidentally erasing useful behaviour elsewhere.
 
 ![Production-feedback selection showing how the current model and policy shape observed outcomes and how admission gates separate pending, censored, missing, and training-eligible rows](/content-assets/articles/article-mlops-monitoring-and-feedback-retraining-from-production-feedback/production-feedback-selection.png)
 
 *The current model and policy determine which outcomes production reveals. Dataset-admission gates keep pending, censored, and missing outcomes distinct from rows eligible for supervised training.*
 
-## Collect Approved Feedback Before Building The Training Dataset
-<!-- section-summary: Training admission starts from the full population of prediction receipts and attaches outcomes under an explicit eligibility and use policy. -->
+## How Should a Retrained Candidate Be Evaluated, Registered, and Proposed for Promotion?
+<!-- section-summary: Retraining creates a candidate that is compared directly with production on the real decision objective, important segments, calibration, reproducibility, and attached evidence before promotion. -->
 
-The feedback pipeline starts from prediction receipts rather than a table of successful label joins. A receipt uses `prediction_id` and prediction time to identify one production decision. It also records the model, policy, score, action, route, and an approved join key. Starting from the receipts keeps missing and pending cases visible.
+Retraining creates a candidate that is compared directly with production on the real decision objective, important segments, calibration, reproducibility, and attached evidence before promotion.
 
-Suppose a document classifier processed 100,000 files. Only 8,000 reached human review, and 7,600 received a final decision. A dataset built from the 7,600 reviewed rows reports perfect join coverage because every row already has a label.
+Suppose the current deployed model is:
 
-Starting from all 100,000 receipts reveals the real structure. Another observation path covered 92,000 cases, while 400 review cases still lack a final decision. The training policy can now admit only the routes suitable for the intended target.
+$$
+M_0.
+$$
 
-### Define Which Predictions Belong In The Dataset
+Retraining creates:
 
-**Observation eligibility** states whether a case had a real opportunity to produce the target outcome. **Training eligibility** adds stricter rules for admission to a model-development snapshot. A case may be useful for operational monitoring and still lack the maturity, consent, provenance, or point-in-time features required for training.
+$$
+M_1.
+$$
 
-The eligibility policy answers concrete questions:
+At this point:
 
-- Which production actions leave the target outcome observable?
-- Which label sources carry enough authority for training?
-- Which policy versions share the same meaning?
-- Which rows require exclusion under privacy or retention rules?
-- Which selection routes need separate reporting or weighting?
-- Which cases remain pending, censored, disputed, or missing?
+$$
+M_1
+$$
 
-Warehouse SQL or Spark commonly implements the cohort join. The left side contains all prediction receipts in scope. The right side contains the authoritative outcome known by the declared cutoff. A left join preserves receipts with no outcome, so the pipeline can classify them explicitly instead of dropping them.
+is only a **candidate**. It has not earned production traffic. The relevant question is:
 
-### Use Data Tests To Enforce Feedback Rules
+$$
+\boxed{\text{Is }M_1\text{ better than }M_0\text{ for the current objective?}}
+$$
 
-The written policy needs executable checks. dbt data tests fit warehouse transformations, while Spark assertions, Deequ, Great Expectations, or platform-native expectations fit lakehouse and distributed pipelines. The tool matters less than the failing rows and the action taken after failure.
+Not:
 
-This dbt fragment checks three structural promises after the snapshot builder has applied the domain rules:
+Did the training job finish successfully
 
-```yaml
-models:
-  - name: feedback_candidate_cohort
-    columns:
-      - name: prediction_id
-        data_tests: [unique, not_null]
-      - name: label_state
-        data_tests:
-          - accepted_values:
-              arguments:
-                values: [mature_observed, censored, mature_missing]
-      - name: selection_route
-        data_tests: [not_null]
-      - name: training_eligible
-        data_tests:
-          - accepted_values:
-              arguments:
-                values: [true, false]
+A successfully trained bad model is still a bad model. This is often called:
+
+$$
+\text{candidate vs champion}
+$$
+
+or:
+
+$$
+\text{new vs incumbent}.
+$$
+
+The comparison should use exactly the same evaluation examples. For prediction loss:
+
+$$
+\Delta L
+=
+L(M_1)-L(M_0).
+$$
+
+If:
+
+$$
+\Delta L<0
+$$
+
+the candidate is better under that loss. But production systems usually need more than one metric. Suppose:
+
+$$
+AUC(M_0)=0.91
+$$
+
+and:
+
+$$
+AUC(M_1)=0.93.
+$$
+
+Looks like an obvious improvement. But suppose:
+
+| Segment        | Current | Candidate |
+| -------------- | ------: | --------: |
+| Overall        |    0.91 |      0.93 |
+| New users      |    0.86 |      0.91 |
+| Existing users |    0.94 |      0.95 |
+| Germany        |    0.90 |      0.74 |
+
+The candidate improved aggregate performance while severely damaging one region. So promotion should evaluate:
+
+$$
+\text{overall quality}
+$$
+
+and:
+
+$$
+\text{important segment quality}.
+$$
+
+This is why model promotion usually needs **guardrails**. Suppose model quality improves:
+
+$$
+AUC:0.91\rightarrow0.93
+$$
+
+but the production system cares about losses at one threshold. What matters might actually be:
+
+$$
+\text{false positives at }\tau=0.8
+$$
+
+and:
+
+$$
+\text{false negatives at }\tau=0.8.
+$$
+
+Or business cost:
+
+$$
+C
+=
+c_{FP}FP+c_{FN}FN.
+$$
+
+A model can have better generic ranking performance but worse business consequences under the deployed policy. The evaluation target should reflect how the model will actually be used. Suppose ranking remains excellent:
+
+$$
+AUC\approx\text{stable}
+$$
+
+but probabilities become miscalibrated. Previously:
+
+$$
+P(Y=1|\hat p=0.2)\approx0.2.
+$$
+
+Now:
+
+$$
+P(Y=1|\hat p=0.2)\approx0.35.
+$$
+
+You may not need full retraining. A calibration update or threshold change could solve the immediate problem. Again:
+
+$$
+\boxed{\text{new evidence}\not\Rightarrow\text{full model retraining}}
+$$
+
+The intervention should match the failure. Suppose retraining twice on the same dataset gives substantially different results because of uncontrolled randomness. Then a candidate improvement may be luck. Reproducibility does not always mean bit-for-bit identical models, especially for distributed or nondeterministic training. But it should mean that you can reconstruct:
+
+$$
+\text{what data was used}
+$$
+
+$$
+\text{what code ran}
+$$
+
+$$
+\text{what configuration ran}
+$$
+
+$$
+\text{what metrics resulted}.
+$$
+
+Then the training run becomes an auditable experiment. A model registry should conceptually contain more than:
+
+```text
+model-v42.bin
 ```
 
-The `unique` and `not_null` tests protect the identity of each cohort member. The label states prevent an immature `pending` case from entering this published cohort. `training_eligible` then separates mature labeled rows from censored or mature-missing evidence without deleting the excluded cases. The selection route preserves the collection mechanism for evaluation.
+The meaningful object is closer to:
 
-Domain checks still need custom queries. These queries find group overlap across splits and feature timestamps later than prediction time. They also confirm that labels follow the approved policy and route totals reconcile with the source cohort.
+$$
+M_{42}
+=
+(
+\text{artifact},
+\text{training snapshot},
+\text{code version},
+\text{label version},
+\text{metrics},
+\text{evaluation snapshot},
+\text{approval status}
+).
+$$
 
-A failed gate quarantines the candidate snapshot and records the offending rows. The data owner repairs the upstream transformation or policy mapping, rebuilds from the same source cutoff, and reruns the checks. Deleting failed rows merely to make the pipeline green would change the eligible population without review.
+Why?
 
-## Wait Until Outcomes Are Complete Enough To Use
-<!-- section-summary: A maturity policy separates unfinished outcomes from final labels and preserves cases whose answer remains unknown. -->
+Because months later, somebody should be able to ask:
 
-Many labels arrive after the prediction. A chargeback can take weeks. An invoice labeled “unpaid after thirty days” needs the full thirty-day period. A moderation decision may remain open until an appeal window closes. Recent silence is therefore weak evidence.
+Why did we deploy this model
 
-Consider an invoice predicted to remain unpaid thirty days after its due date. Ten days later, no payment event exists. Writing `unpaid = 1` would declare failure too early. Writing `unpaid = 0` would treat missing evidence as success. The correct state is `pending` until the observation window closes or an authoritative event settles the outcome earlier.
+And the system should answer with evidence. Registering a candidate says:
 
-```mermaid
-flowchart TD
-    A["Prediction Recorded<br/>(start the observation window)"] --> B["Pending Outcome<br/>(final evidence is incomplete)"]
-    B --> C{"Maturity Check<br/>(read events available by the cutoff)"}
-    C -->|Final event| D["Mature Label<br/>(admit the resolved outcome)"]
-    C -->|Window open| E["Pending Case<br/>(exclude from final training use)"]
-    C -->|Observation ended| F["Censored Case<br/>(preserve an unknown answer)"]
-    C -->|Expected event absent| G["Mature Missing<br/>(investigate source coverage)"]
+This model exists.
 
-    class A,B event
-    class C gate
-    class D,E,F state
-    class G failure
-```
+Promoting it says:
 
-### Do Not Treat Unknown Outcomes As Negative Labels
+We have enough evidence to believe this model should control production decisions.
 
-A case is **right-censored** if observation ended before the outcome window completed. An account may close, a sensor may stop reporting, or the dataset cutoff may arrive before a ninety-day target resolves. The available evidence leaves the final answer unknown.
+Those are very different claims. A promotion gate might require:
 
-Binary classifiers usually exclude censored rows from final supervised training unless the modeling method explicitly handles censoring. The snapshot still records their count by cohort, route, and segment. A sudden increase can reveal a source failure or a product change that removed observation opportunities.
+$$
+\text{overall metric}\ge\text{minimum}
+$$
 
-**Mature missing** describes a different problem. The observation window closed and the system expected an outcome event, yet none arrived. The first investigation checks source freshness, ingestion success, join coverage, and policy versions. Retraining pauses until the team knows whether those rows represent a real absence or a broken feed.
+$$
+\text{candidate improvement}\ge\delta
+$$
 
-### Rebuild Corrected Labels As They Were Known At A Chosen Time
+$$
+\text{critical segment regressions}=0
+$$
 
-Production labels can change. An appeal can reverse a review decision, a late payment can correct an invoice state, and an upstream system can repair a mistaken event. Overwriting the old row destroys the evidence used by an earlier training run.
+$$
+\text{latency within budget}
+$$
 
-Append-only outcome events preserve the sequence. A resolved view chooses the authoritative event available by a declared cutoff. A snapshot built today can include a correction received today; a past snapshot still reflects only the evidence available at its own cutoff. This is the **as-of rule** for labels.
+$$
+\text{calibration acceptable}.
+$$
 
-Maturity and correction policy belong beside the dataset version. Otherwise, two teams can read the same outcome table on different days and silently train from different answers.
+The exact rules differ, but explicit gates make deployment repeatable rather than subjective.
 
-## Freeze The Exact Data Used For Training
-<!-- section-summary: A training snapshot freezes eligible labels, prediction-time features, split rules, and lineage under one immutable identity. -->
+## How Do Shadow, Canary, Exploration, and Feedback Effects Change Online Evaluation?
+<!-- section-summary: Shadow and canary stages add realistic evidence, but model actions change future observations, making exploration and monitoring of data-generation effects part of the evaluation. -->
 
-After the labels are eligible and mature, the pipeline reconstructs the inputs that existed at each original prediction. This protects the model from **data leakage**, which occurs if training receives information unavailable to the production decision.
+Shadow and canary stages add realistic evidence, but model actions change future observations, making exploration and monitoring of data-generation effects part of the evaluation.
 
-Suppose an account-risk prediction ran at 10:00. The account balance was £400 at that moment and changed to £40 at 11:30 after a payment. A training query that joins by account ID alone may attach the £40 balance to the 10:00 prediction. Offline evaluation then rewards the model for using a future event.
+Even an excellent test set is still a simulation of production. The new model may alter:
 
-Point-in-time correctness adds time to the join. For each training observation, the feature builder selects the latest feature value available at or before the prediction timestamp. Databricks Feature Engineering supports point-in-time joins for time-series feature tables. Feast historical feature retrieval provides the same responsibility in an independent feature-store architecture. Warehouse teams can implement temporal joins in SQL, and Spark can construct them at distributed scale.
+$$
+P(\hat Y)
+$$
 
-### Record When Events Happened And When They Became Available
+which changes:
 
-One timestamp rarely covers the whole problem. **Event time** records the moment something happened in the source domain. **Available time** records the moment the training pipeline could have known it.
+$$
+P(D)
+$$
 
-A bank transfer may occur at 09:55 and reach the feature table at 10:07. A prediction at 10:00 cannot use that transfer, even though its event time is earlier. Systems with material ingestion delay need both clocks or a conservative availability rule. The point-in-time join uses the clock that matches the actual serving path.
+which changes user behaviour and future labels. Therefore:
 
-Feature values also need their transformation and source versions. Reconstructing the right raw rows with today's corrected feature logic can still produce a dataset different from the original logic. Teams either preserve versioned feature code and source snapshots or publish durable feature-table versions with enough retention for the required investigation period.
+$$
+\text{offline candidate quality}
+$$
 
-### Treat Every Training Snapshot As A Versioned Data Release
+is necessary evidence, but often not sufficient evidence. Eventually the candidate must encounter real production traffic. Instead of:
 
-The pipeline writes a stable snapshot into the organisation's existing analytical platform. This may be a warehouse table, a Delta or Iceberg snapshot on object storage, or a versioned export with an immutable manifest. dbt is a strong fit for SQL-centered warehouse transformations. Spark fits large distributed joins. Delta and Iceberg provide table snapshots, although retention policies must preserve the files needed for future reconstruction.
+$$
+0\%\rightarrow100\%
+$$
 
-The snapshot manifest records the facts a reviewer needs to reproduce the rows:
+traffic immediately, use staged exposure.
 
-```yaml
-snapshot_id: feedback-routing-v1842
-source_cutoff: outcome-window-42
-label_policy: routing-resolution-v7
-feature_contract: routing-features-v11
-split_policy: grouped-time-split-v4
-collection_routes: [product_outcome, random_audit, human_review]
-source_versions:
-  prediction_receipts: 731
-  resolved_outcomes: 418
-  historical_features: 1264
-quality_report: reports/feedback-routing-v1842.json
-```
+For example:
 
-`snapshot_id` gives the training job one stable input. The three source versions identify the exact table states. The policy IDs preserve how labels, features, and splits were interpreted. The quality report contains row counts, exclusions, label maturity, join coverage, route proportions, segment coverage, and failed-record locations.
+$$
+1\%
+\rightarrow
+5\%
+\rightarrow
+25\%
+\rightarrow
+50\%
+\rightarrow
+100\%.
+$$
 
-A useful rebuild test starts from an empty output location and reads the manifest. It reconstructs the snapshot, then compares the row count, schema, key set, split membership, and content digest with the published version. A version number without retained data files fails this test, so storage retention must cover the organisation's audit and rollback horizon.
+Why?
 
-## Treat Every Retraining Trigger As A Claim To Investigate
-<!-- section-summary: A trigger starts an investigation and states the improvement the candidate must prove; it never guarantees that another model is the right repair. -->
+Because the expected blast radius of an undiscovered failure is approximately related to exposure. If there is a catastrophic feature incompatibility, catching it at 1% is much safer than at 100%. This is the same principle as canary deployment in ordinary software, with additional model-quality checks. Suppose the incumbent:
 
-A retraining trigger is a reason to investigate a new candidate. It can come from a schedule, confirmed prediction-quality decline, feature or traffic drift, a policy change, a new product population, or an incident. Each trigger carries a different hypothesis.
+$$
+M_0
+$$
 
-A batch demand forecast may need a planned seasonal refresh. A document classifier may need new labels after the organisation changes its taxonomy. A fraud model may show a sustained rise in mature false negatives for one payment route. The trigger should name the observed evidence, the affected population, and the expected improvement.
+continues making decisions. The candidate:
 
-“Drift exceeded 0.2” is too weak on its own. Drift says the data changed according to a chosen statistic. That result cannot establish a prediction-quality decline or prove that fresh training data will repair the problem. The feature pipeline may have broken, the label feed may be late, or the decision threshold may need adjustment.
+$$
+M_1
+$$
 
-### Check Feedback Data Before Retraining
+receives the same inputs but its predictions are only logged. Now compare:
 
-The first investigation checks the evidence system: snapshot freshness, schema changes, label volume, join coverage, maturity states, selection routes, and policy versions. The next pass compares affected segments, model routes, feature health, product action rates, and recent releases.
+$$
+\hat Y_0
+$$
 
-Suppose a dashboard reports a sudden fall in precision. The apparent decline starts on the same day that confirmed-positive labels arrive, while confirmed-negative labels retain a thirty-day delay. Recent cases therefore contain a one-sided label population. Retraining on that cohort would amplify the reporting problem. The correct response repairs the maturity view and recomputes the metric from a complete cohort.
+and:
 
-Another incident may reveal stable labels and features, plus a genuine quality loss concentrated in a new document format. That evidence supports a training hypothesis: adding mature examples of the new format and improving its features should reduce misses without increasing false positives or review volume beyond agreed limits.
+$$
+\hat Y_1.
+$$
 
-```mermaid
-flowchart TD
-    A["Trigger Signal<br/>(schedule, quality, drift, policy, or incident)"] --> B["Evidence Integrity<br/>(check freshness, joins, maturity, and policy)"]
-    B --> C{"Evidence Healthy?<br/>(trust the observed regression)"}
-    C -->|No| D["Repair Data Path<br/>(rebuild evidence and recompute metrics)"]
-    D --> B
-    C -->|Yes| E["Cause Investigation<br/>(inspect segments, features, actions, and releases)"]
-    E --> F{"Model Change Plausible?<br/>(state a testable improvement)"}
-    F -->|No| G["Operational Repair<br/>(fix policy, feature, capacity, or source)"]
-    F -->|Yes| H["Training Hypothesis<br/>(define candidate and acceptance evidence)"]
+You can examine:
 
-    class A,B signal
-    class C,F gate
-    class D,G repair
-    class E,H build
-```
+$$
+|\hat Y_1-\hat Y_0|
+$$
 
-The trigger record travels into the training run and evaluation report. Reviewers can then ask whether the candidate solved the problem that justified its cost and risk.
+by segment, input type, and time. This catches:
+
+* serving incompatibilities,
+* unexpected score distributions,
+* preprocessing differences,
+* latency problems.
+
+But it cannot tell you everything, because the candidate is not affecting the world yet. Suppose:
+
+$$
+10\%
+$$
+
+of eligible users receive the candidate and:
+
+$$
+90\%
+$$
+
+receive the incumbent. Now you can compare real outcomes:
+
+$$
+Y|M_1
+$$
+
+against:
+
+$$
+Y|M_0.
+$$
+
+If assignment is sufficiently controlled, this gives stronger evidence than historical comparison because both models operate at approximately the same time under the same environment. This helps separate:
+
+$$
+\text{model difference}
+$$
+
+from:
+
+$$
+\text{time difference}.
+$$
+
+This is where the feedback loop becomes especially important. Suppose:
+
+$$
+M_1
+$$
+
+approves more users than:
+
+$$
+M_0.
+$$
+
+Then:
+
+$$
+P(X,Y|\text{feedback generated by }M_1)
+$$
+
+will differ from:
+
+$$
+P(X,Y|\text{feedback generated by }M_0).
+$$
+
+Not necessarily because the world changed independently, but because the model changed who entered the observable outcome population. Therefore after deployment, you should monitor not only:
+
+$$
+\text{performance}
+$$
+
+but also:
+
+$$
+\boxed{\text{how the new model changes the production data-generating process}}
+$$
+
+Suppose the old model blocks:
+
+$$
+20\%
+$$
+
+of risky transactions. The new model blocks:
+
+$$
+35\%.
+$$
+
+Now the set of allowed transactions changes. Future fraud labels are generated from a different selection. So the next retraining dataset is produced under a new policy. This means retraining is recursive:
+
+$$
+M_t
+\rightarrow
+D_t
+\rightarrow
+D_{\text{feedback},t}
+\rightarrow
+M_{t+1}.
+$$
+
+A production ML system is not merely fitting a static dataset. It is participating in the process that creates its future datasets. If your current policy completely suppresses certain actions, you may never learn what would have happened otherwise. Some systems therefore preserve carefully controlled exploration.
+
+Conceptually:
+
+$$
+D
+\sim
+\pi(D|X)
+$$
+
+where the probability:
+
+$$
+\pi(D|X)
+$$
+
+is logged. This can help later reasoning about selection effects. In suitable domains, randomized or quasi-randomized exposure can improve the quality of future feedback. This must, of course, respect the safety and product constraints of the domain. After deployment, compare:
+
+$$
+P(X|M_0)
+$$
+
+with:
+
+$$
+P(X|M_1)
+$$
+
+where appropriate, and:
+
+$$
+P(\hat Y|M_0)
+$$
+
+against:
+
+$$
+P(\hat Y|M_1),
+$$
+
+as well as:
+
+$$
+P(D|M_0)
+$$
+
+versus:
+
+$$
+P(D|M_1).
+$$
+
+Eventually compare:
+
+$$
+P(Y|M_0)
+$$
+
+and:
+
+$$
+P(Y|M_1).
+$$
+
+These help answer:
+
+Is the candidate merely making different predictions, or is it producing better real-world decisions
+
+Suppose a recommender generates more clicks after deployment. Good Perhaps. But maybe it increased clickbait while reducing long-term retention. Similarly, a fraud model may identify more fraud but massively increase false positives. The new model should be judged against the complete objective:
+
+$$
+U
+=
+\text{benefit}
+-
+\text{costs}
+-
+\text{side effects}.
+$$
+
+Production feedback should represent the outcomes the product genuinely cares about, not merely the easiest observable label. Suppose a model predicts users interested in sports. Those users receive more sports content. They click more sports content. The next model observes stronger sports engagement. It recommends even more sports content. Formally:
+
+$$
+\hat Y_t
+\rightarrow
+D_t
+\rightarrow
+Y_t
+\rightarrow
+D_{\text{train},t+1}
+\rightarrow
+\hat Y_{t+1}.
+$$
+
+The system may converge toward a narrow self-reinforcing world. Nothing is technically broken. Every retraining run may improve offline accuracy on its own feedback-generated dataset. Yet product diversity could steadily deteriorate. This is one reason retraining loops need product-level monitoring. Suppose the old model systematically under-serves a certain segment. That segment receives fewer opportunities. Therefore fewer positive outcomes are observed. The next training set sees fewer positive examples from that segment. The new model can become even less likely to serve it. This is a general problem:
+
+$$
+\boxed{
+\text{biased policy}
+\rightarrow
+\text{biased observations}
+\rightarrow
+\text{biased training data}
+\rightarrow
+\text{reinforced policy}
+}
+$$
+
+Production feedback is not automatically an unbiased teacher. Suppose historical data contains:
+
+$$
+10\,000\,000
+$$
+
+examples. Recent production contains:
+
+$$
+100\,000.
+$$
+
+If simply concatenated:
+
+$$
+D=D_{\text{old}}\cup D_{\text{recent}},
+$$
+
+the recent data represents about 1% of examples. If the world changed materially, its signal may be overwhelmed. You may therefore use weighting:
+
+$$
+L(\theta)
+=
+\sum_i
+w_iL(f_\theta(X_i),Y_i)
+$$
+
+with larger $$w_i$$ for recent or strategically important data. But too much weighting may make the model chase noise. This creates a bias-variance/time-adaptation tradeoff.
+
+## How Should Cadence, Triggers, Dataset Tests, Uncertainty, and Release Evidence Be Controlled?
+<!-- section-summary: Cadence follows value and change rate, while reproducible triggers, dataset tests, paired uncertainty, disagreement analysis, and portable evidence keep the process auditable. -->
+
+Cadence follows value and change rate, while reproducible triggers, dataset tests, paired uncertainty, disagreement analysis, and portable evidence keep the process auditable.
+
+Suppose you retrain every hour. You respond quickly to new behaviour. But you also risk:
+
+* noisy labels,
+* immature outcomes,
+* unstable models,
+* expensive validation,
+* rapid feedback amplification.
+
+Suppose you retrain once a year. You get stable mature data, but may adapt too slowly. So the appropriate cadence balances:
+
+$$
+\text{adaptation speed}
+$$
+
+against:
+
+$$
+\text{evidence quality and stability}.
+$$
+
+There is no universal best schedule. The label delay and rate of world change impose fundamental limits. Let:
+
+$$
+T_D
+$$
+
+be how quickly the data-generating process changes,
+
+$$
+T_L
+$$
+
+be how long labels take to mature, and:
+
+$$
+T_R
+$$
+
+be retraining frequency. Retraining much faster than:
+
+$$
+T_L
+$$
+
+may mean repeatedly training on incomplete truth. Retraining much slower than:
+
+$$
+T_D
+$$
+
+may mean staying stale too long. A sensible system tries to reconcile these competing clocks. A retraining pipeline can fail operationally:
+
+$$
+\text{job crashed}.
+$$
+
+Or the training process can complete but produce a worse model:
+
+$$
+M_1<M_0.
+$$
+
+These are different incidents. The first requires pipeline recovery. The second is a valid experimental outcome:
+
+The new evidence did not produce a better candidate.
+
+A healthy retraining system must be comfortable doing nothing. Suppose retraining runs because a monthly schedule fired. The candidate gets:
+
+$$
+AUC=0.908
+$$
+
+while production has:
+
+$$
+AUC=0.912.
+$$
+
+If guardrails are healthy, the correct result may simply be:
+
+$$
+\boxed{\text{keep current model}}
+$$
+
+Retraining does not need to end in deployment. This is important because otherwise organizational pressure can turn:
+
+We trained a new model
+
+into:
+
+Therefore we must deploy it.
+
+That is poor experiment logic. Suppose somebody asks:
+
+Why was model v43 retrained
+
+You should ideally be able to answer:
+
+* performance metric dropped,
+* for which segment,
+* over which evaluation window,
+* using which label version,
+* under which retraining policy,
+* who or what approved the training run.
+
+This creates:
+
+$$
+\text{trigger}
+\rightarrow
+\text{training run}
+\rightarrow
+\text{candidate}
+\rightarrow
+\text{evaluation}
+\rightarrow
+\text{deployment}.
+$$
+
+That lineage is valuable during incidents. Before fitting the model, check invariants.
+
+For example:
+
+$$
+N_{\text{rows}}>N_{\min}
+$$
+
+$$
+\text{positive rate}\in[a,b]
+$$
+
+$$
+\text{feature null rate}<\tau
+$$
+
+$$
+\text{label maturity}=100\%\text{ for required rows}
+$$
+
+$$
+\text{duplicate rate}<\epsilon
+$$
+
+$$
+\text{feature schema matches expected version}.
+$$
+
+Why?
+
+Because a bad training dataset can successfully produce a model artifact. Training pipelines can fail silently too. If the candidate will operate on:
+
+$$
+P_{\text{current}}(X),
+$$
+
+ask whether its training set resembles that environment sufficiently.
+
+For example:
+
+$$
+D(P_{\text{train}},P_{\text{current}})
+$$
+
+may reveal that a supposedly "fresh" training dataset actually excludes a major current segment because its labels have not matured. A training set can be recent without being representative. There is a temptation to repeatedly inspect the same test set while tuning. Eventually the development process starts optimizing against it.
+
+Then:
+
+$$
+D_{\text{test}}
+$$
+
+is no longer truly unseen. A robust retraining process may maintain several layers:
+
+$$
+D_{\text{train}}
+$$
+
+$$
+D_{\text{validation}}
+$$
+
+$$
+D_{\text{promotion test}}
+$$
+
+and eventually:
+
+$$
+\text{online evaluation}.
+$$
+
+The precise architecture varies, but the principle is that evidence is weaker after it repeatedly influences decisions. Suppose:
+
+$$
+\text{candidate accuracy}=91.2\%
+$$
+
+and:
+
+$$
+\text{current accuracy}=91.0\%.
+$$
+
+Is the candidate genuinely better?
+
+Maybe the difference is sampling noise. So the question is not merely:
+
+$$
+M_1>M_0
+$$
+
+numerically. It is:
+
+$$
+\boxed{
+\text{Is the evidence strong enough that the improvement is meaningful?}
+}
+$$
+
+That may involve confidence intervals, bootstrap comparisons, paired tests, or business-defined minimum effect sizes. Statistical significance and product significance should both matter. When two models predict the same examples, compare them per case. Let:
+
+$$
+L_{0,i}=L(Y_i,M_0(X_i))
+$$
+
+and:
+
+$$
+L_{1,i}=L(Y_i,M_1(X_i)).
+$$
+
+Then examine:
+
+$$
+\Delta_i=L_{1,i}-L_{0,i}.
+$$
+
+This tells you where one model improves or regresses relative to the other. Aggregate averages can hide important patterns. Cases where:
+
+$$
+M_0(X)=M_1(X)
+$$
+
+tell you little about the behavioral change. Cases where:
+
+$$
+M_0(X)\neq M_1(X)
+$$
+
+are particularly valuable. Ask:
+
+* Which segments produce disagreements
+* Who is correct when they disagree
+* Are differences concentrated near the threshold
+* Does the candidate introduce a new failure mode
+
+This gives a more concrete understanding than a single metric delta. Suppose candidate $$M_1$$ is approved. Its deployment metadata should ideally say:
+
+$$
+\text{trained on snapshot}=D_{42}
+$$
+
+$$
+\text{evaluation}=E_{17}
+$$
+
+$$
+\text{current comparison}=M_0
+$$
+
+$$
+\text{approval}=A_{8}.
+$$
+
+Then if production changes sharply after release, you can reconstruct exactly what was believed before deployment. This is model governance in its most practical form: **being able to explain the chain of evidence**.
 
 ![Retraining-trigger triage that checks evidence health and plausible model cause before creating a training hypothesis](/content-assets/articles/article-mlops-monitoring-and-feedback-retraining-from-production-feedback/retraining-trigger-triage.png)
 
 *A retraining trigger begins an investigation. Healthy evidence and a plausible model cause are required before the team creates a training hypothesis and reproducible candidate.*
 
-## Run Reproducible Training
-<!-- section-summary: Reproducible training pins the snapshot, code, environment, parameters, and outputs so a retry or investigation follows the same path. -->
+## How Do Rollout, Rollback, and Post-Release Monitoring Govern the Feedback Loop?
+<!-- section-summary: Layered rollout metrics, predeclared rollback conditions, and post-release comparison protect users and reveal whether the new model is changing its own future training distribution. -->
 
-The training pipeline converts the approved snapshot into a candidate model. Reproducibility means another run can identify and recover the same inputs and logic. Exact floating-point equality across hardware is a stricter goal that some regulated or high-risk systems may require.
+Layered rollout metrics, predeclared rollback conditions, and post-release comparison protect users and reveal whether the new model is changing its own future training distribution.
 
-### Use A Workflow Tool To Run And Record Training
+As the candidate receives traffic, watch:
 
-A retraining run contains dependent steps: validate the snapshot, train the model, evaluate it, and publish the approved outputs. A workflow tool starts those steps in the required order, records their status, and retries work according to an explicit policy. This coordinating role is called **orchestration**, and the workflow tool is often called an **orchestrator**.
+$$
+\text{service health}
+$$
 
-Airflow, Dagster, Prefect, or a managed ML pipeline commonly coordinates the cycle. Airflow fits organisations with an established task-orchestration estate and explicit data intervals. Dagster fits asset-oriented systems that treat snapshots, models, and reports as partitioned data products. SageMaker AI Pipelines, Gemini Enterprise Agent Platform Pipelines, Azure Machine Learning pipelines, and Lakeflow Jobs reduce platform integration inside their respective environments.
+$$
+\text{feature quality}
+$$
 
-The orchestrator owns run order, retries, parameters, and status. The warehouse or lakehouse owns the data rows. The training service owns compute. MLflow or a managed tracker owns experiment and model evidence. Keeping those boundaries clear prevents the orchestrator database from turning into an accidental artifact store.
+$$
+P(\hat Y)
+$$
 
-A typical run resolves immutable inputs and validates the snapshot before training. It evaluates every candidate against the same baseline, writes the model and report, and submits the passing artifact for registration. A retry reads the same snapshot ID and container image digest. It never reruns a query against a moving `latest_feedback` table.
+$$
+P(D)
+$$
 
-### Record Exactly What Produced Each Model
+$$
+\text{segment behaviour}
+$$
 
-The run record links the trigger, snapshot, source revision, environment, configuration, random seeds, output model, and evaluation plan. Git identifies the training code. An OCI image digest identifies the packaged environment. MLflow Tracking can record parameters, datasets, metrics, artifacts, and the Logged Model created by the run.
+$$
+\text{human-review rate}
+$$
 
-Suppose a model's precision changes after a training retry. The team compares the two manifests. A different snapshot points to moving input data; a different image points to dependency drift; the same inputs with different results points toward stochastic training or nondeterministic compute. The manifest turns “we reran the notebook” into an investigation with named evidence.
+and eventually:
 
-Data validation runs before expensive training, and output validation runs before evaluation. A failed step leaves the candidate without release authority. The pipeline preserves logs, failure records, and partial artifacts according to retention policy, then resumes from the last trustworthy boundary or starts a clean run with a new identity.
+$$
+L(Y,\hat Y)
+$$
 
-## Compare The Candidate With The Current Model
-<!-- section-summary: Comparative evaluation tests the candidate and current model on the same evidence across overall quality, important segments, and operational consequences. -->
+plus business outcomes.
 
-A candidate earns consideration by improving the stated hypothesis without creating unacceptable regressions. Comparing it only with a fixed threshold such as “accuracy above 90 percent” misses the practical question: does this version improve the current production decision system?
+Why all these layers?
 
-Both models should receive the same untouched, mature test snapshot. Training and tuning data remain outside that comparison. A time-based split protects the evaluation from learning the future, while grouped splits keep closely related accounts, devices, sellers, patients, or documents inside one side of the boundary.
+Because outcome labels may arrive too slowly to catch a catastrophic rollout. Fast proxies limit damage until strong evidence arrives. Suppose rejection rate normally is:
 
-### Check Overall Metrics First
+$$
+8\%.
+$$
 
-The metric must match the supported decision. A fraud detector may need recall at an acceptable false-positive rate. A demand forecast may need error by forecast horizon and business unit. A probability model may need calibration, so a score near `0.8` corresponds to roughly eight positive outcomes among ten comparable cases.
+The candidate suddenly causes:
 
-Uncertainty also matters. A one-point improvement on a small test set may reflect sampling noise. Confidence intervals, repeated temporal backtests, or statistical tests help reviewers judge whether the evidence supports a durable improvement.
+$$
+32\%.
+$$
 
-### Check Segments For Hidden Regressions
+You do not want to invent a response policy during the incident. Before release, define conditions like:
 
-An overall result can improve while one important group deteriorates. The evaluation therefore repeats the comparison across important segments. Routes and label sources reveal collection effects. Regions, languages, devices, and risk bands reveal concentrated product effects. Approved protected or operationally critical groups receive the same scrutiny.
+$$
+\text{critical metric violates guardrail}
+\Rightarrow
+\text{halt rollout}.
+$$
 
-Consider a ticket-routing candidate that reduces overall misroutes from 12 percent to 9 percent. The same candidate sends 40 percent more cases to the database-specialist queue because its threshold shifted. The queue already operates near capacity, so response time would rise even though the model metric improved.
+This converts deployment from improvisation into controlled experimentation. Suppose offline evidence looked strong but online behaviour was bad. That teaches you something. Maybe:
 
-This is an **operational workload** regression. The evaluation replays the decision policy around each score and estimates action volume, manual-review demand, capacity, cost, and fallback use. Threshold selection belongs in the comparison because the production system acts on thresholds rather than raw metrics alone.
+$$
+D_{\text{offline}}
+$$
 
-```mermaid
-flowchart TD
-    A["Shared Test Snapshot<br/>(same mature evidence for both models)"] --> B["Current Model<br/>(replay existing model and policy)"]
-    A --> C["Candidate Model<br/>(replay proposed model and policy)"]
-    B --> D["Quality Comparison<br/>(measure task-level outcomes)"]
-    C --> D
-    D --> E["Segment Comparison<br/>(find concentrated regressions)"]
-    E --> F["Workload Comparison<br/>(estimate queues, cost, and capacity)"]
-    F --> G{"Release Gates Pass?<br/>(apply reviewed limits and uncertainty)"}
-    G -->|No| H["Reject Or Revise<br/>(preserve evidence and update the hypothesis)"]
-    G -->|Yes| I["Approved Candidate<br/>(submit exact artifact for release review)"]
+did not represent production. Maybe a feedback effect was missing. Maybe latency changed decisions. Maybe feature-serving behaviour differed. The failed rollout becomes new evidence about the system. That evidence should improve the next retraining/evaluation design. Before deployment, candidate evaluation predicts something like:
 
-    class A data
-    class B,C,D,E,F model
-    class G gate
-    class H,I result
-```
+$$
+\Delta U_{\text{offline}}>0.
+$$
 
-MLflow's classic model-evaluation APIs can generate standard classification or regression metrics and artifacts. Custom evaluators or ordinary Python/SQL calculations still carry business-specific gates such as queue capacity, monetary loss, calibration by route, and policy compliance. The evaluation report links every result to the candidate model ID, baseline version, dataset snapshot, and threshold configuration.
+After deployment, observe:
 
-## Register The Model With Its Evaluation Evidence
-<!-- section-summary: Registration gives the candidate a governed identity and links its evidence; a separate release decision grants production authority. -->
+$$
+\Delta U_{\text{online}}.
+$$
 
-A trained artifact needs a stable identity before another system can review or deploy it. A model registry supplies that identity through a registered name and immutable version.
+If:
 
-The version points back to the source run and model signature. Tags and descriptions carry reviewed facts such as the problem type and validation status. Aliases give consumers a movable name for a selected version, while evaluation artifacts preserve the evidence behind that selection.
+$$
+\Delta U_{\text{offline}}
+\gg
+\Delta U_{\text{online}}
+$$
 
-MLflow Model Registry is a common independent choice. Managed registries in SageMaker AI, Gemini Enterprise Agent Platform, Azure Machine Learning, and Unity Catalog serve the same responsibility inside their platforms. Current MLflow workflows favor model versions, aliases, and tags; fixed lifecycle stages are deprecated.
+or has the opposite sign, investigate the gap. The offline-online gap is itself an important monitoring signal. This deserves repeating because it is the most important long-term property of production feedback loops. At generation $$t$$:
 
-Registration records which model passed evaluation. Production authority comes from a separate release decision. An alias such as `candidate` or `champion` helps software find a version. The release record preserves the approval, deployment target, traffic plan, evidence links, owner, and rollback version. A mutable alias alone would lose that history after reassignment.
+$$
+M_t
+$$
 
-Imagine that run `r-918` logs two checkpoints. Only the second passes the segment and workload gates. The registry version points to that exact Logged Model rather than the run in general. The release record then identifies the registered version, serving image, feature contract, threshold policy, and previous stable version. Reviewers can trace one production decision back through every boundary.
+creates decisions:
 
-Signature validation and a representative input example catch interface mismatches before deployment. Security scanning, dependency policy, license checks, and access controls apply to the model package just as they do to other release artifacts. A failed gate leaves the version registered for investigation without granting it traffic.
+$$
+D_t.
+$$
 
-## Release The New Model Gradually
-<!-- section-summary: Progressive release limits exposure, measures fast safety signals, and keeps the previous model and compatible data path ready for rollback. -->
+Those decisions influence which labels become available:
 
-Offline evaluation cannot reproduce every production dependency, traffic pattern, or user response. A controlled release exposes the candidate to a bounded part of the live system and watches the evidence needed for a safe decision.
+$$
+Y_t.
+$$
 
-The first production step may be **shadow evaluation**, where the candidate receives copied requests and produces no user-facing action. Shadowing tests input compatibility, latency, resource use, and score behaviour. It cannot fully measure outcomes created by real candidate actions because the current model still controls the product.
+Then:
 
-A **canary** gives the candidate authority over a small, well-defined share of eligible traffic. Managed endpoints often provide weighted traffic splitting. Kubernetes teams can use Argo Rollouts with an ingress or service mesh for controlled weights and analysis-driven promotion or abort. A simple batch system may publish candidate output to a separate table and compare it with the stable job before consumers switch.
+$$
+D_{\text{train},t+1}
+=
+g(X_t,D_t,Y_t).
+$$
 
-### Watch Fast Signals During The First Release Stage
+The next model becomes:
 
-Many outcome labels mature too slowly for the first rollout decision. The release therefore combines fast guardrails with later quality evidence. Fast signals include request errors, latency, feature-contract failures, score distribution, product action rate, queue volume, fallback use, and segment exposure. They can stop a harmful release before final labels arrive.
+$$
+M_{t+1}
+=
+\text{Train}(D_{\text{train},t+1}).
+$$
 
-Suppose a candidate preserves offline recall yet doubles the number of cases sent to manual review during a 5 percent canary. Queue age starts rising and the review service approaches its capacity limit. The release controller pauses or aborts the canary. The team examines threshold behaviour and workload estimates before producing another release proposal.
+So:
 
-### Restore The Last Approved Release If Gates Fail
+$$
+\boxed{
+M_t
+\rightarrow
+D_{\text{train},t+1}
+\rightarrow
+M_{t+1}
+}
+$$
 
-Rollback needs more than the previous model file. The serving system preserves the stable model version, compatible feature path, preprocessing image, threshold policy, and routing configuration. The release record identifies that complete path.
+The model is partly training its successor by shaping the evidence that successor will see. Don't only monitor:
 
-After an abort, traffic returns to the stable route. The team verifies service recovery, action rates, queue depth, and decision logging. Candidate evidence remains available for investigation. Deleting the failed version would remove the link between affected predictions and the artifact that produced them.
+$$
+\text{model quality}.
+$$
 
-Delayed quality metrics continue to mature after traffic returns. They can reveal a problem missed by the fast guardrails and improve the next evaluation plan.
+Also monitor:
 
-## Monitor How The New Model Changes Future Feedback
-<!-- section-summary: A new model changes routing, actions, and observation coverage, so the team monitors the feedback process as part of the release. -->
+$$
+\text{who receives decisions}
+$$
 
-Every release changes the environment that will train its successor. A new score distribution moves cases across thresholds. A new threshold changes review volume. A new recommendation changes exposure. The next label population therefore belongs to a new collection policy.
+$$
+\text{which outcomes become observable}
+$$
 
-Suppose a fraud candidate sends twice as many payments to review. Confirmed fraud rises during the same period. That rise could describe a more dangerous population, stronger detection, broader inspection, or a change in reviewer behaviour. Comparing raw label counts across the boundary cannot separate those explanations.
+$$
+\text{label coverage by segment}
+$$
 
-The prediction receipt records the model version and decision-policy version for every case. Monitoring breaks label coverage, maturity, selection route, action rate, audit allocation, and join success down by those versions. The team can then see whether a quality change arrived with the model, the policy, or the evidence system.
+$$
+\text{review selection patterns}
+$$
 
-### Keep A Representative Sample Outside Score-Based Selection
+$$
+\text{training-data composition}
+$$
 
-A stable random audit or another approved measurement route protects visibility outside the model's preferred cases. Its allocation, sampling probabilities, reviewer capacity, and segment coverage need monitoring. A model that captures more high-risk cases may still reduce the audit sample if both routes compete for one fixed review budget.
+$$
+\text{examples entering/exiting retraining}.
+$$
 
-If exploration coverage falls below its approved floor, the team can pause training admission, restore audit capacity, and rebuild the snapshot after enough representative outcomes mature. This containment prevents a candidate from training mainly on cases selected by its own predecessor.
+Otherwise the model can look stable while its future data supply gradually becomes distorted. The overall process can be understood as a series of evidence gates:
 
-### Repair Feedback Data Distorted By Earlier Decisions
+$$
+\boxed{
+\text{Feedback exists}
+}
+$$
 
-An investigation starts by locating the boundary where evidence changed: prediction logging, routing policy, outcome source, maturity logic, snapshot builder, or release. The team freezes affected snapshots, marks their training eligibility, and keeps the raw governed evidence available.
+does it have trustworthy labels
 
-A repaired cycle replays from the earliest trustworthy source. The new snapshot receives a new identity and a reconciliation report that compares row counts, route proportions, missingness, maturity, and segments with the affected version. Training resumes only after the collection policy and dataset gates return to their intended state.
+$$
+\downarrow
+$$
 
-This monitoring work closes the loop. Production quality, data quality, and collection quality are separate signals, and all three shape the next candidate.
+$$
+\boxed{
+\text{Feedback is trustworthy}
+}
+$$
 
-## How The Complete Retraining Loop Works
-<!-- section-summary: Industrial retraining connects existing data, orchestration, tracking, registry, release, and monitoring systems through immutable evidence. -->
+is it mature and sufficiently representative
 
-Most teams can build this lifecycle from the platforms they already operate. Prediction receipts and outcomes land in a warehouse or lakehouse on object storage. dbt or Spark resolves eligibility, maturity, and point-in-time joins. Airflow, Dagster, or a managed pipeline coordinates the snapshot, training, and evaluation steps. MLflow or a managed experiment tracker records the run and trained artifact. A registry gives the passing candidate a governed version. Managed endpoint traffic controls or Argo Rollouts limit production exposure. Existing telemetry and ML monitoring measure the new release and its collection policy.
+$$
+\downarrow
+$$
 
-```mermaid
-flowchart TD
-    A["Production Evidence<br/>(receipts, actions, reviews, and outcomes)"] --> B["Warehouse Or Lakehouse<br/>(retain governed source history)"]
-    B --> C["Snapshot Builder<br/>(apply dbt or Spark quality rules)"]
-    C --> D["Pipeline Orchestrator<br/>(run immutable training inputs)"]
-    D --> E["Experiment Tracker<br/>(record run, dataset, metrics, and model)"]
-    E --> F["Model Registry<br/>(assign a governed model version)"]
-    F --> G["Release Controller<br/>(shadow, canary, promote, or roll back)"]
-    G --> H["Production Monitoring<br/>(measure service, quality, and collection)"]
-    H --> A
+$$
+\boxed{
+\text{Training dataset approved}
+}
+$$
 
-    class A,B evidence
-    class C,D,E data
-    class F gate
-    class G,H operate
-```
+can training be reproduced
 
-Teams select only the components their scale and existing platform justify. A small implementation can keep evidence and snapshot SQL in one warehouse. A managed training job supplies compute, MLflow records the model, and a managed endpoint controls release.
+$$
+\downarrow
+$$
 
-A larger estate may move snapshot joins to Spark and coordinate partitions through dedicated orchestration. It may reuse temporal features through a feature platform and run progressive delivery on Kubernetes. Both designs still provide trustworthy evidence, reproducible inputs, comparative proof, bounded authority, and a measurable next collection cycle.
+$$
+\boxed{
+\text{Candidate trained}
+}
+$$
 
-## The Main Idea
-<!-- section-summary: Production feedback supports safe learning only after the system preserves how the evidence was observed and proves each new candidate against the current production decision. -->
+does it beat the incumbent
 
-Production feedback carries two stories. It records what happened after a model decision, and it records which decisions the current model and policy allowed the team to observe.
+$$
+\downarrow
+$$
 
-A reliable retraining process preserves both stories. It admits eligible mature outcomes, freezes point-in-time inputs, records the training run, compares the candidate with the current model, and limits production authority through a reversible release. After release, it measures the changed collection policy so the next dataset has an honest provenance.
+$$
+\boxed{
+\text{Candidate approved}
+}
+$$
 
-That is the difference between repeatedly fitting fresh data and operating a production learning system.
+does it remain healthy under real traffic
+
+$$
+\downarrow
+$$
+
+$$
+\boxed{
+\text{Candidate promoted}
+}
+$$
+
+does it improve actual outcomes Each gate prevents a different kind of silent failure.
+
+## How Does a Fraud Retraining Example Move from Labels to a Release Decision?
+<!-- section-summary: The fraud example constructs the dataset, trains reproducibly, compares candidate and baseline, registers evidence, rolls out gradually, and inspects the feedback created by the release. -->
+
+The fraud example constructs the dataset, trains reproducibly, compares candidate and baseline, registers evidence, rolls out gradually, and inspects the feedback created by the release.
+
+Suppose the deployed fraud model is:
+
+$$
+M_7.
+$$
+
+Historically:
+
+$$
+\text{recall}=91\%.
+$$
+
+Recent mature production labels show:
+
+$$
+\text{recall}=79\%.
+$$
+
+Especially for:
+
+$$
+\text{new-account transactions}.
+$$
+
+The first step is not retraining. Investigation verifies:
+
+* serving is healthy,
+* feature generation is correct,
+* label coverage is normal,
+* labels are mature,
+* no recent deployment explains the change.
+
+Analysts conclude there is likely a genuine new fraud pattern. Now recent production feedback becomes a candidate source of new training data. The pipeline takes historical predictions and only includes production cases satisfying:
+
+$$
+\text{label maturity}=\text{true}
+$$
+
+$$
+\text{label source}=\text{approved}
+$$
+
+$$
+\text{feature lineage}=\text{valid}
+$$
+
+$$
+\text{incident contamination}=\text{false}.
+$$
+
+It uses point-in-time features from the original transaction moment. It preserves both historical data and recent examples:
+
+$$
+D_{\text{new}}
+=
+D_{\text{historical}}
+\cup
+D_{\text{recent approved}}.
+$$
+
+The exact snapshot is frozen:
+
+$$
+D_{2026-08-30-v1}.
+$$
+
+Training records:
+
+$$
+\text{dataset}=D_{2026-08-30-v1}
+$$
+
+$$
+\text{code}=c_{184}
+$$
+
+$$
+\text{configuration}=h_{22}
+$$
+
+$$
+\text{environment}=e_7.
+$$
+
+This produces:
+
+$$
+M_8.
+$$
+
+Now $$M_8$$ is only a candidate. On a later held-out temporal evaluation set:
+
+$$
+\text{Recall}_{M_7}=79\%
+$$
+
+$$
+\text{Recall}_{M_8}=89\%.
+$$
+
+But perhaps false positives changed too:
+
+$$
+\text{FPR}_{M_7}=2.1\%
+$$
+
+$$
+\text{FPR}_{M_8}=3.0\%.
+$$
+
+Now the decision depends on business costs. If fraud loss falls enough to justify the extra customer friction, $$M_8$$ may be preferable. You also verify critical segments and calibration. Model $$M_8$$ is stored together with:
+
+$$
+\text{training snapshot}
+$$
+
+$$
+\text{evaluation results}
+$$
+
+$$
+\text{segment metrics}
+$$
+
+$$
+\text{label definition}
+$$
+
+$$
+\text{approval record}.
+$$
+
+Now the deployment claim is auditable. First:
+
+$$
+1\%
+$$
+
+of traffic. Prediction distribution looks reasonable.
+
+Then:
+
+$$
+10\%.
+$$
+
+Human-review volume rises somewhat but remains manageable.
+
+Then:
+
+$$
+50\%.
+$$
+
+Eventually mature fraud outcomes indicate improved loss. Finally:
+
+$$
+100\%.
+$$
+
+At every stage, the old model remains available as a rollback path until confidence is sufficient. Suppose $$M_8$$ blocks more suspicious new-account transactions. That means future fraud outcomes are observed under a different intervention policy. So when building $$M_9$$, analysts cannot treat its feedback as if it came from exactly the same sampling process as $$M_7$$. The production loop has changed. That is the recursive nature of production learning. Suppose instead:
+
+$$
+\text{Recall}_{M_8}=77\%.
+$$
+
+Then:
+
+$$
+M_8
+$$
+
+should not be deployed. But the retraining process still succeeded operationally. It tested the hypothesis:
+
+Recent production feedback can produce a better model.
+
+The evidence said:
+
+Not with this dataset/configuration.
+
+The correct action is to retain:
+
+$$
+M_7
+$$
+
+and continue investigation. This is scientific reasoning applied to ML operations.
+
+## Why Is Retraining a Replayable Experiment rather than an Automatic Instruction?
+<!-- section-summary: A retraining run is a replayable experiment whose outcome may be no promotion; production feedback is evidence to test, not an instruction to copy automatically. -->
+
+A retraining run is a replayable experiment whose outcome may be no promotion; production feedback is evidence to test, not an instruction to copy automatically.
+
+Suppose six months later you discover a bug in the label definition. You should be able to reconstruct:
+
+$$
+D_{\text{train}}
+$$
+
+under the corrected definition, rerun:
+
+$$
+\text{Train}(D_{\text{train}})
+$$
+
+and recompute evaluation. This requires raw events, versioned labels, point-in-time features, training code, configuration, and snapshots. If the pipeline cannot be replayed, historical models become difficult to understand or audit. Every retraining run asks:
+
+$$
+H_0:
+\text{The current model is at least as good as the candidate}
+$$
+
+against something like:
+
+$$
+H_1:
+\text{The candidate provides useful improvement}.
+$$
+
+The candidate should win because of evidence. Not because it is newer. Not because retraining was scheduled. Not because the training job completed. This mindset prevents automation from becoming blind replacement. It is perfectly reasonable to automate:
+
+$$
+\text{data preparation}
+$$
+
+$$
+\text{training}
+$$
+
+$$
+\text{evaluation}
+$$
+
+$$
+\text{registration}
+$$
+
+and even deployment under strict guardrails. But the automation should encode the reasoning:
+
+$$
+\text{candidate beats incumbent}
+$$
+
+$$
+\land
+$$
+
+$$
+\text{no critical regression}
+$$
+
+$$
+\land
+$$
+
+$$
+\text{training data passed checks}
+$$
+
+$$
+\land
+$$
+
+$$
+\text{deployment guardrails healthy}.
+$$
+
+Good automation removes repetitive human work. It should not remove evidence requirements. Production tells you:
+
+$$
+\text{these outcomes happened}.
+$$
+
+It does not automatically tell you:
+
+$$
+\text{train on every one of them}.
+$$
+
+Some outcomes are:
+
+* biased,
+* censored,
+* immature,
+* policy-dependent,
+* generated during incidents,
+* noisy,
+* causally altered by the old model.
+
+So there is an important transformation:
+
+$$
+\boxed{
+\text{raw feedback}
+\rightarrow
+\text{interpreted feedback}
+\rightarrow
+\text{approved training examples}
+}
+$$
+
+That transformation is just as important as the training algorithm itself. At the highest level:
+
+$$
+\boxed{
+\begin{array}{c}
+\text{Deploy model }M_t\\
+\downarrow\\
+\text{Log predictions and decisions}\\
+\downarrow\\
+\text{Observe production outcomes}\\
+\downarrow\\
+\text{Validate label pipeline}\\
+\downarrow\\
+\text{Wait for maturity}\\
+\downarrow\\
+\text{Understand sampling/policy effects}\\
+\downarrow\\
+\text{Approve feedback for training}\\
+\downarrow\\
+\text{Construct point-in-time dataset}\\
+\downarrow\\
+\text{Freeze snapshot}\\
+\downarrow\\
+\text{Train reproducibly}\\
+\downarrow\\
+\text{Evaluate candidate vs incumbent}\\
+\downarrow\\
+\text{Register candidate + evidence}\\
+\downarrow\\
+\text{Shadow/canary rollout}\\
+\downarrow\\
+\text{Measure online outcomes}\\
+\downarrow\\
+\text{Promote or rollback}\\
+\downarrow\\
+\text{Observe how }M_{t+1}\text{ changes future feedback}
+\end{array}
+}
+$$
+
+And then the cycle begins again. The complete picture is now:
+
+### Drift monitoring asks
+
+$$
+\text{Has the production world changed?}
+$$
+
+### Silent-degradation monitoring asks
+
+$$
+\text{Is the system still useful even though it appears technically healthy?}
+$$
+
+### Production labels ask
+
+$$
+\text{What actually happened after our predictions?}
+$$
+
+### Human review asks
+
+$$
+\text{Can human judgment provide valuable information before or beyond those outcomes?}
+$$
+
+### Retraining asks
+
+$$
+\boxed{
+\text{Which of that accumulated evidence should change what the next model learns?}
+}
+$$
+
+Retraining is therefore the point where monitoring becomes adaptation. A naive retraining loop looks like:
+
+$$
+\boxed{
+\text{new labels}
+\rightarrow
+\text{train}
+\rightarrow
+\text{deploy}
+}
+$$
+
+A trustworthy production-learning loop looks like:
+
+$$
+\boxed{
+\text{Production feedback}
+\rightarrow
+\text{verify its meaning}
+\rightarrow
+\text{wait for maturity}
+\rightarrow
+\text{understand how it was selected}
+\rightarrow
+\text{construct point-in-time examples}
+\rightarrow
+\text{freeze the dataset}
+\rightarrow
+\text{train reproducibly}
+\rightarrow
+\text{compare with the incumbent}
+\rightarrow
+\text{attach evidence to the candidate}
+\rightarrow
+\text{release gradually}
+\rightarrow
+\text{verify real-world improvement}
+\rightarrow
+\text{observe how the new model changes future feedback}
+}
+$$
+
+The crucial principle is:
+
+$$
+\boxed{\text{production feedback is evidence, not automatically training truth}}
+$$
+
+and the second is:
+
+$$
+\boxed{\text{a newly trained model is a hypothesis, not automatically an upgrade}}
+$$
+
+The current model should be replaced only when the new model earns that replacement through evidence. Finally, remember the recursive loop:
+
+$$
+\boxed{
+M_t
+\rightarrow
+\text{decisions}_t
+\rightarrow
+\text{feedback}_t
+\rightarrow
+\text{training data}_{t+1}
+\rightarrow
+M_{t+1}
+}
+$$
+
+That is what makes retraining from production feedback fundamentally different from simply rerunning an offline training script.
+
+- **The model helps create the world from which its successor learns.**
 
 ![Governed retraining loop from production decisions through feedback admission, reproducible training, paired evaluation, controlled release, and outcome confirmation](/content-assets/articles/article-mlops-monitoring-and-feedback-retraining-from-production-feedback/governed-retraining-loop.png)
 
 *The learning loop preserves the policy that shaped its evidence. Failed evaluation returns the candidate to repair, while a fast-signal breach restores the last approved release.*
 
-## References
+## Check Your Answers
 
-- [Google Rules of Machine Learning](https://developers.google.com/machine-learning/guides/rules-of-ml)
-- [Google Research: Hidden Technical Debt in Machine Learning Systems](https://research.google/pubs/hidden-technical-debt-in-machine-learning-systems/)
-- [Databricks Point-in-time feature joins](https://docs.databricks.com/aws/en/machine-learning/feature-store/time-series)
-- [Feast Point-in-time joins](https://docs.feast.dev/getting-started/concepts/point-in-time-joins)
-- [Delta Lake table batch reads and writes](https://docs.delta.io/delta-batch/)
-- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
-- [Apache Airflow timetables](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timetable.html)
-- [Dagster partitioning assets](https://docs.dagster.io/guides/build/partitions-and-backfills/partitioning-assets)
-- [Gemini Enterprise Agent Platform Pipelines](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/introduction)
-- [Gemini Enterprise Agent Platform Model Registry](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/introduction)
-- [MLflow Experiment Tracking](https://mlflow.org/docs/latest/ml/tracking/)
-- [MLflow Model Evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
-- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
-- [Argo Rollouts Analysis and Progressive Delivery](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[When Does Production Feedback Justify Retraining?]{kind="recap"}
+Retraining is justified by a specific claim that newer trustworthy evidence can produce a better candidate, while many production failures require repair rather than a new model.
+:::
+
+:::expand[How Do You Build a Trustworthy, Mature, Point-in-Time Training Dataset from Feedback?]{kind="recap"}
+Approved feedback needs mature labels, pipeline checks, point-in-time correctness, immutable datasets, separate evaluation data, time-aware splits, and a deliberate balance of recent and older examples.
+:::
+
+:::expand[How Should a Retrained Candidate Be Evaluated, Registered, and Proposed for Promotion?]{kind="recap"}
+Retraining creates a candidate that is compared directly with production on the real decision objective, important segments, calibration, reproducibility, and attached evidence before promotion.
+:::
+
+:::expand[How Do Shadow, Canary, Exploration, and Feedback Effects Change Online Evaluation?]{kind="recap"}
+Shadow and canary stages add realistic evidence, but model actions change future observations, making exploration and monitoring of data-generation effects part of the evaluation.
+:::
+
+:::expand[How Should Cadence, Triggers, Dataset Tests, Uncertainty, and Release Evidence Be Controlled?]{kind="recap"}
+Cadence follows value and change rate, while reproducible triggers, dataset tests, paired uncertainty, disagreement analysis, and portable evidence keep the process auditable.
+:::
+
+:::expand[How Do Rollout, Rollback, and Post-Release Monitoring Govern the Feedback Loop?]{kind="recap"}
+Layered rollout metrics, predeclared rollback conditions, and post-release comparison protect users and reveal whether the new model is changing its own future training distribution.
+:::
+
+:::expand[How Does a Fraud Retraining Example Move from Labels to a Release Decision?]{kind="recap"}
+The fraud example constructs the dataset, trains reproducibly, compares candidate and baseline, registers evidence, rolls out gradually, and inspects the feedback created by the release.
+:::
+
+:::expand[Why Is Retraining a Replayable Experiment rather than an Automatic Instruction?]{kind="recap"}
+A retraining run is a replayable experiment whose outcome may be no promotion; production feedback is evidence to test, not an instruction to copy automatically.
+:::

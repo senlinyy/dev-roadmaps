@@ -1,0 +1,42 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/usr/sbin/nginx": { "type": "file", "content": "simulated nginx binary\n", "mode": 493 }
+  },
+  "commandModules": ["packages"],
+  "packages": {
+    "manager": "dnf",
+    "indexFresh": true,
+    "repositories": [
+      { "id": "baseos", "name": "Rocky Linux 9 BaseOS", "family": "dnf", "enabled": true, "trusted": true },
+      { "id": "appstream", "name": "Rocky Linux 9 AppStream", "family": "dnf", "enabled": true, "trusted": true }
+    ],
+    "packages": [
+      { "name": "curl", "architecture": "x86_64", "installedVersion": "8.5.0-1.el9", "candidateVersion": "8.6.0-5.el9_4.2", "repository": "baseos", "summary": "Command line data transfer tool" },
+      { "name": "nginx", "architecture": "x86_64", "installedVersion": "1:1.22.1-4.el9", "candidateVersion": "1:1.24.0-4.el9", "repository": "appstream", "summary": "Nginx web and reverse proxy server", "files": ["/usr/sbin/nginx"] },
+      { "name": "openssl", "architecture": "x86_64", "installedVersion": "1:3.2.1-1.el9", "candidateVersion": "1:3.2.2-6.el9_4", "repository": "baseos", "summary": "TLS toolkit" }
+    ]
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "Last metadata expiration check",
+      "nginx.x86_64",
+      "Version      : 1:1.24.0-4.el9",
+      "Repository   : appstream",
+      "Rocky Linux 9 AppStream",
+      "nginx-1:1.22.1-4.el9.x86_64"
+    ],
+    "requireCommands": ["dnf", "rpm"],
+    "requireCommandPatterns": [
+      "^sudo\\s+dnf\\s+check-update$",
+      "^dnf\\s+info\\s+nginx$",
+      "^dnf\\s+repolist$",
+      "^rpm\\s+-qf\\s+/usr/sbin/nginx$"
+    ],
+    "minCommandCount": 4
+  }
+}

@@ -12,391 +12,2373 @@ aliases:
 
 ## Table of Contents
 
-1. [Deployment And Production Exposure Are Separate Steps](#deployment-and-production-exposure-are-separate-steps)
-2. [What Every Release Strategy Needs](#what-every-release-strategy-needs)
-3. [How Blue-Green Deployment Switches Production Traffic](#how-blue-green-deployment-switches-production-traffic)
-4. [How Canary Deployment Limits Initial Exposure](#how-canary-deployment-limits-initial-exposure)
-5. [How Shadow Deployment Tests Without Controlling Decisions](#how-shadow-deployment-tests-without-controlling-decisions)
-6. [How Rolling Deployment Replaces Instances Gradually](#how-rolling-deployment-replaces-instances-gradually)
-7. [Choose Between Percentage Routing And Consistent User Assignment](#choose-between-percentage-routing-and-consistent-user-assignment)
-8. [Keep Contracts Compatible During Mixed-Version Traffic](#keep-contracts-compatible-during-mixed-version-traffic)
-9. [How Release Gates Decide Whether To Increase Traffic](#how-release-gates-decide-whether-to-increase-traffic)
-10. [Use Release-Specific Signals For Automatic Rollback](#use-release-specific-signals-for-automatic-rollback)
-11. [How Production Platforms Implement These Strategies](#how-production-platforms-implement-these-strategies)
-12. [Choose And Combine Strategies From Product Risk](#choose-and-combine-strategies-from-product-risk)
-13. [The Main Idea](#the-main-idea)
-14. [References](#references)
+1. [Why Must Deployment and Production Exposure Be Separate Operations?](#why-must-deployment-and-production-exposure-be-separate-operations)
+2. [How Do Canary and Shadow Releases Limit or Observe Model Risk?](#how-do-canary-and-shadow-releases-limit-or-observe-model-risk)
+3. [How Do Rolling Releases and Mixed Versions Depend on Compatibility?](#how-do-rolling-releases-and-mixed-versions-depend-on-compatibility)
+4. [How Do Evidence Gates, Baselines, Monitoring, and Tested Rollback Control Traffic?](#how-do-evidence-gates-baselines-monitoring-and-tested-rollback-control-traffic)
+5. [How Do Combined Strategies, Control Planes, Flags, Cohorts, State, Data, and Async Workloads Differ?](#how-do-combined-strategies-control-planes-flags-cohorts-state-data-and-async-workloads-differ)
+6. [How Do Confidence Stages, Scale, Warmup, Health, Reversibility, and Detection Delay Shape Release?](#how-do-confidence-stages-scale-warmup-health-reversibility-and-detection-delay-shape-release)
+7. [How Does a Fail-Safe Release Controller Preserve Known-Good Immutable State?](#how-does-a-fail-safe-release-controller-preserve-known-good-immutable-state)
+8. [What Final Principle Connects Blue-Green, Canary, Shadow, and Rolling Strategies?](#what-final-principle-connects-blue-green-canary-shadow-and-rolling-strategies)
+9. [Check Your Answers](#check-your-answers)
 
-## Deployment And Production Exposure Are Separate Steps
-<!-- section-summary: Release strategies separate the presence of a candidate in production from the authority of its output over real decisions. -->
+A candidate can be installed on production hardware without receiving one real request. It can also process copied production traffic without being allowed to make a decision. Treating installation and exposure as one event removes two powerful safety controls.
 
-A model service can be fully deployed, healthy, and receiving copied requests while every user still receives the current release's answer. A **release strategy** controls how a candidate—the proposed new release—moves from “running in production” to “trusted with production decisions.” Those are two different states.
+A **model release strategy** controls how a deployed version gains traffic and authority. Blue-green, canary, shadow, and rolling approaches manage different risks: complete-environment switching, blast radius, observation without action, and capacity-efficient replacement. They are often combined.
 
-This distinction gives a team room to gather evidence before granting wider authority. The candidate can prove that it loads on production hardware, accepts live request shapes, reaches the feature source, meets its latency budget, and produces plausible outputs. Real user exposure can then grow in reviewed steps.
+Use these questions to connect each strategy to compatibility, evidence gates, cohorts, warmup, rollback, and fail-safe control:
 
-ML systems benefit from this separation because several failures appear only after deployment. A model can pass offline evaluation and still encounter missing live features, unseen categories, numerical differences, slow inference, or a decision-policy mismatch. A new runtime image can also regress while the model remains unchanged.
+1. **Why Must Deployment and Production Exposure Be Separate Operations?**
+2. **How Do Canary and Shadow Releases Limit or Observe Model Risk?**
+3. **How Do Rolling Releases and Mixed Versions Depend on Compatibility?**
+4. **How Do Evidence Gates, Baselines, Monitoring, and Tested Rollback Control Traffic?**
+5. **How Do Combined Strategies, Control Planes, Flags, Cohorts, State, Data, and Async Workloads Differ?**
+6. **How Do Confidence Stages, Scale, Warmup, Health, Reversibility, and Detection Delay Shape Release?**
+7. **How Does a Fail-Safe Release Controller Preserve Known-Good Immutable State?**
+8. **What Final Principle Connects Blue-Green, Canary, Shadow, and Rolling Strategies?**
 
-Four common strategies control different risks:
+## Why Must Deployment and Production Exposure Be Separate Operations?
+<!-- section-summary: Deployment creates a runnable candidate, while exposure grants production traffic and decision authority; blue-green keeps two complete environments but requires capacity and separate validation. -->
 
-- **Blue-green** prepares two complete serving stacks and controls the switch between them.
-- **Canary** gives the candidate a limited share of live decision traffic.
-- **Shadow** copies live requests to the candidate while the current release controls the product response.
-- **Rolling deployment** replaces serving instances in bounded batches to preserve capacity.
+A new version can be deployed without immediately giving it production authority, and that separation defines the release strategy.
 
-These strategies can overlap. SageMaker AI, for example, implements canary traffic shifting as a mode of blue-green endpoint deployment. Kubernetes teams may use a blue-green or canary controller around workloads whose Pods still update in controlled ReplicaSets. The important question concerns which risk each mechanism controls.
+A **model release strategy** answers a deceptively simple question:
+
+**How should a new model go from “it exists” to “it is safely serving production users”?**
+
+The important idea is that these are not the same event. A model can be:
+
+```text
+trained
+   ↓
+validated
+   ↓
+packaged
+   ↓
+deployed
+   ↓
+running in production infrastructure
+```
+
+without yet being allowed to influence a single real user. That separation is the foundation of safe model releases. Suppose production currently uses:
+
+```text
+Model A
+```
+
+You have trained:
+
+```text
+Model B
+```
+
+Offline testing says B is better. The naive release process is:
+
+```text
+Model A serving 100%
+        ↓
+Deploy Model B
+        ↓
+Model B serving 100%
+```
+
+This has a dangerous property:
+
+The first serious production test of Model B happens at full production scale.
+
+If something was missed, every user may immediately experience it. Problems might include:
+
+```text
+higher latency
+unexpected prediction distributions
+memory exhaustion
+bad behavior on real inputs
+broken preprocessing
+incompatible responses
+safety regressions
+business metric regressions
+GPU instability
+dependency problems
+```
+
+So safe release management introduces something between:
+
+```text
+"model is deployed"
+```
+
+and:
+
+```text
+"model controls 100% of production"
+```
+
+That something is a **release strategy**. This distinction is fundamental. Consider:
+
+```text
+Deployment:
+"Can this model run in the production environment?"
+
+Exposure:
+"Which real requests are allowed to reach it?"
+```
+
+They solve different problems. You might deploy Model B:
+
+```text
+Production cluster
+
+Model A: running
+Model B: running
+```
+
+but route:
+
+```text
+100% traffic → Model A
+0% traffic   → Model B
+```
+
+Model B is deployed but not exposed. Then later:
+
+```text
+95% → Model A
+5%  → Model B
+```
+
+Then:
+
+```text
+50% → Model A
+50% → Model B
+```
+
+Eventually:
+
+```text
+0%   → Model A
+100% → Model B
+```
+
+This separation allows you to stop or reverse exposure without necessarily changing the deployed software. That is much safer than treating deployment and activation as one indivisible operation. A normal software release may change deterministic behavior.
+
+For example:
+
+```text
+calculate_tax(order)
+```
+
+should ideally produce a predictable result. Models introduce another dimension. For an ML model:
+
+```text
+prediction = f(input)
+```
+
+the new version may have:
+
+```text
+same API
+same infrastructure
+same request format
+same response format
+```
+
+yet behave very differently.
+
+For example:
+
+```text
+Old model:
+fraud rate predicted as high risk = 4%
+
+New model:
+fraud rate predicted as high risk = 13%
+```
+
+Nothing crashes. All health checks are green. But the business effect may be enormous. So model releases must test at least two broad dimensions:
+
+```text
+System health
++
+Model behavior
+```
+
+A model release can be technically healthy while behaviorally disastrous. No matter whether you use blue-green, canary, rolling, or shadow deployment, the underlying control system is similar:
+
+```text
+New model
+    ↓
+Controlled exposure
+    ↓
+Observe signals
+    ↓
+Compare against expectations
+    ↓
+Decide
+   / \
+  /   \
+continue   stop/rollback
+```
+
+This means every release strategy needs:
+
+```text
+a known candidate version
+
+a way to control traffic
+
+a known baseline
+
+signals to observe
+
+criteria for success
+
+criteria for failure
+
+a way to stop exposure
+
+a way to restore the previous safe state
+```
+
+Different strategies mainly differ in **how exposure changes**. Blue-green deployment begins with two production-capable environments. Suppose:
+
+```text
+Blue  = current production
+Green = new release
+```
+
+Initially:
+
+```text
+Users
+  |
+  v
+Blue
+Model A
+```
+
+while Green exists separately:
+
+```text
+Green
+Model B
+```
+
+but receives no production traffic.
+
+Conceptually:
+
+```text
+                  ┌── Blue: Model A
+Users → Router ───┤
+                  └── Green: Model B
+```
+
+Before the switch:
+
+```text
+100% → Blue
+0%   → Green
+```
+
+After validation, traffic is switched:
+
+```text
+0%   → Blue
+100% → Green
+```
+
+The release mechanism is therefore:
+
+Prepare the entire new environment first, then switch which environment production points to.
+
+Suppose deployment itself takes 20 minutes. Without blue-green, rollback might require:
+
+```text
+stop Model B
+redeploy Model A
+load weights
+warm caches
+restore dependencies
+restart workers
+```
+
+That can be complicated during an incident. With blue-green:
+
+```text
+Green behaving badly
+        ↓
+Router points back to Blue
+```
+
+The old environment is already running. So rollback can be conceptually simple:
+
+```text
+Green → Blue
+```
+
+rather than:
+
+```text
+rebuild the old system
+```
+
+A common misconception is:
+
+Blue-green makes releases safe because rollback is easy.
+
+It makes **infrastructure rollback** easy. It does not automatically make **data or contract rollback** safe. Imagine Green begins writing:
+
+```json
+{
+  "prediction_schema": 3
+}
+```
+
+while Blue only understands:
+
+```text
+prediction_schema <= 2
+```
+
+You switch to Green. It writes new records. Then you switch back to Blue. Blue now reads data it cannot understand. So:
+
+```text
+traffic rollback ≠ complete system rollback
+```
+
+Rollback safety still requires compatibility. During transition:
+
+```text
+Blue = full environment
+Green = full environment
+```
+
+You may temporarily need close to twice the serving capacity. For very large model deployments this can be expensive. If each model version requires:
+
+```text
+64 GPUs
+```
+
+keeping both ready may require:
+
+```text
+128 GPUs
+```
+
+Therefore blue-green trades resource efficiency for strong isolation and fast switching.
+
+## How Do Canary and Shadow Releases Limit or Observe Model Risk?
+<!-- section-summary: Canaries limit blast radius with stable routing and meaningful cohorts; shadows execute without deciding and reveal production-path behaviour at extra cost. -->
+
+Canary and shadow approaches both reduce risk, but one serves decisions to a limited cohort while the other only observes candidate output.
+
+Canary deployment takes a different approach. Instead of switching:
+
+```text
+0% → 100%
+```
+
+you increase exposure gradually.
+
+For example:
+
+```text
+Model A → 99%
+Model B → 1%
+```
+
+Then:
+
+```text
+A → 95%
+B → 5%
+```
+
+Then:
+
+```text
+A → 75%
+B → 25%
+```
+
+Eventually:
+
+```text
+A → 0%
+B → 100%
+```
+
+The essential principle is:
+
+If the new model contains a hidden problem, discover it while only a small fraction of production is exposed.
+
+Suppose a defect affects:
+
+```text
+10% of requests processed by Model B
+```
+
+If you immediately release B to everyone:
+
+```text
+10% of all production requests fail
+```
+
+If B has only 1% exposure:
+
+```text
+1% production exposure
+×
+10% defect rate
+=
+0.1% of total requests
+```
+
+The problem still exists, but fewer users experience it while you detect it. That is the meaning of **blast radius**. A canary does not eliminate bad behavior. It deliberately limits how much production the bad behavior can initially affect. Models often encounter production cases missing from offline datasets.
+
+For example:
+
+```text
+unexpected languages
+new customer behavior
+strange image formats
+rare categories
+different prompt styles
+long-tail traffic
+adversarial inputs
+real latency patterns
+```
+
+A model can pass offline evaluation and still fail in production. Canary deployment gives you real production evidence while controlling the consequences. You might observe:
+
+```text
+error rate
+latency
+GPU memory
+prediction distribution
+conversion
+fraud-review rate
+user abandonment
+safety violations
+```
+
+before increasing exposure. Suppose you say:
+
+```text
+10% traffic → Model B
+```
+
+There are at least two fundamentally different interpretations.
+
+### Per-request percentage routing
+
+Every request is independently assigned:
+
+```text
+request 1 → A
+request 2 → B
+request 3 → A
+request 4 → A
+request 5 → B
+```
+
+The same user may bounce between versions.
+
+### Consistent assignment
+
+Users are partitioned:
+
+```text
+Users 0–9% → B
+Users 10–99% → A
+```
+
+A particular user continues seeing the same model. These produce very different experiments. Suppose you have an API such as:
+
+```text
+classify_image(image)
+```
+
+and each request is independent. Random request-level routing may be fine:
+
+```text
+95% → A
+5%  → B
+```
+
+You get approximately the desired traffic split. This is useful when your primary goal is:
+
+```text
+infrastructure validation
+latency measurement
+error detection
+load testing
+```
+
+Imagine a recommendation system. Request 1:
+
+```text
+User 42 → Model A
+```
+
+Request 2:
+
+```text
+User 42 → Model B
+```
+
+Request 3:
+
+```text
+User 42 → Model A
+```
+
+Now the user's recommendations may constantly change. This can:
+
+```text
+confuse the user
+contaminate experiment results
+create inconsistent sessions
+make behavior hard to reproduce
+```
+
+Instead you might compute:
+
+```text
+bucket = hash(user_id) mod 100
+```
+
+and route:
+
+```text
+bucket < 10 → Model B
+otherwise   → Model A
+```
+
+Now:
+
+```text
+User 42 → always B
+User 71 → always A
+```
+
+during that release stage. This is often called:
+
+```text
+sticky assignment
+consistent routing
+deterministic bucketing
+```
+
+You do not always want to route by user. Possible assignment keys include:
+
+```text
+user
+account
+device
+session
+organization
+region
+request
+tenant
+conversation
+```
+
+For a chatbot, routing an entire conversation to one model may matter. Otherwise:
+
+```text
+Turn 1 → Model A
+Turn 2 → Model B
+Turn 3 → Model A
+```
+
+could produce incoherent behavior. For enterprise software, the important unit might be an entire customer organization. For batch inference, the unit might be a job. The release unit should match the unit over which behavior needs to remain consistent. Shadow deployment asks a different question:
+
+Can we evaluate Model B on real traffic without allowing it to affect production behavior
+
+Suppose requests currently go to Model A. With shadowing:
+
+```text
+                     ┌→ Model A → production result
+Request ─────────────┤
+                     └→ Model B → shadow result
+```
+
+The user receives only:
+
+```text
+Model A result
+```
+
+Model B's result is:
+
+```text
+logged
+measured
+compared
+discarded
+```
+
+rather than used for the decision. Suppose the system handles loan-risk scoring. Production:
+
+```text
+Model A → score 0.23
+```
+
+Shadow:
+
+```text
+Model B → score 0.68
+```
+
+The real decision still uses:
+
+```text
+0.23
+```
+
+But engineers can investigate the disagreement. Across millions of requests, you can measure:
+
+```text
+score distribution differences
+threshold-crossing changes
+latency
+errors
+feature availability
+fairness metrics
+resource requirements
+```
+
+without Model B affecting customers. This makes shadowing especially valuable for high-consequence systems. A shadow model does not control outcomes. Therefore it cannot directly measure every effect. Suppose you are evaluating a recommender. Shadow B recommends:
+
+```text
+Product X
+```
+
+but the user actually sees Model A's:
+
+```text
+Product Y
+```
+
+You cannot observe:
+
+```text
+Would the user have clicked Product X
+```
+
+because Product X was never shown. So shadow testing gives strong evidence about:
+
+```text
+technical behavior
+prediction differences
+runtime behavior
+```
+
+but weaker evidence about:
+
+```text
+causal product outcomes
+```
+
+For those, some real exposure is usually necessary. Each request may now perform:
+
+```text
+1 production inference
++
+1 shadow inference
+```
+
+That can nearly double inference work. For expensive models, you might shadow only:
+
+```text
+1%
+5%
+10%
+```
+
+of traffic. Shadowing itself can therefore be sampled.
 
 ![A side-by-side comparison of blue-green, canary, shadow, and rolling model releases showing traffic flow, candidate authority, recovery, and capacity tradeoffs.](/content-assets/articles/article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments/four-model-release-strategies.png)
 
 *The four strategies can deploy the same candidate while controlling different risks: stack switching, live decision exposure, live-input evidence, or replacement capacity.*
 
-```mermaid
-flowchart TB
-    A["Candidate is deployed"] --> B["Candidate has zero decision authority"]
-    B --> C["Collect safe production evidence"]
-    C --> D["Grant a limited traffic scope"]
-    D --> E["Evaluate candidate-specific gates"]
-    E -->|"gates pass"| F["Increase authority"]
-    E -->|"unsafe or uncertain"| G["Stop exposure and restore safe route"]
-    F --> H["Candidate is accepted as current release"]
+## How Do Rolling Releases and Mixed Versions Depend on Compatibility?
+<!-- section-summary: Rolling releases conserve capacity but create mixed-version traffic whose schemas, semantics, policies, and persisted state must remain compatible. -->
+
+Rolling updates solve capacity replacement and therefore depend heavily on old and new versions coexisting correctly.
+
+Suppose production has five model-serving instances:
+
+```text
+A1
+A2
+A3
+A4
+A5
 ```
 
-## What Every Release Strategy Needs
-<!-- section-summary: Current and candidate releases need a stable router, comparable telemetry, predefined gates, and a retained recovery path before traffic changes. -->
+All run Model A. A rolling deployment may do:
 
-A release strategy starts before the first routing change. The team needs a current release that can continue serving, a candidate release with immutable identity, and a stable routing layer in front of both. Callers use the stable endpoint while the router changes the destination behind it.
-
-### Identify The Complete Current And New Releases
-
-The current and candidate labels should resolve to complete, compatible release units. Each unit includes the model, serving image, preprocessing, feature contract, API contract, decision policy, and runtime configuration. A label such as `candidate` is useful for people; an immutable version or digest is required for evidence and recovery.
-
-Every request, prediction event, trace, and relevant metric should carry the resolved release ID. During mixed traffic, endpoint-level averages can hide a failing candidate because the healthy current release produces most of the data. Candidate and baseline views must remain separable.
-
-### Keep Traffic Routing Separate From Model Loading
-
-The router can be a managed ML endpoint, gateway, service mesh, load balancer, application assignment layer, or Kubernetes Service controlled by a rollout controller. Its job is to send a defined request scope to each ready release. The serving process still verifies which model it loaded and reports that identity.
-
-Routing state also needs an observed view. A desired 10% canary is only an instruction. Operators should verify actual request counts by release, ready capacity behind each route, and the release identity returned through telemetry.
-
-### Define Release Gates Before Sending Traffic
-
-A gate states which evidence permits the next traffic step and which condition stops the rollout. It names an owner, an observation window, minimum sample coverage, and a recovery action. Missing telemetry should pause the release because an unobserved candidate is an unknown candidate.
-
-### Keep A Tested Recovery Path
-
-The current release needs enough capacity to receive full traffic again. Its image, model, feature access, policy, and caller compatibility must remain valid. Scaling the current stack down too early saves money and lengthens recovery.
-
-```mermaid
-flowchart TB
-    R["Stable production endpoint"] --> T["Routing layer"]
-    T --> A["Current release"]
-    T --> B["Candidate release"]
-    A --> O["Telemetry labelled by release"]
-    B --> O
-    O --> G["Predefined release gates"]
-    G -->|"promote"| T
-    G -->|"stop"| X["Route all authority to retained release"]
+```text
+Step 1:
+B1
+A2
+A3
+A4
+A5
 ```
 
-## How Blue-Green Deployment Switches Production Traffic
-<!-- section-summary: Blue-green keeps current and candidate stacks ready side by side so routing can switch between complete environments. -->
+Then:
 
-**Blue-green deployment** runs two complete production-capable stacks. Blue is the current release behind the stable route. Green is the candidate stack. The candidate first receives preview, synthetic, or replay traffic through an isolated route. Promotion switches the active route to green.
+```text
+Step 2:
+B1
+B2
+A3
+A4
+A5
+```
 
-You can think of blue-green as preparing a replacement stage before moving the audience. It controls switch risk and recovery time. It provides less live decision evidence before the switch unless the team adds mirroring or weighted traffic.
+Then:
 
-### How Blue-Green Traffic Moves And What To Measure
+```text
+B1
+B2
+B3
+B4
+B5
+```
 
-Before promotion, real decision traffic stays on blue. Green can receive health probes, golden requests, internal traffic, or governed replays. That evidence verifies loading, contracts, feature access, security, performance, and telemetry. A routing switch then gives green full authority, or a separate traffic manager can introduce a smaller share first.
+The fleet gradually changes from old to new. This is common in container orchestration systems. Unlike blue-green, you may not need two complete environments.
 
-Users usually receive a response from one complete stack. During router propagation, a short overlap can occur, so both releases need compatible caller and downstream contracts. Session state should live outside the replicas or remain readable by both versions.
+Instead:
 
-### Blue-Green Recovery Speed And Capacity Cost
+```text
+remove one old instance
+start one new instance
+repeat
+```
 
-Recovery sends the stable route back to blue. This can be fast if blue stays warm and retains full capacity. The team then verifies actual routing and the release ID behind new requests.
+This reduces temporary capacity requirements. It is often appropriate for:
 
-The main tradeoff is capacity. Running two full GPU fleets can be expensive or impossible under quota. A preview stack can start smaller, then scale before promotion. That lowers idle cost and adds scale-up time to the release path.
+```text
+large fleets
+stateless services
+routine releases
+models with strong compatibility
+```
 
-### Common Blue-Green Failure
+This property is crucial. During rollout:
 
-A green stack can pass readiness while using the wrong feature view or policy version. Health probes prove service availability; release verification proves semantic identity. Another common failure is a shared, incompatible database or event-schema migration that removes blue's ability to resume. Blue-green recovery depends on backward-compatible shared dependencies.
+```text
+Load balancer
+    |
+    +→ Model A
+    +→ Model A
+    +→ Model B
+    +→ Model B
+```
 
-Argo Rollouts implements blue-green on Kubernetes through an active Service and an optional preview Service. It changes Service selectors to point at the chosen ReplicaSet and supports pre-promotion analysis. Its documentation also calls out routing propagation delay and a specific downtime risk for blue-green with ALB Ingress, so the selected traffic integration needs its own verification.
+Clients may hit either version. So rolling release effectively creates temporary coexistence:
 
-## How Canary Deployment Limits Initial Exposure
-<!-- section-summary: Canary routing lets a candidate control a bounded share of real decisions while the current release serves the remainder. -->
+```text
+A + B
+```
 
-A **canary release** gives the candidate a small share of live traffic, evaluates it, and expands the share through planned steps. Candidate responses reach users in that share. The strategy therefore gathers real product evidence while limiting the number of affected decisions.
+This means:
 
-### How Canary Traffic Moves And What To Measure
+A rolling deployment requires compatibility between versions that coexist.
 
-The stable endpoint routes each eligible request to the current or candidate release. A plan might use 1%, 5%, 25%, and 100% steps, with evidence windows between them. Choose each step from request volume, risk, segment coverage, and label delay.
+If B expects a completely different request format, ordinary rolling replacement can become dangerous. Suppose:
 
-Canary traffic can measure service latency, errors, feature health, output distributions, immediate product signals, and eventually ground-truth quality. Candidate metrics must be compared with the current release over the same period. Traffic volume alone is insufficient if the canary misses an important device, geography, or customer segment.
-
-### User Experience And Stable Assignment
-
-A request-level percentage can send the same user to different releases on consecutive calls. That may be acceptable for independent predictions. A ranking or recommendation path often depends on earlier responses. Conversational sessions and cached decisions also carry state across calls. Workflows with retries may need to reproduce the original decision. The routing layer can hash an account or session key, or the application can pass a reviewed route choice.
-
-### Canary Recovery Speed And Capacity Cost
-
-Abort sets candidate decision traffic to zero and sends eligible work back to the current release. The current stack should retain capacity for that return. The candidate stack needs enough resources for its assigned share plus headroom, while the baseline may continue at full capacity for fast recovery. Cost sits between a small extra fleet and near-blue-green duplication as traffic grows.
-
-### Common Canary Failure
-
-Aggregated metrics often hide a bad canary. A 1% candidate with a 20% error rate adds only a small amount to an endpoint-wide average. Release labels and candidate-scoped queries prevent that masking. Another failure is early promotion from too few requests or poor segment coverage. The gate should require both time and evidence volume.
-
-Databricks Model Serving can route one endpoint across served entities. A focused configuration can assign 90% to the current entity and 10% to the candidate:
-
-```json
+```text
+Old server expects:
 {
-  "traffic_config": {
-    "routes": [
-      {"served_model_name": "current", "traffic_percentage": "90"},
-      {"served_model_name": "candidate", "traffic_percentage": "10"}
-    ]
-  }
+  "text": ...
 }
 ```
 
-The endpoint configuration also defines each served entity and its immutable model version. Direct invocation of an individual served model bypasses the traffic setting, which is useful for explicit smoke tests and needs separate access control.
+New server expects:
 
-## How Shadow Deployment Tests Without Controlling Decisions
-<!-- section-summary: Shadow traffic lets a candidate process live requests without allowing its response or side effects to control the product. -->
-
-A **shadow release** copies selected live requests to the candidate. The current release still produces the response used by the product. Candidate output is recorded for comparison or discarded.
-
-The defining rule is clear: shadow output has zero decision authority. Sending 10% of requests to a candidate and returning those answers is canary traffic. Copying 10% while returning only current-release answers is shadow traffic.
-
-### How Shadow Traffic Moves And What To Measure
-
-The router sends the original request to the current release and a copy to the candidate. A correlation ID connects the two results. The team can compare request compatibility, feature retrieval, errors, latency, resource use, prediction distribution, and per-request output differences.
-
-Shadowing gives limited evidence for product impact because users never act on candidate output. A candidate ranking can be compared with the current ranking, while candidate-driven clicks and purchases are absent. Delayed ground truth can still score both predictions for tasks whose labels are independent of the action, though many product outcomes are influenced by what the user saw.
-
-### User Experience And Shadow Recovery
-
-Users receive the current response, so candidate quality has no direct product effect. Recovery stops request copying and removes or scales down the candidate. The baseline route stays unchanged.
-
-### Shadow Resource And Privacy Cost
-
-Shadow execution consumes compute, feature-store reads, network bandwidth, and telemetry capacity. Mirroring all traffic can nearly double inference load. A sampled shadow often provides enough coverage at lower cost.
-
-The candidate receives real request data, so privacy controls still apply. Raw payloads and candidate outputs need an approved purpose, access, and retention. Hiding the response from users leaves the sensitivity of production data unchanged.
-
-### Common Shadow Failure
-
-Copied requests can repeat side effects. A shadow service must avoid charges, messages, writes, queue publication, and feedback events that belong to the production decision. Use read-only dependencies, a shadow execution flag enforced by downstream services, isolated output stores, or a pure scoring boundary.
-
-SageMaker AI shadow variants copy a portion of requests, return only the production-variant response, and can log shadow responses for comparison. SageMaker shadow tests exclude several endpoint types, including serverless inference, asynchronous inference, multi-model endpoints, multiple-container endpoints, Marketplace containers, and Inf1 endpoints. Azure managed online endpoints also support mirroring. Its current managed-endpoint path mirrors to one deployment, caps the mirrored share at 50%, and excludes Kubernetes online endpoints.
-
-## How Rolling Deployment Replaces Instances Gradually
-<!-- section-summary: Rolling deployment replaces serving instances in bounded batches to preserve availability and limit temporary capacity. -->
-
-A **rolling deployment** gradually replaces old instances with new ones. It primarily controls availability and capacity during replacement. It offers weaker traffic isolation than a canary driven by a dedicated router.
-
-### How Rolling Traffic Moves And What To Measure
-
-In a Kubernetes Deployment, a new ReplicaSet scales up while the old ReplicaSet scales down. The Service sends traffic to ready Pods across both sets during the mixed period. `maxUnavailable` limits how much desired capacity can be absent, and `maxSurge` limits extra Pods above the desired count.
-
-```yaml
-strategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxUnavailable: 0
-    maxSurge: 25%
+```text
+{
+  "messages": [...]
+}
 ```
 
-This configuration keeps desired capacity available and permits temporary surge capacity. Readiness gates whether a new Pod joins service. Kubernetes tracks rollout progress and revisions, while application-specific prediction gates require additional telemetry and automation.
+During a rolling deployment:
 
-### User Experience And Version Compatibility
-
-Users may reach either release during the update. Consecutive requests and retries can cross versions. The API, feature path, policy, shared state, and downstream events must support that mixed period. Workloads requiring stable assignment need a routing layer above the native Deployment.
-
-### Rolling Recovery Speed And Capacity Cost
-
-Rolling replacement uses less peak capacity than two full stacks. It can still exceed the desired replica count through `maxSurge`, and terminating Pods may temporarily increase observed resource use. Rollback reverses the Pod template revision and then replaces candidate Pods. Recovery can take longer than a route flip.
-
-Kubernetes revision rollback restores the Deployment Pod template. External model aliases, feature versions, secrets, and policies need their own restoration path. A complete ML release identity should keep those dependencies tied to the image or desired-state record.
-
-### Common Rolling Failure
-
-A shallow readiness check can admit a candidate Pod that listens on a port before its model or critical assets are ready. Another failure appears if the old and new versions cannot share requests, state, or events. Rolling updates assume mixed-version compatibility.
-
-Argo Rollouts adds a separate custom resource and controller for canary and blue-green strategies. With an integrated traffic manager, `setWeight` controls request traffic independently from replica count. Without that integration, Argo Rollouts approximates canary weight through whole Pod counts, which limits precision for small fleets. Unsuccessful analysis can abort the rollout.
-
-## Choose Between Percentage Routing And Consistent User Assignment
-<!-- section-summary: Weighted routing controls aggregate exposure, while stable cohort assignment preserves a consistent release for related requests. -->
-
-**Percentage routing** asks the router to send an aggregate share of requests to each release. It is effective for limiting load and decision volume. The exact request choice may vary from call to call according to the platform's routing behaviour.
-
-**Stable cohort assignment** selects a release from a durable key such as user, account, device, tenant, or session. Related requests stay on the same release for the assignment period. This protects consistency and keeps each user's outcomes associated with one release.
-
-Consider a recommendation service. The first call builds a candidate-specific cache entry, and a retry reaches the current release. The response can conflict with the cached state. Stable assignment keeps both calls on one release. A stateless image classifier with independent requests may need only weighted routing.
-
-```mermaid
-flowchart TB
-    A["Eligible request"] --> B{"Does consistency across requests matter?"}
-    B -->|"No"| C["Weighted request routing"]
-    B -->|"Yes"| D["Choose stable assignment key"]
-    D --> E["Hash or look up cohort"]
-    E --> F["Route all related requests to assigned release"]
-    F --> G["Persist release ID with decision and retry token"]
+```text
+some requests → old server
+some requests → new server
 ```
 
-Retries also need idempotency. The decision record can preserve the original release and result so a repeated request returns a consistent answer without repeating an external action. Stateful services should keep session state in a version-compatible store or route the complete session to one release.
+What request should clients send? Neither structure necessarily works everywhere. This tells us something important:
 
-Some managed endpoints support explicit targeting alongside weighted traffic. SageMaker AI `TargetVariant` selects a production variant and overrides random distribution. Azure callers can target an online deployment with the `azureml-model-deployment` header. These controls can implement internal tests or application-managed assignment, provided caller permissions and routing policy prevent arbitrary public selection.
+Some deployment strategies assume the versions can coexist.
 
-## Keep Contracts Compatible During Mixed-Version Traffic
-<!-- section-summary: Any strategy with overlapping releases depends on compatible caller contracts, features, policy, state, and downstream events. -->
+If they cannot, you may need to first introduce a compatibility layer or perform staged API evolution before using the release strategy. Consider:
 
-Blue-green has a short propagation overlap. Canary and rolling releases intentionally run mixed versions. Shadowing sends the same request through two paths. All four strategies therefore need a compatibility plan.
+```text
+Model A:
+score = probability of fraud
 
-### Keep API Contracts Compatible
+Model B:
+score = arbitrary ranking score
+```
 
-Both releases should accept every caller version expected during the rollout. Additive request fields with safe defaults support gradual migration. Removing a field, changing its meaning, or changing response semantics needs a versioned contract and an ordered caller migration.
+Both return:
 
-A response may also enter a cache, queue, database, or downstream API. Those consumers need to understand outputs from both releases during the overlap. Versioned events and tolerant readers help preserve that boundary.
+```json
+{
+  "score": 0.8
+}
+```
 
-### Keep Feature Contracts Compatible
+During canary deployment:
 
-The current and candidate models may expect different feature sets. The serving layer can retrieve both versions explicitly, or the feature platform can keep a backward-compatible view during the release. A mutable feature name that changes meaning under both models creates an unsafe mixed state.
+```text
+90% → A
+10% → B
+```
 
-Online and training semantics remain important. Each prediction event should record the resolved feature version and freshness status so candidate evidence can be separated from feature-path drift.
+A downstream rule might be:
 
-### Keep Policy And State Compatible
+```python
+if score > 0.7:
+    block_transaction()
+```
 
-Policy turns a model score into a product action. Candidate and current releases may use different thresholds or fallback rules, so the policy version belongs in telemetry and recovery. Shared databases and caches need migrations that both releases can use. The same compatibility rule applies to session stores and queues.
+Now the same threshold has two different meanings depending on routing. That is semantically incompatible. So mixed-version releases require alignment on:
 
-An expand-and-contract migration is common: add the new field or event form, teach both releases to coexist, move traffic, and remove the old form after the recovery window. Destructive migration before full promotion can eliminate the retained release's ability to resume.
+```text
+request structure
+response structure
+meaning
+error behavior
+operational behavior
+```
 
-## How Release Gates Decide Whether To Increase Traffic
-<!-- section-summary: Release gates combine fast operational signals with ML behaviour, segment coverage, and product evidence appropriate to the current traffic scope. -->
+not merely JSON parsing.
 
-A release gate converts evidence into one of three actions: promote, hold, or stop. Strong gates compare candidate and current behaviour and state how much data is enough for the decision.
+## How Do Evidence Gates, Baselines, Monitoring, and Tested Rollback Control Traffic?
+<!-- section-summary: Traffic advances only with release-specific model and system evidence against a baseline, while careful automatic criteria and practiced rollback close the control loop. -->
 
-### Check Whether The New Release Can Serve Reliably
+Whatever strategy is used, traffic movement should be governed by baseline-relative evidence and a rollback path tested before the release.
 
-Service evidence includes request count, error rate, timeout rate, latency percentiles, saturation, queue depth, restart rate, and dependency failures. These signals arrive quickly and support automatic stops. They should use candidate release or deployment labels.
+A weak canary strategy looks like:
 
-### Check That Inputs And Features Keep The Same Meaning
+```text
+1%
+wait
+10%
+wait
+50%
+wait
+100%
+```
 
-Input evidence covers schema failures, missing values, unseen categories, feature-source errors, fallback rate, and freshness. A healthy API can produce harmful predictions from stale or incompatible features. Compare candidate and baseline over the same traffic segments.
+The important missing question is:
 
-### Check Prediction Behaviour Before Labels Arrive
+What determines whether the rollout is allowed to continue
 
-Prediction evidence includes score or class distribution, output bounds, uncertainty where defined, action rate, and candidate-baseline disagreement. These are diagnostic signals. A changed distribution can be expected after a deliberate model improvement, so reviewed bounds and segment context matter.
+You need **release gates**.
 
-### Require Enough Traffic From Important Segments
+Conceptually:
 
-A global sample count can hide empty or tiny subgroups. The gate should name important regions, device types, model routes, risk tiers, or customer groups and require enough observations from each. Unsupported segments can stay on the current release until their path is validated.
+```text
+Deploy B
+   ↓
+1% traffic
+   ↓
+Evaluate release gates
+   ↓
+PASS
+ /   \
+yes   no
+ |     |
+ v     v
+10%  rollback
+```
 
-### Wait For Product Evidence At The Right Speed
+A release strategy without gates is mainly traffic choreography. A release strategy with gates becomes a risk-control system. Imagine Model B is a fraud model. You might establish:
 
-Immediate product signals come from events close to the decision. A manual override can reveal operator disagreement, while a failed workflow or downstream rejection can reveal an unusable output. Empty results and support events provide other early warnings. Ground-truth quality can arrive hours, days, or months later. Fast signals can stop obvious harm. Delayed labels may require a longer limited release. Teams can also use retrospective evaluation or require another approval before full authority.
+```text
+Technical gates:
+error rate <= 0.5%
+p95 latency <= 300 ms
+GPU memory <= safe threshold
+
+Model gates:
+prediction drift within expected range
+calibration acceptable
+no unsupported labels
+
+Product gates:
+manual-review volume <= 1.1× baseline
+legitimate transaction blocks not elevated
+
+Safety gates:
+no critical policy regression
+```
+
+Only if required gates pass does exposure increase. Suppose during the canary:
+
+```text
+Model B error rate = 0.8%
+```
+
+Is that good? You need context. If Model A currently has:
+
+```text
+0.1%
+```
+
+B is much worse. If the entire dependency stack is experiencing:
+
+```text
+2.0%
+```
+
+B may actually be performing relatively well. So release monitoring often compares:
+
+```text
+candidate
+vs
+control
+```
+
+at the same time.
+
+For example:
+
+```text
+A latency: 180 ms
+B latency: 230 ms
+
+A error rate: 0.12%
+B error rate: 0.14%
+
+A conversion: 8.4%
+B conversion: 8.6%
+```
+
+Concurrent comparison reduces confusion caused by changing production conditions. Ordinary deployment monitoring might focus on:
+
+```text
+CPU
+memory
+errors
+latency
+availability
+```
+
+Those are necessary but insufficient. Suppose:
+
+```text
+HTTP success rate = 100%
+p95 latency = 120 ms
+GPU healthy
+```
+
+but Model B predicts:
+
+```text
+"fraud" for 80% of customers
+```
+
+The infrastructure looks perfect. The model is not. So model release monitoring should often include signals such as:
+
+```text
+prediction distributions
+class frequency
+confidence distribution
+calibration
+threshold-crossing frequency
+embedding distribution
+tool-use rate
+refusal rate
+output length
+business-action frequency
+safety outcomes
+```
+
+The exact metrics depend on the model. Imagine your entire production platform has a generic alert:
+
+```text
+error rate > 5%
+```
+
+Model B increases errors from:
+
+```text
+0.1% → 2%
+```
+
+This is a 20× regression. But:
+
+```text
+2% < 5%
+```
+
+so the global alert never fires. For releases, you might use a stricter criterion:
+
+```text
+candidate error rate
+>
+control error rate + 0.2%
+```
+
+or:
+
+```text
+candidate/control error ratio > 2
+```
+
+Release decisions need to detect **regression**, not merely total outage. Suppose B receives 10% traffic. Monitoring detects:
+
+```text
+p95 latency:
+A = 220 ms
+B = 1.8 s
+```
+
+A human could manually intervene. But some failures should automatically cause:
+
+```text
+10% → 0%
+```
+
+This creates a closed control loop:
+
+```text
+Expose
+  ↓
+Measure
+  ↓
+Evaluate
+  ↓
+Unsafe
+  ↓
+Reduce exposure
+```
+
+That is automatic rollback. A rollback trigger that is too insensitive:
+
+```text
+lets real regressions continue
+```
+
+A trigger that is too sensitive:
+
+```text
+rolls back healthy releases because of random noise
+```
+
+Suppose 100 canary requests produce one failure:
+
+```text
+1 / 100 = 1%
+```
+
+That looks high. But the sample is tiny. After 1,000,000 requests:
+
+```text
+1 / 1,000,000
+```
+
+would mean something completely different. So release gates usually need some notion of:
+
+```text
+minimum sample size
+observation window
+statistical confidence
+severity
+```
+
+before making decisions. Critical failures may be exceptions. One severe safety violation could justify immediate rollback regardless of sample size. Imagine a canary simultaneously shows:
+
+```text
+latency +3%
+accuracy +8%
+conversion +10%
+```
+
+Whether this is acceptable depends on product requirements. A release gate is therefore an encoded product decision:
+
+Which tradeoffs are allowed
+
+You may decide:
+
+```text
+latency can increase <= 10%
+if quality improves sufficiently
+```
+
+or:
+
+```text
+latency must never exceed 500 ms
+regardless of quality
+```
+
+Deployment strategy cannot answer this for you. The product's risk tolerance must. A rollback plan that exists only on a diagram may fail. Suppose you believe:
+
+```text
+Model B → Model A
+```
+
+is safe. But B has already:
+
+```text
+changed database records
+written new queue messages
+changed feature caches
+introduced new client fields
+```
+
+and A cannot understand those changes. Then traffic reversal alone may not restore the system. Safe release management tests:
+
+```text
+Can we actually return to A
+after B has been partially active
+```
+
+Rollback is a capability that should be verified, not merely documented.
+
+## How Do Combined Strategies, Control Planes, Flags, Cohorts, State, Data, and Async Workloads Differ?
+<!-- section-summary: Real platforms combine strategies across infrastructure and model exposure, using flags and cohorts while managing state, data pipelines, asynchronous work, and nondeterminism. -->
+
+Production systems often combine these controls across infrastructure, routing, flags, users, geography, tenants, state, and delayed work.
+
+It is useful to compare their first-principles goals.
+
+| Strategy   | Core idea                                 | Main advantage                            | Main limitation                      |
+| ---------- | ----------------------------------------- | ----------------------------------------- | ------------------------------------ |
+| Blue-green | Build complete replacement, then switch   | Fast cutover/rollback                     | Extra capacity                       |
+| Canary     | Give new model limited real traffic       | Limits blast radius                       | Some users still exposed             |
+| Shadow     | Run new model without controlling outcome | Real traffic with near-zero decision risk | Cannot measure full user effect      |
+| Rolling    | Replace instances gradually               | Resource-efficient                        | Mixed-version compatibility required |
+
+These are not mutually exclusive. A high-risk model release might look like:
+
+```text
+1. Deploy Model B beside A
+2. Shadow B on 10% of traffic
+3. Compare outputs
+4. Begin 1% canary
+5. Increase to 5%
+6. Increase to 25%
+7. Increase to 50%
+8. Increase to 100%
+9. Keep A available temporarily
+10. Remove A after confidence grows
+```
+
+This combines ideas from:
+
+```text
+blue-green
+shadow
+canary
+```
+
+You might simultaneously use rolling deployment inside each environment. The strategies operate at different layers. Suppose Model B is deployed to Kubernetes. Infrastructure may perform:
+
+```text
+rolling pod replacement
+```
+
+while your model gateway performs:
+
+```text
+canary request routing
+```
+
+Those are distinct release mechanisms.
+
+For example:
+
+```text
+Infrastructure layer:
+replace serving containers gradually
+
+Application layer:
+route only 5% of eligible users to Model B
+```
+
+This distinction matters because people often say:
+
+"We're doing a rolling release."
+
+But perhaps only the containers are rolling. The model itself may still be exposed instantly to 100% of users. A model release system often has architecture roughly like:
+
+```text
+                       ┌─────────────────┐
+                       │ Release manager │
+                       └────────┬────────┘
+                                │
+                                v
+Client → Gateway → Traffic router
+                     /        \
+                    /          \
+                   v            v
+              Model A       Model B
+                   \            /
+                    \          /
+                     v        v
+                    Metrics
+                       |
+                       v
+                 Release gates
+                       |
+                  pass / fail
+```
+
+The responsibilities are separated. The model server:
+
+```text
+performs inference
+```
+
+The router:
+
+```text
+controls exposure
+```
+
+The monitoring system:
+
+```text
+measures behavior
+```
+
+The release controller:
+
+```text
+decides promotion or rollback
+```
+
+This separation makes sophisticated release policies possible. Suppose Model B supports:
+
+```text
+new summarization algorithm
+```
+
+You can deploy it while keeping:
+
+```text
+feature flag = OFF
+```
+
+Production still behaves as before.
+
+Then:
+
+```text
+flag enabled for employees
+```
+
+then:
+
+```text
+1% users
+```
+
+then:
+
+```text
+10%
+```
+
+and so on. Feature flags reinforce the principle:
+
+```text
+deployment ≠ activation
+```
+
+They make activation reversible without rebuilding software. Some releases begin with:
+
+```text
+employees
+test accounts
+development tenants
+specific customers
+```
+
+before random production canaries.
+
+For example:
+
+```text
+Stage 0: engineering
+Stage 1: company employees
+Stage 2: selected customers
+Stage 3: 1% production
+Stage 4: 10%
+Stage 5: 100%
+```
+
+This is still fundamentally controlled exposure. The "percentage" does not always have to be random. A release cohort can be chosen deliberately. Instead of:
+
+```text
+1% random users
+```
+
+you might start with:
+
+```text
+one region
+```
+
+For example:
+
+```text
+Region A → Model B
+Regions B,C,D → Model A
+```
+
+This can simplify operations. But it can also introduce sampling problems. Region A may have different:
+
+```text
+languages
+customer behavior
+traffic patterns
+regulatory requirements
+device profiles
+```
+
+so results may not generalize globally. The initial cohort should be representative enough for the conclusions you want to draw. Imagine SaaS serving:
+
+```text
+Company A
+Company B
+Company C
+...
+```
+
+Rather than random request-level routing, release by tenant:
+
+```text
+Company A → B
+Company B → A
+Company C → A
+```
+
+This avoids one organization's users seeing inconsistent model behavior. It can also allow:
+
+```text
+opt-in previews
+contract-specific versions
+controlled early adopters
+```
+
+Again, the release unit should match the product's natural isolation boundary. Stateless models are simpler:
+
+```text
+request → model → response
+```
+
+But some systems have state:
+
+```text
+conversation history
+personalization
+session cache
+retrieval indexes
+online learning state
+feature stores
+agent memory
+```
+
+Now switching models may require transferring or sharing state. Suppose:
+
+```text
+Conversation turns 1–5 → Model A
+Turn 6 → Model B
+```
+
+If B interprets state differently, the transition can fail. For stateful products, release strategy must consider:
+
+```text
+state compatibility
+state migration
+sticky routing
+session boundaries
+```
+
+not merely HTTP traffic. A model might depend on:
+
+```text
+Feature pipeline v1 → Model A
+Feature pipeline v2 → Model B
+```
+
+Then deployment is not just:
+
+```text
+A → B
+```
+
+It may be:
+
+```text
+feature generator
+      +
+model
+      +
+postprocessor
+```
+
+These components may need to travel as a compatible bundle.
+
+For example:
+
+```text
+Model B expects 256 features
+Model A expects 128
+```
+
+Blind rolling deployment can create:
+
+```text
+Feature v2 → Model A
+```
+
+which is invalid. One solution is versioned feature sets:
+
+```text
+features_v1 → Model A
+features_v2 → Model B
+```
+
+during migration. Consider:
+
+```text
+Producer → Queue → Model worker
+```
+
+A request may remain in the queue while deployment occurs.
+
+For example:
+
+```text
+12:00 request produced for Model A semantics
+12:05 Model B deployed
+12:07 request consumed
+```
+
+Should Model B process it? Sometimes yes. Sometimes the job must pin:
+
+```text
+model_version = A
+```
+
+The release strategy must account for messages already in flight. Traffic switching alone does not control queued work. Suppose Model B starts a batch inference job lasting three hours. Thirty minutes later, B is rolled back. What happens to the active job? Possible policies include:
+
+```text
+let B jobs finish
+
+cancel B jobs
+
+restart jobs on A
+
+pin every job to its original model version
+```
+
+There is no universal answer. But the release model should explicitly define it. Suppose you compare Model A and B on the same prompt:
+
+```text
+A → response X
+B → response Y
+```
+
+That difference could arise from:
+
+```text
+different model quality
+different random sample
+different decoding
+```
+
+So release evaluation should often compare distributions or task-level outcomes rather than exact outputs.
+
+For example:
+
+```text
+task success rate
+format adherence
+user preference
+tool-call correctness
+hallucination rate
+safety rate
+token usage
+latency
+```
+
+Exact string equality is rarely a useful release gate for generative systems.
 
 ![A canary rollout increasing candidate decision traffic from 1 to 5 to 25 to 100 percent through pass, hold, and stop gates based on release-labelled service, feature, prediction, segment, and product evidence.](/content-assets/articles/article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments/canary-authority-gates.png)
 
 *A canary earns more decision authority only after candidate-specific evidence is sufficient; a hold preserves the current scope, while a stop returns candidate traffic to zero.*
 
-```mermaid
-stateDiagram-v2
-    [*] --> Limited
-    Limited --> Hold: evidence missing or ambiguous
-    Limited --> Stopped: stop gate fails
-    Limited --> Expanded: gates pass
-    Hold --> Limited: investigation resolves concern
-    Hold --> Stopped: concern confirmed
-    Expanded --> Hold: later signal weakens
-    Expanded --> Active: final evidence accepted
-    Stopped --> [*]
-    Active --> [*]
+## How Do Confidence Stages, Scale, Warmup, Health, Reversibility, and Detection Delay Shape Release?
+<!-- section-summary: A release accumulates confidence but does not prove superiority; small cohorts, scale, warmup, model-aware health, disruption cost, reversibility, observability, and delay set the pace. -->
+
+Progressive exposure also probes scale and warmup, and its pace should reflect reversibility and how quickly the system can detect harm.
+
+You can think of evidence accumulating like this:
+
+```text
+Offline tests
+      ↓
+Integration tests
+      ↓
+Shadow production
+      ↓
+Small real canary
+      ↓
+Larger canary
+      ↓
+Full production
 ```
 
-## Use Release-Specific Signals For Automatic Rollback
-<!-- section-summary: Automatic rollback can contain fast, measurable failures only if alarms isolate the candidate and the retained release is complete. -->
+Each stage answers different questions. Offline testing asks:
 
-**Automatic rollback** connects a measurable stop condition to a recovery action. It is effective for fast, objective failures such as high error rate, excessive latency, failed readiness, or feature-source errors. Ambiguous product movement and delayed labels often need a hold plus human review.
+```text
+Does the model look good on known data
+```
 
-### Limit Alarms To The New Release
+Integration testing asks:
 
-An endpoint-wide alarm can miss a small broken canary. Candidate metrics need a release, variant, deployment, or route dimension. The query should also verify that expected candidate traffic and telemetry are present. Zero errors from zero candidate requests provide no safety evidence.
+```text
+Does it work with the production stack
+```
 
-SageMaker AI deployment guardrails connect CloudWatch alarms to canary, linear, blue-green, or rolling updates for supported endpoint types. The new endpoint configuration can be selected in alarm dimensions, and a tripped alarm during the monitoring period initiates rollback. Feature exclusions apply, so the deployment plan should verify endpoint support.
+Shadowing asks:
 
-Argo Rollouts AnalysisRuns can query providers such as Prometheus. An unsuccessful analysis aborts the rollout. Accurate labels and queries remain the team's responsibility; a controller cannot repair mixed or missing telemetry semantics.
+```text
+How does it behave on real production inputs
+```
 
-### Restore The Complete Compatible Release
+Canary asks:
 
-Routing traffic away from the candidate is the first recovery step. The current release needs its original model and image. Its feature contract and decision policy must still resolve, and its secrets must still be accessible. Enough capacity must be ready for returning traffic. A registry alias change alone may leave candidate serving code or policy active.
+```text
+What happens when it actually influences users
+```
 
-After rollback, verify the route, actual request counts, active release IDs, feature health, and product recovery. Preserve candidate evidence for investigation.
+Full rollout asks:
 
-### Repair Decisions Already Made
+```text
+Does this remain healthy at complete scale
+```
 
-Rollback stops new candidate decisions. Earlier actions remain. A declined application may need review, a sent notification may need follow-up, and a published batch may need a corrected version. Decision IDs connect affected outcomes to remediation.
+No earlier stage perfectly predicts the later one. Canary releases are closely related to controlled experiments. You have:
 
-Automatic recovery should also have a failure path. If the current stack cannot regain capacity or the router update fails, incident handling needs a fallback such as a safe rule, delayed response, manual queue, or controlled service stop.
+```text
+Control   = Model A
+Treatment = Model B
+```
 
-## How Production Platforms Implement These Strategies
-<!-- section-summary: Managed ML endpoints and Kubernetes controllers provide different combinations of routing, mirroring, rollout automation, and recovery. -->
+But the goal is not always scientific experimentation. A canary's main goal may simply be:
 
-Industrial platforms use different resource names while implementing the same broad controls. Compare four capabilities: how the platform keeps current and candidate releases separate, how it routes or copies requests, how it labels candidate evidence, and how it restores traffic.
+```text
+detect catastrophic regressions
+```
 
-Similar strategy names can describe different mechanics. SageMaker AI canary traffic shifting operates inside its blue-green deployment guardrails. Azure documentation uses blue-green for multiple deployments with percentage allocation. Native Kubernetes rolling updates replace ready Pods and provide no model-aware release gate. Teams should verify the actual traffic and recovery semantics of the selected platform.
+An A/B test's goal may be:
 
-Amazon SageMaker AI endpoints support weighted production variants and explicit `TargetVariant` routing. Deployment guardrails provide blue-green all-at-once, canary, and linear modes, plus rolling updates and alarm-driven rollback for supported real-time and asynchronous endpoint configurations. Shadow variants copy requests and hide candidate responses, subject to documented endpoint exclusions.
+```text
+estimate causal improvement precisely
+```
 
-Gemini Enterprise Agent Platform Endpoints hold multiple deployed models and a `traffic_split` map whose percentages add to 100. A model absent from that map receives zero endpoint traffic. This supplies weighted routing; the release pipeline still owns staged gates, cohort semantics, and complete-release recovery.
+These overlap, but they are not identical. You might have:
 
-Azure Machine Learning managed online endpoints place multiple deployments behind a stable endpoint. They support percentage traffic allocation, direct deployment targeting, and mirrored traffic. Mirroring currently has a 50% cap, targets one deployment, and is unavailable for Kubernetes online endpoints.
+```text
+Canary 1%
+```
 
-Databricks Model Serving uses served entities and `traffic_config` routes. The endpoint can split traffic across models or versions, and callers can invoke a named served model directly. The application still needs release-labelled telemetry and a stable-assignment layer if related requests must stay together.
+only long enough to establish safety. Then separately run:
 
-Native Kubernetes Deployments provide rolling replacement through ReplicaSets. `maxSurge` and `maxUnavailable` control capacity, readiness controls traffic admission, and rollout status reports progress. Revision history supports Pod-template rollback. Model-aware gates, shadow traffic, and precise weighted canaries sit outside the native Deployment controller. Argo Rollouts is an additional progressive-delivery controller. It adds blue-green and canary steps, plus analysis and traffic-manager integrations. Without a traffic manager, canary weights are approximated through replica counts.
+```text
+50/50 experiment
+```
 
-## Choose And Combine Strategies From Product Risk
-<!-- section-summary: The best strategy follows the failure to control, the evidence required, available capacity, and the speed of recovery. -->
+to determine which model produces better product outcomes. Suppose Model B at 5% traffic shows:
 
-Choose **blue-green** where a complete environment switch and fast route reversal matter most. It fits major runtime changes, isolated stacks, and releases whose full capacity can run in parallel. Budget and quota need room for overlap. Add a preview route, shadow copy, or small traffic split if real-input evidence is required before the switch.
+```text
+no crashes
+normal latency
+normal error rate
+no obvious metric regression
+```
 
-Choose **canary** where the candidate needs real user and product evidence under a bounded blast radius. It works best with enough traffic for timely comparison, release-specific telemetry, representative segment coverage, and a baseline ready to recover full load.
+That means:
 
-Choose **shadow** where live inputs are valuable and candidate decisions are still too risky. It is especially useful for contract, latency, resource, and output-comparison evidence. It cannot establish the causal product effect of candidate decisions, and side effects must stay isolated.
+It appears safe enough to expose more traffic.
 
-Choose **rolling deployment** where availability and capacity efficiency during instance replacement are the main concerns. It suits compatible stateless services with strong readiness checks. Add a progressive-delivery controller or managed routing layer if the release needs candidate-specific traffic steps and gates.
+It does not necessarily establish:
 
-Strategies often form one release path. A team can shadow a candidate to validate live compatibility, admit a stable internal cohort, start a small canary, expand through gates, and retain a blue stack for rapid recovery. The underlying instances may use rolling replacement inside each stack. Each layer should have one clear responsibility so recovery remains understandable.
+It is superior to Model A.
 
-Use the smallest design that controls the actual risk. A low-risk batch scorer may need versioned outputs and a publication gate instead of an online traffic router. A high-impact, low-latency decision service may justify shadowing, stable cohorts, canary analysis, and a warm blue recovery fleet.
+Safety validation and comparative model evaluation are different questions. Suppose a defect occurs once every:
 
-## The Main Idea
-<!-- section-summary: Release strategies control how a deployed candidate gains decision authority and how quickly the system can return to a compatible release. -->
+```text
+100,000 requests
+```
 
-A deployed candidate can remain harmless until routing grants its output authority. Blue-green controls the switch between complete stacks. Canary controls how many live decisions use the candidate. Shadow collects live-input evidence while the baseline controls the product. Rolling deployment controls capacity and availability during instance replacement.
+At 1% traffic, you may need substantial production volume before observing it. So increasing traffic should consider both:
 
-Every strategy depends on immutable current and candidate releases behind a stable route. Release-labelled telemetry feeds predefined gates. Compatible mixed-version boundaries keep both paths usable, and a retained recovery release provides the stop path. Percentage exposure also needs stable assignment where users, sessions, and retries require consistent behaviour.
+```text
+percentage exposure
+and
+absolute number of observations
+```
 
-Strong release decisions combine service, feature, prediction, segment, and product evidence. Automatic rollback contains fast measurable failures after candidate-specific alarms fire. Complete recovery restores the whole decision path and follows up on actions already taken.
+A stage such as:
+
+```text
+5% for five minutes
+```
+
+may be meaningless if only 100 requests arrive. A better gate might require:
+
+```text
+at least 100,000 canary predictions
+AND
+at least 30 minutes
+```
+
+before promotion. Some failures only appear under load. At:
+
+```text
+1% traffic
+```
+
+Model B may fit comfortably in memory. At:
+
+```text
+100%
+```
+
+you discover:
+
+```text
+GPU saturation
+queue growth
+database pressure
+cache contention
+rate-limit exhaustion
+```
+
+So canary progression also acts as a load ramp.
+
+For example:
+
+```text
+1%  → correctness check
+10% → early load check
+50% → high-load validation
+100% → full production
+```
+
+Large models often require:
+
+```text
+loading weights
+compiling kernels
+warming caches
+initializing CUDA
+loading tokenizers
+building retrieval caches
+JIT compilation
+```
+
+If traffic is routed immediately after process startup:
+
+```text
+first users suffer extreme latency
+```
+
+A deployment should normally distinguish:
+
+```text
+process started
+```
+
+from:
+
+```text
+instance ready for production traffic
+```
+
+Readiness checks can require the model to complete representative inference before entering the routing pool. A bad readiness check:
+
+```text
+GET /health
+→ 200 OK
+```
+
+while the model weights failed to load. The HTTP process is alive. The model is not useful. A stronger readiness check might verify:
+
+```text
+weights loaded
+required accelerator available
+tokenizer initialized
+model signature valid
+representative inference succeeds
+dependencies reachable
+```
+
+This prevents broken instances from receiving traffic during rolling or canary releases. Suppose a typo-correction model occasionally performs poorly. The consequence may be:
+
+```text
+minor annoyance
+```
+
+You might accept:
+
+```text
+rolling deployment
++
+small canary
+```
+
+Now suppose the model decides whether payments are fraudulent. A wrong release might:
+
+```text
+block thousands of valid payments
+```
+
+You may prefer:
+
+```text
+shadow
+→ tiny canary
+→ strict release gates
+→ slow ramp
+→ fast rollback
+```
+
+The more expensive the failure, the more controlled the exposure should be. Ask:
+
+If this release is wrong, how easy is it to undo
+
+Some inference-only changes are highly reversible.
+
+```text
+Router → Model A
+```
+
+restores old behavior. Other models cause irreversible actions:
+
+```text
+send email
+deny loan
+purchase asset
+delete content
+execute trade
+modify customer record
+```
+
+Once Model B triggers the action, routing back to A does not undo it. Therefore irreversible decisions deserve more conservative release strategies. A rollout is only as safe as your ability to detect failure. Imagine two systems. System 1 can observe:
+
+```text
+latency
+errors
+prediction distribution
+customer outcomes
+safety events
+```
+
+within minutes. System 2 gets business metrics:
+
+```text
+seven days later
+```
+
+System 1 can reasonably ramp faster because it gets faster feedback. System 2 may need:
+
+```text
+longer canaries
+smaller exposure
+additional offline safeguards
+```
+
+A general relationship is:
+
+```text
+poor observability
+        ↓
+higher uncertainty
+        ↓
+more conservative rollout
+```
+
+Suppose a bug costs:
+
+```text
+£10,000 per hour
+```
+
+but your relevant metric arrives once per day. Automatic rollback cannot protect you quickly because the signal is delayed. Release design therefore needs to ask:
+
+```text
+How quickly can the failure happen
+How quickly can we detect it
+How quickly can we stop it
+```
+
+These are three separate timescales. You want:
+
+```text
+detection time + rollback time
+```
+
+to be small relative to the rate at which harm accumulates.
+
+## How Does a Fail-Safe Release Controller Preserve Known-Good Immutable State?
+<!-- section-summary: A controller can pause, promote, or roll back asymmetrically, fail safely, and preserve immutable release and configuration identities plus a known-good version. -->
+
+Those signals form a feedback controller whose safe states include pause and retained known-good release, not only promote or rollback.
+
+There is a useful control-systems interpretation. Think of traffic exposure as a control variable:
+
+```text
+u = percentage of production traffic
+```
+
+You observe system outputs:
+
+```text
+latency
+error rate
+quality
+business metrics
+```
+
+Then adjust:
+
+```text
+u
+```
+
+For example:
+
+```text
+u = 1%
+
+metrics healthy
+    ↓
+u = 5%
+
+metrics healthy
+    ↓
+u = 20%
+
+metric unsafe
+    ↓
+u = 0%
+```
+
+Release management is therefore a feedback-control problem:
+
+Increase exposure only while observations remain inside acceptable bounds.
+
+Suppose the monitoring system becomes unavailable. Should the release automatically continue:
+
+```text
+10% → 50% → 100%
+```
+
+without evidence Usually that is a poor default. A safer design is often:
+
+```text
+no trustworthy metrics
+        ↓
+do not increase exposure
+```
+
+This is a fail-closed approach to promotion. The exact choice depends on system risk, but the principle is:
+
+Loss of evidence should not accidentally be interpreted as evidence of safety.
+
+You might require:
+
+```text
+30 minutes of healthy behavior
+```
+
+to move:
+
+```text
+10% → 25%
+```
+
+but only:
+
+```text
+one critical safety failure
+```
+
+to move:
+
+```text
+25% → 0%
+```
+
+That asymmetry is sensible. Confidence should often accumulate slowly. Evidence of catastrophic failure can be sufficient immediately. Possible states need not be just:
+
+```text
+continue
+rollback
+```
+
+You can have:
+
+```text
+continue
+pause
+rollback
+```
+
+Suppose metrics are ambiguous. At:
+
+```text
+10% exposure
+```
+
+you may stop increasing traffic while gathering more evidence. This preserves the current experiment without exposing more users. A robust system typically knows:
+
+```text
+Candidate = B
+Baseline  = A
+```
+
+A should remain identifiable and deployable throughout the risky part of B's release. Avoid vague rollback targets such as:
+
+```text
+"the previous code"
+```
+
+Prefer immutable versions:
+
+```text
+fraud-model:2026-08-22.3
+fraud-model:2026-08-28.1
+```
+
+Then rollback means:
+
+```text
+route to an exact known artifact
+```
+
+rather than trying to reconstruct history. Once:
+
+```text
+model:v42
+```
+
+has been released, changing the contents behind the same version makes release analysis unreliable. Yesterday:
+
+```text
+v42 = weights A
+```
+
+Today:
+
+```text
+v42 = weights B
+```
+
+Now:
+
+```text
+"roll back to v42"
+```
+
+has ambiguous meaning. A much stronger rule is:
+
+```text
+one version identifier
+→ one immutable artifact
+```
+
+New weights receive a new version. This makes:
+
+```text
+promotion
+rollback
+auditing
+reproducibility
+```
+
+far safer. A model is not just weights. Its production behavior may depend on:
+
+```text
+prompt template
+temperature
+threshold
+tokenizer
+retrieval index
+feature definitions
+system instructions
+postprocessing
+safety filters
+dependency versions
+```
+
+Changing:
+
+```text
+temperature = 0.2
+```
+
+to:
+
+```text
+temperature = 1.1
+```
+
+can dramatically alter behavior without changing model weights. Therefore the real release artifact is closer to:
+
+```text
+Model release =
+weights
++ preprocessing
++ postprocessing
++ runtime configuration
++ dependencies
+```
+
+Release strategy should version the effective behavioral system. Suppose you operate a customer-support routing model. Model A currently chooses:
+
+```text
+billing
+technical
+sales
+cancellation
+```
+
+Model B has better offline accuracy. You could perform the release like this:
+
+```text
+Step 1
+Deploy B with zero production control.
+```
+
+Production:
+
+```text
+A → controls routing
+B → receives no traffic
+```
+
+Then:
+
+```text
+Step 2
+Shadow 20% of incoming tickets.
+```
+
+For each shadowed request:
+
+```text
+A predicts: billing
+B predicts: technical
+```
+
+Record disagreements. You discover:
+
+```text
+B latency acceptable
+B schema correct
+B label vocabulary correct
+B disagreement rate acceptable
+```
+
+Then:
+
+```text
+Step 3
+Give B 1% real control.
+```
+
+Use consistent user/account assignment if needed. Observe:
+
+```text
+routing errors
+resolution time
+human reassignment rate
+latency
+support escalation
+```
+
+If gates pass:
+
+```text
+1% → 5% → 20% → 50% → 100%
+```
+
+If B's human-reassignment rate rises sharply:
+
+```text
+release controller → route B traffic back to A
+```
+
+A remains available during the rollback window. Only later do you remove A. This is much safer than:
+
+```text
+Deploy B
+→ immediately delete A
+```
+
+There is no universally best strategy. Think from four first-principles questions:
+
+```text
+How likely is failure
+
+How expensive is failure
+
+How quickly can failure be detected
+
+How reversible are its effects
+```
+
+If:
+
+```text
+low consequence
+easy detection
+easy rollback
+```
+
+a simple rolling deployment may be reasonable. If:
+
+```text
+high consequence
+rare failure modes
+irreversible actions
+```
+
+you might use:
+
+```text
+shadow
++
+small sticky canary
++
+strict gates
++
+slow promotion
++
+known-good rollback
+```
+
+The release strategy follows from the risk model.
+
+Conceptually:
+
+```text
+                    Failure impact
+                 Low             High
+             ┌────────────┬──────────────┐
+Low          │ simple     │ canary       │
+uncertainty  │ rolling    │ + rollback   │
+             ├────────────┼──────────────┤
+High         │ canary     │ shadow       │
+uncertainty  │            │ + canary     │
+             │            │ + strict     │
+             │            │ gates        │
+             └────────────┴──────────────┘
+```
+
+This is not a rigid rule. It illustrates the principle:
+
+More uncertainty and more potential harm justify more controlled exposure.
+
+You can understand the strategies by asking what they control. Blue-green controls:
+
+```text
+which complete environment is active
+```
+
+Canary controls:
+
+```text
+how much real production the candidate controls
+```
+
+Shadow controls:
+
+```text
+whether the candidate's output affects decisions
+```
+
+Rolling controls:
+
+```text
+how quickly infrastructure instances are replaced
+```
+
+Consistent assignment controls:
+
+```text
+which users remain attached to which version
+```
+
+Release gates control:
+
+```text
+whether exposure is allowed to increase
+```
+
+Rollback controls:
+
+```text
+how quickly exposure can be reversed
+```
+
+They solve different parts of the release problem. Because these mechanisms address different risks, a sophisticated release can use all of them.
+
+For example:
+
+```text
+Blue-green
+    ↓
+Prepare isolated Model B environment
+
+Shadow
+    ↓
+Test B with production inputs
+
+Canary
+    ↓
+Allow B to control 1% of users
+
+Sticky assignment
+    ↓
+Keep each user on one model
+
+Release gates
+    ↓
+Evaluate technical + model + business signals
+
+Automatic rollback
+    ↓
+Return B's traffic to A if unsafe
+
+Gradual promotion
+    ↓
+1% → 5% → 25% → 50% → 100%
+```
+
+This is not redundant. Each layer removes a different uncertainty.
+
+## What Final Principle Connects Blue-Green, Canary, Shadow, and Rolling Strategies?
+<!-- section-summary: Blue-green controls complete environments, canary controls exposure, shadow controls decision authority, and rolling controls replacement; combinations match several risks at once. -->
+
+The final comparison chooses each strategy for the specific dimension of risk it controls.
+
+Everything follows from one fact:
+
+> **A model being ready to run is not the same as being proven safe to control all production traffic.**
+
+Therefore deployment should be decomposed:
+
+```text
+Build candidate
+      ↓
+Deploy candidate
+      ↓
+Give it limited or zero influence
+      ↓
+Observe real behavior
+      ↓
+Compare with a known-good baseline
+      ↓
+Increase exposure only if evidence supports it
+      ↓
+Retain the ability to reverse
+      ↓
+Eventually retire the old version
+```
+
+The major strategies are simply different implementations of controlled exposure:
+
+```text
+Blue-green
+    = prepare complete replacement before switching
+
+Canary
+    = expose a small real population first
+
+Shadow
+    = observe real traffic without controlling outcomes
+
+Rolling
+    = replace serving instances gradually
+```
+
+And the deeper operational rule is:
+
+```text
+Deployment safety
+      ≠
+"Did the new model start?"
+
+Deployment safety
+      =
+"Can we limit exposure,
+observe meaningful consequences,
+increase exposure deliberately,
+and return to a known-good state
+when the evidence says we should?"
+```
+
+For model systems, this is especially important because a release can be perfectly healthy from an infrastructure perspective while silently changing predictions, rankings, decisions, costs, or user behavior. So the core philosophy of **Model Release Strategies** is:
+
+**Do not make confidence a prerequisite for deployment. Make confidence something you accumulate through progressively controlled production exposure.**
 
 ![A complete model release summary connecting release prerequisites, strategy selection, evidence-based pass hold or stop decisions, and recovery of the retained decision path.](/content-assets/articles/article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments/model-release-strategy-summary.png)
 
 *Deployment presence is separate from production authority: prepare a recoverable boundary, choose the risk control, gate each increase, and repair decisions already made after a rollback.*
 
-## References
+## Check Your Answers
 
-- [Amazon SageMaker AI Deployment Guardrails](https://docs.aws.amazon.com/sagemaker/latest/dg/deployment-guardrails.html)
-- [Amazon SageMaker AI Production Variants](https://docs.aws.amazon.com/sagemaker/latest/dg/model-ab-testing.html)
-- [Amazon SageMaker AI Shadow Variants](https://docs.aws.amazon.com/sagemaker/latest/dg/model-validation.html)
-- [Amazon SageMaker AI Shadow Test Exclusions](https://docs.aws.amazon.com/sagemaker/latest/dg/shadow-tests.html)
-- [Gemini Enterprise Agent Platform: Deploy a Model and Split Endpoint Traffic](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/deploy-model-api)
-- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
-- [Azure Machine Learning Online Endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online)
-- [Azure Machine Learning Safe Online Rollout](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-safely-rollout-online-endpoints?view=azureml-api-2)
-- [Databricks Model Serving Traffic Splits](https://docs.databricks.com/aws/en/machine-learning/model-serving/serve-multiple-models-to-serving-endpoint)
-- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
-- [Kubernetes Rolling Update](https://kubernetes.io/docs/tasks/run-application/update-deployment-rolling/)
-- [Argo Rollouts Canary Strategy](https://argo-rollouts.readthedocs.io/en/stable/features/canary/)
-- [Argo Rollouts Blue-Green Strategy](https://argo-rollouts.readthedocs.io/en/stable/features/bluegreen/)
-- [Argo Rollouts Analysis](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)
-- [Argo Rollouts Traffic Management](https://argo-rollouts.readthedocs.io/en/stable/features/traffic-management/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Why Must Deployment and Production Exposure Be Separate Operations?]{kind="recap"}
+Deployment creates a runnable candidate, while exposure grants production traffic and decision authority; blue-green keeps two complete environments but requires capacity and separate validation.
+:::
+
+:::expand[How Do Canary and Shadow Releases Limit or Observe Model Risk?]{kind="recap"}
+Canaries limit blast radius with stable routing and meaningful cohorts; shadows execute without deciding and reveal production-path behaviour at extra cost.
+:::
+
+:::expand[How Do Rolling Releases and Mixed Versions Depend on Compatibility?]{kind="recap"}
+Rolling releases conserve capacity but create mixed-version traffic whose schemas, semantics, policies, and persisted state must remain compatible.
+:::
+
+:::expand[How Do Evidence Gates, Baselines, Monitoring, and Tested Rollback Control Traffic?]{kind="recap"}
+Traffic advances only with release-specific model and system evidence against a baseline, while careful automatic criteria and practiced rollback close the control loop.
+:::
+
+:::expand[How Do Combined Strategies, Control Planes, Flags, Cohorts, State, Data, and Async Workloads Differ?]{kind="recap"}
+Real platforms combine strategies across infrastructure and model exposure, using flags and cohorts while managing state, data pipelines, asynchronous work, and nondeterminism.
+:::
+
+:::expand[How Do Confidence Stages, Scale, Warmup, Health, Reversibility, and Detection Delay Shape Release?]{kind="recap"}
+A release accumulates confidence but does not prove superiority; small cohorts, scale, warmup, model-aware health, disruption cost, reversibility, observability, and delay set the pace.
+:::
+
+:::expand[How Does a Fail-Safe Release Controller Preserve Known-Good Immutable State?]{kind="recap"}
+A controller can pause, promote, or roll back asymmetrically, fail safely, and preserve immutable release and configuration identities plus a known-good version.
+:::
+
+:::expand[What Final Principle Connects Blue-Green, Canary, Shadow, and Rolling Strategies?]{kind="recap"}
+Blue-green controls complete environments, canary controls exposure, shadow controls decision authority, and rolling controls replacement; combinations match several risks at once.
+:::

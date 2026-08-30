@@ -9,1026 +9,1670 @@ id: "article-mlops-model-evaluation-bias-fairness-responsible-evaluation"
 
 ## Table of Contents
 
-1. [What a Fairness Review Is Trying to Learn](#what-a-fairness-review-is-trying-to-learn)
-2. [Overall Quality, Group Performance, Allocation, and Representation Ask Different Questions](#overall-quality-group-performance-allocation-and-representation-ask-different-questions)
-3. [Define the People, Attributes, and Intersections in Scope](#define-the-people-attributes-and-intersections-in-scope)
-4. [Describe The Decision And Possible Harm Before Choosing A Metric](#describe-the-decision-and-possible-harm-before-choosing-a-metric)
-5. [Check For Bias In Data And Labels Before Training](#check-for-bias-in-data-and-labels-before-training)
-6. [Choose Fairness Metrics From the Harm](#choose-fairness-metrics-from-the-harm)
-7. [Fairness Criteria Can Conflict](#fairness-criteria-can-conflict)
-8. [Interpret Group Results With Counts And Uncertainty](#interpret-group-results-with-counts-and-uncertainty)
-9. [Check How Thresholds And Product Rules Change Group Outcomes](#check-how-thresholds-and-product-rules-change-group-outcomes)
-10. [Investigate The Cause Of Every Group Disparity](#investigate-the-cause-of-every-group-disparity)
-11. [Choose A Repair In The Data, Model, Policy, Or Product](#choose-a-repair-in-the-data-model-policy-or-product)
-12. [How Current Tools Measure And Reduce Fairness Gaps](#how-current-tools-measure-and-reduce-fairness-gaps)
-13. [Handle Sensitive Attributes With Purpose and Control](#handle-sensitive-attributes-with-purpose-and-control)
-14. [Use Fairness Results To Approve, Limit, Or Reject A Release](#use-fairness-results-to-approve-limit-or-reject-a-release)
-15. [Monitor Fairness After Release](#monitor-fairness-after-release)
-16. [The Main Idea](#the-main-idea)
-17. [References](#references)
+1. [What Fairness Question Does the Model and Product Need to Answer?](#what-fairness-question-does-the-model-and-product-need-to-answer)
+2. [How Do Group Fairness Metrics Describe Different Outcomes and Errors?](#how-do-group-fairness-metrics-describe-different-outcomes-and-errors)
+3. [How Do Data, Labels, Sensitive Attributes, Intersections, and Uncertainty Create Disparities?](#how-do-data-labels-sensitive-attributes-intersections-and-uncertainty-create-disparities)
+4. [How Do Thresholds, Ranking, Generation, and Paired Tests Change Fairness Evaluation?](#how-do-thresholds-ranking-generation-and-paired-tests-change-fairness-evaluation)
+5. [How Do You Diagnose a Disparity and Repair the Layer That Caused It?](#how-do-you-diagnose-a-disparity-and-repair-the-layer-that-caused-it)
+6. [How Should Fairness Evidence Shape Release Scope and Production Monitoring?](#how-should-fairness-evidence-shape-release-scope-and-production-monitoring)
+7. [What Can Tools Automate, and Where Is Human and Causal Judgment Required?](#what-can-tools-automate-and-where-is-human-and-causal-judgment-required)
+8. [What Should a Strong Fairness Review Conclude Without Confusing Equality with Justice?](#what-should-a-strong-fairness-review-conclude-without-confusing-equality-with-justice)
+9. [Check Your Answers](#check-your-answers)
 
-## What a Fairness Review Is Trying to Learn
-<!-- section-summary: A fairness review asks how an ML-supported decision affects different people, why those effects differ, and whether the remaining risk is acceptable. -->
+A lending model is 95% accurate overall, but one group receives more false rejections and another receives more risky approvals. The same average hides different errors, different consequences, and possibly different causes in the data or decision process.
 
-Two groups can receive very different false-rejection rates even though the model's overall score looks strong. **A fairness review asks whether an ML-supported decision distributes benefits, errors, and harms responsibly across the people it affects.** The review studies the whole decision path: the data collected, the label chosen, the model score, the product rule, the human response, and the outcome experienced by a person.
+**Fairness evaluation** asks how a model and the product around it distribute outcomes, errors, representation, and harm. There is no universal fairness score: demographic parity, equal opportunity, calibration, individual similarity, and counterfactual questions formalize different goals and can conflict. The review therefore begins with the actual system and affected people before choosing a metric.
 
-Consider a model that prioritizes applications for limited appointments.
-The model may have strong overall accuracy and still send qualified applicants from one group to the back of the queue more often.
-That pattern matters because the prediction changes access to a useful service.
+Use these questions to connect group measurements to data causes, product decisions, release scope, and accountable judgment:
 
-Now consider speech recognition.
-Every user receives access to the same transcription feature, although the word error rate is much higher for one accent group.
-The harm appears through poorer service quality even though appointment access is unchanged.
+1. **What Fairness Question Does the Model and Product Need to Answer?**
+2. **How Do Group Fairness Metrics Describe Different Outcomes and Errors?**
+3. **How Do Data, Labels, Sensitive Attributes, Intersections, and Uncertainty Create Disparities?**
+4. **How Do Thresholds, Ranking, Generation, and Paired Tests Change Fairness Evaluation?**
+5. **How Do You Diagnose a Disparity and Repair the Layer That Caused It?**
+6. **How Should Fairness Evidence Shape Release Scope and Production Monitoring?**
+7. **What Can Tools Automate, and Where Is Human and Causal Judgment Required?**
+8. **What Should a Strong Fairness Review Conclude Without Confusing Equality with Justice?**
 
-A third system generates profile images from text.
-Its outputs may repeatedly portray leadership roles through one narrow identity.
-Classification accuracy and false-negative rates provide little insight into that representation harm.
-The team needs qualitative review and representation-specific measures.
+## What Fairness Question Does the Model and Product Need to Answer?
+<!-- section-summary: Fairness evaluation begins with the system's decision, affected people, benefits, harms, historical process, and the specific disparity question being investigated. -->
 
-These situations share a concern about unfair impact, yet they require different evidence.
-Fairness is therefore a **socio-technical** question.
-“Socio” refers to people, institutions, history, power, policy, and consequences.
-“Technical” refers to data, models, metrics, interfaces, and production controls.
-The two sides interact throughout the system.
+A high average score cannot show how benefits and errors are distributed, so fairness evaluation begins by naming the decision and the people affected.
 
-```mermaid
-flowchart TD
-    A["Real decision or user experience"] --> B["People and groups affected"]
-    A --> C["Benefit, error, or harm"]
-    A --> D["Data and historical process"]
-    D --> E["Model score"]
-    E --> F["Threshold, policy, or human action"]
-    F --> G["Experienced outcome"]
-    B --> H["Fairness evidence"]
-    C --> H
-    G --> H
-    H --> I["Mitigate, restrict, monitor,<br/>or decline the ML use"]
+The easiest way to understand fairness evaluation is to start with a limitation of ordinary model evaluation. Suppose a model makes a consequential decision:
 
-    class A,B,C context
-    class D,E,F,G system
-    class H evidence
-    class I decision
+approve or reject an application.
+
+You evaluate it on 100,000 examples and find:
+
+$$
+\text{accuracy}=95\%
+$$
+
+That tells you something about average predictive performance. But it does **not** tell you:
+
+* whether errors are concentrated among particular groups,
+* whether one group receives fewer beneficial outcomes,
+* whether the training labels themselves encode historical discrimination,
+* whether an apparently neutral threshold affects groups differently,
+* whether some people are systematically represented inaccurately,
+* or whether the remaining errors have very different consequences.
+
+So fairness evaluation begins with a deeper question:
+
+**Who experiences the model's errors and decisions, and what happens to them because of those errors and decisions?**
+
+That is the foundation. Suppose a binary classifier predicts whether someone should receive some benefit. Let:
+
+$$
+\hat Y \in \{0,1\}
+$$
+
+be the model's prediction and:
+
+$$
+Y \in \{0,1\}
+$$
+
+be the target or ground truth. Ordinary evaluation might calculate:
+
+$$
+P(\hat Y = Y)
+$$
+
+Fairness evaluation asks conditional questions such as:
+
+$$
+P(\hat Y=Y\mid G=A)
+$$
+
+and:
+
+$$
+P(\hat Y=Y\mid G=B)
+$$
+
+where $$G$$ represents some relevant group. But even this isn't enough. Imagine both groups have 90% accuracy. For group A, most errors are harmless false positives. For group B, most errors are harmful false negatives. The same accuracy can hide very different experiences. Therefore the first principle is:
+
+**Fairness cannot be determined from one aggregate performance number.**
+
+You have to understand the **decision, groups, error types, and consequences**. The word **bias** is overloaded. In machine learning it can mean at least three different things.
+
+### Statistical bias
+
+An estimator systematically differs from the quantity it is estimating. This is the technical bias in the bias-variance tradeoff. That is not what people usually mean in fairness discussions.
+
+### Systematic model bias
+
+A model makes certain kinds of errors more often under particular conditions.
+
+For example:
+
+a speech-recognition system has substantially higher transcription error for one accent.
+
+### Social or fairness bias
+
+A system systematically disadvantages people, reinforces stereotypes, or distributes benefits and harms in an unjustified way. These ideas overlap, but they aren't equivalent. A measurable group difference isn't automatically unfair. And an unfair system need not have an obvious accuracy gap. So:
+
+> **Fairness evaluation is an investigation of whether model behavior produces unjustified differences in treatment, quality, opportunity, burden, or representation.**
+
+This is perhaps the most important practical rule. Don't begin with:
+
+“Should we calculate demographic parity?”
+
+Begin with:
+
+“What does this system actually do?”
+
+For example:
+
+```text
+Applicant
+   ↓
+Model gives risk score
+   ↓
+Threshold applied
+   ↓
+Approve / reject
+   ↓
+Person receives or does not receive benefit
 ```
 
-The previous segment-evaluation framework supplies the mechanics for calculating metrics on defined groups.
-Fairness review adds a different responsibility.
-It asks which groups and harms matter, whether the observed labels deserve trust, which fairness idea fits the decision, and who has authority to accept the remaining risk.
+Now ask:
 
-A numerical gap starts an investigation.
-It cannot settle every fairness question by itself.
-Responsible review combines quantitative evidence with domain knowledge, policy and legal analysis, feedback from affected people, and an enforceable release decision.
+1. Who is affected
+2. What decision is being made
+3. What benefit or burden is allocated
+4. What mistakes can occur
+5. Who bears the cost of those mistakes
+6. Can the decision be appealed or corrected
+7. Is the outcome reversible
+8. Is the model deciding, recommending, ranking, or merely providing information
 
-## Overall Quality, Group Performance, Allocation, and Representation Ask Different Questions
-<!-- section-summary: Fairness concerns can involve model quality, service quality, access to benefits, exposure to burdens, or how people are represented. -->
+These questions determine what “fairness” could reasonably mean. Consider four AI systems.
 
-Suppose a team sees a five-point difference between two groups.
-That number could describe prediction quality, access to a benefit, exposure to a burden, or representation in generated output.
-Each concern points to different evidence and a different repair.
+### System A: loan approval
 
-Before choosing metrics, separate the four questions that are often mixed together.
+Potential harm:
 
-### Measure Overall Quality Across The Full Population
+qualified applicants are incorrectly denied.
 
-Overall accuracy, recall, mean error, or ranking quality describes broad model performance.
-It answers whether the model supports its main task across the evaluation population.
+A **false negative** may therefore be particularly important.
 
-This remains necessary evidence.
-A system with poor overall quality has a general reliability problem.
-Fairness metrics cannot rescue a model that fails almost everyone.
+### System B: fraud detection
 
-Overall quality also hides distribution.
-A speech recognizer with a 7 percent word error rate can average a 4 percent rate for one accent group and a 20 percent rate for another.
-The overall score says little about the second group’s experience.
+Potential harm:
 
-### Compare Prediction Quality Across Groups
+legitimate customers are incorrectly blocked.
 
-**Group performance** compares quality or error rates across groups.
-For speech recognition, the team may compare word error rate.
-For a medical image classifier, it may compare sensitivity and false-positive rate.
-For a demand forecast, it may compare absolute error across neighbourhoods if forecast quality shapes service levels.
+Here the burden caused by **false positives** may matter heavily.
 
-This question often describes **quality-of-service harm**.
-People can access the same feature while receiving substantially different quality.
+### System C: medical screening
 
-### Check Who Receives Benefits Or Burdens
+Potential harm:
 
-An **allocation harm** occurs when a system helps decide who receives an opportunity, resource, service, review, restriction, or cost.
-Examples include an interview, a loan review, an insurance investigation, a school place, extra identity verification, or access to a promotion.
+actual disease goes undetected.
 
-Selection rate describes how often each group receives the positive action.
-Error rates add crucial context.
-If qualified applicants from one group are rejected more often, false-negative rate reveals a lost-opportunity pattern that overall selection alone cannot explain.
+Here **false-negative rates or recall** may be central.
 
-### Check How The System Represents Or Recognizes People
+### System D: image generator
 
-A **representation harm** concerns visibility, stereotyping, denigration, erasure, or the way identities and cultures appear in system outputs.
-Search results that repeatedly associate one group with low-status roles provide one example.
-A generative system that sexualizes some identities more often provides another.
+There may be no binary allocation decision at all. Instead the concern might be:
 
-Representation review may use rating rubrics, counterfactual prompt sets, content taxonomies, expert review, and feedback from affected communities.
-Confusion-matrix parity covers only the parts that can be expressed as labelled prediction errors.
+when asked for a CEO, does the system consistently portray one kind of person
 
-```mermaid
-mindmap
-  root((Fairness questions))
-    Overall quality
-      Does the system work broadly?
-      Population-level metric
-    Group performance
-      Who receives weaker quality?
-      Error rates by group
-    Allocation
-      Who receives a benefit or burden?
-      Selection and decision errors
-    Representation
-      How are people depicted or recognized?
-      Qualitative and quantitative review
-```
+That is primarily a **representation** question. These systems should not use identical fairness tests. This gives us another first principle:
 
-A single product can create several kinds of harm.
-A content-moderation model may remove harmless posts from one community more often, which is a quality and allocation concern.
-Its labels may also treat reclaimed identity language as inherently abusive, which reflects a representation and label-design concern.
+**Choose fairness metrics from the harm, not the other way around.**
 
-Naming the concern keeps the review focused.
-It also prevents a team from declaring the system fair because one convenient parity metric passed.
+It helps to separate at least four.
 
-## Define the People, Attributes, and Intersections in Scope
-<!-- section-summary: Fairness groups need a clear relationship to affected people, the decision context, and the governed attributes used for evaluation. -->
+### A. Quality fairness
 
-A fairness review needs to know who can benefit, who can be harmed, and who may be missing from the data.
-Direct users form only part of that picture.
-A fraud model affects account holders whose transactions are blocked.
-A hiring tool affects applicants.
-A delivery forecast can affect workers and neighbourhoods even if planners are the only people who open the software.
+Does the system work equally well for different groups
 
-The group definitions usually involve **sensitive attributes**.
-This broad term covers characteristics that require special care because they relate to identity, vulnerability, social disadvantage, privacy, or the harm under review.
+For example:
 
-A **protected attribute** has a legal meaning tied to a jurisdiction and context.
-The applicable list and permitted uses differ across countries, sectors, and decisions.
-Engineering teams should get qualified legal and privacy guidance instead of copying one generic list into every system.
+| Group   | Speech recognition word error rate |
+| ------- | ---------------------------------: |
+| Group A |                                 5% |
+| Group B |                                17% |
 
-The attribute used for fairness analysis also needs an honest meaning.
-Self-identified gender, a category inferred from a name, and a reviewer’s perception of gender describe different things.
-An image classifier that estimates perceived age supplies evidence about appearance, not a person’s verified age.
-The data documentation should state how the attribute was collected, who supplied it, and which values remain unknown.
+The product technically exists for both groups, but one receives much poorer quality.
 
-### Check Whether Other Features Reveal Sensitive Group Membership
+### B. Allocation fairness
 
-A model may exclude a protected attribute and still reproduce group differences.
-A **proxy** is another feature correlated with the sensitive characteristic.
-Postcode can reflect residential segregation.
-School name can carry information about geography and socioeconomic conditions.
-Language, browsing pattern, or device type may also correlate with group membership.
+Who receives benefits, opportunities, burdens, or restrictions
 
-Removing one column therefore leaves a wider investigation.
-The team examines data history, feature meaning, model reliance, and outcome differences.
-Proxy analysis needs context because correlation alone supplies no proof of an unfair mechanism.
+For example:
 
-### Check Intersections Hidden By Broad Groups
+| Group | Approval rate |
+| ----- | ------------: |
+| A     |           70% |
+| B     |           45% |
 
-People belong to several groups at once.
-An overall result for women and an overall result for older adults can both pass while older women experience a concentrated failure.
-The combined group is an **intersection**.
+This describes **outcomes**, not necessarily model correctness.
 
-Fairlearn can create intersections from multiple sensitive features, and TFMA can calculate crossed slices.
-The statistical challenge is the same one introduced in segment evaluation: each added dimension creates smaller groups.
-Predeclare important intersections from the decision and harm map, preserve unknown values, report counts, and gather more evidence where the sample is sparse.
+### C. Error fairness
 
-```mermaid
-flowchart TD
-    A["Decision context"] --> B["Direct users"]
-    A --> C["People receiving benefits or burdens"]
-    A --> D["People represented in outputs"]
-    B --> E["Governed sensitive attributes"]
-    C --> E
-    D --> E
-    E --> F["Single groups"]
-    E --> G["Important intersections"]
-    E --> H["Unknown or unmeasured groups"]
-    F --> I["Fairness evaluation scope"]
-    G --> I
-    H --> J["Evidence limitation and<br/>collection plan"]
-    J --> I
+Are particular harmful mistakes concentrated among some groups
 
-    class A context
-    class B,C,D people
-    class E,F,G,I group
-    class H,J limit
-```
+For example:
 
-Missing attribute data creates a genuine limitation.
-Inferring identity from names, images, or geography can introduce another biased model and may create privacy or legal risk.
-Sometimes the responsible result is a narrower claim: the available evidence cannot measure the intended groups reliably.
-The team can then pursue approved data collection, qualitative research, external evaluation, or a more cautious product scope.
+| Group | False-negative rate |
+| ----- | ------------------: |
+| A     |                  5% |
+| B     |                 18% |
 
-## Describe The Decision And Possible Harm Before Choosing A Metric
-<!-- section-summary: A fairness question connects one product decision to the affected people, beneficial action, harmful error, and human or automated response. -->
+This can matter even when overall approval rates are similar.
 
-Metric names feel abstract until they are tied to a real action.
-Start with one complete path from prediction to consequence.
+### D. Representation fairness
 
-Suppose a model scores requests for a limited support program.
-High scores receive automatic priority, middle scores receive human review, and low scores enter the ordinary queue.
-A false negative can delay a person who genuinely needs the program.
-A false positive can consume limited capacity and delay others.
-The harm may grow if the human reviewer sees only the model score and assumes it is objective.
+How does the model portray people and social groups
 
-This situation gives the fairness review several concrete objects:
+Examples include:
 
-- the affected population and eligibility rule;
-- the beneficial action and any burdens;
-- the outcome label and the time needed to observe it;
-- the model score and decision thresholds;
-- the false positive and false negative consequences;
-- the human role, fallback, appeal, and correction path;
-- the groups that may experience these effects differently.
+* stereotyping occupations,
+* associating groups with crime or poverty,
+* systematically omitting some groups,
+* using demeaning descriptions,
+* producing less diverse or less realistic representations.
 
-The team can now write a plain fairness question:
+Representation problems often require different evaluation methods from classification metrics.
 
-“Among eligible people who genuinely need the service, how often does each reviewed group receive priority, and which groups are delayed by false negatives?”
+## How Do Group Fairness Metrics Describe Different Outcomes and Errors?
+<!-- section-summary: Demographic parity, equal opportunity, equalized odds, predictive parity, calibration, individual fairness, and counterfactual fairness formalize different concerns and can conflict. -->
 
-That wording suggests true-positive rate, false-negative rate, selection rate, support counts, and review volume.
-A different harm would produce another metric set.
+Different harms lead to different conditional probabilities, which is why fairness has several incompatible-looking metric families.
 
-```mermaid
-flowchart TD
-    A["Eligible request"] --> B["Model score"]
-    B --> C{"Product policy"}
-    C -->|"High score"| D["Automatic priority"]
-    C -->|"Middle score"| E["Human review"]
-    C -->|"Low score"| F["Ordinary queue"]
-    D --> G["Benefit or burden"]
-    E --> G
-    F --> G
-    G --> H["Later outcome and appeal"]
-    H --> I["Compare effects and errors<br/>across governed groups"]
+Suppose $$G$$ denotes group membership. One straightforward diagnostic is:
 
-    class A input
-    class B,C system
-    class D,E,F,G action
-    class H,I evidence
-```
+$$
+P(\hat Y=1\mid G=g)
+$$
 
-The review should also ask whether ML belongs in the decision.
-A highly consequential use with unreliable labels, no appeal, and no safe fallback may deserve a manual or rules-based workflow.
-NIST AI RMF treats the choice to proceed with an AI system as part of risk management, including the option to avoid or transfer risk.
+This is simply:
 
-Fairness requirements should be set before the final candidate result appears.
-Product, domain, policy, privacy, legal, and affected-stakeholder perspectives may all be needed.
-The result is a reviewed harm-and-measurement plan, not a metric chosen by whichever model currently scores best.
+What fraction of group $$g$$ receives the positive prediction
+
+Suppose:
+
+$$
+P(\hat Y=1\mid G=A)=0.80
+$$
+
+and:
+
+$$
+P(\hat Y=1\mid G=B)=0.50
+$$
+
+There is a large difference. But we still cannot conclude why. Possible explanations include:
+
+* the model is unfair,
+* the underlying populations genuinely differ in a job-relevant variable,
+* the labels contain historical bias,
+* data coverage differs,
+* the model has different error rates,
+* the threshold behaves differently,
+* an upstream product rule creates the disparity,
+* or several factors interact.
+
+A disparity is therefore usually:
+
+**a signal requiring explanation, not by itself proof of a cause.**
+
+One common criterion is **demographic parity**. It asks for:
+
+$$
+P(\hat Y=1\mid G=A)
+=
+P(\hat Y=1\mid G=B)
+$$
+
+In words:
+
+Both groups should receive positive model outcomes at the same rate.
+
+Suppose:
+
+| Group | Positive-decision rate |
+| ----- | ---------------------: |
+| A     |                    60% |
+| B     |                    60% |
+
+Demographic parity holds. This criterion can be useful when equal access to an opportunity is itself the central concern. But notice something important. It completely ignores the ground-truth label $$Y$$. That can be either appropriate or inappropriate depending on the situation. Another criterion asks:
+
+Among people who truly belong in the positive class, do different groups have the same chance of receiving a positive prediction
+
+Formally:
+
+$$
+P(\hat Y=1\mid Y=1,G=A)
+=
+P(\hat Y=1\mid Y=1,G=B)
+$$
+
+That quantity is the **true-positive rate**, or recall. Suppose:
+
+| Group | Qualified people approved |
+| ----- | ------------------------: |
+| A     |                       95% |
+| B     |                       75% |
+
+Then qualified members of group B are much more likely to be missed. That may be extremely important in applications where denial of a deserved opportunity is the primary harm. Binary classification has two major error types.
+
+### False positive
+
+$$
+Y=0,\quad \hat Y=1
+$$
+
+### False negative
+
+$$
+Y=1,\quad \hat Y=0
+$$
+
+**Equalized odds** approximately asks for equal error behavior across groups:
+
+$$
+P(\hat Y=1\mid Y=y,G=A)
+=
+P(\hat Y=1\mid Y=y,G=B)
+$$
+
+for both:
+
+$$
+y=0
+$$
+
+and:
+
+$$
+y=1
+$$
+
+In practical terms, groups should have similar:
+
+* true-positive rates,
+* false-positive rates.
+
+This asks something stronger than equal opportunity. Suppose the model predicts positive. You might ask:
+
+Is that prediction equally trustworthy for everyone
+
+That corresponds to precision:
+
+$$
+P(Y=1\mid \hat Y=1,G=g)
+$$
+
+Predictive parity asks for this to be similar across groups.
+
+For example:
+
+| Group | Precision |
+| ----- | --------: |
+| A     |       90% |
+| B     |       68% |
+
+A positive prediction means something quite different across the two groups. That's another form of disparity. Many systems produce a probability or score rather than an immediate yes/no decision. Suppose the model outputs:
+
+$$
+s(x)=0.7
+$$
+
+A calibrated model means approximately:
+
+among people receiving a score near 0.7, roughly 70% actually experience the event.
+
+Groupwise calibration asks whether this meaning remains true within groups:
+
+$$
+P(Y=1\mid S=s,G=A)
+\approx s
+$$
+
+and:
+
+$$
+P(Y=1\mid S=s,G=B)
+\approx s
+$$
+
+If a score of 0.7 means approximately 70% risk for one group but 40% for another, downstream decision-makers can be misled even if the model's aggregate calibration looks excellent. This is one of the deepest ideas in fairness evaluation. People sometimes assume there must be a classifier that simultaneously has:
+
+* equal selection rates,
+* equal false-positive rates,
+* equal false-negative rates,
+* equal predictive values,
+* perfect calibration.
+
+In general, there may not be. When underlying outcome rates differ across groups and predictions are imperfect, several desirable fairness criteria can mathematically conflict. This is not merely an engineering failure. Sometimes the goals themselves are incompatible. That means fairness evaluation cannot consist of:
+
+“Calculate every fairness metric and make all of them zero.”
+
+Instead you must decide:
+
+**Which disparities correspond to the harms this product is responsible for controlling?**
+
+That is partly an empirical question and partly a normative/product-policy question. Suppose actual positive rates are:
+
+$$
+P(Y=1\mid A)=0.8
+$$
+
+and:
+
+$$
+P(Y=1\mid B)=0.4
+$$
+
+Now imagine a model with useful but imperfect predictive power. If you require identical positive-prediction rates across A and B, you may need to use different error tradeoffs between groups. If instead you require identical false-positive and false-negative rates, the positive-prediction rates may remain different. If you require score calibration within both groups, other parity conditions may become impossible to satisfy simultaneously. So when someone asks:
+
+“Is this model fair?”
+
+the scientifically responsible response is:
+
+**Fair according to what criterion, given what harm model?**
+
+There is no universal scalar called “fairness.” Group metrics compare populations. Another approach asks:
+
+Should similar people receive similar treatment
+
+Conceptually:
+
+$$
+d(x_i,x_j)\text{ small}
+\Rightarrow
+d(f(x_i),f(x_j))\text{ small}
+$$
+
+This is often called **individual fairness**. For example, if two applicants are identical on all genuinely relevant factors, tiny irrelevant differences should not cause radically different outcomes. The hard part is defining:
+
+What counts as “similar”
+
+That depends on the application and carries value judgments of its own. Suppose we could imagine the same person in two worlds:
+
+* everything relevant remains the same,
+* but some sensitive attribute differs.
+
+Then ask:
+
+Would the model's decision change
+
+Conceptually:
+
+$$
+f(x,G=A)
+\stackrel{?}{=}
+f(x,G=B)
+$$
+
+This is the intuition behind **counterfactual fairness**. It's powerful, but difficult. Why? Because real attributes are entangled with social conditions. Changing one attribute while magically holding everything else constant may produce an impossible or misleading hypothetical. So counterfactual tests should be carefully designed rather than mechanically changing words in an input.
 
 ![A limited-support-program decision connects scores and policy routes to false-negative, false-positive, human-review, and appeal evidence](/content-assets/articles/article-mlops-model-evaluation-bias-fairness-responsible-evaluation/fairness-from-decision-and-harm.png)
 
 *The affected people, benefit, harmful error, human role, and appeal path determine which group metrics and operational evidence belong in the review.*
 
-## Check For Bias In Data And Labels Before Training
-<!-- section-summary: Historical decisions, labels, sampling, and measurement can create group differences that a model learns or that an evaluation hides. -->
+## How Do Data, Labels, Sensitive Attributes, Intersections, and Uncertainty Create Disparities?
+<!-- section-summary: Disparities can enter through sampling, measurement, labels, previous decisions, proxies, intersections, and small denominators even when sensitive attributes are excluded from training. -->
 
-A model learns from records created by an earlier process.
-Those records can already contain unequal treatment or incomplete observation.
-Training faithfully on them may reproduce the process with greater scale and consistency.
+Those metrics measure outcomes produced by a larger data and decision system, so the investigation must look upstream at representation and labels.
 
-### Check Whether Past Decisions Changed The Labels
+Suppose you train on historical hiring decisions. Your label is:
 
-Suppose a hiring dataset uses “received a strong annual review” as the target.
-Only people who were hired and remained long enough can receive that label.
-Previous screening, team assignments, manager support, workplace access, and promotion opportunities all influenced the recorded outcome.
+$$
+Y=\text{“was hired”}
+$$
 
-The label therefore describes success inside a historical system.
-It is not a pure measurement of talent available before hiring.
+The model can learn to predict those labels perfectly. But what does the label represent It represents:
 
-The same issue appears in lending.
-Repayment is observed for approved applicants and usually unknown for rejected applicants.
-This is sometimes called a **selective-label problem**: the old decision controls which outcomes become visible.
-A model trained on approved loans alone may have weak evidence about people whom the older policy excluded.
+historical human hiring decisions.
 
-### Check Whether Reviewers Applied Labels Consistently
+It does not necessarily represent:
 
-Human labels often represent policy and interpretation.
-Content reviewers may disagree about sarcasm, reclaimed slurs, or dialect.
-Medical labels can vary across facilities because testing and diagnosis access differs.
-Customer-risk labels may treat a delayed payment and a fraudulent payment as the same event.
+who would have performed well in the job.
 
-Measure agreement and disagreements by group where possible.
-Review the label guide, annotator coverage, escalation rules, and policy versions.
-A fairness gap built from inconsistent labels may describe the labelling process as much as the model.
+If past hiring behavior contained discrimination, then a perfectly predictive model could faithfully reproduce it. This gives us a fundamental warning:
 
-### Check Whether Important Experiences Are Missing From The Sample
+**Ground truth can itself be biased.**
 
-Training and evaluation data may underrepresent a device, language, disability-related interaction, or service channel.
-The number of rows alone provides limited reassurance.
-The sample also needs the relevant range of conditions and enough positive outcomes to measure the harmful error.
+Accuracy against an unjust target is not fairness. Consider how an evaluation dataset comes into existence:
 
-Targeted collection and stratified evaluation can strengthen the evidence.
-Sampling weights may be needed for full-population estimates if the fairness set intentionally oversamples smaller groups.
-
-### Check Whether Features And Sensors Work Equally Well Across Groups
-
-A feature or outcome may have unequal measurement quality.
-Wearable sensors can perform differently across skin tones or movement patterns.
-Address history may be less complete for people with unstable housing.
-A resume parser may recognize one credential format and miss another.
-
-These are measurement problems in the system feeding the model.
-Feature importance alone will not reveal whether the source measurement is valid.
-
-```mermaid
-flowchart TD
-    A["Historical institution and policy"] --> B["Who receives an opportunity"]
-    B --> C["Which outcomes become observable"]
-    A --> D["How labels are defined"]
-    A --> E["Which groups and conditions are sampled"]
-    A --> F["How features are measured"]
-    C --> G["Training and evaluation data"]
-    D --> G
-    E --> G
-    F --> G
-    G --> H["Model learns the recorded process"]
-    H --> I["Fairness review checks each evidence boundary"]
-
-    class A history
-    class B,C,D,E,F process
-    class G,H data
-    class I review
+```text
+world
+ ↓
+who gets observed
+ ↓
+what gets measured
+ ↓
+how it gets labelled
+ ↓
+which examples are retained
+ ↓
+training/evaluation dataset
 ```
 
-An evidence review records where each field came from, who was excluded, how outcomes mature, and which historical policy produced the labels.
-If the label cannot support the fairness question, another metric calculation will not repair the foundation.
-The team needs better outcomes, a different study design, a narrower use, or a decision to avoid the model.
+Bias can enter at every arrow.
 
-## Choose Fairness Metrics From the Harm
-<!-- section-summary: Fairness metrics compare different aspects of decisions, so the appropriate measure follows the benefit, burden, and harmful error in the product. -->
+### Sampling bias
 
-Suppose two groups receive positive decisions at different rates.
-The gap alone cannot tell the team whether to align selection rates, qualified-person recall, false-positive rates, precision, or probability meaning.
-The decision and its harmful errors determine which comparison deserves priority.
+Some populations are poorly represented.
 
-Fairness metrics express a specific idea about which quantities should align across groups.
-Each one protects a different concern.
+### Measurement bias
 
-### Use Selection-Rate Parity To Compare Access To The Predicted Action
+The same underlying property is measured differently across groups.
 
-**Demographic parity** asks whether groups receive the positive prediction at similar rates.
-In probability notation, it compares `P(prediction = positive | group)`.
-The calculation uses predictions and group membership without an outcome label.
+### Label bias
 
-This can be informative if the positive prediction directly allocates a benefit and the allocation rate itself is under review.
-For example, a team may examine who receives invitations to a limited opportunity.
+Human annotations reflect stereotypes or historical institutional choices.
 
-Selection parity alone leaves qualification and error patterns unexplained.
-Groups may have different observed outcome rates because of history, measurement, or other causes.
-A matching selection rate can also hide higher false negatives in one group.
+### Missingness bias
 
-### Use Equal Opportunity To Compare Benefits For Qualified People
+Some features are missing systematically for particular populations.
 
-**Equal opportunity** compares true-positive rates across groups.
-Among people labelled positive, it asks how often the system predicts positive.
+### Survivorship bias
 
-For an appointment-priority model, this can represent how often people who genuinely need the service receive priority.
-The complementary false-negative rate shows how often each group loses that opportunity.
+Only people who reached a later stage are represented.
 
-This criterion depends on the label.
-If “genuinely needs the service” is measured inconsistently across groups, equal-opportunity results inherit that problem.
+### Selection bias
 
-### Use Equalized Odds To Compare Both Types Of Classification Error
+The dataset includes only people affected by past decisions.
 
-**Equalized odds** asks for similar true-positive rates and false-positive rates across groups.
-It therefore considers missed benefits and incorrectly assigned benefits or burdens.
+### Temporal bias
 
-A fraud system may use it to examine both missed fraud and legitimate payments incorrectly blocked.
-The criterion is demanding because threshold changes often move the two error rates in opposite directions.
+Data reflects conditions from one historical period that no longer hold. You should therefore evaluate the dataset before evaluating the trained model. Imagine a medical model predicts:
 
-### Use Predictive Parity To Compare What A Positive Decision Means
+probability of receiving advanced treatment.
 
-**Predictive parity** compares precision across groups.
-Among people who receive a positive prediction, it asks how often the positive outcome occurs.
+Historical treatment data is used as ground truth. But receiving treatment depends on:
 
-This matters when a score or alert carries a claim of risk.
-If two groups receive the same “high risk” label and the observed event rate differs sharply, downstream reviewers may interpret the alert differently.
-
-### Use Calibration To Compare Whether Probabilities Keep The Same Meaning
-
-A score is **calibrated within groups** if cases assigned a probability near 0.7 experience the outcome about 70 percent of the time in each group.
-Calibration matters when the probability itself drives pricing, staffing, communication, or several thresholds.
-
-Calibration should be checked across the score range.
-One average calibration error can hide a poorly calibrated band near the action boundary.
-
-### Use Other Evidence For Individual And Representation Harms
-
-**Individual fairness** asks whether similar people receive similar decisions.
-Its difficulty lies in defining “similar” without encoding the same unfair assumptions under review.
-
-Representation harms may need structured human evaluation, output taxonomies, counterfactual prompt tests, and community feedback.
-Their evidence rarely reduces to one confusion-matrix statistic.
-
-```mermaid
-flowchart TD
-    A["What harm is under review?"] --> B["Unequal access to<br/>the positive action"]
-    A --> C["Qualified people<br/>miss the benefit"]
-    A --> D["Both false positives<br/>and false negatives matter"]
-    A --> E["Positive alerts should<br/>carry similar meaning"]
-    A --> F["Risk scores should<br/>match observed frequency"]
-    A --> G["Representation or<br/>individual treatment"]
-    B --> H["Selection rate /<br/>demographic parity"]
-    C --> I["True-positive rate /<br/>equal opportunity"]
-    D --> J["Equalized odds"]
-    E --> K["Precision /<br/>predictive parity"]
-    F --> L["Group calibration"]
-    G --> M["Context-specific qualitative<br/>and quantitative evidence"]
-
-    class A question
-    class B,C,D,E,F,G harm
-    class H,I,J,K,L,M metric
+```text
+medical need
++
+access to care
++
+insurance
++
+doctor decisions
++
+geography
++
+historical inequalities
 ```
 
-Differences and ratios summarize gaps.
-A difference of zero means the compared rates match.
-A ratio of one means they match.
-Neither value supplies a universal fairness threshold.
-The release rule needs a justification based on consequence, uncertainty, policy, legal requirements, and the limits of the metric.
+The label is not pure biological need. It contains the behavior of the social system. This distinction matters enormously. A machine-learning target often represents:
 
-## Fairness Criteria Can Conflict
-<!-- section-summary: Several fairness criteria cannot generally hold together when groups have different observed outcome rates and the model makes errors. -->
+$$
+\text{what historically happened}
+$$
 
-Teams often hope to choose every fairness metric and require all of them to match.
-That goal can be mathematically impossible unless the model is nearly perfect or groups have the same observed outcome rate.
+rather than:
 
-Imagine two groups with different recorded base rates for an outcome.
-The model is calibrated in both groups, so a score of 0.8 corresponds to an outcome rate near 80 percent in each group.
-Now apply one threshold.
-The score distributions can produce different false-positive and false-negative rates.
+$$
+\text{what ideally should happen}
+$$
 
-Changing group thresholds can align error rates.
-Those changes may break calibration among the people receiving the positive decision or change selection rates.
-Improving one parity criterion can therefore move another criterion away from equality.
+Fairness review should explicitly ask which one is being modeled. Suppose you remove ethnicity from a dataset. Does that eliminate ethnic bias? No. Other variables can act as proxies. For example, depending on context:
 
-```mermaid
-flowchart TD
-    A["Groups have different<br/>observed outcome rates"] --> B["Model scores are calibrated<br/>within each group"]
-    B --> C["One shared threshold"]
-    C --> D["Different error rates<br/>can remain"]
-    D --> E["Adjust thresholds to<br/>align an error criterion"]
-    E --> F["Selection rates and the meaning<br/>of positive decisions can change"]
-    F --> G["Governance chooses which harm<br/>the system should prioritize"]
+* postcode,
+* language,
+* school,
+* occupation,
+* purchasing behavior
 
-    class A condition
-    class B,C,D,E mechanism
-    class F,G tradeoff
+may correlate with a sensitive attribute. The model might reconstruct substantial information about the removed attribute indirectly. So:
+
+**Fairness through unawareness is generally insufficient.**
+
+Not providing a sensitive column is very different from demonstrating fair outcomes. This creates an apparent paradox. You might say:
+
+“We don't want the system discriminating based on group membership, so we shouldn't collect group membership.”
+
+But if you collect no information whatsoever, you may be unable to discover:
+
+Group B experiences twice the false-negative rate of group A.
+
+Sensitive information can therefore be necessary for **auditing**, even when it should not be used as a decision feature. The important distinction is purpose. You might maintain:
+
+```text
+decision features
+       ↓
+     model
 ```
 
-The conflict is a reason to make the value choice explicit.
-For a screening tool, reviewers may prioritize equal opportunity because missed qualified people carry the central harm.
-For a fraud alert used by investigators, false-positive parity may receive more weight because unnecessary investigation creates a serious burden.
-A risk score used as a probability may need calibration as a core requirement.
+separately from:
 
-The observed base rates also deserve investigation.
-They may reflect genuine differences relevant to the decision, unequal access to earlier opportunities, selective labels, or measurement bias.
-Treating the rate as unquestioned ground truth can make the metric choice appear more objective than it is.
-
-A responsible report therefore presents the chosen criterion, competing metrics, overall utility, and who accepted the trade-off.
-It avoids a leaderboard where the “fairest” candidate is simply the model that wins one selected number.
-
-## Interpret Group Results With Counts And Uncertainty
-<!-- section-summary: Fairness gaps need denominators, outcome counts, coverage, and uncertainty before they can support a release claim. -->
-
-Group metrics inherit every evidence requirement from segment evaluation.
-Fairness adds greater stakes because small or missing groups may represent people whose experience is already overlooked.
-
-Suppose a report shows true-positive rates of 0.82 and 0.68 for two groups.
-The first rate comes from 2,400 positive outcomes.
-The second comes from 19.
-The observed gap deserves attention, while the second estimate has substantial sampling uncertainty.
-
-Every group row should carry:
-
-- total eligible cases;
-- positive and negative outcome counts;
-- true positives, false positives, true negatives, and false negatives;
-- prediction, attribute, label, and join coverage;
-- the metric estimate and uncertainty interval;
-- the comparison group or overall result;
-- the attribute source and group-definition version.
-
-Intersectional groups can quickly become sparse.
-A group with no positive outcomes cannot supply a meaningful true-positive rate.
-Reporting `0`, silently dropping the row, and treating the metric as “not applicable” communicate different things.
-Use an explicit insufficient-evidence state and preserve the counts.
-
-Fairlearn’s `MetricFrame` supports bootstrap confidence intervals.
-Bootstrap resampling repeatedly samples evaluation rows and recalculates the metric, which estimates how much the result changes across similar samples.
-Repeated observations from one person or institution require cluster-aware resampling outside a simple row bootstrap.
-
-```mermaid
-flowchart TD
-    A["Group metric"] --> B["Eligible and labelled counts"]
-    A --> C["Confusion-matrix counts"]
-    A --> D["Attribute and join coverage"]
-    A --> E["Uncertainty interval"]
-    A --> F["Attribute source and<br/>definition version"]
-    B --> G{"Enough valid evidence?"}
-    C --> G
-    D --> G
-    E --> G
-    F --> G
-    G -->|"Yes"| H["Reviewed fairness result"]
-    G -->|"No"| I["Collect evidence, narrow scope,<br/>or keep a safer workflow"]
-
-    class A metric
-    class B,C,D,E,F,G evidence
-    class H,I decision
+```text
+protected audit attributes
+       ↓
+fairness evaluation
 ```
 
-Small samples should not receive an automatic pass.
-They also should not receive a confident population-level failure label from a few rows.
-A high-consequence observed failure can justify precautionary containment while targeted collection, external review, or a controlled pilot strengthens the estimate.
+Access controls, minimization, retention limits, aggregation, legal requirements, and privacy protections become important here. Suppose a model performs well for:
 
-Broad exploratory searches create another uncertainty problem.
-If hundreds of groups and intersections are scanned, some extreme gaps will appear through chance.
-Predeclared fairness groups can support gates.
-Newly discovered groups need confirmation on fresh data, with immediate containment available for plausible high-severity harm.
+women overall.
 
-## Check How Thresholds And Product Rules Change Group Outcomes
-<!-- section-summary: The model score, decision threshold, human workflow, and fallback policy jointly determine who receives a benefit or burden. -->
+And well for:
 
-A model commonly produces a score.
-The product decides what that score does.
-The same model can create different fairness outcomes under different thresholds and workflow rules.
+older adults overall.
 
-Suppose a support program prioritizes cases above 0.7.
-One group’s qualified cases cluster between 0.60 and 0.72, while another group’s qualified cases cluster between 0.75 and 0.90.
-A shared threshold creates a larger false-negative rate for the first group.
+It could still perform badly for:
 
-Lowering the threshold can recover more qualified cases from both groups.
-It may also increase false positives and overwhelm human reviewers.
-Changing the model without testing the queue would move the harm into a capacity failure.
+older women.
 
-Group-specific thresholds can align one parity criterion in some settings.
-They require sensitive attributes at decision time and can change how otherwise similar cases are treated.
-Their use may conflict with law, policy, privacy constraints, or the product’s fairness goals.
-Qualified legal and governance review is essential before adopting them.
+Mathematically:
 
-The surrounding product offers other controls:
+$$
+P(\text{error}\mid A)
+$$
 
-- send uncertain cases to a trained reviewer;
-- use a common fallback for groups with insufficient evidence;
-- add an appeal and correction route;
-- hide the model score from reviewers if it creates automation bias;
-- enforce review capacity and queue-age limits;
-- remove automatic rejection while retaining model-assisted prioritization;
-- decline the model if no acceptable policy can control the harm.
+and:
 
-```mermaid
-flowchart TD
-    A["Model score"] --> B{"Decision policy"}
-    B --> C["Automatic positive action"]
-    B --> D["Human review"]
-    B --> E["Fallback or abstention"]
-    B --> F["Negative action"]
-    C --> G["Selection and error rates by group"]
-    D --> G
-    E --> G
-    F --> G
-    G --> H["Workload, waiting time,<br/>appeals, and final outcomes"]
-    H --> I["Evaluate the complete system"]
+$$
+P(\text{error}\mid B)
+$$
 
-    class A score
-    class B policy
-    class C,D,E,F,G action
-    class H,I outcome
+tell you nothing definitive about:
+
+$$
+P(\text{error}\mid A\cap B)
+$$
+
+This is the same intersection problem that appears in general segment evaluation, but it can be particularly important in fairness work. Relevant intersections might involve combinations of:
+
+* age,
+* gender,
+* language,
+* disability-related accessibility needs,
+* geography,
+* device type,
+* socioeconomic proxies,
+* product context.
+
+You should not mechanically test every possible combination. Prioritize intersections based on plausible mechanisms, consequences, historical evidence, user research, and observed failures. Suppose:
+
+| Group | Errors |  Cases | Error rate |
+| ----- | -----: | -----: | ---------: |
+| A     |    500 | 10,000 |         5% |
+| B     |      1 |     20 |         5% |
+
+The point estimates match. But our certainty does not. Similarly:
+
+| Group | Errors |  Cases | Error rate |
+| ----- | -----: | -----: | ---------: |
+| A     |    500 | 10,000 |         5% |
+| B     |      2 |     20 |        10% |
+
+It would be premature to treat the apparent doubling as equally reliable as the large-sample estimate. So every group metric should normally be shown alongside:
+
+* number of examples,
+* relevant denominator,
+* uncertainty interval,
+* ideally the raw confusion-matrix counts.
+
+A fairness dashboard showing:
+
+Group A: 92%
+Group B: 84%
+
+without sample counts can be actively misleading. Suppose you have 100,000 examples from a group. That sounds enormous. But perhaps only 25 examples are actually positive. If you are estimating false-negative rate, your effective denominator is approximately:
+
+$$
+25
+$$
+
+not:
+
+$$
+100,000
+$$
+
+This means minority groups and rare outcomes create a double sampling problem. You may need targeted data collection to estimate a relevant fairness quantity with useful precision. Suppose with millions of examples you discover:
+
+$$
+\text{Group A accuracy}=95.01\%
+$$
+
+and:
+
+$$
+\text{Group B accuracy}=94.97\%
+$$
+
+The difference may be statistically detectable. But operationally meaningless. Conversely, imagine a rare group has:
+
+$$
+20\%
+$$
+
+higher failure probability, but the sample is too small for conventional statistical significance. That may still deserve urgent investigation if the potential harm is severe. So fairness review needs both:
+
+$$
+\text{statistical evidence}
+$$
+
+and:
+
+$$
+\text{practical / harm significance}
+$$
+
+They answer different questions.
+
+## How Do Thresholds, Ranking, Generation, and Paired Tests Change Fairness Evaluation?
+<!-- section-summary: Decision thresholds, ranked exposure, generated content, and controlled paired changes require fairness tests beyond ordinary aggregate classification metrics. -->
+
+The model's surrounding decision rule and product form then determine how scores turn into approvals, exposure, generated content, or paired treatment differences.
+
+Suppose a model outputs a risk score:
+
+$$
+s(x)\in[0,1]
+$$
+
+and the product uses:
+
+$$
+\hat Y=
+\begin{cases}
+1  s(x)\ge0.7\\
+0  s(x)<0.7
+\end{cases}
+$$
+
+The underlying model may remain unchanged while fairness outcomes change dramatically if the threshold moves from:
+
+$$
+0.7
+$$
+
+to:
+
+$$
+0.5
+$$
+
+Why? Because groups can have different score distributions. Imagine:
+
+```text
+             threshold
+                 ↓
+Group A   -----████████████---
+Group B   --████████-----------
 ```
 
-Evaluate the candidate with the exact production policy.
-Compare group metrics, overall utility, workload, deferrals, coverage, and appeal outcomes.
-If a mitigation relies on human review, load-test the review queue and define the safe response after capacity is exhausted.
+Moving the threshold alters:
 
-The policy version belongs in the fairness report.
-A threshold change, staffing change, or new fallback can alter experienced fairness even if the model artifact stays fixed.
+* selection rates,
+* false positives,
+* false negatives,
 
-## Investigate The Cause Of Every Group Disparity
-<!-- section-summary: Group gaps are descriptive evidence, so diagnosis follows the data, labels, model, policy, and human workflow before choosing a repair. -->
+potentially by different amounts across groups. Therefore fairness testing cannot stop at raw model scores. It has to evaluate the **decision policy that consumes those scores**. Imagine the model itself has similar group performance. But the product says:
 
-A group gap says that outcomes differ under the evaluated system.
-The mechanism remains unknown until the team traces the affected examples through the system.
+if confidence < 0.8, send to human review.
 
-Suppose a resume classifier has a higher false-negative rate for applicants using one language.
-Several causes are possible:
+Suppose one group receives lower confidence scores because its data has poorer image quality. Then that group may experience:
 
-- the training set has fewer examples in that language;
-- the parser drops qualifications expressed through an unfamiliar format;
-- the label guide rewards one style of work history;
-- a proxy feature reflects an earlier unequal screening process;
-- the threshold interacts with less calibrated scores;
-- reviewers correct errors for one group more often;
-- the evaluation join loses outcomes from one application channel.
+* more manual reviews,
+* longer delays,
+* more requests for documentation,
+* higher abandonment.
 
-The investigation traces examples through each layer.
-Review false positives, false negatives, correct cases, missing predictions, and scores near the action boundary.
-Compare similar cases across groups and inspect feature lineage, parser output, label provenance, model explanations, policy route, and final human action.
+Those are real product outcomes even if final classifier accuracy is identical. A complete fairness evaluation therefore looks at:
 
-Explanations such as SHAP values show how model features contributed to a prediction under the fitted model.
-They can reveal reliance on school name or document format.
-They do not prove that the feature caused the real-world outcome or that removing it will improve fairness.
+$$
+\text{data}
+\rightarrow
+\text{model}
+\rightarrow
+\text{threshold}
+\rightarrow
+\text{business rules}
+\rightarrow
+\text{human process}
+\rightarrow
+\text{user outcome}
+$$
 
-Counterfactual testing also needs care.
-Changing an identity word in a text prompt can reveal model sensitivity to that token.
-Changing a recorded protected attribute in a tabular row leaves the person’s lived history and social context untouched.
-Many associated experiences, opportunities, and measurements remain unchanged.
+not merely the model in isolation. Many systems do not make binary decisions. They rank:
 
-```mermaid
-flowchart TD
-    A["Observed group disparity"] --> B["Check attribute and outcome joins"]
-    B --> C["Review labels and historical policy"]
-    C --> D["Inspect capture, features,<br/>and preprocessing"]
-    D --> E["Inspect model scores<br/>and explanations"]
-    E --> F["Inspect thresholds,<br/>human action, and appeals"]
-    F --> G["Form a plausible mechanism"]
-    G --> H["Test a targeted change"]
-    H --> I["Re-evaluate fairness,<br/>utility, and new side effects"]
+* job candidates,
+* search results,
+* products,
+* creators,
+* advertisements,
+* recommendations.
 
-    class A finding
-    class B,C,D,E,F inspect
-    class G,H action
-    class I verify
+Now position matters. Being ranked:
+
+$$
+1^\text{st}
+$$
+
+is not equivalent to being ranked:
+
+$$
+100^\text{th}
+$$
+
+So you might care about:
+
+* exposure,
+* probability of appearing in top $$k$$,
+* average rank,
+* visibility,
+* click opportunity,
+* distribution of recommendations.
+
+A group can technically appear in the output while receiving almost no useful exposure. Thus allocation fairness in ranking is often about **attention**, not simple inclusion. An LLM does not simply output:
+
+$$
+0 \text{ or } 1
+$$
+
+It produces open-ended text. So fairness evaluation may examine:
+
+### Quality disparities
+
+Does answer quality decline for certain dialects or languages?
+
+### Stereotypes
+
+Does the model disproportionately associate particular groups with particular occupations or behaviors?
+
+### Toxicity
+
+Does discussion of certain identities trigger more toxic responses?
+
+### Refusal disparities
+
+Does the model unnecessarily refuse benign requests involving some identities more often than analogous requests involving others?
+
+### Sentiment disparities
+
+Does the model describe otherwise equivalent people more negatively depending on demographic cues?
+
+### Representation
+
+When a demographic characteristic is unspecified, what distributions emerge?
+
+### Respect and naming
+
+Does the model correctly interpret names, pronouns, dialects, or culturally specific concepts? This usually requires a combination of automated metrics and careful human review. One useful generative-model technique is to create paired examples. For instance:
+
+```text
+"Write a biography of a successful male engineer."
 ```
 
-Quantitative analysis should be joined by domain knowledge and feedback from affected people.
-A community may identify a burden that the current telemetry never records.
-Appeals and complaints can expose harmful edge cases, confusing explanations, and missing groups.
+versus:
 
-Diagnosis ends with a testable mechanism and an owner.
-“The model is biased” is too broad for remediation.
-“The parser omits contractor credentials used more often in this group” names a data transformation, a concrete repair, and evidence that can prove recovery.
-
-## Choose A Repair In The Data, Model, Policy, Or Product
-<!-- section-summary: Fairness mitigation targets the layer that creates the harm and then verifies both the intended improvement and any new trade-offs. -->
-
-Suppose the investigation finds that a parser drops qualifications written in one credential format.
-Retraining with a fairness constraint would leave that information missing.
-Changing the parser and rebuilding the evaluation rows targets the responsible layer.
-
-Fairness mitigation follows the same principle across the system.
-The repair should match the mechanism found during diagnosis.
-
-### Repair Biased Or Incomplete Data And Labels
-
-Data work can add underrepresented conditions, improve attribute coverage, correct parsing, revise a label guide, use multiple reviewers, or gather outcomes that the old policy never observed.
-
-Reweighting and resampling can give underrepresented group-and-label combinations more influence during training.
-These techniques change the training objective.
-They cannot correct an invalid label or create information absent from the source.
-
-Suppose a speech model underperforms on a device-and-accent intersection because the training set contains little audio from that combination.
-Targeted collection, audio-quality review, and a stratified evaluation set address the identified coverage gap.
-Recovery evidence includes improved word error rate for the intersection, stable performance elsewhere, and production tests on the actual device route.
-
-### Change Model Training To Optimize A Fairness Constraint
-
-Fairlearn includes reduction algorithms such as `ExponentiatedGradient`.
-They turn constraints such as demographic parity or equalized odds into a sequence of weighted learning problems for a compatible estimator.
-AIF360 also provides in-processing algorithms that incorporate fairness objectives during training.
-
-The chosen constraint encodes a value decision.
-The team should compare the resulting fairness metric, overall utility, calibration, group-specific errors, and operational cost.
-
-### Change Decisions After Scoring
-
-Fairlearn’s `ThresholdOptimizer` and AIF360 post-processing algorithms can adjust decisions to satisfy a selected parity constraint.
-This can work with an existing model and avoids retraining.
-
-The trade-offs are substantial.
-The decision path may need sensitive attributes at inference time.
-The transformation can change calibration, selection volume, and treatment near the boundary.
-Deployment must reproduce the post-processing rule exactly, and governance must approve its use.
-
-### Change The Surrounding Product Workflow
-
-Some harms are best controlled through the product.
-The system can abstain on unsupported cases, route them to a trusted workflow, present uncertainty to trained reviewers, add an appeal, or remove automation from a high-consequence action.
-
-For a small group with weak evidence, keeping the existing manual process may provide safer containment while approved data collection continues.
-The release router must enforce that boundary, and monitoring must detect route leakage.
-
-```mermaid
-flowchart TD
-    A["Diagnosed fairness mechanism"] --> B["Data or label change"]
-    A --> C["Model objective or constraint"]
-    A --> D["Post-processing rule"]
-    A --> E["Product workflow or fallback"]
-    B --> F["Retrain or recompute policy"]
-    C --> F
-    D --> F
-    E --> F
-    F --> G["Paired evaluation on the<br/>same governed groups"]
-    G --> H["Check fairness, utility,<br/>calibration, workload, and coverage"]
-    H --> I{"Residual risk acceptable?"}
-    I -->|"Yes"| J["Controlled rollout"]
-    I -->|"No"| K["Revise, narrow, or stop"]
-
-    class A cause
-    class B,C,D,E,F mitigation
-    class G,H,I verify
-    class J,K decision
+```text
+"Write a biography of a successful female engineer."
 ```
 
-Every mitigation needs a regression review.
-Improving true-positive-rate parity can increase false positives or lower overall benefit.
-Improving one intersection can hurt another.
-A fairer model score can still produce unfair outcomes if the product policy, human workflow, or access barriers remain unchanged.
+Then examine whether only appropriate content changes. The general form is:
 
-Roll out the complete change through a bounded pilot or staged release.
-Define success, stop conditions, fallback, review capacity, and the mature outcomes needed for confirmation.
+$$
+x_A
+$$
+
+and:
+
+$$
+x_B
+$$
+
+where the examples differ in one controlled attribute. You can compare:
+
+$$
+f(x_A)
+$$
+
+with:
+
+$$
+f(x_B)
+$$
+
+This can help reveal stereotype sensitivity. But paired tests require caution. Not every attribute can be meaningfully substituted while everything else stays constant. And artificial templates may fail to represent natural usage. So paired testing should complement real-world evaluation rather than replace it.
+
+## How Do You Diagnose a Disparity and Repair the Layer That Caused It?
+<!-- section-summary: A measured gap starts an investigation into representation, labels, features, objectives, thresholds, and product workflow so mitigation targets the actual cause. -->
+
+A disparity alone does not identify its cause; mitigation should follow evidence through the layer that generated the difference.
+
+Suppose group B's false-negative rate is twice group A's. Do not immediately conclude:
+
+“The model architecture is biased.”
+
+The disparity could originate from many layers. A useful causal investigation might inspect:
+
+```text
+population
+   ↓
+data collection
+   ↓
+measurement
+   ↓
+labels
+   ↓
+feature representation
+   ↓
+training
+   ↓
+model scores
+   ↓
+threshold
+   ↓
+product rules
+   ↓
+human intervention
+   ↓
+final outcome
+```
+
+You need to locate where the disparity is introduced or amplified. Imagine a speech-recognition model performs worse for one accent. Possible causes include:
+
+### Coverage
+
+The training corpus contains fewer speakers with that accent.
+
+### Recording conditions
+
+That group happened to be recorded with lower-quality microphones.
+
+### Label quality
+
+Annotators made more transcription mistakes on unfamiliar accents.
+
+### Representation
+
+The learned acoustic or language representation generalizes poorly.
+
+### Objective
+
+Training optimizes average loss, so improvements on a large group dominate improvements on a small group.
+
+### Deployment mismatch
+
+The evaluation audio does not resemble the group's real production environment. Each cause suggests a different repair. Once the mechanism is understood, interventions can happen at several levels.
+
+### Data intervention
+
+Examples:
+
+* collect additional examples,
+* improve annotation quality,
+* rebalance or reweight training data,
+* correct missing coverage,
+* redesign the target.
+
+### Model intervention
+
+Examples:
+
+* modify the loss,
+* use reweighting,
+* improve representations,
+* add constraints,
+* use group-aware training where justified.
+
+### Decision-policy intervention
+
+Examples:
+
+* reconsider thresholds,
+* introduce abstention,
+* require human review for uncertain decisions,
+* optimize explicitly for costly errors.
+
+### Product intervention
+
+Examples:
+
+* provide appeals,
+* show uncertainty,
+* change workflow,
+* avoid using the model for a particular decision,
+* route affected cases differently.
+
+The best solution is not always:
+
+train a “fairer model.”
+
+Sometimes the correct fix is to stop automating part of the process. Suppose your training objective is:
+
+$$
+L=
+\frac{1}{N}
+\sum_i \ell_i
+$$
+
+A group making up 2% of the dataset contributes roughly 2% of the total training objective. The optimizer therefore has limited incentive to sacrifice performance elsewhere to improve that group. One intervention is weighted loss:
+
+$$
+L=
+\frac{1}{N}
+\sum_i w_i\ell_i
+$$
+
+where examples from some underperforming group receive larger weights. This changes what the optimizer cares about. But it does not magically define fairness. You still need to know:
+
+* why the disparity exists,
+* whether weighting addresses that cause,
+* what performance tradeoffs result,
+* whether subgroup performance actually improves on independent data.
+
+Suppose your dataset contains exactly equal numbers from two groups. That fixes one possible problem:
+
+representation count.
+
+It does not guarantee:
+
+* equal label quality,
+* equal feature quality,
+* equal task difficulty,
+* equal error rates,
+* equal outcomes,
+* equal harm.
+
+A dataset can be numerically balanced and deeply biased. Conversely, an imbalanced dataset isn't necessarily unfair if the sampling design is appropriate for the problem. So:
+
+**dataset balance and fairness are not synonyms.**
+
+Imagine group B performs badly. If you retained appropriate protected evaluation attributes, you can discover:
+
+$$
+\text{FNR}_B = 18\%
+$$
+
+versus:
+
+$$
+\text{FNR}_A = 5\%
+$$
+
+Without group information you might see only:
+
+$$
+\text{overall FNR}=6\%
+$$
+
+and never notice. This is why mature fairness programs distinguish:
+
+information needed to **make decisions**
+
+from:
+
+information needed to **audit decisions**.
+
+Those datasets can have different access controls and purposes.
 
 ![A resume-classifier disparity is traced to a parser that drops contractor credentials and repaired at the preprocessing layer](/content-assets/articles/article-mlops-model-evaluation-bias-fairness-responsible-evaluation/repair-the-responsible-layer.png)
 
 *A group gap describes the symptom; diagnosis identifies a testable mechanism, and the repair is re-evaluated for utility, coverage, workload, and new trade-offs.*
 
-## How Current Tools Measure And Reduce Fairness Gaps
-<!-- section-summary: Fairlearn, TFMA Fairness Indicators, AIF360, and managed platforms automate group evidence and mitigation after the team has defined the fairness question. -->
+## How Should Fairness Evidence Shape Release Scope and Production Monitoring?
+<!-- section-summary: Release may be blocked or scoped, and production monitoring should track both disparities and absolute outcomes as groups and populations change. -->
 
-The fairness plan defines the decision, harms, groups, metrics, evidence limits, and release consequences. Current tools can then run that analysis consistently.
-They calculate group results and preserve artifacts.
-They cannot choose the ethical or legal meaning of fairness for the product.
+Because every intervention has tradeoffs, fairness results must affect release scope and continue as production evidence rather than end at the offline report.
 
-### Fairlearn supports assessment and mitigation
+Suppose a candidate model improves overall accuracy:
 
-Fairlearn’s `MetricFrame` calculates ordinary performance metrics for each sensitive group and important intersection.
-It can also report differences, ratios, worst-group values, and bootstrap confidence intervals.
+| Metric           | Current | Candidate |
+| ---------------- | ------: | --------: |
+| Overall accuracy |     91% |       95% |
 
-The following example evaluates selection rate, true-positive rate, and false-positive rate across the intersection of two approved attributes.
-The output contains one row for every observed combination, plus bootstrap intervals.
+Excellent. But then:
 
-```python
-from fairlearn.metrics import (
-    MetricFrame,
-    count,
-    false_positive_rate,
-    selection_rate,
-    true_positive_rate,
-)
+| Group | Current FNR | Candidate FNR |
+| ----- | ----------: | ------------: |
+| A     |          8% |            6% |
+| B     |          9% |       **21%** |
 
-assessment = MetricFrame(
-    metrics={
-        "count": count,
-        "selection_rate": selection_rate,
-        "true_positive_rate": true_positive_rate,
-        "false_positive_rate": false_positive_rate,
-    },
-    y_true=evaluation["outcome"],
-    y_pred=evaluation["decision"],
-    sensitive_features=evaluation[["review_group", "age_band"]],
-    n_boot=500,
-    ci_quantiles=[0.025, 0.975],
-    random_state=42,
-)
+The average improvement hides a major regression. A release policy might therefore contain conditions such as:
 
-group_metrics = assessment.by_group
-lower, upper = assessment.by_group_ci
-largest_gaps = assessment.difference()
+$$
+\text{overall quality}\ge T
+$$
+
+and:
+
+$$
+\text{FNR}_g\le T_g
+$$
+
+and:
+
+$$
+|\text{FNR}_A-\text{FNR}_B|\le\delta
+$$
+
+where these thresholds are justified by the system's harm analysis. The goal isn't necessarily mathematical equality down to decimal points. It is preventing unacceptable disparities. Fairness review doesn't have to produce only:
+
+ship
+
+or:
+
+reject.
+
+Suppose a new model performs well overall but has uncertain performance for one language. Possible decisions include:
+
+* release everywhere except that language,
+* retain the previous model for the affected group,
+* send uncertain cases to human review,
+* restrict the model to lower-consequence tasks,
+* collect more evidence before wider rollout,
+* reject the release if the harm cannot be sufficiently controlled.
+
+Fairness results become part of deployment architecture. Offline evaluation is not the end. Production populations change. Suppose group B had:
+
+$$
+\text{FNR}=7\%
+$$
+
+before deployment. Six months later:
+
+$$
+\text{FNR}=15\%
+$$
+
+Possible explanations include:
+
+* input distribution changed,
+* a new device entered the market,
+* an upstream preprocessing system changed,
+* new language patterns emerged,
+* training data became stale,
+* usage expanded into a population absent from evaluation.
+
+If production monitoring tracks only overall accuracy, this may remain invisible. So important pre-release fairness metrics should, where lawful and feasible, have corresponding production monitoring. Imagine:
+
+### Month 1
+
+$$
+\text{FNR}_A=5\%
+$$
+
+$$
+\text{FNR}_B=10\%
+$$
+
+Gap:
+
+$$
+5\text{ percentage points}
+$$
+
+### Month 2
+
+$$
+\text{FNR}_A=30\%
+$$
+
+$$
+\text{FNR}_B=30\%
+$$
+
+Gap:
+
+$$
+0
+$$
+
+By a pure parity metric, Month 2 looks “fairer.” But the model is terrible for everyone. This exposes a critical distinction:
+
+**Fairness is not a substitute for quality.**
+
+You should usually monitor:
+
+$$
+\text{absolute group performance}
+$$
+
+and:
+
+$$
+\text{between-group disparity}
+$$
+
+simultaneously. Imagine a model discriminates terribly against everyone equally.
+
+Then:
+
+$$
+\text{error}_A=\text{error}_B=50\%
+$$
+
+There is no group disparity. But that does not make the system acceptable. Fairness criteria are additional constraints on a system that must still satisfy basic safety and performance requirements. Suppose:
+
+$$
+\text{FNR}_A=1\%
+$$
+
+and:
+
+$$
+\text{FNR}_B=2\%
+$$
+
+Absolute difference:
+
+$$
+2\%-1\%=1\text{ percentage point}
+$$
+
+Relative ratio:
+
+$$
+\frac{2\%}{1\%}=2
+$$
+
+Group B's error rate is twice as large, yet the absolute difference is only one percentage point. Now consider:
+
+$$
+30\%
+$$
+
+versus:
+
+$$
+40\%
+$$
+
+The ratio is smaller:
+
+$$
+1.33
+$$
+
+but the absolute gap is ten percentage points. Which matters more depends on the harm and baseline frequency. Good reporting often includes both rather than choosing whichever looks more dramatic. Suppose you report:
+
+Asian-language performance = 91%.
+
+That could combine:
+
+| Language   | Performance |
+| ---------- | ----------: |
+| Japanese   |         97% |
+| Korean     |         96% |
+| Vietnamese |         90% |
+| Bengali    |         64% |
+
+The aggregate can conceal the weakest population. The same issue applies to broad demographic categories. Every grouping system is a simplification. Therefore ask:
+
+Does the chosen category correspond to a meaningful mechanism or user experience
+
+Broad categories may be useful for one question and useless for another. Fairness evaluation often pretends group attributes are simple columns:
+
+```text
+gender = X
+race = Y
+disability = Z
 ```
 
-The `count` column shows evidence volume.
-`by_group_ci` returns the requested lower and upper bootstrap quantiles.
-The release artifact should also include outcome counts, coverage, the attribute source, and the policy version because `MetricFrame` receives only the joined rows supplied to it.
+Reality is messier. Attributes can be:
 
-Fairlearn also provides mitigation algorithms including reductions and threshold optimization.
-Use them after the team has justified a fairness constraint and can deploy the resulting policy.
-The old Fairlearn notebook dashboard is no longer developed; current Fairlearn guidance points dashboard users toward the Responsible AI Toolbox while retaining the metrics and plotting APIs.
+* self-identified,
+* inferred,
+* externally assigned,
+* multi-valued,
+* culturally dependent,
+* time-varying,
+* context-dependent,
+* legally defined differently across jurisdictions.
 
-### TFMA Fairness Indicators fits repeated pipeline evaluation
+How a group attribute was obtained therefore matters. A fairness report should distinguish, where relevant, between:
 
-Fairness Indicators is built on TensorFlow Model Analysis, or **TFMA**.
-It computes classification metrics across declared slices and several thresholds, which helps teams see how a decision boundary changes group outcomes.
-TFMA can run distributed evaluation over large datasets and fit into a TFX or other orchestrated pipeline.
+self-reported attribute
 
-The slice configuration should come from the governed fairness plan.
-Use the overall slice, reviewed sensitive groups, and justified intersections.
-Preserve counts and confidence intervals, and keep the resulting report with the candidate model and evaluation data identity.
+and:
 
-Fairness Indicators focuses on quantitative classifier evidence.
-Representation harms, historical-label validity, lawful attribute use, and product governance still require other methods and owners.
+inferred proxy.
 
-### AIF360 offers a broad assessment and mitigation toolkit
+They aren't interchangeable. Suppose an image generator receives 10,000 neutral prompts such as:
 
-IBM’s AI Fairness 360, usually called **AIF360**, provides datasets, group and individual fairness metrics, explainers, bias detectors, and algorithms across preprocessing, in-processing, and post-processing.
-Its scikit-learn-compatible APIs can fit familiar experimental workflows.
+“Generate an image of a software engineer.”
 
-AIF360 is useful for comparing mitigation families and investigating how a metric changes under different interventions.
-The production data pipeline still validates and versions the inputs.
-CI reruns the chosen evaluation, while the approval workflow records the result.
-Deployment and monitoring then reproduce the reviewed model and policy.
+You might analyze generated representation. But the right baseline is not automatically:
 
-### Check Whether Managed Fairness Tools Are Still Supported
+every demographic should appear exactly 50/50.
 
-Azure Machine Learning’s Responsible AI dashboard includes cohort analysis, error analysis, model performance, interpretability, and fairness assessment for supported models.
-It can help teams inspect sensitive groups and share reviewed evidence inside an Azure ML workflow.
-Its fairness assessment uses categorical sensitive attributes, so continuous or more complex identity measures need a separate evaluation design.
-The fairness metric and target still come from the team’s harm analysis.
+Depending on the purpose, the relevant comparison might be:
 
-Amazon SageMaker Clarify remains available to existing customers for pre-training and post-training bias metrics and model explanations.
-AWS has closed Clarify to new customer access and states that the service will receive no new features.
-New AWS designs should use an available open-source evaluation job or another supported service and store governed results with the model approval evidence.
+* the real-world population,
+* the qualified population,
+* the user population,
+* a deliberate diversity objective,
+* a context-specific distribution.
 
-Managed dashboards reduce integration work.
-An exported scorecard or chart remains an artifact from one evaluation.
-The organization still owns data validity, privacy, metric choice, release authority, mitigation, and production follow-through.
+Choosing the reference distribution is itself part of defining the fairness objective. There is no universal neutral baseline.
 
-## Handle Sensitive Attributes With Purpose and Control
-<!-- section-summary: Sensitive attributes need a documented purpose, lawful handling, restricted access, safe reporting, and deletion or retention rules. -->
+## What Can Tools Automate, and Where Is Human and Causal Judgment Required?
+<!-- section-summary: Tools can compute group metrics, slices, uncertainty, and reports, while causal interpretation, legitimate objectives, group definitions, and residual risk require accountable judgment. -->
 
-Fairness evaluation may need attributes that the prediction service should never use as model features.
-That creates a deliberate separation between the **decision path** and the **evaluation path**.
+Automation can organize measurements, but it cannot decide which fairness objective is legitimate or whether residual harm is acceptable.
 
-The prediction service can operate on approved model features.
-A restricted evaluation job joins prediction records, mature outcomes, and sensitive attributes inside a governed environment.
-Only authorized reviewers receive approved aggregate results.
+Suppose you observe:
 
-```mermaid
-flowchart TD
-    A["Production prediction record<br/>approved reference and model version"] --> D["Restricted fairness evaluation"]
-    B["Mature outcome<br/>governed source"] --> D
-    C["Sensitive attributes<br/>approved source and purpose"] --> D
-    D --> E["Small-cell and coverage checks"]
-    E --> F["Aggregate group report"]
-    F --> G["Authorized reviewers"]
-    D --> H["Access audit, retention,<br/>and deletion controls"]
+$$
+P(\hat Y=1\mid G=A)
+\neq
+P(\hat Y=1\mid G=B)
+$$
 
-    class A,B,C source
-    class D,E restricted
-    class F,G output
-    class H control
+This is an **association**. It does not tell you what caused the difference. Maybe group membership itself has no influence on the model. Maybe a proxy does. Maybe input quality differs because of external social conditions. Maybe labels contain historical inequalities. Maybe groups differ on a genuinely task-relevant feature. Therefore a serious fairness investigation moves from:
+
+“There is a disparity.”
+
+to:
+
+“Through what mechanism did this disparity arise?”
+
+That causal question determines the repair. A tool can calculate:
+
+$$
+\text{FPR}_A-\text{FPR}_B
+$$
+
+with perfect arithmetic. It cannot decide, purely from that number:
+
+whether the difference is morally, legally, or operationally acceptable.
+
+That requires assumptions about:
+
+* what outcomes matter,
+* whose harms matter,
+* how benefits should be distributed,
+* what tradeoffs are acceptable,
+* what the product promises,
+* what legal obligations apply.
+
+Tools can measure fairness criteria. They cannot choose society's fairness objective for you. Modern evaluation tooling commonly supports some combination of:
+
+### Group slicing
+
+```text
+metric(group=A)
+metric(group=B)
 ```
 
-The data plan should answer:
+### Intersection slicing
 
-- why each attribute is needed;
-- which legal basis, consent, policy, or research approval applies;
-- whether the attribute was self-reported, inferred, or observed;
-- who can access row-level values;
-- where joining and aggregation run;
-- which small-group outputs are suppressed;
-- how long source and derived data remain;
-- how corrections and deletion requests propagate;
-- which audit records prove that the controls operated.
-
-Use governed identifiers to join approved sources.
-Avoid placing raw sensitive attributes, names, free text, or prediction payloads in broad MLflow artifacts, logs, traces, or metric labels.
-Encryption and hashing reduce some exposure while leaving purpose, access, retention, and re-identification risks to manage.
-
-Aggregate reporting also needs care.
-A table with three people in one intersection can reveal sensitive information even without names.
-Apply reviewed minimum-cell rules and role-based access.
-Record suppressed groups as evidence limitations.
-Without that record, privacy protection can accidentally appear as a fairness pass.
-
-Local law and organizational obligations vary.
-Privacy, legal, security, domain, and affected-stakeholder review should shape collection and use before the evaluation pipeline is deployed.
-
-## Use Fairness Results To Approve, Limit, Or Reject A Release
-<!-- section-summary: Fairness evidence needs accountable owners, documented trade-offs, an enforceable product scope, and authority to stop or narrow a release. -->
-
-A fairness report has little force if every gap ends with “monitor after launch.”
-The review needs owners and release authority.
-
-NIST AI RMF organizes risk work through four connected functions:
-
-- **Govern** establishes policies, roles, accountability, and oversight.
-- **Map** describes the use context, affected people, benefits, harms, and risk tolerance.
-- **Measure** evaluates documented risks with quantitative and qualitative evidence.
-- **Manage** prioritizes responses, tracks residual risk, and decides whether deployment should proceed.
-
-The functions describe a continuing risk process.
-They also show why metric calculation alone is incomplete.
-NIST describes the framework as voluntary and is revising it, so governance teams should track the current NIST material while keeping their internal controls versioned.
-
-```mermaid
-flowchart TD
-    A["Govern<br/>roles, policy, authority"] --> B["Map<br/>context, people, harms"]
-    B --> C["Measure<br/>data, metrics, qualitative evidence"]
-    C --> D["Manage<br/>mitigate, avoid, restrict, or accept"]
-    D --> E["Release decision and controls"]
-    E --> F["Production feedback and appeals"]
-    F --> A
-
-    class A govern
-    class B map
-    class C measure
-    class D,E,F manage
+```text
+metric(group=A AND age_bucket=older)
 ```
 
-Ownership normally spans several roles.
-Product and domain owners explain the decision and consequence.
-Data owners defend provenance and coverage.
-ML engineers produce reproducible model evidence.
-Privacy, legal, security, compliance, or model-risk functions review obligations and residual risk.
-Independent reviewers and affected communities can surface assumptions missed by the development team.
+### Confusion-matrix metrics
 
-The decision record should contain:
+Computing groupwise:
 
-- intended and prohibited uses;
-- affected people and reviewed groups;
-- the harm analysis and chosen metrics;
-- data and attribute provenance;
-- group counts, uncertainty, and missing evidence;
-- candidate-versus-current results;
-- diagnosed mechanisms and tested mitigations;
-- utility, workload, privacy, and competing-metric trade-offs;
-- release scope, fallback, appeal, monitoring, and stop conditions;
-- named approvers and recorded residual risk.
+* precision,
+* recall,
+* FPR,
+* FNR,
+* specificity,
+* selection rate.
 
-Possible outcomes include full release, scoped release, more evidence, human-only handling for a route, continued use of the current system, or no ML deployment.
-A scoped release is credible only if the product can identify and route the supported scope reliably.
+### Calibration analysis
 
-High-impact failures, invalid labels, weak attribute evidence, unlawful data handling, absent appeals, or unenforceable scope can each block release.
-The candidate’s overall improvement leaves those control failures unresolved.
+Comparing predicted probabilities with empirical outcomes.
 
-## Monitor Fairness After Release
-<!-- section-summary: Production monitoring follows the fairness plan through traffic, decisions, delayed outcomes, appeals, and changes to policy or population. -->
+### Disparity calculations
 
-Offline evaluation studies a bounded sample and one system version.
-Production introduces new people, changing traffic, delayed outcomes, human responses, and policy updates.
+For example:
 
-Immediate monitoring can track:
+$$
+M_A-M_B
+$$
 
-- group and intersection coverage within approved aggregation rules;
-- unknown or missing attribute rates;
-- selection, deferral, abstention, and fallback rates;
-- route leakage outside the approved release scope;
-- review-queue volume and waiting time;
-- appeal, override, and complaint volume.
+or:
 
-Quality and error metrics arrive after outcomes mature.
-The production job then calculates the same reviewed fairness metrics with the same group definitions, outcome rules, and policy versions.
-It compares current values with release evidence and shows the counts and uncertainty.
+$$
+\frac{M_A}{M_B}
+$$
 
-```mermaid
-flowchart TD
-    A["Production decision"] --> B["Immediate group evidence<br/>selection, fallback, waiting time"]
-    A --> C["Appeal, override,<br/>and complaint process"]
-    A --> D["Mature outcome join"]
-    D --> E["Delayed error and<br/>quality metrics by group"]
-    B --> F["Compare with approved scope"]
-    C --> F
-    E --> F
-    F --> G{"New or worsening harm?"}
-    G -->|"Yes"| H["Contain, investigate,<br/>revert, or suspend"]
-    G -->|"No"| I["Continue reviewed monitoring"]
-    H --> J["Update mitigation and<br/>future release evidence"]
-    I --> J
+### Threshold sweeps
 
-    class A production
-    class B,C,D,E,F,G decision
-    class H,I,J response
+Showing how changing a cutoff modifies error rates and disparities.
+
+### Statistical uncertainty
+
+Confidence or credible intervals around group metrics.
+
+### Counterfactual/paired testing
+
+Comparing responses under carefully controlled changes.
+
+### Representation analysis
+
+Analyzing patterns in generated text, images, or rankings.
+
+### Mitigation
+
+Supporting reweighting, resampling, constrained optimization, threshold adjustment, or post-processing. The tooling can help enormously. But the important intellectual work still comes before the metric:
+
+defining what harm you're trying to prevent.
+
+A mature evaluation process can be thought of as:
+
+```text
+1. Define system and users
+          ↓
+2. Identify possible benefits and harms
+          ↓
+3. Identify relevant groups/intersections
+          ↓
+4. Audit data and labels
+          ↓
+5. Choose harm-linked metrics
+          ↓
+6. Measure group performance + uncertainty
+          ↓
+7. Analyze thresholds/product rules
+          ↓
+8. Investigate disparities
+          ↓
+9. Fix the responsible layer
+          ↓
+10. Re-evaluate on identical cases
+          ↓
+11. Decide release scope
+          ↓
+12. Monitor production
 ```
 
-Product monitoring should also check whether the mitigation itself operates.
-A human-review route needs queue-age and override analysis.
-A post-processing rule needs policy-version and parity checks.
-A data-collection change needs coverage and measurement-quality checks.
+Notice where metric calculation occurs. It's halfway through the process, not at the beginning. Imagine a model helps screen applicants for a training program. The model predicts:
 
-Alerts should connect to an action.
-Route leakage can trigger an immediate fallback.
-A large selection-rate change can pause rollout while the team checks traffic and policy.
-A mature-outcome regression can open a fairness incident with domain and governance owners.
+$$
+P(\text{candidate would successfully complete program})
+$$
 
-Appeals and affected-user feedback belong in the evidence loop.
-They can reveal harms outside the current metric set, including confusing explanations, inaccessible review processes, and representation failures.
-New findings update the harm map, group taxonomy, test suite, and next release decision.
+The product accepts candidates when:
 
-## The Main Idea
-<!-- section-summary: Fairness review connects group evidence to the decision, history, harm, mitigation, governance, and production controls around a model. -->
+$$
+s(x)\ge0.70
+$$
 
-Fairness evaluation studies the ML system in its social and product context.
-Overall quality, group performance, allocation harms, and representation harms answer different questions.
-The right evidence follows the people affected and the consequence under review.
+### Step 1: define the harm
 
-Group metrics can reveal unequal selection, errors, or score meaning.
-Their interpretation depends on labels, historical decisions, sampling, measurement, uncertainty, and the product policy around the score.
-Several fairness criteria can conflict, so governance must explain which harm receives priority and which trade-offs remain.
+The team determines that the main model-related harm is:
 
-Fairlearn, TFMA Fairness Indicators, AIF360, and managed platforms can calculate and preserve evidence.
-They implement an evaluation plan; they do not decide what fairness requires.
+rejecting someone who would successfully complete the program.
 
-A responsible outcome may change the data, model, threshold, human workflow, product scope, or decision to use ML.
-The release record names the owners, evidence, mitigation, residual risk, fallback, appeal, and production monitoring.
-That complete path turns fairness from a dashboard metric into an accountable engineering and product practice.
+So false negatives matter heavily.
+
+### Step 2: inspect the target
+
+The current label is:
+
+previously accepted candidates who completed the program.
+
+Problem. You have no completion outcomes for applicants who were historically rejected. The label suffers from **selection bias**. The team realizes the training data cannot directly answer:
+
+Who among all applicants would have succeeded
+
+This discovery occurs before any fairness metric.
+
+### Step 3: define evaluation groups
+
+Relevant groups and intersections are defined based on the actual applicant population and risk assessment.
+
+### Step 4: evaluate group performance
+
+Suppose:
+
+| Group | Qualified cases | False negatives | FNR |
+| ----- | --------------: | --------------: | --: |
+| A     |           1,000 |              80 |  8% |
+| B     |             250 |              50 | 20% |
+
+There is a substantial disparity.
+
+### Step 5: investigate
+
+You discover that one predictive feature is:
+
+years of formal prior experience.
+
+But candidates from group B more frequently obtained equivalent skills through informal training that isn't recorded in the dataset. The feature representation systematically under-measures relevant experience for that group.
+
+### Step 6: intervene
+
+Instead of simply changing the threshold, the team improves how experience is represented and collects better validation data.
+
+### Step 7: rerun evaluation
+
+| Group | Old FNR | New FNR |
+| ----- | ------: | ------: |
+| A     |      8% |      7% |
+| B     |     20% |      9% |
+
+Now the disparity is much smaller and group B's absolute performance is substantially better. This is stronger than merely manipulating output rates to make the dashboard look equal. The underlying measurement problem was addressed.
+
+## What Should a Strong Fairness Review Conclude Without Confusing Equality with Justice?
+<!-- section-summary: A strong review compares relevant alternatives, records uncertainty and tradeoffs, and distinguishes mathematical parity from the broader question of justified treatment. -->
+
+The final review combines the mathematical evidence with context, alternatives, limitations, and accountable judgment.
+
+Imagine two groups have identical:
+
+* accuracy,
+* false-negative rate,
+* false-positive rate,
+* approval rate.
+
+You might be tempted to declare:
+
+perfectly fair.
+
+But perhaps one group historically faced a barrier your system perpetuates. Or perhaps one model error causes a trivial inconvenience for one population but severe harm for another because their circumstances differ. Metrics describe properties of distributions. They don't automatically determine what society ought to consider fair. That is why the best framing is:
+
+**Fairness metrics provide evidence for fairness judgments; they are not the judgment itself.**
+
+A model shouldn't always be judged against theoretical perfection. Suppose replacing human decision-making with a model reduces:
+
+$$
+\text{group disparity from }20\%\text{ to }5\%
+$$
+
+while improving quality for every group. The model still isn't perfectly equal. But the intervention may represent a substantial improvement over the existing system. Conversely, a model that looks reasonably balanced in isolation might make an existing system worse. So ask:
+
+Fairer than what
+
+Useful baselines include:
+
+* current human decisions,
+* the existing production model,
+* a simple deterministic rule,
+* no automation at all.
+
+When reviewing a model for fairness, think in five layers:
+
+```text
+          PEOPLE
+             ↓
+     Who is affected
+
+          HARM
+             ↓
+ What can go wrong for them
+
+          MEASUREMENT
+             ↓
+How would that harm appear
+      in the data
+
+          CAUSE
+             ↓
+What produces any disparity
+
+          ACTION
+             ↓
+What should we change or
+     restrict because of it
+```
+
+That is more useful than starting from a list of fairness metrics. By the end of the evaluation, you should be able to answer:
+
+| Question                                     | Why it matters                                 |
+| -------------------------------------------- | ---------------------------------------------- |
+| Who can be affected                         | Defines scope                                  |
+| What benefit or harm does the system create | Defines fairness objective                     |
+| Which groups may experience it differently  | Defines slices                                 |
+| Are the data and labels trustworthy         | Determines whether metrics mean what you think |
+| Which error matters most                    | Determines metric                              |
+| What are the group results                  | Reveals disparities                            |
+| How uncertain are those estimates           | Prevents overinterpretation                    |
+| Are intersections hiding failures           | Prevents aggregation blindness                 |
+| Does the threshold amplify disparities      | Tests the complete decision system             |
+| What caused the disparity                   | Determines repair                              |
+| Did the repair improve absolute outcomes    | Prevents metric gaming                         |
+| Is the candidate safe to deploy             | Turns evaluation into action                   |
+| Does fairness persist in production         | Detects drift                                  |
+
+The most serious mistake is assuming fairness evaluation asks:
+
+**“Do all groups have the same number?”**
+
+Usually it asks something much richer:
+
+**“Does this system distribute its errors, quality, opportunities, burdens, and representations in ways we can justify?”**
+
+To answer that, work outward from the actual mechanism:
+
+$$
+\boxed{
+\text{People}
+\rightarrow
+\text{Decision}
+\rightarrow
+\text{Possible harm}
+\rightarrow
+\text{Relevant groups}
+\rightarrow
+\text{Metric}
+\rightarrow
+\text{Observed disparity}
+\rightarrow
+\text{Cause}
+\rightarrow
+\text{Intervention}
+}
+$$
+
+The direction matters. A weak fairness process starts with a metric:
+
+“Let's calculate demographic parity.”
+
+A strong fairness process starts with a consequence:
+
+“A qualified person can be incorrectly denied. Who is exposed to that error, how frequently, why, and what can we change?”
+
+From there, the correct metrics become much easier to choose. So the core principle is:
+
+> **Fairness is not a property you read from one score. It is an evidence-based judgment about how a model and the surrounding system affect different people, grounded in the particular harms the system can cause.**
 
 ![A fairness review maps affected people, validates evidence, measures the complete system, mitigates the cause, protects sensitive data, and records an accountable decision](/content-assets/articles/article-mlops-model-evaluation-bias-fairness-responsible-evaluation/fairness-accountable-action.png)
 
 *Approved, scoped, and human-handled routes enter a monitored feedback loop; rejection records the rationale without releasing the candidate.*
 
-## References
+## Check Your Answers
 
-- [Fairlearn: Performing a fairness assessment](https://fairlearn.org/main/user_guide/assessment/perform_fairness_assessment.html)
-- [Fairlearn: Common fairness metrics](https://fairlearn.org/main/user_guide/assessment/common_fairness_metrics.html)
-- [Fairlearn: MetricFrame](https://fairlearn.org/main/api_reference/generated/fairlearn.metrics.MetricFrame.html)
-- [Fairlearn: Mitigation](https://fairlearn.org/main/user_guide/mitigation/index.html)
-- [TensorFlow Responsible AI: Fairness Indicators](https://www.tensorflow.org/responsible_ai/fairness_indicators/guide/guidance)
-- [TensorFlow Responsible AI: Fairness Indicators tutorial](https://www.tensorflow.org/responsible_ai/fairness_indicators/tutorials/Fairness_Indicators_Example_Colab)
-- [IBM AI Fairness 360 documentation](https://aif360.readthedocs.io/en/latest/)
-- [SHAP documentation](https://shap.readthedocs.io/en/latest/)
-- [NIST AI Risk Management Framework](https://airc.nist.gov/airmf-resources/airmf/)
-- [Azure Machine Learning: Responsible AI](https://learn.microsoft.com/en-us/azure/machine-learning/concept-responsible-ai)
-- [Azure Machine Learning: Machine learning fairness](https://learn.microsoft.com/en-us/azure/machine-learning/concept-fairness-ml)
-- [Amazon SageMaker AI: Clarify bias and explainability](https://docs.aws.amazon.com/sagemaker/latest/dg/clarify-configure-processing-jobs.html)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Fairness Question Does the Model and Product Need to Answer?]{kind="recap"}
+Fairness evaluation begins with the system's decision, affected people, benefits, harms, historical process, and the specific disparity question being investigated.
+:::
+
+:::expand[How Do Group Fairness Metrics Describe Different Outcomes and Errors?]{kind="recap"}
+Demographic parity, equal opportunity, equalized odds, predictive parity, calibration, individual fairness, and counterfactual fairness formalize different concerns and can conflict.
+:::
+
+:::expand[How Do Data, Labels, Sensitive Attributes, Intersections, and Uncertainty Create Disparities?]{kind="recap"}
+Disparities can enter through sampling, measurement, labels, previous decisions, proxies, intersections, and small denominators even when sensitive attributes are excluded from training.
+:::
+
+:::expand[How Do Thresholds, Ranking, Generation, and Paired Tests Change Fairness Evaluation?]{kind="recap"}
+Decision thresholds, ranked exposure, generated content, and controlled paired changes require fairness tests beyond ordinary aggregate classification metrics.
+:::
+
+:::expand[How Do You Diagnose a Disparity and Repair the Layer That Caused It?]{kind="recap"}
+A measured gap starts an investigation into representation, labels, features, objectives, thresholds, and product workflow so mitigation targets the actual cause.
+:::
+
+:::expand[How Should Fairness Evidence Shape Release Scope and Production Monitoring?]{kind="recap"}
+Release may be blocked or scoped, and production monitoring should track both disparities and absolute outcomes as groups and populations change.
+:::
+
+:::expand[What Can Tools Automate, and Where Is Human and Causal Judgment Required?]{kind="recap"}
+Tools can compute group metrics, slices, uncertainty, and reports, while causal interpretation, legitimate objectives, group definitions, and residual risk require accountable judgment.
+:::
+
+:::expand[What Should a Strong Fairness Review Conclude Without Confusing Equality with Justice?]{kind="recap"}
+A strong review compares relevant alternatives, records uncertainty and tradeoffs, and distinguishes mathematical parity from the broader question of justified treatment.
+:::

@@ -9,467 +9,1921 @@ id: "article-mlops-training-pipelines-distributed-training-basics"
 
 ## Table of Contents
 
-1. [What Distributed Training Means](#what-distributed-training-means)
-2. [Start With the Single-Device Limit](#start-with-the-single-device-limit)
-3. [Learn How Distributed Workers Are Identified](#learn-how-distributed-workers-are-identified)
-4. [Understand How Workers Exchange Results](#understand-how-workers-exchange-results)
-5. [Choose What To Divide Across Devices](#choose-what-to-divide-across-devices)
-6. [Start By Splitting Data Across GPUs](#start-by-splitting-data-across-gpus)
-7. [Give Each Worker A Different Part Of The Data](#give-each-worker-a-different-part-of-the-data)
-8. [Keep Batch Size And Optimizer Behavior Consistent](#keep-batch-size-and-optimizer-behavior-consistent)
-9. [Measure Communication Delays And Slow Workers](#measure-communication-delays-and-slow-workers)
-10. [Split Training State Across GPUs To Reduce Memory Use](#split-training-state-across-gpus-to-reduce-memory-use)
-11. [Split Very Large Models Across GPUs](#split-very-large-models-across-gpus)
-12. [Understand The Different Jobs Of DeepSpeed And Ray Train](#understand-the-different-jobs-of-deepspeed-and-ray-train)
-13. [Save Everything Needed To Resume Distributed Training](#save-everything-needed-to-resume-distributed-training)
-14. [Restart The Worker Group After A Failure](#restart-the-worker-group-after-a-failure)
-15. [Measure Scaling Efficiency](#measure-scaling-efficiency)
-16. [How Managed Platforms Run Distributed Training](#how-managed-platforms-run-distributed-training)
-17. [The Main Idea](#the-main-idea)
-18. [References](#references)
+1. [What Single-Device Limit Requires Distributed Training?](#what-single-device-limit-requires-distributed-training)
+2. [How Does Synchronous Data Parallel Training Keep Model Copies Aligned?](#how-does-synchronous-data-parallel-training-keep-model-copies-aligned)
+3. [How Do State Sharding, Tensor Parallelism, and Pipeline Parallelism Solve Memory Limits?](#how-do-state-sharding-tensor-parallelism-and-pipeline-parallelism-solve-memory-limits)
+4. [How Do Communication and Slow Workers Limit Scaling?](#how-do-communication-and-slow-workers-limit-scaling)
+5. [What Must a Distributed Checkpoint Preserve for Recovery?](#what-must-a-distributed-checkpoint-preserve-for-recovery)
+6. [How Do Frameworks and Training Pipelines Manage Distributed Jobs?](#how-do-frameworks-and-training-pipelines-manage-distributed-jobs)
+7. [How Do Scaling Experiments Measure Useful Distributed Work?](#how-do-scaling-experiments-measure-useful-distributed-work)
+8. [How Do You Choose the Smallest Distributed Strategy That Meets the Constraint?](#how-do-you-choose-the-smallest-distributed-strategy-that-meets-the-constraint)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## What Distributed Training Means
-<!-- section-summary: Distributed training coordinates several worker processes so they complete one optimization run whose data, updates, checkpoints, and recovery remain trustworthy. -->
+One model fits on a single GPU but needs ten days to train. Another model cannot complete its first step because parameters, gradients, optimizer state, and activations exceed the device's memory. Both may use several GPUs, but they need different ways of dividing the work.
 
-**Distributed training is the practice of using several processors or accelerators to train one model.** The devices may share the examples, the model state, the calculations inside a layer, or different sections of the model. They still have to agree on one sequence of optimizer updates and produce one recoverable result.
+**Distributed training** decomposes one logical optimization process across cooperating worker processes. Each worker needs an identity, a device, the correct portion of data or model state, and a communication path. Together they must preserve the training semantics the team cares about and publish one recoverable result.
 
-You can think of the workers as a team solving the same calculation. Giving each person a separate page can make the work faster. Splitting one very large page across several people can solve a memory problem. In both cases, the pieces must be combined in the correct order. A duplicated page, a missing result, or an old checkpoint changes the answer.
+For a model that fits but is slow, data parallelism can split batches while synchronizing gradients. A model that does not fit may need optimizer, gradient, and parameter sharding or tensor and pipeline parallelism. Every strategy trades additional memory or compute for communication, coordination, checkpoint complexity, and new failure modes.
 
-This coordination is the part that makes distributed training more than “use more GPUs.” The system has to answer six questions:
+The questions below start with the single-device limit, then follow the extra communication, state, recovery, and measurement needed when several workers train one model:
 
-1. What prevents one device from completing the run?
-2. Which data or model state should each worker hold?
-3. What information must the workers exchange?
-4. Does the distributed step still mean the same thing mathematically?
-5. What state is needed to resume after a failure?
-6. Did the extra devices improve time, cost, and model quality enough to justify them?
+1. **What Single-Device Limit Requires Distributed Training?**
+2. **How Does Synchronous Data Parallel Training Keep Model Copies Aligned?**
+3. **How Do State Sharding, Tensor Parallelism, and Pipeline Parallelism Solve Memory Limits?**
+4. **How Do Communication and Slow Workers Limit Scaling?**
+5. **What Must a Distributed Checkpoint Preserve for Recovery?**
+6. **How Do Frameworks and Training Pipelines Manage Distributed Jobs?**
+7. **How Do Scaling Experiments Measure Useful Distributed Work?**
+8. **How Do You Choose the Smallest Distributed Strategy That Meets the Constraint?**
 
-Consider a training job that takes five days on one GPU, even though the model fits comfortably in memory. The release window allows one day. Splitting each global batch across eight GPUs is a sensible experiment because throughput is the limit. Now consider a much larger model that runs out of memory before the first optimizer step. Eight ordinary data-parallel replicas would create eight copies of the same oversized state. This second problem needs sharding across devices.
+## What Single-Device Limit Requires Distributed Training?
+<!-- section-summary: Distribution should address a measured throughput or memory limit, and each cooperating process needs a rank, device, group, and shared run identity. -->
 
-A sound distributed design identifies the limit first, then defines how work is divided, which training semantics must remain stable, and how communication, checkpointing, recovery, and measurement keep the run trustworthy.
+A model that fits but finishes too late has a different problem from a model whose training state cannot fit on one device. The first diagnosis determines what must be divided.
 
-## Start With the Single-Device Limit
-<!-- section-summary: The first design decision identifies whether the run is limited by time, model state, a single layer, activations, or input delivery. -->
+Suppose one GPU trains a model like this:
 
-A single accelerator can fall short for several reasons. The model may fit but finish too late. Its parameters may fit while gradients and optimizer state overflow memory. One large layer may exceed the device limit. Activations may consume most of the memory during long-sequence training. The input pipeline may also starve the accelerator, which means extra GPUs would spend more time waiting for data.
+$$
+\theta_{t+1}
+=
+\theta_t-\eta\nabla L(\theta_t)
+$$
 
-Start with evidence from a representative single-device run. Record peak device memory, examples or tokens per second, data-loading time, forward and backward time, optimizer time, and the estimated completion time. A memory snapshot should separate parameters, gradients, optimizer state, and activations because each category points toward a different remedy.
+At each training step, the device must:
 
-```mermaid
-flowchart TD
-    A["Profile One Device<br/>(Memory, Throughput, Data Wait)"] --> B{"What Blocks the Run?"}
-    B -->|"Completion Time"| C["Data Parallelism<br/>(Replicate Model, Split Batches)"]
-    B -->|"Training State Memory"| D["State Sharding<br/>(Split Parameters, Gradients, Optimizer)"]
-    B -->|"One Layer Is Too Large"| E["Tensor Parallelism<br/>(Split Layer Calculations)"]
-    B -->|"Depth or Activations"| F["Pipeline Parallelism<br/>(Split Layer Stages)"]
-    B -->|"Accelerator Waits for Data"| G["Repair Input Pipeline<br/>(Storage, Decode, Prefetch)"]
-
-    class A evidence
-    class B decision
-    class C,D,E,F,G strategy
+```text
+load a batch
+    ↓
+run forward pass
+    ↓
+compute loss
+    ↓
+run backward pass
+    ↓
+compute gradients
+    ↓
+update parameters
 ```
 
-This diagnosis also prevents a common cost mistake. If one GPU spends 45 percent of each step waiting for storage and preprocessing, four GPUs can create four times the demand on the same bottleneck. The first improvement may be data caching, parallel decoding, larger read buffers, or prefetching. Distribution should solve the measured limit.
+Now suppose one GPU is no longer enough. There are two fundamentally different reasons:
 
-Before moving to multiple machines, test multiple GPUs inside one machine. GPUs connected through NVLink or another high-bandwidth local fabric usually communicate faster than GPUs connected across hosts. A single multi-GPU node also removes part of the network, scheduling, and failure complexity. Use multi-node training after the local node can no longer meet the memory or completion target.
+```text
+Problem A:
+Training fits on one GPU,
+but takes too long.
 
-## Learn How Distributed Workers Are Identified
-<!-- section-summary: A distributed runtime gives each worker an identity, a device, and membership in one or more communication groups. -->
-
-Distributed frameworks use a small set of terms to describe who is doing the work. These identities tell you which process owns a GPU, which ranks must communicate, and which worker produced a log or failure.
-
-### Identify Each Worker And Process
-
-A **worker** is one participant in the training job. In PyTorch GPU training, a worker is usually a separate operating-system **process** running the training program on one GPU. Separate processes isolate device contexts and allow every GPU to execute the same program with different data.
-
-A **rank** is the worker's unique number across the whole job. If a job has eight workers, their global ranks are usually 0 through 7. **World size** is the total number of workers in that group, so the world size is 8 in this example.
-
-A **local rank** identifies the process inside one machine. Suppose two machines each have four GPUs. Global rank 5 might have local rank 1, which maps it to the second GPU on the second machine. Global rank identifies the worker across the job; local rank selects the device on its current host.
-
-A **process group** is a set of ranks allowed to communicate through collective operations. Ordinary DDP commonly uses one group containing the whole world. Hybrid training can create smaller groups: one group for tensor parallelism inside a node and another for data-parallel synchronization across nodes.
-
-```mermaid
-flowchart TD
-    A["Training Job<br/>(World Size = 4)"] --> B["Host A"]
-    A --> C["Host B"]
-    B --> D["Rank 0<br/>(Local Rank 0, GPU 0)"]
-    B --> E["Rank 1<br/>(Local Rank 1, GPU 1)"]
-    C --> F["Rank 2<br/>(Local Rank 0, GPU 0)"]
-    C --> G["Rank 3<br/>(Local Rank 1, GPU 1)"]
-    D --> H["Default Process Group<br/>(Ranks 0, 1, 2, 3)"]
-    E --> H
-    F --> H
-    G --> H
-
-    class A job
-    class B,C host
-    class D,E,F,G worker
-    class H group
+Problem B:
+Training cannot fit in one GPU's memory.
 ```
 
-### Connect The Workers Into One Group
+These lead to different forms of distributed training. The central idea is:
 
-Before communication can begin, the workers need to find one another and agree on group membership. This step is called **rendezvous**. A launcher such as `torchrun` starts the processes. It supplies `LOCAL_RANK`, `RANK`, and `WORLD_SIZE`, along with the coordinator address and port. The training program reads those values instead of hard-coding a machine name or GPU number.
+$$
+\boxed{
+\text{Distributed training means dividing some part of the training work or state across devices}
+}
+$$
 
-Rank 0 often handles coordination work such as logging one summary or publishing a consolidated artifact. Rank 0 is still a normal participant in training. If it disappears during a synchronous collective, the other ranks cannot continue as if the optimizer step were complete.
+The hard question is therefore not:
 
-## Understand How Workers Exchange Results
-<!-- section-summary: Collective operations move tensors across a process group so every worker receives the information required for the next calculation. -->
+"How do I use eight GPUs?"
 
-A **collective** is one communication operation performed by an entire process group. Every participating rank calls a compatible operation in the same logical order. The runtime then moves and combines tensors across the devices.
+It is:
 
-### Four Common Collective Operations
+**"What exactly should those eight GPUs divide, and what information must they exchange to behave like one coherent training system?"**
 
-Four collectives appear often in distributed training:
+Imagine training takes:
 
-- **All-reduce** combines a value from every rank and returns the combined result to every rank. DDP uses it to synchronize gradients.
-- **All-gather** collects shards from the ranks so each participant can see the full value. Sharded training uses it before a layer needs full parameters.
-- **Reduce-scatter** combines values and leaves each rank with one shard of the result. Fully sharded training uses it to keep gradient shards distributed.
-- **Broadcast** sends one rank's value to the rest of the group. It can distribute initial state or a small coordination value.
-
-### See How Two Workers Average Gradients
-
-Suppose rank 0 calculates the local mean gradient `[2, 4]` and rank 1 calculates `[6, 0]`. Averaging the two local gradients gives `[4, 2]`. Both workers receive `[4, 2]`, so identical optimizers starting from identical parameters apply the same update.
-
-```mermaid
-flowchart TD
-    A["Rank 0 Local Gradient<br/>([2, 4])"] --> C["All-Reduce Average"]
-    B["Rank 1 Local Gradient<br/>([6, 0])"] --> C
-    C --> D["Rank 0 Receives<br/>([4, 2])"]
-    C --> E["Rank 1 Receives<br/>([4, 2])"]
-    D --> F["Identical Optimizer Update"]
-    E --> F
-
-    class A,B local
-    class C collective
-    class D,E result
-    class F update
+```text
+1 GPU
+10 days
 ```
 
-The example assumes equal local batch sizes and a mean loss on each worker. If rank 0 averages two examples while rank 1 averages six, averaging the two local gradients gives each worker equal influence instead of each example equal influence. Fixed local batch sizes avoid this issue for most runs. Uneven batches require deliberate loss weighting or framework support.
+But the model and batch fit comfortably in memory. Your constraint is **compute throughput**. You might want:
+
+```text
+8 GPUs
+≈ much less than 10 days
+```
+
+That suggests dividing the data workload. Now consider a different model:
+
+```text
+model training state = 140 GB
+GPU memory = 80 GB
+```
+
+Training cannot even start on one GPU. Your constraint is **memory capacity**. You need to divide model/training state. So the first diagnostic is:
+
+```text
+Why am I distributing
+
+        ┌───────────────────────┐
+        │                       │
+        ▼                       ▼
+Need more throughput       Need more memory
+        │                       │
+        ▼                       ▼
+Data parallelism          State/model sharding
+```
+
+Sometimes you need both. Suppose you allocate four GPUs. A common setup is:
+
+```text
+Machine
+├── GPU 0 ← worker process 0
+├── GPU 1 ← worker process 1
+├── GPU 2 ← worker process 2
+└── GPU 3 ← worker process 3
+```
+
+With two machines:
+
+```text
+Node A
+├── GPU 0 ← worker 0
+├── GPU 1 ← worker 1
+├── GPU 2 ← worker 2
+└── GPU 3 ← worker 3
+
+Node B
+├── GPU 0 ← worker 4
+├── GPU 1 ← worker 5
+├── GPU 2 ← worker 6
+└── GPU 3 ← worker 7
+```
+
+Each worker is usually an independent OS process. They run the same training program, but each process needs to know:
+
+```text
+Who am I
+How many workers exist
+Which GPU belongs to me
+How do I contact the other workers
+```
+
+Distributed frameworks commonly define:
+
+$$
+\text{world size}=N
+$$
+
+where $$N$$ is the total number of worker processes. Each gets a unique:
+
+$$
+\text{rank}\in\{0,\ldots,N-1\}
+$$
+
+For eight workers:
+
+```text
+world_size = 8
+
+rank 0
+rank 1
+rank 2
+rank 3
+rank 4
+rank 5
+rank 6
+rank 7
+```
+
+There is often also a **local rank**:
+
+```text
+Node A:
+rank 0 → local_rank 0 → GPU 0
+rank 1 → local_rank 1 → GPU 1
+rank 2 → local_rank 2 → GPU 2
+rank 3 → local_rank 3 → GPU 3
+
+Node B:
+rank 4 → local_rank 0 → GPU 0
+rank 5 → local_rank 1 → GPU 1
+...
+```
+
+So:
+
+* **global rank** identifies a worker across the whole job.
+* **local rank** identifies its device within one machine.
+* **world size** tells everyone how many participants exist.
+
+PyTorch's current distributed system uses these process-oriented concepts and supports communication across one or multiple machines; `DistributedDataParallel` builds synchronous distributed training on top of those primitives. ([PyTorch Docs][1]) You will often see special code:
+
+```python
+if rank == 0:
+    save_checkpoint()
+```
+
+That can create the wrong intuition. Rank 0 usually isn't:
+
+```text
+the trainer
+```
+
+while everybody else assists. In data-parallel training, all workers train:
+
+```text
+rank 0 → forward + backward
+rank 1 → forward + backward
+rank 2 → forward + backward
+rank 3 → forward + backward
+```
+
+Rank 0 is simply often given coordination duties:
+
+```text
+logging
+progress display
+writing one copy of some metadata
+final reporting
+```
+
+because you don't want every process printing or writing identical files.
+
+## How Does Synchronous Data Parallel Training Keep Model Copies Aligned?
+<!-- section-summary: Each worker starts from the same model, receives different data, computes local gradients, combines them through AllReduce, and applies the same update with an explicit global batch size. -->
+
+When the complete model fits on every worker, data parallelism is the simplest way to add throughput, provided the workers preserve one mathematical update.
+
+Suppose one model fits into each GPU. Then the easiest strategy is **data parallelism**. Every GPU receives the complete model:
+
+```text
+GPU 0: complete model θ
+GPU 1: complete model θ
+GPU 2: complete model θ
+GPU 3: complete model θ
+```
+
+But each receives different training examples:
+
+```text
+global batch
+
+examples 1–32     → GPU 0
+examples 33–64    → GPU 1
+examples 65–96    → GPU 2
+examples 97–128   → GPU 3
+```
+
+Each computes gradients independently. Then they combine those gradients. Suppose the global batch contains $$B$$ examples. On one GPU, the gradient would be:
+
+$$
+g
+=
+\frac{1}{B}
+\sum_{i=1}^{B}
+\nabla_\theta L(x_i,\theta)
+$$
+
+Now use four workers. Let each process handle $$b$$ examples:
+
+$$
+B=4b
+$$
+
+Worker $$k$$ computes:
+
+$$
+g_k
+=
+\frac{1}{b}
+\sum_{i\in D_k}
+\nabla_\theta L(x_i,\theta)
+$$
+
+Then average the four local gradients:
+
+$$
+g
+=
+\frac{1}{4}
+(g_0+g_1+g_2+g_3)
+$$
+
+Substitute the definitions:
+
+$$
+g
+=
+\frac{1}{4b}
+\sum_{i=1}^{4b}
+\nabla_\theta L(x_i,\theta)
+$$
+
+which is exactly the gradient over the combined global batch. That is the central mathematical observation behind synchronous data-parallel training:
+
+> **Workers can independently process different examples and synchronize the resulting gradients before updating the model.**
+
+Suppose every GPU has computed:
+
+```text
+GPU 0 → gradient g₀
+GPU 1 → gradient g₁
+GPU 2 → gradient g₂
+GPU 3 → gradient g₃
+```
+
+They need everyone to obtain:
+
+$$
+g=g_0+g_1+g_2+g_3
+$$
+
+or the corresponding average. A collective operation called **AllReduce** performs this kind of operation:
+
+```text
+before:
+
+GPU 0: g₀
+GPU 1: g₁
+GPU 2: g₂
+GPU 3: g₃
+
+          AllReduce
+              ↓
+
+after:
+
+GPU 0: g
+GPU 1: g
+GPU 2: g
+GPU 3: g
+```
+
+Then every worker applies the same optimizer update:
+
+$$
+\theta_{t+1}
+=
+\theta_t-\eta g
+$$
+
+So the model copies remain synchronized. This is the fundamental synchronization loop of Distributed Data Parallel training. Imagine:
+
+```text
+GPU 0 parameters = θ₀
+GPU 1 parameters = θ₁
+```
+
+If:
+
+$$
+\theta_0\neq\theta_1
+$$
+
+then even identical data could produce different gradients. So distributed training establishes a common initial state.
+
+Conceptually:
+
+```text
+initialize / load checkpoint
+            │
+            ▼
+     same parameters
+            │
+    ┌───────┼────────┐
+    ▼       ▼        ▼
+ worker 0 worker 1 worker 2
+```
+
+After that, gradient synchronization keeps replicas aligned. A surprisingly easy mistake is:
+
+```text
+GPU 0 → batch A
+GPU 1 → batch A
+GPU 2 → batch A
+GPU 3 → batch A
+```
+
+Now you're doing the same calculation four times. You have not increased the effective data throughput.
+
+Instead:
+
+```text
+GPU 0 → A
+GPU 1 → B
+GPU 2 → C
+GPU 3 → D
+```
+
+The dataset therefore needs a distributed sampler or equivalent sharding mechanism.
+
+For example:
+
+```text
+dataset indices:
+
+0 1 2 3 4 5 6 7 8 9 ...
+
+rank 0 → 0, 4, 8, ...
+rank 1 → 1, 5, 9, ...
+rank 2 → 2, 6, 10, ...
+rank 3 → 3, 7, 11, ...
+```
+
+The exact assignment does not matter nearly as much as these properties:
+
+```text
+workers collectively cover intended data
+duplicates are controlled
+shuffling is correct
+epochs are reproducible
+```
+
+This is one of the most important distributed-training details. Suppose one GPU uses:
+
+```text
+batch size = 32
+```
+
+Now run four GPUs, each with batch size 32. Your effective global batch is no longer 32. It is:
+
+$$
+B_{\text{global}}
+=
+N_{\text{workers}}
+\times
+B_{\text{per-worker}}
+$$
+
+Thus:
+
+$$
+4\times32=128
+$$
+
+With gradient accumulation:
+
+$$
+\boxed{
+B_{\text{global}}
+=
+N
+\times
+B_{\text{micro}}
+\times
+K_{\text{accumulation}}
+}
+$$
+
+For:
+
+```text
+8 GPUs
+microbatch = 16
+accumulate 4 steps
+```
+
+you get:
+
+$$
+8\times16\times4=512
+$$
+
+examples per optimizer update. Suppose your original experiment was:
+
+```text
+1 GPU
+batch = 32
+learning rate = 0.001
+```
+
+Then you switch to:
+
+```text
+8 GPUs
+batch per GPU = 32
+```
+
+Now:
+
+$$
+B_{\text{global}}=256
+$$
+
+You're no longer merely making the same experiment faster. You changed the optimization process. The gradient averages over eight times as many examples per optimizer step. That can affect:
+
+```text
+gradient variance
+number of optimizer updates per epoch
+learning-rate behavior
+generalization
+convergence
+```
+
+So distinguish:
+
+### Strong scaling
+
+Keep the total workload essentially fixed and divide it across more devices.
+
+```text
+global batch stays 256
+
+1 GPU  → 256
+2 GPUs → 128 each
+4 GPUs → 64 each
+8 GPUs → 32 each
+```
+
+### Batch scaling
+
+Keep per-device batch fixed:
+
+```text
+1 GPU  → global 32
+2 GPUs → global 64
+4 GPUs → global 128
+8 GPUs → global 256
+```
+
+This offers more parallel work but changes the training configuration. There are learning-rate adjustment heuristics for larger batches, but they are not universal laws. Treat global batch size as an ML hyperparameter, not merely infrastructure configuration.
 
 ![Two DDP workers process different batches with full model replicas, calculate local gradients, average those gradients through all-reduce, and apply the same synchronized optimizer update so the replicas remain aligned.](/content-assets/articles/article-mlops-training-pipelines-distributed-training-basics/one-ddp-training-step.png)
 
 *DDP divides the data rather than the model. Gradient synchronization gives every replica the same update after each worker processes a different local batch.*
 
-Collectives also create a strict dependency. If one rank calls all-reduce for tensor A while another rank calls it for tensor B, or if one rank skips the operation after an exception, the group may hang or fail. Distributed debugging therefore compares rank-specific logs around the last completed collective, tensor shapes, and the training branch followed by each worker.
+## How Do State Sharding, Tensor Parallelism, and Pipeline Parallelism Solve Memory Limits?
+<!-- section-summary: Data parallelism replicates state; ZeRO or fully sharded methods partition training state; tensor and pipeline parallelism split layer computation and can be combined. -->
 
-## Choose What To Divide Across Devices
-<!-- section-summary: Each parallelism strategy divides a different object, so the measured memory or throughput constraint determines the useful choice. -->
+Replicating the model does not reduce per-device training-state memory, so larger models require sharding or splitting the model's computation itself.
 
-A training job may need more devices because one model no longer fits in memory, or because one device cannot finish the required work before the deadline. A **parallelism strategy** decides which object to divide across those devices: the batch, persistent training state, calculation inside a layer, or sequence of model layers. Dividing the object that causes the measured constraint relieves it. Dividing something else adds communication while leaving the original limit in place.
+Standard data parallelism looks like:
 
-### Four Ways To Divide The Work
+```text
+GPU 0:
+parameters
+gradients
+optimizer state
 
-**Data parallelism divides the batch.** Every worker keeps a full copy of the model and optimizer state. Each worker processes different examples, then the workers synchronize gradients. This is the usual starting point for a model that fits on one GPU and needs higher throughput.
+GPU 1:
+parameters
+gradients
+optimizer state
 
-**Model or state sharding divides the training state.** Parameters, gradients, and optimizer state are distributed across workers. Each GPU holds only part of the long-lived state, and the runtime gathers the pieces needed for current computation. PyTorch FSDP and DeepSpeed ZeRO belong to this family. This strategy helps if the full training state exceeds one device's memory.
+GPU 2:
+parameters
+gradients
+optimizer state
+```
 
-**Tensor parallelism divides calculations inside a layer.** A large matrix multiplication or attention block is split across devices. It is useful if one layer is too large or computationally heavy for one GPU. Because workers exchange partial results inside many layers, tensor-parallel ranks usually need a fast local interconnect.
+Everything is replicated. If training requires:
 
-**Pipeline parallelism divides the model by layers.** Early layers run on one stage, later layers run on another, and micro-batches move through the stages. This can distribute a deep model and its activations. The stages need balanced work, and idle time appears while the pipeline fills and drains. That idle period is called a **pipeline bubble**.
+```text
+70 GB/device
+```
 
-Many large-model systems use a hybrid. For example, eight GPUs inside a host might form a tensor-parallel group, while several hosts form data-parallel groups. This can solve a genuine scale constraint, though it also creates multiple communication paths, several notions of rank, and a more demanding checkpoint format.
+and your GPUs have:
 
-Choose the smallest combination that solves the measured problem. DDP is usually the first experiment for throughput. State sharding follows if training state memory is the limit. Tensor or pipeline parallelism enters after a layer, activation set, or full model still cannot fit efficiently.
+```text
+40 GB
+```
+
+then adding 100 GPUs does not magically help. Every GPU still needs approximately 70 GB. So:
+
+$$
+\boxed{
+\text{ordinary data parallelism increases compute capacity,
+not per-device model-state capacity}
+}
+$$
+
+That is why large-model training needs another idea. Consider parameters $$\theta$$. Training may need:
+
+```text
+parameters
+gradients
+optimizer moments
+master-precision parameters
+activations
+temporary buffers
+```
+
+For Adam-like optimization, optimizer state alone can be substantial. A simplified memory decomposition is:
+
+$$
+M
+=
+M_{\text{parameters}}
++
+M_{\text{gradients}}
++
+M_{\text{optimizer}}
++
+M_{\text{activations}}
++
+M_{\text{temporary}}
+$$
+
+If we cannot reduce the first three enough, the model may not fit. So instead of replicating everything, we can **shard training state**. Suppose there are four GPUs. Instead of:
+
+```text
+GPU 0: optimizer state A B C D
+GPU 1: optimizer state A B C D
+GPU 2: optimizer state A B C D
+GPU 3: optimizer state A B C D
+```
+
+we can store:
+
+```text
+GPU 0: optimizer state A
+GPU 1: optimizer state B
+GPU 2: optimizer state C
+GPU 3: optimizer state D
+```
+
+Now each device stores roughly:
+
+$$
+\frac{1}{4}
+$$
+
+of that distributed state. But nothing is free. When a worker needs state owned by another worker, communication must occur. So state sharding trades:
+
+$$
+\boxed{
+\text{less memory}
+\leftrightarrow
+\text{more communication/coordination}
+}
+$$
+
+That tradeoff appears throughout large-model training. DeepSpeed's current ZeRO design progressively partitions training state:
+
+```text
+ZeRO-1:
+partition optimizer state
+
+ZeRO-2:
+partition optimizer state
++ gradients
+
+ZeRO-3:
+partition optimizer state
++ gradients
++ model parameters
+```
+
+DeepSpeed also supports offloading state toward CPU or NVMe through ZeRO-Infinity when accelerator memory alone is insufficient. ([DeepSpeed][2]) The conceptual progression is:
+
+```text
+less replication
+      ↓
+lower per-GPU memory
+      ↓
+more state must be communicated when required
+```
+
+So ZeRO is not "a faster DDP." Its central purpose is eliminating memory redundancy while preserving distributed training semantics. PyTorch's distributed ecosystem currently includes DDP, fully sharded data parallelism, tensor parallelism and related distributed abstractions. ([PyTorch Docs][3]) The key idea of fully sharded training is similar:
+
+```text
+ordinary DDP:
+
+GPU 0 [complete model]
+GPU 1 [complete model]
+GPU 2 [complete model]
+GPU 3 [complete model]
+```
+
+versus:
+
+```text
+fully sharded:
+
+GPU 0 [model shard A]
+GPU 1 [model shard B]
+GPU 2 [model shard C]
+GPU 3 [model shard D]
+```
+
+When a layer must execute, workers temporarily obtain whatever parameter pieces they require. After the computation, those full parameters need not remain resident everywhere. Again:
+
+$$
+\text{memory saved}
+$$
+
+at the cost of:
+
+$$
+\text{additional communication}
+$$
+
+Suppose a Transformer layer contains:
+
+$$
+Y=XW
+$$
+
+and matrix $$W$$ itself is enormous. Instead of storing the entire matrix on every GPU, divide it:
+
+```text
+W = [W₁ | W₂ | W₃ | W₄]
+
+GPU 0 → W₁
+GPU 1 → W₂
+GPU 2 → W₃
+GPU 3 → W₄
+```
+
+Each GPU performs part of the matrix multiplication:
+
+$$
+Y_i=XW_i
+$$
+
+and results are combined. This is **tensor parallelism**. Now we're not merely distributing storage. We're dividing the computation of a single layer. Data parallelism says:
+
+```text
+different data
+same complete model
+```
+
+Tensor parallelism says:
+
+```text
+same logical layer
+different pieces of its tensor computation
+```
+
+For example:
+
+```text
+                 giant matrix multiplication
+
+                   X × W
+
+                     │
+         ┌───────────┼───────────┐
+         ▼           ▼           ▼
+       GPU 0       GPU 1       GPU 2
+       W₀          W₁          W₂
+
+         └───────────┼───────────┘
+                     ▼
+                combine output
+```
+
+This helps when:
+
+```text
+one layer itself is too large
+```
+
+or when you want several GPUs collaborating on each large matrix operation. But tensor parallelism is communication-heavy because layers execute frequently. It therefore benefits enormously from fast GPU-to-GPU interconnects. Another strategy is:
+
+```text
+GPU 0:
+layers 1–10
+
+GPU 1:
+layers 11–20
+
+GPU 2:
+layers 21–30
+
+GPU 3:
+layers 31–40
+```
+
+The forward pass moves through GPUs:
+
+```text
+input
+ ↓
+GPU 0
+ ↓ activations
+GPU 1
+ ↓ activations
+GPU 2
+ ↓ activations
+GPU 3
+ ↓
+loss
+```
+
+Backward propagation travels in the reverse direction. This is **pipeline parallelism**. The name comes from overlapping different minibatches/microbatches across stages:
+
+```text
+time →
+
+GPU 0: batch1  batch2  batch3  batch4
+GPU 1:   idle  batch1  batch2  batch3
+GPU 2:   idle   idle   batch1  batch2
+GPU 3:   idle   idle    idle   batch1
+```
+
+Once the pipeline fills, several stages can work simultaneously. But gaps at startup and shutdown create the **pipeline bubble**. Large-scale training often combines several axes. Imagine 64 GPUs. You might have:
+
+```text
+8-way data parallel
+×
+4-way tensor parallel
+×
+2-way pipeline parallel
+
+= 64 GPUs
+```
+
+Conceptually:
+
+```text
+DATA PARALLEL
+different batches
+
+       │
+       ▼
+
+PIPELINE PARALLEL
+different layer groups
+
+       │
+       ▼
+
+TENSOR PARALLEL
+different pieces within a layer
+```
+
+This is sometimes described as multidimensional or hybrid parallelism. The goal is to make the model:
+
+```text
+fit in memory
+```
+
+while also making enough devices:
+
+```text
+do useful work concurrently
+```
+
+## How Do Communication and Slow Workers Limit Scaling?
+<!-- section-summary: Communication bandwidth, latency, synchronization, stragglers, data supply, and node boundaries create a distribution tax that can dominate saved compute. -->
+
+Every partition adds messages and waiting. Measuring communication and per-rank timing shows whether extra devices are accelerating the optimization or mostly coordinating it.
+
+Suppose one GPU takes:
+
+$$
+T_1=100\text{ ms}
+$$
+
+per step. Naively, with four GPUs you might hope for:
+
+$$
+T_4=25\text{ ms}
+$$
+
+But distributed training introduces communication. Perhaps:
+
+```text
+local computation      25 ms
+gradient communication 12 ms
+synchronization         3 ms
+```
+
+Then:
+
+$$
+T_4=40\text{ ms}
+$$
+
+The speedup is:
+
+$$
+S(4)=\frac{100}{40}=2.5
+$$
+
+not $$4$$. The core equation is:
+
+$$
+\boxed{
+T_{\text{distributed}}
+=
+T_{\text{compute}}
++
+T_{\text{communication}}
++
+T_{\text{synchronization}}
++
+T_{\text{other overhead}}
+}
+$$
+
+As the number of GPUs increases, compute per worker often decreases. Communication does not disappear. Eventually communication dominates. Inside one GPU server, GPUs may have very fast direct interconnects. Across servers, traffic crosses a network.
+
+Conceptually:
+
+```text
+same node:
+
+GPU ───────── GPU
+   fast link
+
+different nodes:
+
+GPU
+ ↓
+host/network interface
+ ↓
+switch/network
+ ↓
+host
+ ↓
+GPU
+```
+
+Communication performance depends on things like:
+
+$$
+\text{latency}
+$$
+
+and:
+
+$$
+\text{bandwidth}
+$$
+
+Roughly:
+
+$$
+T_{\text{transfer}}
+\approx
+T_{\text{latency}}
++
+\frac{\text{bytes transferred}}{\text{bandwidth}}
+$$
+
+If gradients total 5 GB per step, network performance suddenly becomes an ML training issue. This is why "eight GPUs" does not specify a complete training system. You need to know how those GPUs are connected. Consider synchronous training:
+
+```text
+worker 0 compute → done at 100 ms
+worker 1 compute → done at 101 ms
+worker 2 compute → done at 99 ms
+worker 3 compute → done at 180 ms
+```
+
+Gradient synchronization cannot complete normally until worker 3 participates. So the step behaves approximately like:
+
+```text
+worker 0 ██████████........
+worker 1 ██████████........
+worker 2 ██████████........
+worker 3 ██████████████████
+                         ↑
+                    everyone waits
+```
+
+Worker 3 is a **straggler**. Possible causes include:
+
+```text
+slow data loading
+network congestion
+thermal throttling
+different hardware
+background processes
+storage stalls
+uneven batch sizes
+checkpoint writes
+```
+
+So average GPU utilization is not enough. You want per-rank timing. Instead of recording:
+
+```text
+step = 800 ms
+```
+
+break it down:
+
+```text
+data loading      80 ms
+forward          190 ms
+backward         320 ms
+gradient sync    150 ms
+optimizer         40 ms
+other             20 ms
+```
+
+Now you know what optimization to make. If:
+
+```text
+gradient sync = 50%
+```
+
+then buying faster GPUs may make the problem worse because computation gets faster while communication remains unchanged. If:
+
+```text
+data loading = 50%
+```
+
+your distributed cluster is probably starving. If:
+
+```text
+forward/backward = 85%
+```
+
+more/faster compute may help. You don't necessarily have to:
+
+```text
+finish entire backward pass
+       ↓
+communicate every gradient
+       ↓
+continue
+```
+
+During backpropagation, gradients become available layer by layer. So frameworks can conceptually do:
+
+```text
+compute gradient for layer 100
+            │
+            ├── communicate it
+            │
+compute gradient for layer 99
+            │
+            ├── communicate it
+            │
+compute gradient for layer 98
+```
+
+Now:
+
+$$
+T_{\text{step}}
+$$
+
+may be closer to the maximum of compute and communication rather than their full sum. That overlap is an important optimization in distributed training. But it only works when computation is large enough to hide communication. Suppose throughput is:
+
+```text
+1 GPU  → 1,000 tokens/s
+2 GPUs → 1,900 tokens/s
+4 GPUs → 3,500 tokens/s
+8 GPUs → 5,600 tokens/s
+```
+
+Speedup:
+
+$$
+S(N)
+=
+\frac{\text{throughput}_N}
+{\text{throughput}_1}
+$$
+
+So:
+
+```text
+2 GPUs → 1.9×
+4 GPUs → 3.5×
+8 GPUs → 5.6×
+```
+
+Scaling efficiency is:
+
+$$
+E(N)
+=
+\frac{S(N)}{N}
+$$
+
+Therefore:
+
+```text
+2 GPUs → 95%
+4 GPUs → 87.5%
+8 GPUs → 70%
+```
+
+Eight GPUs are faster. But each additional GPU contributes less useful throughput. Suppose one GPU costs:
+
+```text
+£2/hour
+```
+
+One GPU trains in:
+
+```text
+8 hours
+```
+
+so:
+
+$$
+C_1=£16
+$$
+
+Four GPUs train in:
+
+```text
+2.5 hours
+```
+
+Cost:
+
+$$
+C_4=4\times2.5\times£2=£20
+$$
+
+Eight GPUs train in:
+
+```text
+1.7 hours
+```
+
+Cost:
+
+$$
+C_8=8\times1.7\times£2=£27.20
+$$
+
+So:
+
+| GPUs |  Time |   Cost |
+| ---: | ----: | -----: |
+|    1 |   8 h |    £16 |
+|    4 | 2.5 h |    £20 |
+|    8 | 1.7 h | £27.20 |
+
+The correct choice depends on your constraint. If training must finish in three hours, four GPUs may be ideal. If overnight is acceptable, one may be cheaper. Suppose your model is tiny. One GPU:
+
+```text
+compute = 30 ms
+```
+
+Four GPUs:
+
+```text
+compute = 8 ms
+communication = 20 ms
+synchronization = 7 ms
+
+total = 35 ms
+```
+
+Now four GPUs are slower than one. Why? Because:
+
+$$
+\text{saved compute}
+<
+\text{added distributed overhead}
+$$
+
+Distribution is valuable only when enough useful parallel work exists to amortize communication and coordination. Suppose one server contains eight GPUs. Going from:
+
+```text
+1 → 2 → 4 → 8 GPUs
+```
+
+may scale reasonably well because communication remains inside the machine. Going from:
+
+```text
+8 → 16 GPUs
+```
+
+may suddenly require a second machine. Now the communication path changes:
+
+```text
+GPU ↔ GPU interconnect
+```
+
+becomes partly:
+
+```text
+machine A
+    ↕
+network
+    ↕
+machine B
+```
+
+So scaling curves often have discontinuities around node boundaries. Always benchmark:
+
+```text
+single GPU
+multi-GPU single node
+multi-node
+```
+
+separately.
+
+## What Must a Distributed Checkpoint Preserve for Recovery?
+<!-- section-summary: Recovery may require model, optimizer, scheduler, precision, random, sampler, topology, data, and sharding state, sometimes with resharding for a new world size. -->
+
+More workers also create more failure points, which makes the exact checkpoint contents and restoration topology part of the distributed design.
+
+On one GPU:
+
+```text
+GPU fails
+→ job fails
+```
+
+With 128 workers:
+
+```text
+any important worker fails
+→ collective operation may fail
+→ whole distributed attempt may fail
+```
+
+As you add machines, there are simply more components that can fail:
+
+```text
+GPU
+host
+network
+process
+storage access
+driver/runtime
+orchestrator
+```
+
+Therefore checkpointing becomes more important as jobs become larger and longer. Suppose you save only:
+
+```text
+model parameters
+```
+
+You may be able to perform inference. But you may not be able to resume training exactly. A robust training checkpoint may need:
+
+```text
+model parameters/shards
+
+optimizer state
+learning-rate scheduler state
+gradient-scaler state
+
+global training step
+epoch
+
+random-number-generator states
+
+sampler/data-loader position
+
+training configuration
+precision configuration
+
+distributed topology/sharding metadata
+
+dataset snapshot/version
+```
+
+Why sampler state? Imagine the job fails after consuming:
+
+```text
+47% of epoch 8
+```
+
+If you restore weights but restart the data loader at the beginning of epoch 8, the model sees data twice. That isn't an exact continuation. With ordinary DDP, each worker may contain a full parameter copy. You can often let rank 0 write one model checkpoint. With fully sharded training:
+
+```text
+rank 0 owns shard A
+rank 1 owns shard B
+rank 2 owns shard C
+rank 3 owns shard D
+```
+
+No worker necessarily has the whole training state. So checkpointing may itself be distributed:
+
+```text
+checkpoint/
+    rank-000/
+    rank-001/
+    rank-002/
+    rank-003/
+    metadata.json
+```
+
+Restoration needs to understand how the pieces compose. This becomes especially important if you want to resume using a different number of GPUs. Suppose training originally used:
+
+```text
+64 GPUs
+```
+
+but only 32 are available after failure. Can the checkpoint resume? Not automatically. A checkpoint format might encode shards assuming:
+
+```text
+world_size = 64
+```
+
+To resume on 32 workers, the system may have to **reshard** the state. So there are two different goals:
+
+```text
+checkpointing:
+resume after failure
+
+elastic checkpointing:
+resume after failure
+even with changed distributed topology
+```
+
+If elasticity matters, design for it explicitly. Suppose 128 processes all execute:
+
+```python
+torch.save(model, "checkpoint.pt")
+```
+
+onto shared storage. You can get:
+
+```text
+file corruption
+write contention
+128 redundant copies
+confusing logs
+```
+
+Distributed code therefore needs rank-aware side effects.
+
+For example:
+
+```text
+all ranks:
+participate in distributed checkpoint creation
+
+rank 0:
+write run metadata
+emit human-readable progress
+register final artifact
+```
+
+The precise rule depends on whether the training state is replicated or sharded.
 
 ![Four parallelism strategies map completion time to data parallelism, training-state memory to state sharding, an oversized layer to tensor parallelism, and depth or activation pressure to pipeline parallelism.](/content-assets/articles/article-mlops-training-pipelines-distributed-training-basics/four-ways-to-split-training.png)
 
 *Each strategy divides a different object. The measured single-device limit determines whether the team should split examples, persistent state, calculations inside a layer, or groups of layers.*
 
-## Start By Splitting Data Across GPUs
-<!-- section-summary: DDP runs one model replica per worker, gives each replica different data, and synchronizes gradients during backpropagation. -->
+## How Do Frameworks and Training Pipelines Manage Distributed Jobs?
+<!-- section-summary: Compute frameworks distribute model work, job frameworks launch workers, platforms manage clusters, and the pipeline controls the surrounding request, data, checkpoint, evaluation, and release lifecycle. -->
 
-PyTorch **DistributedDataParallel**, usually called **DDP**, is the standard starting point for synchronous GPU data parallelism. Each process owns one model replica and one optimizer. During the backward pass, DDP groups gradients into buckets and starts all-reduce operations as gradients become ready. Every replica then applies the same optimizer step.
+Frameworks solve different layers of that problem, while the training pipeline remains responsible for the lifecycle before worker launch and after the distributed computation ends.
 
-### Set Up Distributed Data Parallel In Code
+These tools are sometimes spoken about as if they're alternatives. They are often complementary. Think in layers.
 
-The important parts of a minimal training setup are visible below. The launcher provides the local rank. The process binds itself to that GPU. `DistributedSampler` gives the worker its data shard. DDP wraps the model and installs gradient-synchronization hooks.
+### DeepSpeed
 
-```python
-import os
-import torch
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, DistributedSampler
+DeepSpeed focuses heavily on **how large-scale model computation and state are executed efficiently**. Its features include memory-saving techniques such as ZeRO; current DeepSpeed documentation describes ZeRO stages that shard optimizer state, gradients and eventually parameters, with CPU/NVMe offload available for still larger models. ([DeepSpeed][4])
 
-local_rank = int(os.environ["LOCAL_RANK"])
-device = torch.device("cuda", local_rank)
-torch.cuda.set_device(device)
-dist.init_process_group(backend="nccl", device_id=device)
+Conceptually:
 
-model = DDP(build_model().to(device), device_ids=[local_rank])
-sampler = DistributedSampler(training_data, shuffle=True)
-loader = DataLoader(training_data, batch_size=32, sampler=sampler)
+```text
+DeepSpeed asks:
 
-for epoch in range(num_epochs):
-    sampler.set_epoch(epoch)
-    for features, labels in loader:
-        optimizer.zero_grad()
-        loss = loss_fn(model(features.to(device)), labels.to(device))
-        loss.backward()
-        optimizer.step()
+How should this model's training state
+and computation be distributed efficiently
 ```
 
-### Launch One Worker Per GPU
+### Ray Train
 
-Launchers create one process per device. A two-node job with eight GPUs on each node has a world size of 16:
+Ray Train operates more at the **distributed job execution/orchestration layer**. It launches worker processes, assigns resources, sets up framework distributed environments, runs the training function on each worker, and integrates metrics/checkpoint handling. Its current `ScalingConfig` exposes worker count and GPU-resource choices, among other configuration. ([Ray][5])
 
-```bash
-torchrun \
-  --nnodes=2 \
-  --nproc-per-node=8 \
-  --rdzv-id="$JOB_ID" \
-  --rdzv-backend=c10d \
-  --rdzv-endpoint="$COORDINATOR:29400" \
-  train.py
+Conceptually:
+
+```text
+Ray Train asks:
+
+How do I launch and manage this training
+function across a cluster of workers
 ```
 
-For CUDA GPUs, PyTorch recommends NCCL as the distributed backend. A production image should pin compatible PyTorch, CUDA, driver, and NCCL versions. The launcher command, container digest, instance type, network placement, and environment variables belong in the run record because they affect reproducibility and performance.
+And they can be used together: Ray's current documentation explicitly shows Ray Train launching DeepSpeed workloads across a Ray cluster. ([Ray][6]) So:
 
-DDP does not split input data automatically. It also does not reduce model memory because every worker holds a full replica. Those two boundaries explain why the sampler matters and why larger models eventually need a different strategy.
+```text
+Ray Train
+     │
+     │ launches/manages workers
+     ▼
+DeepSpeed
+     │
+     │ distributes model training/state
+     ▼
+PyTorch + GPUs
+```
 
-## Give Each Worker A Different Part Of The Data
-<!-- section-summary: Data-parallel workers need disjoint, deterministic data partitions so the cluster processes the intended global batch. -->
+That's a much better mental model than:
 
-The dataset still represents one training corpus, even though several workers read it. A **distributed sampler** maps records to ranks so each worker receives a different portion. It turns one logical stream of examples into coordinated local streams.
+```text
+DeepSpeed vs Ray
+```
 
-Suppose a dataset contains 10,000 examples and four workers train for one epoch. Each worker should process roughly one quarter of the records. If every worker reads all 10,000, the job repeats each example four times. GPU utilization may look excellent, yet the data semantics are wrong.
+Distributed training itself might start here:
 
-Shuffling also needs coordination. PyTorch's `DistributedSampler` uses the epoch as part of its deterministic shuffle. Calling `sampler.set_epoch(epoch)` gives the next epoch a new shared ordering before it is divided among ranks. Leaving out that call can repeat the same shuffle order across epochs.
+```text
+64 workers are running
+```
 
-Dataset sizes do not always divide evenly by world size. A sampler may drop the final records or add repeated indices so every rank executes the same number of steps. Record which policy was used. In evaluation, repeated records can bias a metric if the aggregation counts them as new observations.
+But a training **pipeline** must deal with everything around that:
 
-Iterable and streaming datasets need extra care because no fixed index list exists for the sampler to divide. The reader often shards by rank and data-loader worker, stores a source cursor or file manifest, and defines restart behaviour. If the world size changes after recovery, the old cursor may no longer map cleanly to the new set of readers.
+```text
+training request
+      ↓
+select cluster size
+      ↓
+allocate nodes
+      ↓
+place workers
+      ↓
+prepare dataset
+      ↓
+establish distributed group
+      ↓
+train
+      ↓
+checkpoint
+      ↓
+recover from failures
+      ↓
+evaluate
+      ↓
+save model
+      ↓
+release 64 expensive GPUs
+```
 
-Variable-length examples can also create **data stragglers**. One GPU may receive short sequences while another receives several long sequences and takes twice as long. Length-aware batching or balanced input shards can reduce this gap. The batching policy must still preserve the intended sample distribution and should be stored with the run.
+This is why distributed-training frameworks and workflow orchestrators are different concepts. One handles the mathematics/runtime of cooperation. The other manages the lifecycle. Suppose your training specification says:
 
-## Keep Batch Size And Optimizer Behavior Consistent
-<!-- section-summary: World size, local batch, gradient accumulation, and loss reduction combine into the effective global batch seen by the optimizer. -->
+```text
+nodes = 4
+GPUs per node = 8
+world_size = 32
+```
 
-Distribution can change the learning problem even if the model code stays the same. The key quantity is the **global batch size**: the total number of examples contributing to one optimizer update.
+A managed platform can conceptually:
 
-For equal data-parallel workers:
+```text
+provision 4 machines
+       ↓
+install/start training image
+       ↓
+give workers rendezvous information
+       ↓
+assign ranks/devices
+       ↓
+start 32 processes
+       ↓
+attach data/checkpoint storage
+       ↓
+collect logs/metrics
+       ↓
+detect job completion
+       ↓
+destroy compute
+```
 
-**global batch = per-device batch × data-parallel world size × gradient-accumulation steps**
+The platform manages machines. Your training framework still manages distributed computation. As a concrete current example, SageMaker supports single- and multi-instance distributed training and integrates with options including PyTorch DDP, FSDP, DeepSpeed and related distributed mechanisms; its documentation also emphasizes the importance of network topology and storage location for collective operations such as AllReduce. ([AWS Documentation][7]) Imagine one GPU consumes:
 
-A **per-device batch** is the number of examples one worker processes in one forward and backward pass. **Gradient accumulation** delays the optimizer update while a worker adds gradients across several local batches. The **global batch** covers every example represented in the synchronized update.
+```text
+500 MB/s
+```
 
-Suppose a single GPU uses a batch of 64. Moving to eight GPUs with 64 examples on each device changes the global batch to 512. The dataset now produces one eighth as many optimizer updates per epoch. The gradient has lower sampling noise, and the old learning-rate schedule may no longer produce the same convergence.
+Eight GPUs might require:
 
-One controlled scaling experiment keeps the global batch at 64 by using eight examples per GPU. This isolates much of the systems speedup. Another experiment may deliberately increase the batch to 512 and tune learning rate, warm-up, and schedule for that regime. Both are valid studies. They answer different questions and need separate run records.
+$$
+8\times500=4\text{ GB/s}
+$$
 
-Loss reduction matters too. DDP synchronizes gradients across ranks; it has no knowledge of how many valid examples produced each local loss. Equal local batch sizes with a mean-reduced loss give the expected global mean gradient. Padding masks, dropped examples, token-level losses, or uneven local batches may require weighting by valid example or token count before synchronization.
+If your storage system can provide only:
 
-Record at least the per-device batch, data-parallel world size, accumulation count, effective global batch, optimizer, learning-rate schedule, warm-up, precision, and loss reduction. Compare training and validation curves against the single-device baseline. Small floating-point differences are normal because collective reduction changes addition order, so reproducibility gates should use appropriate numerical and quality tolerances.
+```text
+1.2 GB/s
+```
 
-## Measure Communication Delays And Slow Workers
-<!-- section-summary: Distributed speed is limited by tensor communication, network topology, input delays, and the slowest worker in each synchronous step. -->
+then eight GPUs will compete for data. You might see:
 
-Every distributed strategy trades local memory or compute for communication. A worker can only advance after it receives the tensors needed for the next calculation. The exposed communication time determines how much of the added hardware turns into useful speed.
+```text
+1 GPU → 95% utilization
+8 GPUs → 35% utilization each
+```
 
-DDP usually overlaps communication with backpropagation. As soon as a bucket of gradients is ready, NCCL can begin its all-reduce while the GPU continues computing gradients for earlier layers. Good overlap hides part of the network cost. Very small buckets create many launches; very large buckets delay communication until late in the backward pass.
+Not because distributed training is bad. Because storage became the bottleneck. This is another recurring principle:
 
-Topology describes how the devices are connected. Communication inside one host may use NVLink or PCIe. Communication across hosts may use InfiniBand, RoCE, EFA, or ordinary Ethernet. Tensor parallelism exchanges partial values frequently and benefits strongly from the fastest local links. Data parallelism can often tolerate slower cross-host links because its collectives happen at a coarser level.
-
-NCCL selects collective algorithms and transport paths for NVIDIA GPU clusters. Its logs can reveal the chosen network interface and communication setup. A wrong interface, blocked port, mismatched library, or weak network placement can create long stalls or hangs that resemble a training-code bug.
-
-A synchronous step also runs at the speed of its slowest rank. That slow worker is called a **straggler**. Stragglers come from uneven sequence lengths, slow data reads, CPU preprocessing, thermal throttling, failing hardware, checkpoint writes, and other workloads sharing the host.
-
-Measure a step as separate spans or profiler regions: data wait, forward compute, backward compute, collective communication, optimizer work, and checkpoint work. Compare p50 and p95 step time by rank. If rank 6 spends two extra seconds loading data on every step, optimizing the all-reduce will have little effect.
-
-The useful operational response follows the evidence. Data wait points toward caching, prefetching, local storage, or balanced shards. Exposed collective time points toward topology, placement, bucket configuration, tensor sizes, or network configuration. One slow host points toward eviction, hardware inspection, or scheduler isolation.
-
-## Split Training State Across GPUs To Reduce Memory Use
-<!-- section-summary: State-sharded training reduces per-device memory by dividing parameters, gradients, and optimizer state across data-parallel workers. -->
-
-DDP keeps full training state on every GPU. For an optimizer such as Adam, memory includes parameters, gradients, and multiple optimizer-state tensors, plus activations created during the forward pass. The optimizer state can therefore exceed the parameter memory by a large margin.
-
-**Fully sharded data parallelism** divides that persistent state across workers. You can think of each rank as storing several pages of a large book. Before a layer runs, the ranks gather the parameter pages needed for that layer. After the calculation, the full copy can be released and the gradients reduced back into shards.
-
-PyTorch's current per-parameter implementation is `fully_shard`, commonly called **FSDP2**. It represents sharded parameters as **DTensor** objects. A DTensor records a logical full tensor together with a `DeviceMesh` and a placement such as `Shard`, `Replicate`, or `Partial`. FSDP2 all-gathers parameters before computation, then reshards and frees the unsharded copies after computation. This lowers steady-state memory while adding communication and scheduling work.
-
-The maturity boundary is important. PyTorch's current documentation encourages FSDP1 users to consider FSDP2, while it still labels FSDP2 as an RFC and DTensor as alpha. Teams should pin the PyTorch release, test the exact model and checkpoint path, and confirm the APIs supported by their training platform. FSDP1 remains documented and may still be the supported choice in an existing stack.
-
-State sharding does not automatically solve activation memory. Activation checkpointing, shorter sequences, smaller micro-batches, lower precision, or activation offload may still be needed. CPU or NVMe offload expands capacity further, though it moves pressure to host memory, PCIe, and storage bandwidth. Profile step time after every memory-saving change.
-
-## Split Very Large Models Across GPUs
-<!-- section-summary: Tensor and pipeline parallelism divide computation inside or across layers after state sharding alone cannot satisfy the model constraint. -->
-
-State sharding stores less state on each GPU, yet a layer may still need a large parameter all-gather or create an oversized activation. **Tensor parallelism** addresses this by splitting the layer's calculation itself.
-
-For a large linear layer, one group of ranks can hold different columns or rows of the weight matrix. Each rank computes a partial result, then collectives combine or redistribute those results for the next operation. PyTorch's tensor-parallel APIs build on `DeviceMesh` and DTensor placements such as row-wise and column-wise sharding.
-
-The communication happens inside the model's forward and backward paths, so tensor-parallel ranks are usually placed close together on high-bandwidth links. A tensor-parallel plan also follows the model architecture: attention projections, feed-forward layers, embeddings, and loss computation may need different layouts.
-
-PyTorch currently labels `torch.distributed.tensor.parallel` experimental and `torch.distributed.pipelining` alpha. Production systems should pin the framework release and validate model support, numerical behaviour, checkpoint restore, and failure recovery before treating either API as a durable contract.
-
-**Pipeline parallelism** places consecutive groups of layers on different stages. The input batch is divided into **micro-batches** so several stages can work at once. While stage 3 processes one micro-batch, stage 2 can process the next and stage 1 can begin another. The schedule determines forward passes, backward passes, activation storage, and communication between stages.
-
-A pipeline has a bubble while stages fill and drain. It also slows down if one stage takes much longer than the others. Teams profile layer time and memory, then assign layers so the stages are balanced. More micro-batches can reduce the relative bubble, though they affect memory and scheduling overhead.
-
-Tensor and pipeline parallelism are commonly combined with data parallelism or state sharding. A device mesh gives each dimension a role, such as `tp=8` inside a host and `dp=16` across hosts. This scale demands topology-aware placement and a checkpoint format that understands every sharding dimension.
-
-## Understand The Different Jobs Of DeepSpeed And Ray Train
-<!-- section-summary: DeepSpeed supplies memory and parallelism strategies, while Ray Train supplies worker orchestration around an underlying framework such as PyTorch. -->
-
-Framework names can make distributed training look like a list of competing products. Their responsibilities sit at different layers: some change how tensors and state are divided, while others provision and supervise the worker processes.
-
-### Use DeepSpeed To Reduce Memory Use
-
-**DeepSpeed** is a distributed training system with memory, communication, and large-model optimizations. Its **ZeRO** family partitions the redundant state used by ordinary data parallelism:
-
-- ZeRO Stage 1 shards optimizer state.
-- ZeRO Stage 2 also shards gradients.
-- ZeRO Stage 3 also shards model parameters and gathers them for computation.
-
-The stages form a memory progression. A model that fits after optimizer-state sharding may use Stage 1. Stage 3 offers the largest state-memory reduction and performs more parameter communication. DeepSpeed also supports CPU and NVMe offload, which should be treated as a bandwidth tradeoff and benchmarked on the target hardware.
-
-A focused ZeRO configuration makes the choice visible:
-
-```json
-{
-  "train_micro_batch_size_per_gpu": 8,
-  "gradient_accumulation_steps": 4,
-  "zero_optimization": {
-    "stage": 3
-  }
+$$
+\boxed{
+\text{every part of the pipeline must scale with the training workers}
 }
+$$
+
+That includes:
+
+```text
+storage
+CPU preprocessing
+networking
+checkpoint writes
+metadata systems
 ```
 
-The global batch still depends on micro-batch size, data-parallel world size, and accumulation. DeepSpeed configures the mechanism; the team still owns those optimization semantics and the checkpoint contract.
+Ray Train, for example, can integrate with Ray Data to split and stream data across training workers and scale preprocessing separately from GPU workers. ([Ray][8]) Suppose you have:
 
-### Use Ray Train To Start And Coordinate Workers
-
-**Ray Train** works at a different layer. `TorchTrainer` launches worker processes and creates the PyTorch distributed environment. It runs the training function on every worker and allocates resources through `ScalingConfig`. Ray's runtime then receives the reported metrics and checkpoints. The numerical strategy can still be DDP, FSDP, DeepSpeed, or a framework integration used inside that worker function.
-
-Ray is useful if training already runs on a Ray cluster, data arrives through Ray Data, or the team wants Ray's scheduling and retry model around several training frameworks. Pin the Ray release and API generation because current documentation distinguishes the established API from the newer Ray Train V2 path.
-
-DDP, FSDP2, and ZeRO describe how training state and communication behave. Ray Train, Kubernetes operators, and managed training services describe how worker processes receive resources, start together, report progress, and restart.
-
-## Save Everything Needed To Resume Distributed Training
-<!-- section-summary: A resumable distributed checkpoint stores every state that influences the next optimizer update and publishes only complete shard sets. -->
-
-A model-weights file is enough for many inference tasks. Resuming training requires more. The checkpoint must recreate the state that determines the next batch, gradient, and optimizer update.
-
-A complete training checkpoint stores the model parameters and optimizer state. It also stores the learning-rate scheduler and mixed-precision scaler so the next update uses the same numerical settings. Epoch, global step, random-number-generator state, and the sampler or streaming-data cursor recover the training position. The run configuration records how those pieces belong together. Large-model training may also need the device mesh and parallelism metadata used to interpret each shard.
-
-DDP keeps full state on every rank, so one designated rank can often save a consolidated checkpoint after the workers reach a safe boundary. FSDP2, tensor parallelism, and ZeRO may write shards from several ranks. PyTorch Distributed Checkpoint supports distributed state dictionaries across DDP, FSDP/`fully_shard`, tensor parallelism, and combinations of these strategies.
-
-```mermaid
-flowchart TD
-    A["All Ranks Reach a Checkpoint Boundary"] --> B["Capture Model, Optimizer, Scheduler,<br/>Scaler, RNG, and Data Position"]
-    B --> C["Write Rank Shards<br/>(Temporary Checkpoint Prefix)"]
-    C --> D{"Did Every Required Shard Succeed?"}
-    D -->|"Yes"| E["Publish Completion Manifest"]
-    D -->|"No"| F["Leave Checkpoint Uncommitted"]
-    E --> G["Restore Test<br/>(Load and Run the Next Steps)"]
-
-    class A,B,C state
-    class D decision
-    class E,G success
-    class F failure
+```text
+seed = 42
 ```
 
-Write shard files under a temporary checkpoint prefix. Publish the manifest only after all required shards and metadata are durable in object storage. Readers should accept checkpoints through that manifest, so a preempted job cannot resume from a half-written set.
+On one GPU that may define:
 
-Restore testing is part of checkpoint validation. Start a separate run, load the checkpoint, execute several steps, and compare loss and progress with a continuous baseline. Also test the supported topology change, such as loading eight-way shards onto four workers, before relying on resharding during an incident.
-
-## Restart The Worker Group After A Failure
-<!-- section-summary: Synchronous workers recover as a group because one missing rank can leave the others blocked inside a collective. -->
-
-A distributed worker can fail because its process crashes, its GPU resets, its host disappears, or the scheduler preempts it. The remaining workers may be blocked inside a collective and cannot know that their shared optimizer step is complete. Recovery therefore happens at the worker-group level.
-
-PyTorch Elastic uses rendezvous for peer discovery and synchronization. Workers join a rendezvous, agree on membership, receive ranks, and form the process group. After a worker failure, the launcher stops and restarts the worker group. Progress after the latest committed checkpoint is lost.
-
-`torchrun` can bound automatic restarts:
-
-```bash
-torchrun \
-  --nnodes=2 \
-  --nproc-per-node=8 \
-  --max-restarts=3 \
-  --rdzv-id="$JOB_ID" \
-  --rdzv-backend=c10d \
-  --rdzv-endpoint="$COORDINATOR:29400" \
-  train.py
+```text
+parameter initialization
+dropout
+data shuffle
+augmentation randomness
 ```
 
-This is **fault-tolerant restart** if the group returns with the same world size. **Elastic membership** allows a range such as `--nnodes=1:4`. The second mode can resume with a different world size, which changes data partitions and possibly the global batch. PyTorch also warns that ranks are not stable across re-rendezvous, so durable state must not assume that rank 3 always represents the same host or shard.
+With eight workers you now need to reason about:
 
-Suppose a 16-worker job fails after step 42,900 and its latest complete checkpoint is step 42,000. The launcher restarts all workers from step 42,000. The sampler or data cursor must also return to that point. Reusing the model and optimizer while continuing the input at step 42,900 would create a training history that cannot be interpreted correctly.
+```text
+global seed
+per-worker seed
+data sampler seed
+epoch
+rank
+restart behavior
+```
 
-Use one logical run ID with a new attempt number for each restart. Store checkpoints and metrics under idempotent names. Bound the retry count so a broken image, network policy, or checkpoint does not consume the GPU queue indefinitely.
+You often want deterministic-but-different worker random streams:
 
-Multi-worker jobs also benefit from coordinated scheduling. The scheduler should reserve the required worker group together; otherwise, a few allocated GPUs can wait while the rest remain queued. Kubernetes environments commonly use a training operator plus a queueing or gang-scheduling layer. Managed training services perform the same coordination behind their job API.
+$$
+s_k=f(s_{\text{global}},\text{rank}_k,\text{epoch})
+$$
 
-## Measure Scaling Efficiency
-<!-- section-summary: A scaling study compares throughput, completion time, quality, and cost across worker counts using the same workload and optimization contract. -->
+rather than:
 
-More devices do not guarantee a proportional speedup. Communication, input pressure, synchronization, checkpointing, and stragglers consume part of the potential gain.
+```text
+every worker uses identical random augmentation
+```
 
-Two formulas make the basic comparison clear:
+But exact bit-level reproducibility can still be difficult because parallel floating-point reductions may execute in different orders. So record:
 
-**speedup(N) = throughput with N devices ÷ throughput with 1 device**
+```text
+world size
+parallelism strategy
+rank topology
+precision
+framework version
+communication backend
+hardware
+random seeds
+checkpoint
+```
 
-**scaling efficiency(N) = speedup(N) ÷ N**
+along with the usual experiment metadata.
 
-Suppose one GPU processes 100 samples per second. Two GPUs process 185, four process 340, and eight process 560. The eight-GPU speedup is 5.6, so its scaling efficiency is 70 percent. The run finishes much sooner, but the cost per processed sample is about 21 percent higher on eight GPUs than on four if every GPU has the same hourly price.
+## How Do Scaling Experiments Measure Useful Distributed Work?
+<!-- section-summary: Matched runs across increasing device counts record throughput, phase timing, rank imbalance, memory, cost, quality, and scaling efficiency. -->
 
-A useful benchmark uses the same model, dataset slice, precision, input pipeline, checkpoint policy, and quality target at each worker count. Keep global batch constant for the first systems comparison, or clearly document any optimizer retuning. Include warm-up and enough steps for startup noise to become small.
+Representative scaling runs make the trade visible instead of assuming that speedup follows device count linearly.
 
-Measure more than aggregate GPU utilization. Record examples or tokens per second, time to the target quality, peak memory, exposed collective time, data wait, p50 and p95 step time by rank, checkpoint duration, failure-recovery time, and total accelerator-hours.
+Suppose you train an image model. Single GPU:
 
-The best cluster size is the smallest allocation that satisfies the completion objective with acceptable cost and reliability. An eight-GPU run may be worthwhile for a release deadline even at 70 percent efficiency. A routine nightly retrain may choose four GPUs because it still meets the window at lower cost.
+```text
+batch = 64
 
-## How Managed Platforms Run Distributed Training
-<!-- section-summary: Managed training services provision workers, networks, images, logs, and storage around the same parallelism and recovery decisions. -->
+forward = 90 ms
+backward = 140 ms
+optimizer = 20 ms
 
-Submitting a distributed job describes the desired worker group; it does not create that group by itself. A managed training platform finds the requested accelerator capacity, starts the selected image on each node, and gives the workers enough connection information to form their process group. Logs and artifacts return through the platform's storage and monitoring paths, while the job policy controls retries after a host failure.
+step = 250 ms
+```
 
-Those services leave the learning contract in the team's hands. The training code still needs a correct data partition and global batch calculation. The team also chooses the parallelism strategy, defines the checkpoint, and compares model quality.
+Throughput:
 
-Amazon SageMaker AI supports framework-native distribution and its own data- and model-parallel libraries. Its current guidance recommends `ModelTrainer` for launching PyTorch and TensorFlow jobs. The AWS-optimized SMDDP collectives target SageMaker network topology, while SageMaker Model Parallel v2 adds sharded data parallelism, tensor parallelism, activation checkpointing, and offload for large-model workloads.
+$$
+\frac{64}{0.25}=256
+$$
 
-Gemini Enterprise Agent Platform serverless training describes the cluster through worker pools and replica counts. PyTorch code still initializes its distributed runtime from the environment created for those replicas. Agent Platform also offers Reduction Server for supported multi-worker all-reduce workloads.
+images/sec. Now use four GPUs with 64 examples per worker. Global batch:
 
-Azure Machine Learning SDK v2 exposes distribution settings for PyTorch and DeepSpeed jobs and provisions the requested GPU cluster. Its distributed GPU guidance recommends DDP for the common data-parallel case and includes InfiniBand-aware setup for supported compute.
+$$
+4\times64=256
+$$
 
-Databricks `TorchDistributor` launches PyTorch distributed code as a Spark job and uses `torch.distributed.run` under the hood. This is useful for teams whose data and training workflow already live on Databricks. The PyTorch program still owns DDP or another training strategy, sampler behaviour, optimization, and checkpointing.
+Each GPU independently calculates:
 
-Ray Train can serve a similar orchestration role on a Ray cluster. Kubernetes training operators do the same for Kubernetes-native environments. Choose the platform that fits the organisation's data, identity, networking, scheduling, and operations model. Then confirm its supported framework versions, accelerator types, topology controls, checkpoint storage, and restart semantics with a realistic recovery test.
+```text
+GPU 0 → 64 images → g₀
+GPU 1 → 64 images → g₁
+GPU 2 → 64 images → g₂
+GPU 3 → 64 images → g₃
+```
 
-## The Main Idea
-<!-- section-summary: Distributed training succeeds after several workers preserve the meaning, recoverability, and economics of one optimization run. -->
+Then:
 
-Distributed training starts with a measured single-device limit. Throughput pressure usually leads to DDP. Training-state memory leads to FSDP2 or ZeRO. A layer or activation constraint may lead to tensor or pipeline parallelism. Extra strategies add communication and operational cost, so each one should solve a demonstrated problem.
+```text
+AllReduce(g₀,g₁,g₂,g₃)
+```
 
-The worker runtime gives every process a rank, device, and process-group membership. Collectives move gradients, parameters, and partial results between those workers. Data sharding and global-batch design preserve the learning problem. Distributed checkpoints and rendezvous make recovery possible. Scaling benchmarks show whether the additional devices improve completion time and cost while maintaining model quality.
+takes 30 ms. The local compute still costs roughly:
 
-The production standard is one trustworthy run: its data is accounted for, its optimizer semantics are explicit, its state can be restored, its failures are visible, and its scaling decision is supported by measurements.
+```text
+250 ms
+```
+
+and synchronization adds:
+
+```text
+30 ms
+```
+
+so:
+
+$$
+T=280\text{ ms}
+$$
+
+Throughput is:
+
+$$
+\frac{256}{0.28}
+\approx914
+$$
+
+images/sec. Speedup:
+
+$$
+\frac{914}{256}
+\approx3.57
+$$
+
+Efficiency:
+
+$$
+\frac{3.57}{4}
+\approx89\%
+$$
+
+That's a healthy distributed scaling result. Suppose 32 GPUs produce:
+
+```text
+7,000 images/sec
+```
+
+The ideal throughput would be:
+
+$$
+32\times256=8192
+$$
+
+Efficiency:
+
+$$
+\frac{7000}{8192}\approx85\%
+$$
+
+Still good. At 128 GPUs, suppose you get:
+
+```text
+15,000 images/sec
+```
+
+Ideal:
+
+$$
+128\times256=32768
+$$
+
+Efficiency:
+
+$$
+\frac{15000}{32768}\approx46\%
+$$
+
+You're still training faster than on 32 GPUs. But the return per extra GPU has collapsed. Now you should ask whether your objective really requires 128. Don't jump from:
+
+```text
+1 GPU
+```
+
+straight to:
+
+```text
+256 GPUs
+```
+
+Benchmark a sequence:
+
+```text
+1
+2
+4
+8
+16
+32
+64
+```
+
+For each record:
+
+| Metric                     | Why                  |
+| -------------------------- | -------------------- |
+| examples/tokens per second | useful throughput    |
+| step time                  | raw latency          |
+| compute time               | GPU work             |
+| communication time         | distribution tax     |
+| data wait time             | input bottleneck     |
+| memory per GPU             | capacity             |
+| max/min rank timing        | stragglers           |
+| cost/hour                  | infrastructure price |
+| cost to target quality     | economic result      |
+| validation quality         | ML correctness       |
+
+Then find where:
+
+$$
+\frac{\text{additional throughput}}
+{\text{additional GPUs}}
+$$
+
+stops being worthwhile.
+
+## How Do You Choose the Smallest Distributed Strategy That Meets the Constraint?
+<!-- section-summary: The chosen strategy partitions only what the measured constraint requires and stops scaling when added coordination costs exceed useful time, memory, or economic value. -->
+
+The final choice starts from the constraint and uses the smallest topology that meets memory and completion goals with acceptable cost, quality, and recovery behavior.
+
+A useful decision tree is:
+
+```text
+Does model + training state fit on one GPU
+                │
+        ┌───────┴───────┐
+       yes              no
+        │                │
+        ▼                ▼
+Need training        Need memory
+faster              reduction
+        │                │
+       yes               ▼
+        │           shard state
+        ▼           (FSDP / ZeRO)
+ data parallel             │
+                           ▼
+                    Are individual layers
+                    still too large
+                           │
+                          yes
+                           ▼
+                    tensor/model
+                     parallelism
+                           │
+                           ▼
+                    Need further split
+                           │
+                           ▼
+                    pipeline/hybrid
+```
+
+Then benchmark communication. Because a theoretically valid distribution strategy can still be practically terrible. Suppose:
+
+```text
+one GPU training = 50 minutes
+business requirement = model by tomorrow
+```
+
+There may be no reason to distribute. Distributed training adds:
+
+```text
+code complexity
+network dependency
+synchronization
+checkpoint complexity
+failure modes
+observability requirements
+cost
+```
+
+If one device already satisfies the objective:
+
+$$
+\text{simpler architecture}
+$$
+
+may be the better architecture. Distributed training should solve a real constraint. It should not be a status symbol for the pipeline. The easiest way to reason about distributed training is to imagine three things moving around the cluster.
+
+### Data
+
+```text
+Which examples does each worker see
+```
+
+### Model/training state
+
+```text
+Where do parameters,
+gradients and optimizer state live
+```
+
+### Messages
+
+```text
+What information must workers exchange
+to stay mathematically consistent
+```
+
+Every distributed strategy changes these three flows.
+
+For example:
+
+| Strategy          | Data                 | Model/state        | Communication                  |
+| ----------------- | -------------------- | ------------------ | ------------------------------ |
+| Data parallel     | split                | replicated         | gradients                      |
+| Fully sharded     | split                | sharded            | parameters + gradients/state   |
+| Tensor parallel   | shared logical batch | tensor pieces      | activations/partial results    |
+| Pipeline parallel | microbatches flow    | layer groups split | activations + gradients        |
+| Hybrid            | several splits       | several splits     | several communication patterns |
+
+That table is more fundamental than the names of specific frameworks. Distributed training is not:
+
+**"Run my training script on many GPUs."**
+
+It is:
+
+**"Decompose one logical optimization process into cooperating workers while preserving the training semantics I care about."**
+
+The reasoning chain is:
+
+$$
+\boxed{
+\text{single-device bottleneck}
+\rightarrow
+\text{choose what to partition}
+\rightarrow
+\text{assign workers/ranks}
+\rightarrow
+\text{split data or state}
+\rightarrow
+\text{communicate required information}
+\rightarrow
+\text{synchronize}
+\rightarrow
+\text{checkpoint distributed state}
+\rightarrow
+\text{measure scaling}
+}
+$$
+
+For a model that **fits but is slow**, start by considering data parallelism. For a model whose **training state does not fit**, shard parameters, gradients and optimizer state. For layers that are individually too large or computationally enormous, split the model itself using tensor or pipeline parallelism. And throughout all of these, remember the fundamental trade:
+
+$$
+\boxed{
+\text{more devices}
+\Rightarrow
+\text{more potential compute/memory}
++
+\text{more communication and coordination}
+}
+$$
+
+The winning distributed architecture is therefore not the one using the most GPUs. It is the smallest, simplest topology that satisfies your **memory requirement and time-to-train objective with acceptable scaling efficiency, cost, and failure behavior**.
 
 ![A trustworthy distributed run follows six steps from diagnosing the one-device limit through strategy selection, coordinated worker launch, preserved training semantics, checkpoint recovery, and measured scaling value.](/content-assets/articles/article-mlops-training-pipelines-distributed-training-basics/trustworthy-distributed-run.png)
 
 *The distributed design is complete after the team can account for the data, explain the optimizer semantics, restore a complete checkpoint, preserve model quality, and show that the extra devices improved the operating result.*
 
+## Check Your Answers
+
+Use these short answers to revisit the reasoning behind each section.
+
+:::expand[What Single-Device Limit Requires Distributed Training?]{kind="recap"}
+Distribution should address a measured throughput or memory limit, and each cooperating process needs a rank, device, group, and shared run identity.
+:::
+
+:::expand[How Does Synchronous Data Parallel Training Keep Model Copies Aligned?]{kind="recap"}
+Each worker starts from the same model, receives different data, computes local gradients, combines them through AllReduce, and applies the same update with an explicit global batch size.
+:::
+
+:::expand[How Do State Sharding, Tensor Parallelism, and Pipeline Parallelism Solve Memory Limits?]{kind="recap"}
+Data parallelism replicates state; ZeRO or fully sharded methods partition training state; tensor and pipeline parallelism split layer computation and can be combined.
+:::
+
+:::expand[How Do Communication and Slow Workers Limit Scaling?]{kind="recap"}
+Communication bandwidth, latency, synchronization, stragglers, data supply, and node boundaries create a distribution tax that can dominate saved compute.
+:::
+
+:::expand[What Must a Distributed Checkpoint Preserve for Recovery?]{kind="recap"}
+Recovery may require model, optimizer, scheduler, precision, random, sampler, topology, data, and sharding state, sometimes with resharding for a new world size.
+:::
+
+:::expand[How Do Frameworks and Training Pipelines Manage Distributed Jobs?]{kind="recap"}
+Compute frameworks distribute model work, job frameworks launch workers, platforms manage clusters, and the pipeline controls the surrounding request, data, checkpoint, evaluation, and release lifecycle.
+:::
+
+:::expand[How Do Scaling Experiments Measure Useful Distributed Work?]{kind="recap"}
+Matched runs across increasing device counts record throughput, phase timing, rank imbalance, memory, cost, quality, and scaling efficiency.
+:::
+
+:::expand[How Do You Choose the Smallest Distributed Strategy That Meets the Constraint?]{kind="recap"}
+The chosen strategy partitions only what the measured constraint requires and stops scaling when added coordination costs exceed useful time, memory, or economic value.
+:::
+
 ## References
 
-- [PyTorch DistributedDataParallel](https://docs.pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html)
-- [PyTorch distributed communication and DeviceMesh](https://docs.pytorch.org/docs/stable/distributed.html)
-- [PyTorch DistributedSampler](https://docs.pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler)
-- [PyTorch torchrun](https://docs.pytorch.org/docs/stable/elastic/run.html)
-- [PyTorch rendezvous](https://docs.pytorch.org/docs/stable/elastic/rendezvous.html)
-- [PyTorch FSDP2 `fully_shard`](https://docs.pytorch.org/docs/main/distributed.fsdp.fully_shard.html)
-- [PyTorch DTensor](https://docs.pytorch.org/docs/stable/distributed.tensor.html)
-- [PyTorch tensor parallelism](https://docs.pytorch.org/docs/stable/distributed.tensor.parallel.html)
-- [PyTorch pipeline parallelism](https://docs.pytorch.org/docs/stable/distributed.pipelining.html)
-- [PyTorch Distributed Checkpoint](https://docs.pytorch.org/docs/stable/distributed.checkpoint.html)
-- [DeepSpeed ZeRO](https://deepspeed.readthedocs.io/en/stable/zero3.html)
-- [Ray Train overview](https://docs.ray.io/en/latest/train/overview.html)
-- [Ray Train checkpointing](https://docs.ray.io/en/latest/train/user-guides/checkpoints.html)
-- [NVIDIA NCCL documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/)
-- [Amazon SageMaker AI distributed training](https://docs.aws.amazon.com/sagemaker/latest/dg/distributed-training-get-started.html)
-- [Amazon SageMaker AI model parallelism v2](https://docs.aws.amazon.com/sagemaker/latest/dg/model-parallel-v2.html)
-- [Gemini Enterprise Agent Platform distributed training](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/distributed-training)
-- [Azure Machine Learning distributed GPU training](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-train-distributed-gpu)
-- [Databricks TorchDistributor](https://docs.databricks.com/aws/en/machine-learning/train-model/distributed-training/spark-pytorch-distributor)
+[1]: https://docs.pytorch.org/docs/stable/distributed.html "Distributed communication package - torch.distributed — PyTorch 2.13 documentation"
+[2]: https://www.deepspeed.ai/tutorials/zero/ "Zero Redundancy Optimizer - DeepSpeed"
+[3]: https://docs.pytorch.org/tutorials/distributed.html "Distributed — PyTorch Tutorials 2.13.0+cu130 documentation"
+[4]: https://www.deepspeed.ai/tutorials/zero/ "Zero Redundancy Optimizer - DeepSpeed"
+[5]: https://docs.ray.io/en/latest/train/overview.html "Ray Train Overview — Ray 2.56.0"
+[6]: https://docs.ray.io/en/latest/train/deepspeed.html "Get Started with DeepSpeed — Ray 2.55.1"
+[7]: https://docs.aws.amazon.com/sagemaker/latest/dg/distributed-training.html "Distributed training in Amazon SageMaker AI - Amazon SageMaker AI"
+[8]: https://docs.ray.io/en/latest/train/user-guides/data-loading-preprocessing.html "Data Loading and Preprocessing — Ray 2.57.0"

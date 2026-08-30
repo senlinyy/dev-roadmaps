@@ -1,0 +1,39 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/apt/sources.list.d": { "type": "dir" },
+    "/etc/apt/sources.list.d/vendor.list": { "type": "file", "content": "deb https://packages.vendor.example stable main\n" }
+  },
+  "commandModules": ["packages"],
+  "packages": {
+    "manager": "apt",
+    "indexFresh": false,
+    "repositories": [
+      { "id": "noble", "name": "Ubuntu Noble", "family": "apt", "url": "http://archive.ubuntu.com/ubuntu noble", "enabled": true, "trusted": true },
+      { "id": "vendor", "name": "Vendor Stable", "family": "apt", "url": "https://packages.vendor.example stable", "enabled": true, "trusted": false, "configPath": "/etc/apt/sources.list.d/vendor.list" }
+    ],
+    "packages": [
+      { "name": "vendor-agent", "architecture": "amd64", "candidateVersion": "3.4.1", "repository": "vendor", "summary": "Vendor monitoring agent" }
+    ]
+  },
+  "grader": {
+    "strategy": "package-state",
+    "expectedPackages": {
+      "indexFresh": true,
+      "disabledRepositories": ["vendor"],
+      "diagnostics": ["repository-trust"]
+    },
+    "expectedFs": {
+      "/etc/apt/sources.list.d/vendor.list": { "type": "file", "exists": false },
+      "/etc/apt/sources.list.d/vendor.list.disabled": { "type": "file", "contentContains": "packages.vendor.example" }
+    },
+    "requireCommands": ["apt", "mv", "apt-cache"],
+    "requireCommandPatterns": [
+      "^mv\\s+/etc/apt/sources\\.list\\.d/vendor\\.list\\s+/etc/apt/sources\\.list\\.d/vendor\\.list\\.disabled$",
+      "^apt-cache\\s+policy\\s+vendor-agent$"
+    ],
+    "minCommandCount": 4
+  }
+}

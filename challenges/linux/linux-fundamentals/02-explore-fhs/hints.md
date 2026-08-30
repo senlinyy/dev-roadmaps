@@ -1,1 +1,9 @@
-Use `cd /etc` to navigate, then `ls` to see what's there. `cat hostname` reads a file in the current directory. `tail -n 5 /var/log/syslog` shows the last 5 lines. Finish with `cat /etc/os-release` so the grader sees the OS info as your last output.
+System-wide configuration normally begins under `/etc`; look for a directory named after the service.
+
+---
+
+Changing logs belong under `/var/log`, while deployed service data commonly belongs under `/srv`.
+
+---
+
+Short-lived PID files belong under `/run`. Use a command that prints file contents, and use the end-of-file viewer for the two newest log lines.

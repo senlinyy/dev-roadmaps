@@ -1,17 +1,17 @@
 ---
-title: "Explore the Filesystem Hierarchy"
-sectionSlug: where-linux-puts-important-things
+title: "Follow the Application Trail"
+sectionSlug: where-does-linux-put-important-things
 order: 2
+revision: 2
 ---
 
-Linux follows the Filesystem Hierarchy Standard (FHS) so every distribution puts things in the same places. Time to explore where critical system files live.
+The `orders-api` service failed during startup. Its configuration, changing logs, deployed release, and runtime PID should each live under the standard Linux directory for that kind of data.
 
 You start in `/home/dev`. Your job:
 
-1. **Navigate to `/etc`** and list its contents to see system configuration files.
-2. **Read `/etc/hostname`** to find this machine's name.
-3. **Read `/etc/resolv.conf`** to see the DNS resolver configuration.
-4. **Navigate to `/var/log`** and show the **last 5 lines** of `syslog`.
-5. As your final command, **read `/etc/os-release`** to identify the operating system.
+1. **Read the service configuration** from the standard system-wide configuration tree.
+2. **Inspect the latest two application log lines** from the directory used for changing log data.
+3. **List the deployed release data** from the part of the filesystem used for service content.
+4. **Read the runtime PID** from the volatile runtime directory.
 
-The grader checks that you used `cd`, `ls`, `cat`, and `tail`, and that your last output contains the OS release information.
+The grader checks that your evidence reaches all four filesystem roles.

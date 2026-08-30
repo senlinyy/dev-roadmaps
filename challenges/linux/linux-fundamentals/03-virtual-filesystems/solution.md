@@ -1,9 +1,9 @@
 ```bash
-$ cat /proc/cpuinfo
-$ cat /proc/meminfo
-$ cat /proc/version
-$ wc -l /proc/cpuinfo
-$ cat /proc/loadavg
+cat /proc/4242/cmdline
+readlink /proc/4242/cwd
+cat /proc/4242/environ
+cat /sys/block/vdb/queue/rotational
 ```
 
-- Every file in `/proc` is generated on the fly by the kernel. No data lives on disk. `cpuinfo` describes the CPU, `meminfo` shows RAM stats, `version` gives the kernel build. `loadavg` shows the 1/5/15-minute load averages. Keep it as your final command so the grader sees it.
+- `/proc/4242` exposes live state for one process.
+- `/sys/block/vdb` exposes kernel-maintained information about one block device.

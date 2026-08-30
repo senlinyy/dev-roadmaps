@@ -1,7 +1,7 @@
 ---
 title: "Human Review Workflows"
-description: "Design human review as a production workflow with risk-based routing, reliable assignment, useful reviewer context, adjudication, quality control, and governed feedback."
-overview: "Human review gives selected model decisions to qualified people through a controlled path. The workflow decides which cases need review, preserves the evidence, records accountable decisions, and returns suitable outcomes to monitoring and model development."
+description: "Human review begins as a routing policy that balances uncertainty, consequence, learning value, random coverage, reviewer cost, and available capacity."
+overview: "Human review begins as a routing policy that balances uncertainty, consequence, learning value, random coverage, reviewer cost, and available capacity. The full example connects routing, case state, reviewer behaviour, queue capacity, architecture, reproducible labels, policy monitoring, and the value of information."
 tags: ["MLOps", "production", "feedback"]
 order: 2
 id: "article-mlops-monitoring-and-feedback-human-review-workflows"
@@ -9,498 +9,2579 @@ id: "article-mlops-monitoring-and-feedback-human-review-workflows"
 
 ## Table of Contents
 
-1. [What a Human Review Workflow Means](#what-a-human-review-workflow-means)
-2. [How A Case Moves Through Human Review](#how-a-case-moves-through-human-review)
-3. [Choose Which Cases Need Human Review](#choose-which-cases-need-human-review)
-4. [What Information A Reviewer Needs](#what-information-a-reviewer-needs)
-5. [How Reviewers Claim Work Without Duplicating It](#how-reviewers-claim-work-without-duplicating-it)
-6. [Design The Interface For An Independent Human Decision](#design-the-interface-for-an-independent-human-decision)
-7. [Define Review Decisions And Resolve Disagreement](#define-review-decisions-and-resolve-disagreement)
-8. [Measure And Improve Reviewer Quality](#measure-and-improve-reviewer-quality)
-9. [Limit Review Data By Privacy, Access, And Retention Rules](#limit-review-data-by-privacy-access-and-retention-rules)
-10. [Set Queue Targets For Capacity And User Delay](#set-queue-targets-for-capacity-and-user-delay)
-11. [Use Review Outcomes Safely In Monitoring And Retraining](#use-review-outcomes-safely-in-monitoring-and-retraining)
-12. [How Human Review Fits Into Production](#how-human-review-fits-into-production)
-13. [The Main Idea](#the-main-idea)
-14. [References](#references)
+1. [Which Decisions Should Enter Human Review and Why?](#which-decisions-should-enter-human-review-and-why)
+2. [How Should a Review Case, Its Evidence, and Its Decisions Be Structured?](#how-should-a-review-case-its-evidence-and-its-decisions-be-structured)
+3. [How Do Claiming, Disagreement, and Reviewer Quality Work Safely?](#how-do-claiming-disagreement-and-reviewer-quality-work-safely)
+4. [How Do Selection Bias, Privacy, Access, and Retention Shape Review Evidence?](#how-do-selection-bias-privacy-access-and-retention-shape-review-evidence)
+5. [How Should the Review Queue Be Operated as a Production Service?](#how-should-the-review-queue-be-operated-as-a-production-service)
+6. [How Can Review Outcomes Monitor Models without Corrupting Future Training Data?](#how-can-review-outcomes-monitor-models-without-corrupting-future-training-data)
+7. [How Do Escalation, Appeals, and Multiple Evidence Sources Improve the System?](#how-do-escalation-appeals-and-multiple-evidence-sources-improve-the-system)
+8. [How Does the Complete Human-Review Feedback Loop Work in Practice?](#how-does-the-complete-human-review-feedback-loop-work-in-practice)
+9. [Check Your Answers](#check-your-answers)
 
-## What a Human Review Workflow Means
-<!-- section-summary: Human review is a controlled handoff from an automated decision to a qualified person who has the evidence and authority to act. -->
+A model is uncertain about a high-impact decision, so the product sends the case to a person. That sounds safe until the queue overloads, two reviewers claim the same case, the interface anchors both people on the model answer, and their decisions are copied directly into the next training set.
 
-A model may be uncertain about a case whose consequence is too important for an automatic guess. **A human review workflow is the controlled handoff from that automated system to a qualified person.** The model supplies a prediction, score, or extracted value. The reviewer receives selected evidence, makes a decision, and returns it to the product through a controlled action.
+A **human review workflow** is a production system for selecting, presenting, deciding, recording, and escalating cases. People can add judgment and discover missing context, but their decisions also have latency, inconsistency, bias, privacy, and capacity constraints. The workflow must preserve why each case was selected and what kind of evidence the result represents.
 
-Consider an invoice-processing system. A model reads a supplier's bank details from a PDF so the payment system does not require manual data entry for every invoice. Most documents match the supplier record and move through automatically. One invoice contains a new bank account and the scan is difficult to read. An accounts-payable specialist receives the case. Money stays inside the organisation until that person confirms the change against approved supplier evidence.
+Use the following questions to design the route, the durable case, the reviewer operation, and the feedback that follows:
 
-The person needs more than a button labelled **Approve**. The screen should show the source document and the existing supplier record. It should also explain the model's extracted value and the routing reason. The reviewer's role determines whether they may approve, correct, reject, or escalate the case. The workflow must prevent conflicting actions and preserve what each person saw.
+1. **Which Decisions Should Enter Human Review and Why?**
+2. **How Should a Review Case, Its Evidence, and Its Decisions Be Structured?**
+3. **How Do Claiming, Disagreement, and Reviewer Quality Work Safely?**
+4. **How Do Selection Bias, Privacy, Access, and Retention Shape Review Evidence?**
+5. **How Should the Review Queue Be Operated as a Production Service?**
+6. **How Can Review Outcomes Monitor Models without Corrupting Future Training Data?**
+7. **How Do Escalation, Appeals, and Multiple Evidence Sources Improve the System?**
+8. **How Does the Complete Human-Review Feedback Loop Work in Practice?**
 
-This produces four connected responsibilities:
+## Which Decisions Should Enter Human Review and Why?
+<!-- section-summary: Human review begins as a routing policy that balances uncertainty, consequence, learning value, random coverage, reviewer cost, and available capacity. -->
 
-```mermaid
-flowchart TD
-    A["Automated Decision<br/>(model proposes an action)"] --> B["Risk-Based Handoff<br/>(policy selects review cases)"]
-    B --> C["Qualified Judgement<br/>(person examines governed evidence)"]
-    C --> D["Controlled Action<br/>(product applies the accepted decision)"]
-    D --> E["Review Evidence<br/>(outcome supports audit and learning)"]
+Human review begins as a routing policy that balances uncertainty, consequence, learning value, random coverage, reviewer cost, and available capacity.
 
-    class A input; class B,C control; class D action; class E evidence
-```
+A machine-learning model makes an estimate from incomplete information:
 
-Human review does not make every automated decision safe. A poor interface can encourage rubber-stamping. An overloaded queue can delay urgent cases. An unqualified reviewer can add another source of error. The production design therefore covers the handoff, the person, the queue, the decision, and the later use of that decision.
+$$
+\hat Y = f(X)
+$$
 
-## How A Case Moves Through Human Review
-<!-- section-summary: The lifecycle moves one selected prediction through routing, evidence capture, assignment, decision, optional adjudication, and governed downstream use. -->
+Sometimes that estimate is reliable enough to act on automatically. Sometimes the consequences of a mistake are too large, the model is too uncertain, or the case is unusual enough that we want a person to examine it. That gives us a second decision-making path:
 
-The review lifecycle follows one case from the model to a final, traceable outcome. Each stage answers a different question. The stages share stable identifiers, so the product can connect the model event, human decision, and final action. A missing stage leaves a practical gap. For example, a reviewer decision has little authority if no product transition consumes it. A product action cannot support a later audit if its review evidence was never preserved.
+$$
+\text{Model prediction}
+\rightarrow
+\text{Human review}
+\rightarrow
+\text{Final decision}
+$$
 
-### The Seven Stages From Prediction To Final Outcome
+A **human review workflow** is the production system that decides **which cases need human judgment, gets those cases to appropriate reviewers, records what the reviewers decided and why, and feeds those results back into monitoring and model improvement**. The important word is *workflow*. Simply showing a model prediction to a person is not enough. You need selection, queues, assignment, interfaces, decision definitions, quality controls, audit history, privacy controls, capacity planning, and careful use of the resulting labels. Suppose a model estimates:
 
-1. **Eligibility** asks whether the case is allowed and required to enter review.
-2. **Routing** selects the queue, priority, reviewer qualification, and deadline.
-3. **Evidence capture** freezes the identifiers and context needed to understand the original decision.
-4. **Assignment** gives one reviewer temporary ownership of the task.
-5. **Decision** records the selected action and reason.
-6. **Adjudication** resolves disagreement or ambiguity through a more authoritative review.
-7. **Downstream use** applies the decision to the product and publishes a governed event for monitoring or model development.
+$$
+P(Y=1|X)=0.98
+$$
 
-```mermaid
-flowchart TD
-    A["Prediction Receipt<br/>(record the original model event)"] --> B["Eligibility Check<br/>(apply risk and policy rules)"]
-    B --> C["Review Item<br/>(freeze context and deadline)"]
-    C --> D["Claimed Task<br/>(one reviewer holds a lease)"]
-    D --> E["Reviewer Decision<br/>(action plus reason code)"]
-    E --> F{"Resolution Needed?<br/>(disagreement or ambiguity)"}
-    F -->|Yes| G["Adjudication<br/>(qualified authority resolves the case)"]
-    F -->|No| H["Accepted Outcome<br/>(product applies the decision)"]
-    G --> H
-    H --> I["Governed Feedback<br/>(monitoring and dataset pipelines consume it)"]
+For some application, acting automatically may be reasonable. Now suppose:
 
-    class A event; class B,C,D work; class E,F,G decision; class H,I output
-```
+$$
+P(Y=1|X)=0.51
+$$
 
-### Choose Whether Review Happens Before Or After The Action
+The model is nearly indifferent. If the cost of getting the decision wrong is high, we might prefer:
 
-Two paths often share this lifecycle. **Pre-action review** pauses a product action until a person decides. The invoice bank-account change belongs on this path because the payment has not happened yet. **Post-action review** inspects a sample after the product has acted. A search-ranking team might ask assessors to judge a random sample of completed searches so it can measure relevance without delaying every user query.
+$$
+\text{machine estimates}
+\rightarrow
+\text{human investigates}
+\rightarrow
+\text{decision}
+$$
 
-The distinction matters because the workflow has different authority. A pre-action queue controls a live product decision and needs a safe fallback if reviewers are unavailable. A post-action queue produces audit evidence and can usually tolerate a longer deadline.
+rather than:
 
-## Choose Which Cases Need Human Review
-<!-- section-summary: Eligibility defines the handoff policy, while routing sends an eligible case to a queue with the right priority, skills, and deadline. -->
+$$
+\text{machine estimates}
+\rightarrow
+\text{automatic decision}.
+$$
 
-**Eligibility** is the rule that decides whether a prediction enters human review. **Routing** takes an eligible case and chooses who should see it, how urgent it is, and which review path applies.
+But uncertainty is only one reason to review a case. Consider a model detecting fraudulent payments. A £4 transaction with estimated fraud probability:
 
-### Route Cases According To The Source Of Risk
+$$
+0.60
+$$
 
-Teams commonly route cases for four reasons:
+might not deserve expensive manual review. A £100,000 transaction with:
 
-- **Impact:** an error could cause financial, safety, legal, or access harm.
-- **Uncertainty:** the model has weak evidence or several plausible outputs.
-- **Novelty:** the input differs materially from the data covered by validation.
-- **Policy:** organisational or regulatory rules require a person with named authority.
+$$
+0.60
+$$
 
-Uncertainty needs careful treatment. A low confidence score can identify some difficult cases, although a model can also be confidently wrong.
+might. So the fundamental review question is not simply:
 
-### Sample Cases Outside The Model-Selected Queue
+Is the model uncertain
 
-A stable random sample of ordinary traffic gives the team evidence outside the model's own uncertainty rule. Segment sampling adds coverage for important languages, devices, regions, or customer groups that overall traffic may hide.
+It is closer to:
 
-Suppose a content-moderation model assigns a risk score to a post. The routing policy could send very high-risk content to a rapid pre-publication queue. A small proportion of medium- and low-risk content enters a blinded audit. Threats involving immediate physical harm go to a specially trained escalation group. Those paths support different actions and require different expertise.
+$$
+\boxed{
+\text{Is additional human information worth its cost for this case?}
+}
+$$
 
-```mermaid
-flowchart TD
-    A["Model Output<br/>(prediction, score, and context)"] --> B{"High Impact?<br/>(error could cause serious harm)"}
-    B -->|Yes| C["Pre-Action Review<br/>(pause the product action)"]
-    B -->|No| D{"Audit Sample?<br/>(random or segment coverage)"}
-    D -->|Yes| E["Post-Action Audit<br/>(measure routine quality)"]
-    D -->|No| F{"Exception Detected?<br/>(invalid input or policy conflict)"}
-    F -->|Yes| G["Specialist Queue<br/>(route by required expertise)"]
-    F -->|No| H["Automated Path<br/>(continue under normal policy)"]
+That is the economic foundation of human review. Consider the entire decision system:
 
-    class A input; class B,D,F question; class C,E,G review; class H auto
-```
+$$
+X
+\rightarrow
+f(X)
+\rightarrow
+\hat Y
+\rightarrow
+\text{routing policy}
+\rightarrow
+\begin{cases}
+\text{automatic decision}\\
+\text{human review}
+\end{cases}
+$$
 
-A routing policy should identify the policy version and the selection probability for sampled work. The version explains why a case entered review. The selection probability supports weighted estimates later, because a queue that deliberately oversamples risky cases does not represent production traffic directly.
+For reviewed cases:
 
-### Define What Happens If The Review Queue Is Overloaded
+$$
+\text{case}
+\rightarrow
+\text{review queue}
+\rightarrow
+\text{reviewer}
+\rightarrow
+H
+\rightarrow
+D
+$$
 
-Queue capacity belongs in the policy. If an urgent queue reaches its safe limit, the system needs an explicit fallback. It may hold the action, apply a conservative rule, or page an authorised responder. Silently dropping review or raising the confidence threshold transfers risk to users without recording the change.
+where:
+
+* $$X$$ = model inputs,
+* $$\hat Y$$ = model prediction,
+* $$H$$ = human judgment,
+* $$D$$ = final production decision.
+
+The human is therefore not outside the ML system. The reviewer is one component inside a larger decision system. That means reviewer behaviour must be observable just like model behaviour. A model is restricted to information encoded in its features and learned relationships. A human reviewer may be able to reason about context the model does not possess. For example, a fraud model might see:
+
+$$
+X=
+\{
+\text{transaction amount},
+\text{device},
+\text{country},
+\text{merchant},
+\text{account age}
+\}
+$$
+
+A reviewer may additionally inspect:
+
+* account history,
+* related transactions,
+* merchant context,
+* customer communications,
+* known fraud patterns,
+* supporting documents.
+
+The human effectively gets a richer information set:
+
+$$
+X_H = X + Z
+$$
+
+where $$Z$$ represents additional evidence. Human review can therefore improve decisions when:
+
+$$
+P(Y|X,Z)
+$$
+
+is materially more informative than:
+
+$$
+P(Y|X).
+$$
+
+This is the ideal reason to introduce humans. Human review should not be understood as:
+
+$$
+\text{machine imperfect}
+\rightarrow
+\text{human truth}.
+$$
+
+Humans also make errors. A reviewer may be affected by:
+
+* incomplete evidence,
+* ambiguous policy,
+* fatigue,
+* time pressure,
+* inconsistent interpretation,
+* anchoring on the model's prediction,
+* inadequate training.
+
+So the relevant quantities might be:
+
+$$
+P(\text{model correct}|X)
+$$
+
+and:
+
+$$
+P(\text{reviewer correct}|X,Z).
+$$
+
+For some cases:
+
+$$
+P(\text{reviewer correct})
+
+P(\text{model correct})
+$$
+
+but for others the reverse can be true. A sensible workflow uses human attention where it adds value. Suppose your model handles:
+
+$$
+10{,}000{,}000
+$$
+
+decisions per day. Your human review team can inspect:
+
+$$
+20{,}000.
+$$
+
+You clearly cannot send everything to people. Therefore the first engineering problem is:
+
+$$
+\boxed{\text{Which 20,000 cases should humans inspect?}}
+$$
+
+This is a resource-allocation problem. If $$r_i$$ means "send case $$i$$ to review," you could conceptually want to maximize:
+
+$$
+\sum_i r_i \cdot V_i
+$$
+
+subject to:
+
+$$
+\sum_i r_i C_i \le B
+$$
+
+where:
+
+* $$V_i$$ = expected value of reviewing the case,
+* $$C_i$$ = review cost,
+* $$B$$ = available review capacity.
+
+You rarely calculate this perfectly, but it is the right mental model. Human attention is scarce. Different workflows optimize for different goals. One common strategy is **uncertainty review**. Suppose:
+
+$$
+\hat p=P(Y=1|X)
+$$
+
+and the automatic threshold is:
+
+$$
+0.5.
+$$
+
+Cases around:
+
+$$
+\hat p\approx0.5
+$$
+
+are uncertain, so you might review:
+
+$$
+0.4<\hat p<0.6.
+$$
+
+But this can be too simplistic. Another strategy is **risk-based review**. You might prioritize:
+
+$$
+\text{expected error cost}
+=
+P(\text{error}|X)\times\text{impact if wrong}.
+$$
+
+Then even a fairly confident prediction can warrant review if the stakes are enormous. It helps to separate operational review from data collection. You may review a case because the immediate production decision is important:
+
+$$
+\text{decision review}.
+$$
+
+Or because you want to estimate whether the model is performing well:
+
+$$
+\text{audit review}.
+$$
+
+Or because the model has rarely seen this type of case:
+
+$$
+\text{novelty review}.
+$$
+
+Or because you want useful new labeled examples:
+
+$$
+\text{learning review}.
+$$
+
+These objectives produce different sampling policies. If you confuse them, your human-review dataset becomes difficult to interpret. Suppose you only review cases where:
+
+$$
+0.45<\hat p<0.55.
+$$
+
+Your reviewer dataset consists entirely of difficult, ambiguous cases. If reviewers find that:
+
+$$
+30\%
+$$
+
+of model predictions are wrong, you cannot conclude:
+
+$$
+\text{model error rate}=30\%.
+$$
+
+You intentionally selected hard cases. Your observed quantity is:
+
+$$
+P(\text{error}|\text{selected for review})
+$$
+
+rather than:
+
+$$
+P(\text{error}).
+$$
+
+For unbiased monitoring, it can therefore be valuable to reserve some review capacity for a random sample of ordinary production traffic. This gives you a more representative audit population. Conceptually, review traffic might contain several streams:
+
+$$
+Q=
+Q_{\text{high risk}}
++
+Q_{\text{uncertain}}
++
+Q_{\text{random audit}}
++
+Q_{\text{novel}}
++
+Q_{\text{escalated}}.
+$$
+
+For example, some capacity protects users immediately, some estimates system quality, and some gathers information about unfamiliar situations. The exact percentages depend on the application. The deeper principle is:
+
+$$
+\boxed{\text{review sampling should reflect why you want human judgment}}
+$$
+
+rather than simply "send low-confidence predictions."
+
+## How Should a Review Case, Its Evidence, and Its Decisions Be Structured?
+<!-- section-summary: Each case needs durable identity and state, proportionate context, a precise judgment vocabulary, and a separation between reviewer opinion and the final product action. -->
+
+Each case needs durable identity and state, proportionate context, a precise judgment vocabulary, and a separation between reviewer opinion and the final product action.
+
+A typical lifecycle looks like:
+
+$$
+\text{prediction created}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{routing policy says review}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{review case created}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{case enters queue}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{reviewer claims case}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{reviewer examines evidence}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{decision recorded}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{optional second review / escalation}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{final action}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{future outcome collected}
+$$
+
+$$
+\downarrow
+$$
+
+$$
+\text{review quality + model quality measured}.
+$$
+
+Every transition should ideally be observable. A production review case needs identity.
+
+Conceptually:
+
+$$
+R_i=
+(
+\text{case\_id},
+\text{prediction\_id},
+t_{\text{created}},
+\text{reason},
+\text{priority},
+\text{state}
+)
+$$
+
+The link:
+
+$$
+\text{case\_id}
+\rightarrow
+\text{prediction\_id}
+$$
+
+is particularly important. It lets you connect:
+
+$$
+\text{model prediction}
+$$
+
+to:
+
+$$
+\text{human judgment}
+$$
+
+to:
+
+$$
+\text{eventual outcome}.
+$$
+
+Without that lineage you cannot later ask:
+
+When model and human disagreed, who tended to be right
+
+Rather than treating a case as simply "done" or "not done," define states.
+
+For example:
+
+$$
+\text{created}
+\rightarrow
+\text{queued}
+\rightarrow
+\text{claimed}
+\rightarrow
+\text{in review}
+\rightarrow
+\text{submitted}
+\rightarrow
+\text{resolved}.
+$$
+
+Additional paths may include:
+
+$$
+\text{in review}\rightarrow\text{needs escalation}
+$$
+
+or:
+
+$$
+\text{claimed}\rightarrow\text{expired}\rightarrow\text{queued}.
+$$
+
+Why bother?
+
+Because operational questions become well-defined:
+
+$$
+\text{How many are waiting?}
+$$
+
+$$
+\text{How long have they waited?}
+$$
+
+$$
+\text{How many are stuck?}
+$$
+
+$$
+\text{Which cases need escalation?}
+$$
+
+Explicit states turn an informal human process into a reliable production workflow. At first it may seem obvious:
+
+Show reviewers everything.
+
+That is often wrong. The interface should show enough information to make the desired decision, but not irrelevant information that adds noise, bias, privacy exposure, or cognitive burden. Suppose a reviewer is deciding whether a transaction is fraudulent. Useful evidence might include:
+
+$$
+\text{transaction details}
+$$
+
+$$
+\text{recent account activity}
+$$
+
+$$
+\text{device changes}
+$$
+
+$$
+\text{related transactions}
+$$
+
+$$
+\text{merchant context}.
+$$
+
+What the reviewer sees should follow from the **decision task**, not from whatever data happens to be available. A single observation often has little meaning.
+
+For example:
+
+$$
+\text{transaction}=£2,000
+$$
+
+may look suspicious in isolation. But perhaps the customer regularly spends:
+
+$$
+£1,500-£3,000.
+$$
+
+Or perhaps their historical maximum is:
+
+$$
+£25.
+$$
+
+The same number means different things depending on context. Therefore interfaces often benefit from showing relevant changes or histories:
+
+$$
+X_t-X_{t-1}
+$$
+
+or:
+
+$$
+X_t
+\quad\text{relative to}\quad
+P(X|\text{this entity's history}).
+$$
+
+Humans are often especially valuable at contextual pattern recognition. More information does not monotonically improve judgment. If the interface provides 200 fields, reviewers may ignore most of them, develop shortcuts, or spend too long on each case. You can think of effective reviewer information as a tradeoff:
+
+$$
+\text{decision quality}
+\quad\text{vs.}\quad
+\text{cognitive cost}.
+$$
+
+The useful interface is one that helps the reviewer locate the evidence relevant to the policy. Good reviewer UX is part of model quality. This is a surprisingly important design choice. Suppose the model says:
+
+$$
+\hat p_{\text{fraud}}=0.93.
+$$
+
+Then the human sees:
+
+Model: 93% fraud.
+
+Now the reviewer may become anchored on that answer. Instead of independently deciding:
+
+$$
+H=g(X,Z),
+$$
+
+the human may effectively behave like:
+
+$$
+H=g(X,Z,\hat Y)
+$$
+
+with excessive weight on $$\hat Y$$. Then your supposedly independent human label is partly generated by the model itself. Suppose the model has a systematic blind spot. If reviewers see model predictions first and generally trust them, reviewers may reproduce the same blind spot. Then human-review data says:
+
+Humans agree with the model 98% of the time.
+
+But agreement is not necessarily evidence of correctness. The review process was influenced by the model. For monitoring or ground-truth creation, you may instead want:
+
+$$
+\boxed{\text{blind review}}
+$$
+
+where the reviewer makes an independent initial decision before seeing the model output. The model prediction can optionally be revealed afterward for operational purposes. Blind review is not universally best. If the goal is fast operational decision-making, showing the model's:
+
+* suggested classification,
+* highlighted evidence,
+* retrieved context,
+* explanation,
+
+may make reviewers more efficient. So there are two competing objectives:
+
+$$
+\text{independent measurement}
+$$
+
+versus:
+
+$$
+\text{efficient human-machine collaboration}.
+$$
+
+For evaluation labels, independence is especially valuable. For high-throughput operations, assistance may be worth the loss of independence. The important thing is to know which system you are building. Suppose a reviewer says:
+
+$$
+H=\text{fraud}
+$$
+
+but policy says transactions below £5 should not be blocked.
+
+Then:
+
+$$
+D=\text{allow}
+$$
+
+despite the review result. You should record both:
+
+$$
+\text{review judgment}
+$$
+
+and:
+
+$$
+\text{final production decision}.
+$$
+
+Otherwise later analysis might incorrectly infer that the reviewer judged the transaction legitimate. This is the same principle used in model systems:
+
+$$
+\text{prediction}\neq\text{decision}.
+$$
+
+Likewise:
+
+$$
+\boxed{\text{human assessment}\neq\text{final action}}
+$$
+
+in general. A review workflow becomes unreliable if labels mean different things to different reviewers. Suppose choices are:
+
+$$
+\{\text{safe},\text{fraud}\}.
+$$
+
+What happens when evidence is insufficient?
+
+Some reviewers may choose "safe." Others may choose "fraud." Others may abandon the case. A better decision space may include:
+
+$$
+\{\text{fraud},\text{legitimate},\text{insufficient evidence}\}.
+$$
+
+The exact taxonomy depends on the problem, but each category needs operational semantics. A label should answer a defined question. Teams sometimes try to force every review into:
+
+$$
+Y\in\{0,1\}.
+$$
+
+But uncertainty itself can be meaningful. Suppose experienced reviewers repeatedly return:
+
+$$
+H=\text{uncertain}
+$$
+
+for a particular class of cases. That may indicate:
+
+* ambiguous product policy,
+* insufficient evidence,
+* a genuinely difficult boundary,
+* missing features,
+* a new phenomenon.
+
+Forcing reviewers to guess destroys that signal. Sometimes:
+
+$$
+\boxed{\text{I cannot determine this from available evidence}}
+$$
+
+is the most accurate label. A final label such as:
+
+$$
+H=1
+$$
+
+may tell you what the reviewer concluded. A structured reason can tell you why.
+
+For example:
+
+$$
+\text{decision}=\text{fraud}
+$$
+
+$$
+\text{reason}=\text{account takeover pattern}.
+$$
+
+Structured reason codes can help reveal:
+
+$$
+\text{which failure mode is increasing?}
+$$
+
+If a model suddenly misses many cases with reason:
+
+$$
+\text{new-device social-engineering attack},
+$$
+
+that is useful feedback for feature and model development. Free-form comments may add context, but structured fields are much easier to aggregate.
 
 ![Human-review routing policy using impact, uncertainty, novelty, and policy to choose an automated path, pre-action review, post-action audit, or specialist escalation](/content-assets/articles/article-mlops-monitoring-and-feedback-human-review-workflows/human-review-routing-policy.png)
 
 *Impact, uncertainty, novelty, and policy all feed the routing policy. Only human-review routes consume review capacity; ordinary automated cases continue under the approved product policy.*
 
-## What Information A Reviewer Needs
-<!-- section-summary: A review item is an immutable record that connects the original prediction, routing rule, governed evidence, deadline, and permitted reviewer actions. -->
+## How Do Claiming, Disagreement, and Reviewer Quality Work Safely?
+<!-- section-summary: Atomic claims, leases, deliberate duplicate review, preserved disagreements, gold cases, agreement measures, and difficulty-aware analysis make reviewer evidence trustworthy. -->
 
-A **review item** is the durable record a queue gives to a reviewer. It should let another authorised person reconstruct the original decision later, even after the model, source data, or policy has changed.
+Atomic claims, leases, deliberate duplicate review, preserved disagreements, gold cases, agreement measures, and difficulty-aware analysis make reviewer evidence trustworthy.
 
-### Link The Review Task To The Original Decision
+Suppose two reviewers open the same case. Reviewer A spends five minutes investigating. Reviewer B independently spends five minutes doing the same. Both submit decisions. Unless double-review was intentional, you have wasted scarce capacity and created ambiguous state. So review systems need a mechanism to claim work.
 
-At minimum, the item needs:
+Conceptually:
 
-- a stable `review_task_id` and `prediction_id`;
-- the model, feature, and routing-policy versions;
-- the prediction, score, and decision timestamp;
-- the reason for review, priority, deadline, and required reviewer role;
-- governed references to the source evidence;
-- the allowed decisions and active label-policy version;
-- assignment, submission, escalation, and adjudication timestamps.
+$$
+\text{queued}
+\xrightarrow{\text{claim}}
+\text{owned by reviewer }r.
+$$
 
-### Reference Sensitive Evidence Instead Of Copying It
+This is a distributed-systems problem, not an ML problem. Imagine:
 
-The phrase **governed reference** is important. A review database rarely needs another unrestricted copy of a medical image, identity document, or customer conversation. It can store an object identifier. The interface then obtains short-lived access through the source system's normal authorisation path.
+$$
+\text{Reviewer A: claim case 123}
+$$
 
-For a document-extraction case, one review item might look like this:
+and at essentially the same moment:
 
-```json
-{
-  "review_task_id": "rvw_01J...",
-  "prediction_id": "pred_01J...",
-  "model_version": "invoice-extractor-27",
-  "policy_version": "bank-change-review-4",
-  "review_reason": "supplier_bank_account_changed",
-  "priority": "high",
-  "due_at": "<ISO-8601 deadline>",
-  "evidence": {
-    "invoice_object_id": "obj_8f...",
-    "supplier_record_version": 312
-  },
-  "proposal": {
-    "field": "bank_account",
-    "value": "GB29..."
-  },
-  "allowed_actions": ["confirm", "correct", "reject", "escalate"]
-}
-```
+$$
+\text{Reviewer B: claim case 123}.
+$$
 
-The example contains identifiers and the proposed field. It avoids storing the full invoice in the task record. The interface resolves the object ID after checking the reviewer's role. The stored record also freezes the supplier record version, so an investigator does not unknowingly compare the review with a later edited supplier profile.
+The storage layer should allow only one successful transition:
 
-### Add Corrections Without Replacing Earlier Decisions
+$$
+\text{queued}\rightarrow\text{claimed}.
+$$
 
-Immutability applies to decision evidence. A correction creates a new event linked to the original review. The original row remains intact. This preserves the first judgement and the later correction, together with each actor and authorising policy.
+Conceptually:
 
-## How Reviewers Claim Work Without Duplicating It
-<!-- section-summary: An atomic claim gives one reviewer temporary ownership, and a lease allows abandoned work to return safely to the queue. -->
+$$
+\text{UPDATE case}
+$$
 
-Several reviewers may request work at the same time. A plain query such as `SELECT the oldest open task` can give the same task to two people before either request updates it. Both reviewers might then submit different answers or trigger the product action twice.
+only if:
 
-A **claim** is the atomic transition that assigns one task to one reviewer. A **lease** is the limited period for which that assignment remains valid. The reviewer can renew an active lease, submit a decision, or release the task. An expired lease allows the queue to recover work abandoned after a closed browser, lost connection, or crashed worker.
+$$
+\text{state}=\text{queued}.
+$$
 
-### Use One Transaction To Prevent Duplicate Ownership
+One claimant succeeds. The other gets another case. Without an atomic claim, concurrency bugs waste human effort. What if Reviewer A claims a case and then:
 
-PostgreSQL is a practical default for a moderate review queue because the task state and claim can share one transaction. The key operation is small:
+* closes the browser,
+* loses network access,
+* ends their shift,
+* forgets about it
 
-```sql
-BEGIN;
+The case could remain locked forever. So instead of permanent ownership:
 
-WITH next_task AS (
-  SELECT review_task_id
-  FROM mlops.review_tasks
-  WHERE status = 'open'
-    AND reviewer_role = 'payments-specialist'
-  ORDER BY priority DESC, due_at, created_at
-  FOR UPDATE SKIP LOCKED
-  LIMIT 1
-)
-UPDATE mlops.review_tasks AS task
-SET status = 'assigned',
-    assigned_reviewer_id = $1,
-    assigned_at = CURRENT_TIMESTAMP,
-    assignment_expires_at = CURRENT_TIMESTAMP + INTERVAL '10 minutes'
-FROM next_task
-WHERE task.review_task_id = next_task.review_task_id
-RETURNING task.*;
+$$
+\text{claim}
+$$
 
-COMMIT;
-```
+often means:
 
-`FOR UPDATE` locks the selected row until the transaction finishes. `SKIP LOCKED` tells another claimant to move past that row and choose different work. PostgreSQL documents this option for multiple consumers of a queue-like table. The query sees an inconsistent view because it skips rows held by other transactions, so it is unsuitable for ordinary analytics.
+$$
+\text{lease until }t+\Delta.
+$$
 
-### Recover Expired Work And Guard Final Submission
+If no heartbeat or submission occurs before expiry:
 
-Lease expiry needs a compare-and-set update. The recovery worker should reopen only an `assigned` task whose lease has expired and whose decision is still absent. Submission follows the same rule: update `assigned` to `submitted` only if the reviewer owns the active lease.
+$$
+\text{claimed}\rightarrow\text{queued}.
+$$
 
-The submission request also carries an **idempotency key**, which identifies one logical action across retries. A repeated request with the same key returns the stored decision. A different second decision receives a conflict and enters the resolution path.
+This is the same lease pattern used in distributed job systems. A human review queue is, in many respects, a task-processing system where the workers happen to be people. For difficult or high-stakes cases you may deliberately ask:
 
-Tests should run simultaneous claims and confirm that each reviewer receives a different task. Another test should expire a lease and reclaim the task once. A submission retry should still produce exactly one product action.
+$$
+H_1
+$$
 
-PostgreSQL does not need to own every later use of the data. The transaction database can run the live queue, while completed review events flow to a warehouse or lakehouse for analytics and dataset construction.
+and:
+
+$$
+H_2
+$$
+
+to make independent judgments. Then disagreement:
+
+$$
+H_1\neq H_2
+$$
+
+is useful information. The system needs to distinguish:
+
+$$
+\text{two reviewers because of a bug}
+$$
+
+from:
+
+$$
+\text{two reviewers by design}.
+$$
+
+Intentional redundancy is one method for estimating human-label quality. Suppose two qualified reviewers inspect the same case. Reviewer 1 says:
+
+$$
+H_1=1
+$$
+
+Reviewer 2 says:
+
+$$
+H_2=0.
+$$
+
+It is tempting to assume somebody made a mistake. But the case may genuinely be ambiguous. Disagreement can reflect:
+
+$$
+\text{reviewer noise}
+$$
+
+or:
+
+$$
+\text{ambiguous evidence}
+$$
+
+or:
+
+$$
+\text{ambiguous policy}.
+$$
+
+Those causes should not automatically be treated the same way. A workflow may use:
+
+$$
+H_1,H_2
+\rightarrow
+\text{adjudicator}
+\rightarrow
+H^*.
+$$
+
+Or for larger panels:
+
+$$
+H^*=\operatorname{majority}(H_1,H_2,H_3).
+$$
+
+But majority vote is not automatically truth. Three people following the same mistaken interpretation can outvote one domain expert. The resolution method should reflect expertise and the cost of errors. What matters for monitoring is preserving both the original judgments and the resolved judgment. Suppose final adjudication says:
+
+$$
+H^*=1.
+$$
+
+It is useful to retain:
+
+$$
+H_1=1,\qquad H_2=0,\qquad H_3=1.
+$$
+
+Why?
+
+Because disagreement rate itself can be monitored:
+
+$$
+P(H_1\neq H_2).
+$$
+
+If that rises sharply, something may have changed:
+
+* policies became unclear,
+* a new case type appeared,
+* evidence became poorer,
+* reviewer training diverged.
+
+So the label history contains information beyond the final consensus. A human reviewer is another prediction mechanism. We can represent reviewer $$r$$ as:
+
+$$
+H_r=g_r(X,Z).
+$$
+
+If sufficiently reliable reference outcomes later become available, we can compare:
+
+$$
+H_r
+$$
+
+with:
+
+$$
+Y.
+$$
+
+Then calculate quantities analogous to model evaluation:
+
+$$
+\text{accuracy}_r
+$$
+
+$$
+\text{precision}_r
+$$
+
+$$
+\text{recall}_r.
+$$
+
+Human quality should be measured, not assumed. Suppose Reviewer A receives mostly obvious cases. Reviewer B handles difficult escalations. Their raw accuracies are:
+
+$$
+A=98\%
+$$
+
+$$
+B=91\%.
+$$
+
+It would be wrong to immediately conclude Reviewer A is better. The case distributions differ:
+
+$$
+P(X|\text{Reviewer A})
+\neq
+P(X|\text{Reviewer B}).
+$$
+
+This is the same statistical issue that appears when comparing models on different datasets. Fair reviewer evaluation needs comparable cases or adjustment for case difficulty. One method is to periodically insert cases with trusted answers:
+
+$$
+Y^*.
+$$
+
+Reviewers do not necessarily know which cases are tests. Then measure:
+
+$$
+P(H_r=Y^*).
+$$
+
+These are sometimes called gold cases. They can reveal:
+
+* misunderstanding of policy,
+* quality deterioration,
+* training needs,
+* systematic reviewer errors.
+
+But the gold labels themselves need to be genuinely reliable. A bad answer key measures conformity to a bad answer key. Suppose reviewers agree:
+
+$$
+99.5\%
+$$
+
+of the time. This looks excellent. But imagine all reviewers use the same incorrect rule.
+
+Then:
+
+$$
+\text{agreement}\approx100\%
+$$
+
+while:
+
+$$
+\text{accuracy}
+$$
+
+could still be poor. So:
+
+$$
+\boxed{\text{agreement}\neq\text{correctness}}.
+$$
+
+Agreement measures consistency. To measure correctness, you need stronger reference evidence. For each case:
+
+$$
+T_r
+=
+t_{\text{submitted}}-t_{\text{opened}}.
+$$
+
+A sharp increase in review time may indicate:
+
+* harder cases,
+* confusing interface changes,
+* missing evidence,
+* new policy complexity.
+
+An unusually low review time can also be suspicious if reviewers are rushing or mechanically accepting suggestions. Thus human operations generate their own observability signals. Monitoring usually talks about:
+
+$$
+P(X)
+$$
+
+and:
+
+$$
+P(Y|X).
+$$
+
+But a human-in-the-loop system also contains:
+
+$$
+P(H|X,Z,r,t).
+$$
+
+That relationship can change. For example, after a policy update:
+
+$$
+P(H=1|X)
+$$
+
+might shift. This may be intentional. Or reviewers may gradually develop inconsistent interpretations. Human behaviour is part of the production system and can drift.
+
+## How Do Selection Bias, Privacy, Access, and Retention Shape Review Evidence?
+<!-- section-summary: Selection reasons must remain visible because review data is biased; least-privilege access, audit records, and intentional retention protect the people represented in each case. -->
+
+Selection reasons must remain visible because review data is biased; least-privilege access, audit records, and intentional retention protect the people represented in each case.
+
+Suppose only model-uncertain cases go to humans. Your human-labeled dataset follows:
+
+$$
+P(X,Y|\text{reviewed})
+$$
+
+rather than:
+
+$$
+P(X,Y).
+$$
+
+If you train the next model directly on that dataset without accounting for selection, you heavily oversample ambiguous cases. That might be useful. But it changes the training distribution. Review labels therefore come with a **sampling policy** that should be recorded. For every reviewed case, record something like:
+
+$$
+S_i=
+\text{review selection reason}.
+$$
+
+Examples could conceptually include:
+
+$$
+\text{random audit}
+$$
+
+$$
+\text{low confidence}
+$$
+
+$$
+\text{high financial exposure}
+$$
+
+$$
+\text{user appeal}
+$$
+
+$$
+\text{novel input}
+$$
+
+$$
+\text{policy escalation}.
+$$
+
+Then later you can distinguish:
+
+$$
+P(Y|\text{random audit})
+$$
+
+from:
+
+$$
+P(Y|\text{uncertain cases}).
+$$
+
+Without selection lineage, review results are easy to misuse. This distinction matters. Suppose a reviewer says:
+
+$$
+H=\text{fraud}.
+$$
+
+Later a definitive investigation establishes:
+
+$$
+Y=\text{legitimate}.
+$$
+
+The reviewer's judgment was a decision-time estimate. The later outcome is stronger evidence. Therefore:
+
+$$
+\boxed{H\neq Y}
+$$
+
+in general. A human review result may be:
+
+* a production decision,
+* a provisional label,
+* an expert annotation,
+
+without necessarily being ground truth. The system should preserve that distinction. Even when human judgments are imperfect, they can arrive much faster than final outcomes. Suppose official fraud labels take:
+
+$$
+60\text{ days}.
+$$
+
+Expert review is available within:
+
+$$
+10\text{ minutes}.
+$$
+
+Then human judgments can function as:
+
+$$
+Y_{\text{proxy}}
+$$
+
+for rapid monitoring. You might track:
+
+$$
+P(H\neq\hat Y)
+$$
+
+as an early warning. Later, when true outcomes arrive, you can evaluate both:
+
+$$
+P(\hat Y=Y)
+$$
+
+and:
+
+$$
+P(H=Y).
+$$
+
+This provides a powerful fast/slow feedback architecture. A reviewer interface creates another surface where potentially sensitive information is exposed. The naive approach:
+
+Show everything so reviewers can make better decisions.
+
+can violate data-minimization principles. Instead ask:
+
+$$
+\boxed{\text{What is the minimum information required for this task?}}
+$$
+
+Different review roles may require different views. A fraud investigator may legitimately need information that a quality auditor does not. Suppose reviewer $$r$$ has role:
+
+$$
+R_r.
+$$
+
+Access should be derived from:
+
+$$
+\text{allowed data}=A(R_r).
+$$
+
+Not every reviewer should automatically access every case or every field. Useful controls can include:
+
+$$
+\text{role-based access}
+$$
+
+$$
+\text{regional restrictions}
+$$
+
+$$
+\text{case-type restrictions}
+$$
+
+$$
+\text{temporary privileges}
+$$
+
+$$
+\text{auditable access logs}.
+$$
+
+The review workflow is part of the security boundary of the system. For sensitive workflows it can matter to know:
+
+$$
+\text{who viewed which case}
+$$
+
+$$
+\text{when}
+$$
+
+$$
+\text{what they changed}
+$$
+
+$$
+\text{which evidence they accessed}.
+$$
+
+This gives an audit trail:
+
+$$
+\text{case}
+\rightarrow
+\text{access history}
+\rightarrow
+\text{decision history}.
+$$
+
+The same lineage principle that applies to models also applies to humans. A review system may accumulate:
+
+* raw user content,
+* documents,
+* transaction histories,
+* reviewer notes,
+* screenshots,
+* personal identifiers.
+
+Keeping all of it forever "just in case" increases risk. Different pieces of information may need different retention periods. The general principle is:
+
+$$
+\boxed{\text{retain data because there is a defined need, not merely because storage is cheap}}
+$$
+
+while still preserving sufficient lineage for auditing and model evaluation.
+
+## How Should the Review Queue Be Operated as a Production Service?
+<!-- section-summary: Arrival rate, service capacity, utilization, priority, waiting-time tails, oldest-case age, and user consequence determine whether the human queue is healthy. -->
+
+Arrival rate, service capacity, utilization, priority, waiting-time tails, oldest-case age, and user consequence determine whether the human queue is healthy.
+
+Cases arrive at some rate:
+
+$$
+\lambda
+=
+\text{cases per hour}.
+$$
+
+Reviewers process cases at total rate:
+
+$$
+\mu
+=
+\text{cases per hour}.
+$$
+
+If:
+
+$$
+\lambda > \mu
+$$
+
+for a sustained period, the queue necessarily grows. No dashboard can solve that mathematical problem. So a review workflow needs capacity planning. Suppose:
+
+$$
+\lambda=1{,}000\text{ cases/hour}
+$$
+
+and reviewers can process:
+
+$$
+\mu=900\text{ cases/hour}.
+$$
+
+Every hour adds approximately:
+
+$$
+100
+$$
+
+cases. After 10 hours:
+
+$$
+\approx1{,}000
+$$
+
+additional cases are waiting. The system may still be technically healthy. But users experience growing delays. This is another silent operational failure. Suppose average capacity equals average arrival rate:
+
+$$
+\lambda\approx\mu.
+$$
+
+It may seem perfectly efficient. But arrivals and handling times vary. A temporary spike creates backlog, and there is no spare capacity to recover. Queueing systems generally become increasingly sensitive to variability as:
+
+$$
+\rho=\frac{\lambda}{\mu}\rightarrow1.
+$$
+
+So some spare capacity is not waste. It is resilience. Suppose two cases are waiting:
+
+$$
+A:\text{£200,000 transaction}
+$$
+
+$$
+B:\text{£2 transaction}.
+$$
+
+If their risks are otherwise comparable, waiting cost may be very different. A priority function might conceptually depend on:
+
+$$
+\text{priority}
+=
+g(
+\text{risk},
+\text{financial exposure},
+\text{user harm},
+\text{age},
+\text{regulatory deadline}
+).
+$$
+
+Again, the specific formula varies. The principle is that queue order should reflect the consequences of delay. A target such as:
+
+$$
+\text{95\% reviewed within 10 minutes}
+$$
+
+should not exist merely because 10 minutes is a nice round number. Ask:
+
+What happens while this case waits
+
+If a bank card is frozen during review, a 12-hour queue has significant user impact. If review happens after the fact for model-quality auditing, a 12-hour delay may be irrelevant. Service-level objectives should come from the surrounding product process. Suppose average review latency is:
+
+$$
+4\text{ minutes}.
+$$
+
+That looks excellent. But perhaps:
+
+$$
+p50=1\text{ minute}
+$$
+
+and:
+
+$$
+p99=3\text{ hours}.
+$$
+
+A small fraction of users experience terrible delays. So operational monitoring should examine a distribution:
+
+$$
+P(T_{\text{review}})
+$$
+
+and often track percentiles such as:
+
+$$
+p50,\quad p90,\quad p95,\quad p99.
+$$
+
+This is the same reason service-latency monitoring uses percentiles. Suppose backlog size stays constant:
+
+$$
+10{,}000.
+$$
+
+Perhaps the system is healthy. Or perhaps reviewers keep processing new easy cases while 500 difficult cases have been stuck for three days. A useful metric is:
+
+$$
+\max_i(t_{\text{now}}-t_{\text{created},i}).
+$$
+
+The oldest unresolved case can reveal starvation hidden by aggregate queue size. A mature workflow observes quantities such as:
+
+$$
+\text{incoming review rate}
+$$
+
+$$
+\text{queue size}
+$$
+
+$$
+\text{queue age}
+$$
+
+$$
+\text{claim rate}
+$$
+
+$$
+\text{completion rate}
+$$
+
+$$
+\text{review latency}
+$$
+
+$$
+\text{escalation rate}
+$$
+
+$$
+\text{disagreement rate}
+$$
+
+$$
+\text{reviewer quality}
+$$
+
+$$
+\text{outcome coverage}.
+$$
+
+It is not enough to monitor the model and ignore the human subsystem.
 
 ![Atomic review-task claim with a lease, expiry recovery, and idempotent final submission](/content-assets/articles/article-mlops-monitoring-and-feedback-human-review-workflows/human-review-claim-lease.png)
 
 *An atomic claim gives one reviewer a lease. Expiry can reopen abandoned work, while an idempotency key prevents a retry from creating a second product action.*
 
-## Design The Interface For An Independent Human Decision
-<!-- section-summary: The interface gives reviewers the source evidence, task purpose, label definitions, and permitted actions without pushing them toward the model's answer. -->
+## How Can Review Outcomes Monitor Models without Corrupting Future Training Data?
+<!-- section-summary: Random audits and reason codes can expose model problems, but operational reviews are not automatically ground truth and should enter training only through versioned approval rules. -->
 
-The interface determines what judgement a reviewer can actually make. It should present the task as a real product decision, identify the evidence, and explain the consequence of each permitted action. A complete screen answers five questions in ordinary language:
+Random audits and reason codes can expose model problems, but operational reviews are not automatically ground truth and should enter training only through versioned approval rules.
 
-1. What case am I reviewing?
-2. Why did it reach this queue?
-3. What evidence may I use?
-4. Which decisions am I authorised to make?
-5. What happens after I submit?
+Suppose humans independently audit random production cases. Then model-human disagreement:
 
-### Show The Evidence And The Effect Of Each Action
+$$
+D_{MH}
+=
+P(H\neq\hat Y)
+$$
 
-For the invoice example, the reviewer could see the original PDF beside the extracted bank account. The approved supplier account and the change that triggered review appear beside it. The screen offers confirm, correct, reject, and escalate as separate actions. A short policy definition explains what each action does. **Correct** requires a replacement value. **Reject** requires an applicable reason. **Escalate** records the missing evidence or authority that prevented a decision.
+can be monitored over time. Suppose historically:
 
-### Control How The Model Suggestion Influences The Reviewer
+$$
+D_{MH}=4\%
+$$
 
-The model answer can either appear immediately or remain hidden for the first judgement. The choice follows the task. A time-sensitive operational review may need the proposal because the person is validating a specific action. A blinded quality audit should hide it until submission. The resulting audit measures an independent judgement with less influence from the screen.
+and suddenly:
 
-```mermaid
-flowchart TD
-    A["Case Purpose<br/>(what real action is under review)"] --> B["Source Evidence<br/>(governed material needed to decide)"]
-    B --> C["Routing Explanation<br/>(why this case reached the reviewer)"]
-    C --> D["Decision Options<br/>(actions defined by current policy)"]
-    D --> E["Reason and Confidence<br/>(structured evidence about the judgement)"]
-    E --> F["Visible Consequence<br/>(what submission changes next)"]
+$$
+D_{MH}=17\%.
+$$
 
-    class A,B,C context
-    class D,E decision
-    class F result
-```
+That is an important warning. Possible explanations include:
 
-Visual design can introduce automation bias. A large green model recommendation beside a small neutral alternative signals approval before the reviewer reads the evidence. Interfaces should use balanced choices and accessible colour. Keyboard navigation and explicit loading states also matter. A score such as `0.91` needs a defined meaning. The interface should present it as a probability only if calibration evidence supports that interpretation.
+* model degradation,
+* reviewer policy change,
+* reviewer quality problems,
+* population shift,
+* data pipeline issues.
 
-Tools such as Label Studio can provide configurable annotation screens and references to task data. They can also expose reviewer assignments and webhooks. A custom review application is often appropriate if the submission directly controls a product action or needs complex domain permissions. The surrounding system still owns durable task state, authority checks, and the product transition.
+It is not automatically proof the model is wrong, but it is powerful evidence that something changed. Recall that operational review often oversamples difficult cases. If you want a meaningful estimate of production error, deliberately sample cases randomly:
 
-## Define Review Decisions And Resolve Disagreement
-<!-- section-summary: A decision taxonomy defines the actions and reasons a reviewer can record, while adjudication resolves disagreement without erasing it. -->
+$$
+X_i\sim P_{\text{prod}}(X).
+$$
 
-A **decision taxonomy** is the controlled set of outcomes a reviewer may select. It prevents several situations from collapsing into a vague label such as `reviewed`. The product can then apply the right action, and the quality team can understand the reason behind it.
+Then obtain independent human judgments. This gives something closer to:
 
-### Define The Actions A Reviewer Can Take
+$$
+P(H\neq\hat Y)
+$$
 
-Reviewers usually need these distinct actions:
+across the true production distribution. If human labels are sufficiently reliable, this can act as an early approximation of:
 
-- **confirm** the proposed action;
-- **correct** the output and supply the accepted value;
-- **reject** the proposal without a replacement;
-- **abstain** because the evidence cannot support a decision;
-- **escalate** because a more qualified role or policy owner is required.
+$$
+P(Y\neq\hat Y).
+$$
 
-These outcomes describe different situations. Combining abstention and rejection into one label makes missing evidence look like a model error. Combining correction and escalation hides whether the first reviewer had enough authority to solve the case.
+Random review capacity is therefore not wasted effort; it buys observability. Suppose:
 
-### Use Reason Codes To Measure Recurring Failures
+$$
+P(X)
+$$
 
-A **reason code** records why the reviewer chose an outcome. For an extracted address, reasons might include `source_unreadable`, `wrong_field_boundary`, `supplier_record_conflict`, or `policy_exception`. The code supports reliable grouping. A short note can add case-specific detail. Free text alone produces many spellings and descriptions for the same recurring problem.
+appears stable. Prediction distributions:
 
-### Keep The Original Decisions During Adjudication
+$$
+P(\hat Y)
+$$
 
-**Adjudication** is a second decision that resolves disagreement or ambiguity under a defined authority. Two assessors may disagree about whether a support message contains a threat. A specialist may also find that the current policy does not cover a new type of document. The workflow preserves both original judgements and adds the adjudicated outcome with its own actor, reason, and policy version.
+also appear stable. But a subtle new scam emerges that looks statistically similar to old traffic. Human experts start recognizing it from context unavailable to the model. Human disagreement with the model increases before production labels mature. Thus:
 
-```mermaid
-flowchart TD
-    A["First Decision<br/>(reviewer records action and reason)"] --> B{"Resolution Check<br/>(agreement, confidence, and policy coverage)"}
-    B -->|Resolved| C["Accepted Outcome<br/>(decision can control the product)"]
-    B -->|Disagreement| D["Second Review<br/>(independent qualified judgement)"]
-    B -->|Policy Gap| E["Policy Escalation<br/>(owner defines the applicable rule)"]
-    D --> F["Adjudicated Outcome<br/>(authority resolves disagreement)"]
-    E --> F
-    F --> C
+$$
+\boxed{\text{human review can act as a semantic sensor}}
+$$
 
-    class A,D review; class B question; class E,F escalation; class C result
-```
+for changes that purely statistical monitoring does not easily detect. Suppose model false negatives repeatedly receive reviewer reason:
 
-Disagreement is valuable evidence. Repeated disagreement on one category may reveal vague instructions, insufficient source material, or a problem whose correct answer is genuinely subjective. Retraining a model on forced consensus would hide that uncertainty. The team should repair the policy or label definition first if people cannot apply it consistently.
+$$
+\text{"new account takeover indicator"}
+$$
 
-## Measure And Improve Reviewer Quality
-<!-- section-summary: Agreement, calibration tasks, sampled re-review, and segment analysis test whether human decisions are consistent and suitable for downstream use. -->
+That suggests the model may lack an important variable $$Z$$. Humans are effectively using:
 
-Human decisions vary. Expertise, fatigue, unclear guidance, difficult source material, and the interface can all affect a review. Throughput alone cannot show whether the decisions are trustworthy.
+$$
+P(Y|X,Z)
+$$
 
-### Use Several Checks To Measure Reviewer Quality
+while the model only has:
 
-Teams usually combine several quality controls:
+$$
+P(Y|X).
+$$
 
-- **overlap sampling** sends a controlled subset to two independent reviewers;
-- **adjudication rate** shows how often ordinary review cannot settle a case;
-- **calibration tasks** use cases with a carefully established answer to test guidance and training;
-- **sampled re-review** asks a senior or quality team to inspect completed work;
-- **segment analysis** compares quality across task type, language, source, reviewer group, and time;
-- **reason-code review** finds categories that reviewers apply inconsistently.
+The pattern suggests:
 
-**Inter-rater agreement** measures how often reviewers make compatible decisions on the same cases. Raw agreement is simple to explain: 90 matching decisions out of 100 overlapping tasks gives 90 percent agreement. It can overstate consistency if one label dominates. Cohen's kappa adjusts two-reviewer agreement for matches expected by chance. It still depends on label prevalence and does not prove that either reviewer is correct.
+$$
+Z
+$$
 
-### Investigate Disagreement By Task And Segment
+may be worth engineering into future model inputs. Human review can therefore produce feature-development feedback, not merely labels. Suppose cases enter review only when:
 
-Suppose two assessors agree on 98 percent of ordinary support messages but only 61 percent of messages labelled as coercion. The lower result identifies the category that needs investigation. The team can inspect the source evidence, label definition, examples in the guidance, and interface. A blanket average would hide the weak category.
+$$
+0.4<\hat p<0.6.
+$$
 
-```mermaid
-flowchart TD
-    A["Completed Reviews<br/>(decisions grouped by task and segment)"] --> B["Overlap Sample<br/>(two independent judgements)"]
-    A --> C["Calibration Sample<br/>(cases with established outcomes)"]
-    A --> D["Quality Re-Review<br/>(senior review of completed work)"]
-    B --> E["Agreement Analysis<br/>(find unstable labels and segments)"]
-    C --> E
-    D --> E
-    E --> F["Targeted Repair<br/>(guidance, training, policy, or interface)"]
+Then your human-labeled dataset consists mostly of boundary cases. If you append those cases to training data without accounting for the selection mechanism, your new training distribution becomes disproportionately concentrated near the old model's decision boundary. This might be intentional for active learning. But it is not a representative sample. Formally:
 
-    class A evidence
-    class B,C,D,E control
-    class F repair
-```
+$$
+P(X|\text{reviewed})
+\neq
+P(X|\text{production}).
+$$
 
-Quality checks should also guard against model copying. Assisted operational reviews and blinded audit reviews serve different purposes and need separate metrics. A fast assisted decision may be valid. One suspicious pattern combines near-universal acceptance with unusually fast completion on comparable tasks. Poor results on blinded or calibration cases strengthen that evidence.
+Therefore human-review data must carry selection metadata. In active learning, a model deliberately chooses examples for humans to label because those examples are expected to be informative.
 
-## Limit Review Data By Privacy, Access, And Retention Rules
-<!-- section-summary: Reviewers receive the minimum evidence their role needs, and every access and decision follows an auditable retention policy. -->
+For example:
 
-Review evidence can contain personal, financial, medical, or commercially sensitive information. The workflow should minimise exposure before the first task reaches a person.
+$$
+x^*
+=
+\arg\max_x
+\operatorname{uncertainty}(f(x)).
+$$
 
-**Least privilege** means that a reviewer receives only the permissions needed for their assigned work. A payments reviewer may view the invoice and approved supplier record for one task without gaining access to the entire finance bucket. A language specialist may see the text needed for a classification without seeing account fields that do not affect the decision.
+Then the human supplies:
 
-### Authorise Access To The Task And Evidence Separately
+$$
+Y^*.
+$$
 
-The operational pattern usually includes:
+This can be highly efficient because human effort focuses on cases where labels provide substantial learning value. But it also means the resulting labels are **not randomly sampled**. Active-learning datasets need careful evaluation and weighting if you want to draw conclusions about the full production population. Suppose Reviewer A approves a transaction because policy says:
 
-- identity from the organisation's single sign-on provider;
-- role and queue membership checked on every claim and evidence request;
-- short-lived signed access to source objects;
-- field masking or redaction before display;
-- audit events for view, claim, decision, export, and escalation;
-- separate retention rules for source evidence, review metadata, and free-text notes;
-- a controlled break-glass path for exceptional access.
+When evidence is ambiguous, prefer the customer.
 
-```mermaid
-flowchart TD
-    A["Reviewer Identity<br/>(authenticated person and current role)"] --> B["Task Authorisation<br/>(role may claim this queue)"]
-    B --> C["Evidence Authorisation<br/>(task grants minimum source access)"]
-    C --> D["Short-Lived View<br/>(signed reference expires after use)"]
-    D --> E["Audit Event<br/>(record actor, object, action, and time)"]
-    E --> F["Retention Policy<br/>(delete or preserve each record by purpose)"]
+That operational choice may be correct. But it does not necessarily imply:
 
-    class A identity
-    class B,C,D control
-    class E,F record
-```
+$$
+Y=\text{legitimate}.
+$$
 
-Free-text rationales deserve special attention because people may copy sensitive material into them. Structured reason codes reduce that pressure. If free text is necessary, the interface can state what belongs there and apply redaction controls. The field stays under the same access and deletion policy as the task.
+The decision could represent policy under uncertainty rather than truth. So it is useful to distinguish:
 
-### Keep Audit Records Without Copying Sensitive Content
+$$
+H_{\text{assessment}}
+$$
 
-Audit logs need protection from ordinary task editing. Each event should identify the actor, action, object, timestamp, and result. The events then flow to the organisation's security monitoring and retention path. A log entry containing the full sensitive document creates another uncontrolled copy and defeats data minimisation.
+from:
 
-## Set Queue Targets For Capacity And User Delay
-<!-- section-summary: Arrival rate, handling time, queue age, missed deadlines, and reviewer availability show whether the human layer can meet its product promise. -->
+$$
+D_{\text{human}}
+$$
 
-A review queue is a production service. Work arrives, waits, consumes specialist time, and must finish before the product's decision deadline. The team therefore needs both a user-facing objective and the capacity to support it.
+from eventual:
 
-A **service-level objective**, or **SLO**, is a measurable reliability target. An urgent payment-review queue might set an objective that 99 percent of eligible cases receive a decision within ten minutes. A post-action audit queue might target completion within two business days. The target should describe the whole path from eligibility to accepted decision, including adjudication if it blocks the product action.
+$$
+Y.
+$$
 
-### Measure Work Volume And User Delay
+Otherwise business decisions can accidentally become false ground-truth labels. Suppose review policy version `v4` says one kind of content is permitted. Policy `v5` classifies it as prohibited.
 
-Five measurements give an operational picture:
+Then:
 
-- **arrival rate:** new tasks per minute or hour;
-- **completion rate:** accepted decisions per minute or hour;
-- **oldest-task age:** the wait of the task closest to harm;
-- **deadline-miss rate:** the share completed after the SLO boundary;
-- **available qualified capacity:** reviewers who can legally and practically handle each queue.
+$$
+H_{\text{v4}}(X)
+\neq
+H_{\text{v5}}(X)
+$$
 
-Queue depth alone can mislead. One hundred two-second checks may clear quickly. Twenty specialist investigations may take hours. Oldest-task age and expected handling time reveal the user impact.
+even with perfectly consistent reviewers. If model metrics change after the policy update, you need to know:
 
-### Estimate Reviewer Capacity From Arrival And Handling Time
+$$
+\text{review guideline version}.
+$$
 
-Capacity planning can start with a simple relationship:
+Otherwise policy drift can look like model drift. So the lineage might include:
 
-**required reviewer hours per hour = arrival rate × average handling time**
+$$
+\text{model version}
+$$
 
-Suppose 120 tasks arrive each hour and the average review takes two minutes. The queue needs four reviewer-hours of work every hour. Staffing exactly four people leaves no room for breaks, case variation, training, or sudden traffic. At a target occupancy of 70 percent, the calculation suggests about six available reviewers: `4 / 0.70 = 5.7`.
+$$
+\text{review policy version}
+$$
 
-The calculation is a starting estimate. Teams should split it by reviewer skill, priority, and time of day, then test it against observed tail wait and deadline misses. A senior-only escalation queue can fail despite spare capacity in a general queue because the available people lack the required authority.
+$$
+\text{reviewer}
+$$
 
-An overload policy must protect the real action. Options include pausing the action, applying a conservative deterministic fallback, shedding low-priority audits, borrowing qualified capacity, or paging an incident owner. The dashboard should record which fallback is active so later outcome analysis does not treat the period as ordinary model behaviour.
+$$
+\text{timestamp}.
+$$
 
-## Use Review Outcomes Safely In Monitoring And Retraining
-<!-- section-summary: Review decisions enter monitoring and model development with provenance, sampling information, maturity, and point-in-time boundaries intact. -->
+Suppose a new review policy is introduced. If reviewers receive inconsistent training, their outputs diverge. Then your feedback data deteriorates. Reviewer training should therefore be treated as a production change. You can measure before and after:
 
-A completed review provides feedback, although it is not automatically a clean training label. The queue selected the case for a reason. Uncertain, high-risk, and disputed predictions may be heavily overrepresented. Assisted reviewers may also have seen the model answer.
+$$
+\text{agreement rate}
+$$
 
-### Record Why Each Case Was Sent For Review
+$$
+\text{gold-case accuracy}
+$$
 
-The feedback event should preserve:
+$$
+\text{decision distribution}
+$$
 
-- prediction, review, model, and policy identifiers;
-- routing reason and sampling probability;
-- assisted or blinded review mode;
-- original decision, reviewer decision, and adjudicated outcome;
-- reason code, reviewer qualification, and timestamps;
-- correction, appeal, and maturity state.
+$$
+\text{review time}.
+$$
 
-Monitoring can use mature reviewed outcomes to estimate error rates for the reviewed population. A representative random audit supports broader production estimates. Analysts should report the coverage and selection route beside each metric. Risk-routed cases and ordinary traffic need separate views.
+Human process changes deserve the same release discipline as code changes.
 
-### Check Outcome Maturity And Point-In-Time Correctness Before Training
+## How Do Escalation, Appeals, and Multiple Evidence Sources Improve the System?
+<!-- section-summary: Expert escalation, appeal outcomes, reviewer-model comparisons, and several independent evidence layers reveal failures that one model metric or reviewer group can miss. -->
 
-Training adds another boundary. The dataset builder must freeze an as-of cutoff and resolve corrections and appeals. It also reconstructs features from information available at the original prediction time. This prevents **label leakage**. Leakage occurs if later information enters an earlier training example and makes offline performance look unrealistically strong.
+Expert escalation, appeal outcomes, reviewer-model comparisons, and several independent evidence layers reveal failures that one model metric or reviewer group can miss.
 
-```mermaid
-flowchart TD
-    A["Accepted Review Event<br/>(decision, reason, and provenance)"] --> B["Maturity Check<br/>(wait for appeals and corrections)"]
-    B --> C["Monitoring Cohort<br/>(measure quality with selection visible)"]
-    B --> D["Training Eligibility<br/>(apply policy and point-in-time checks)"]
-    D --> E["Versioned Dataset<br/>(freeze rows, cutoffs, and lineage)"]
-    E --> F["Candidate Evaluation<br/>(compare before controlled release)"]
+For any reviewed prediction, preserve four distinct concepts:
 
-    class A event; class B,D control; class C,E data; class F release
-```
+$$
+\boxed{
+\hat Y
+=
+\text{model belief}
+}
+$$
 
-Review feedback can also reveal a non-model repair. Repeated `source_unreadable` outcomes may point to a scanning problem. A high `policy_exception` rate may call for new guidance. Rising queue age may require capacity or routing changes. The reason taxonomy helps send evidence to the team that owns the actual failure.
+$$
+\boxed{
+H
+=
+\text{reviewer belief}
+}
+$$
 
-## How Human Review Fits Into Production
-<!-- section-summary: The live review path uses transactional state and identity controls, while durable events feed analytical and model-development systems. -->
+$$
+\boxed{
+D
+=
+\text{action taken}
+}
+$$
 
-Most production designs separate the **operational path** from the **analytical path**. The operational path claims tasks and applies decisions. It needs low-latency transactions, strict authorisation, and idempotent product actions. The analytical path stores history, calculates quality metrics, and builds versioned datasets.
+$$
+\boxed{
+Y
+=
+\text{eventual outcome}
+}
+$$
 
-This separation prevents a slow dashboard query from blocking an urgent claim. It also keeps the source of truth for live task state small and transactional. The event path copies completed outcomes into systems designed for large scans and scheduled processing. Stable task and event IDs connect both sides.
+These variables may all differ.
 
-### Use The Operational Path For Live Decisions
+For example:
 
-```mermaid
-flowchart TD
-    A["Decision Service<br/>(prediction and routing policy)"] --> B["Transactional Queue<br/>(PostgreSQL task state and leases)"]
-    B --> C["Reviewer Application<br/>(identity, evidence, and decision UI)"]
-    C --> D["Decision Transaction<br/>(store outcome and outbox event)"]
-    D --> E["Product Action<br/>(apply idempotent accepted decision)"]
-    D --> F["Event Stream<br/>(publish durable review outcome)"]
-    F --> G["Warehouse or Lakehouse<br/>(monitoring cohorts and quality reports)"]
-    G --> H["Orchestrated Dataset Build<br/>(maturity, policy, and time checks)"]
+$$
+\hat Y=\text{fraud}
+$$
 
-    I["Object Storage<br/>(governed source evidence)"] --> C
-    J["Identity and Audit<br/>(roles, access, and security records)"] --> C
-    J --> D
+$$
+H=\text{legitimate}
+$$
 
-    class A,B,C,D live; class I,J evidence; class F,G,H analytics; class E action
-```
+$$
+D=\text{allow}
+$$
 
-A practical default uses PostgreSQL or a managed PostgreSQL service for the live queue. An existing identity provider supplies reviewer identity and group membership. Sensitive evidence remains in governed object storage or the source application. The queue stores object references and policy versions.
+$$
+Y=\text{fraud}.
+$$
 
-The decision transaction can write the final state and an **outbox record** together. An outbox is a table of events waiting to be published. A relay sends those events to Apache Kafka or the organisation's managed event bus. This avoids a fragile dual write in which the database commits but the event publish fails. Consumers still use event IDs for idempotency because delivery and retries cross several systems.
+That single case tells you something about both model and reviewer performance. If you collapse the four values into one "label," you lose most of the information. Once actual outcomes mature, you can partition reviewed cases into:
 
-### Use The Analytical Path For History And Dataset Preparation
+| Model   | Human   | Outcome | Interpretation           |
+| ------- | ------- | ------- | ------------------------ |
+| Correct | Correct | —       | Both worked              |
+| Correct | Wrong   | —       | Human override hurt      |
+| Wrong   | Correct | —       | Human review added value |
+| Wrong   | Wrong   | —       | Both missed the case     |
 
-Completed events land in the established warehouse or lakehouse for operational metrics, reviewer-quality analysis, and feedback cohorts. Airflow, Dagster, or a managed pipeline service can schedule audit sampling and build matured datasets. The orchestrator should not sit inside the synchronous claim transaction; the transactional database already owns that small state transition.
+More formally, compare:
 
-Label Studio can supply a configurable review interface for annotation-oriented tasks. Its official webhook documentation states that failed webhook deliveries are not retried. A production integration should use an idempotent receiver and reconciliation. Another safe design treats the durable review database and export path as the source of truth. Direct product actions need an application path with explicit authority and transaction controls.
+$$
+L(Y,\hat Y)
+$$
 
-The smallest useful stack may be one application and PostgreSQL. Kafka earns its place after several consumers need durable review events. A warehouse or lakehouse addresses large analytical history. A workflow orchestrator supports scheduled governance work. The architecture should grow from observed failure boundaries. A product checklist is a poor substitute.
+against:
 
-## The Main Idea
-<!-- section-summary: Human review works as a production control only if the handoff, evidence, authority, queue, quality, and feedback path are designed together. -->
+$$
+L(Y,H).
+$$
 
-Human review is a production decision system. Eligibility selects the cases that need people. Routing supplies the right priority and expertise. Immutable review items preserve the original context. Claims and leases prevent conflicting work. The interface supports an informed judgement, while decision taxonomies and adjudication keep disagreement visible.
+Then ask:
 
-The same system needs privacy controls and capacity targets. Quality measurement and tested fallbacks keep the human layer dependable. Its outcomes can improve monitoring and future models after the pipeline applies provenance, sampling, maturity, and point-in-time rules. These controls turn a person's click into accountable evidence that the product and MLOps lifecycle can safely use.
+$$
+E[L(Y,H)] < E[L(Y,\hat Y)]
+$$
+
+and, crucially:
+
+$$
+\text{for which kinds of cases?}
+$$
+
+Human review may add enormous value for some segments and almost none for others. Suppose human review costs:
+
+$$
+£5
+$$
+
+per case. On average, it prevents expected loss of:
+
+$$
+£1.
+$$
+
+The workflow may not make economic sense. For a segment where expected prevented loss is:
+
+$$
+£100
+$$
+
+per review, it clearly might. A useful conceptual metric is:
+
+$$
+\text{review value}
+=
+\text{expected cost without review}
+-
+\text{expected cost with review}
+-
+\text{review cost}.
+$$
+
+This helps decide where human attention should be allocated. Imagine model accuracy:
+
+$$
+96\%.
+$$
+
+Reviewers override 10% of predictions. Among overridden cases, humans are correct only:
+
+$$
+60\%.
+$$
+
+It is possible that the human workflow reduces final system quality. So evaluate:
+
+$$
+\text{model alone}
+$$
+
+against:
+
+$$
+\text{model + review policy}.
+$$
+
+The object being optimized is the **whole decision system**, not human involvement itself. Not all reviewers need the same authority. A system might have:
+
+$$
+\text{Tier 1 reviewer}
+\rightarrow
+\text{specialist}
+\rightarrow
+\text{adjudicator}.
+$$
+
+A simple case stops at Tier 1. A difficult case escalates. This uses scarce expert attention more efficiently. You can think of expertise as another limited resource that should be routed according to expected value. Suppose normally:
+
+$$
+5\%
+$$
+
+of cases need specialist review. Suddenly:
+
+$$
+28\%
+$$
+
+do. Possible explanations include:
+
+* new case type,
+* unclear policy,
+* missing information,
+* reviewer training issue,
+* model routing different traffic into the queue.
+
+So:
+
+$$
+P(\text{escalation})
+$$
+
+is itself a monitoring metric. The human workflow can tell you that the surrounding environment changed. Suppose the final system rejects a user's request. The user appeals. That creates additional evidence.
+
+Conceptually:
+
+$$
+\text{initial prediction}
+\rightarrow
+\text{review}
+\rightarrow
+\text{decision}
+\rightarrow
+\text{appeal}
+\rightarrow
+\text{re-review}.
+$$
+
+Appeals are not a random sample—they are selected by who chooses and is able to challenge a decision—but they can expose high-impact failure modes. The appeal path should therefore remain linked to the original prediction and review history. Just like model decisions, human decisions can affect which outcomes become observable. Suppose a reviewer blocks a transaction. You may never observe:
+
+$$
+\text{Would it have produced a fraud loss if allowed?}
+$$
+
+So:
+
+$$
+H
+\rightarrow
+D
+\rightarrow
+Y_{\text{observed}}.
+$$
+
+The review workflow participates in the same causal feedback problems discussed for production labels. Human labels do not magically eliminate counterfactual uncertainty. Imagine a fraud system. Immediately, you monitor:
+
+$$
+P(X)
+$$
+
+and:
+
+$$
+P(\hat Y).
+$$
+
+Minutes later, reviewers provide:
+
+$$
+H.
+$$
+
+Weeks later, final fraud outcomes provide:
+
+$$
+Y.
+$$
+
+So the evidence timeline becomes:
+
+$$
+\boxed{
+X
+\rightarrow
+\hat Y
+\rightarrow
+H
+\rightarrow
+Y
+}
+$$
+
+Each stage provides stronger but slower evidence. Feature anomalies are fast. Human judgments add semantic information. Final labels provide stronger outcome confirmation. This is a powerful design for systems where truth is delayed.
+
+## How Does the Complete Human-Review Feedback Loop Work in Practice?
+<!-- section-summary: The full example connects routing, case state, reviewer behaviour, queue capacity, architecture, reproducible labels, policy monitoring, and the value of information. -->
+
+The full example connects routing, case state, reviewer behaviour, queue capacity, architecture, reproducible labels, policy monitoring, and the value of information.
+
+Suppose an online-payment model outputs:
+
+$$
+\hat p_{\text{fraud}}=0.57.
+$$
+
+The routing system calculates that the transaction is:
+
+$$
+£8{,}000
+$$
+
+and the combination of uncertainty and financial exposure exceeds the review threshold. So:
+
+$$
+\text{route}=\text{human review}.
+$$
+
+A case is created:
+
+$$
+C_{417}.
+$$
+
+It records:
+
+$$
+\text{prediction\_id}=P_{9281}
+$$
+
+$$
+\text{model version}=v12
+$$
+
+$$
+\text{selection reason}=\text{high expected loss}.
+$$
+
+The case enters a priority queue. Reviewer A atomically claims it under a 15-minute lease. The reviewer sees transaction history, account changes, device information, related purchases, and the relevant policy. To preserve independence, the model's fraud probability is initially hidden. Reviewer A concludes:
+
+$$
+H=\text{fraud}.
+$$
+
+They give structured reason:
+
+$$
+\text{account takeover}.
+$$
+
+Because the transaction is high value, policy requires a second independent review. Reviewer B also says:
+
+$$
+H_2=\text{fraud}.
+$$
+
+The transaction is blocked. The system preserves:
+
+$$
+\hat Y=0.57
+$$
+
+$$
+H_1=1
+$$
+
+$$
+H_2=1
+$$
+
+$$
+D=\text{block}.
+$$
+
+Several weeks later, external evidence confirms account takeover:
+
+$$
+Y=1.
+$$
+
+Now the system can conclude that human review correctly caught a difficult case the model considered only moderately risky. That example becomes useful for:
+
+$$
+\text{monitoring}
+$$
+
+and perhaps later:
+
+$$
+\text{training},
+$$
+
+provided it satisfies the required label-quality and sampling rules. Suppose during one week reviewers flag hundreds of similar cases. Model scores remain around:
+
+$$
+0.4-0.6.
+$$
+
+Structured review reasons show:
+
+$$
+\text{new account-takeover technique}.
+$$
+
+Now monitoring can detect:
+
+$$
+P(H=1|\hat p\approx0.5)
+$$
+
+increasing sharply. This suggests:
+
+The model is missing a new predictive pattern.
+
+Engineers examine reviewer evidence and discover that humans are using a newly available signal:
+
+$$
+Z=\text{recent SIM replacement}.
+$$
+
+That signal is not currently part of $$X$$. A future model can potentially learn:
+
+$$
+P(Y|X,Z)
+$$
+
+instead of:
+
+$$
+P(Y|X).
+$$
+
+This is human review acting as a true learning feedback loop. Before declaring concept drift, ask whether:
+
+$$
+P(H|X)
+$$
+
+changed because of a new policy or reviewer training. Perhaps a guideline update instructed reviewers to classify borderline cases as fraud. Then the increase in model-human disagreement may reflect:
+
+$$
+\text{human policy change}
+$$
+
+rather than:
+
+$$
+\text{world change}.
+$$
+
+This is why the review-policy version belongs in lineage. Suppose review disagreement suddenly increases. A useful reasoning sequence is:
+
+$$
+\boxed{
+\text{Workflow health}
+\rightarrow
+\text{Queue/routing}
+\rightarrow
+\text{review UI}
+\rightarrow
+\text{policy version}
+\rightarrow
+\text{reviewer quality}
+\rightarrow
+\text{model/data changes}
+\rightarrow
+\text{eventual outcomes}
+}
+$$
+
+First establish that cases are being routed and presented correctly. Then verify reviewers are following the intended policy. Only after that should you interpret disagreement as evidence of model degradation. The measuring instrument must be trusted before its measurements are trusted. At a high level, the system becomes:
+
+$$
+\boxed{
+\begin{array}{c}
+\text{Request}\\
+\downarrow\\
+\text{Feature generation}\\
+\downarrow\\
+\text{Model}\\
+\downarrow\\
+\text{Prediction}\\
+\downarrow\\
+\text{Routing policy}\\
+\swarrow\qquad\searrow\\
+\text{Automatic path}\qquad\text{Review queue}\\
+\qquad\qquad\downarrow\\
+\qquad\qquad\text{Human judgment}\\
+\searrow\qquad\swarrow\\
+\text{Final decision}\\
+\downarrow\\
+\text{Real-world outcome}
+\end{array}
+}
+$$
+
+Meanwhile all stages write observability data. Later:
+
+$$
+(\hat Y,H,D,Y)
+$$
+
+can be joined and analyzed. That is the core human-in-the-loop architecture. A production system might use:
+
+$$
+\text{automatic acceptance}
+$$
+
+for very safe cases,
+
+$$
+\text{human review}
+$$
+
+for uncertain or high-impact cases, and:
+
+$$
+\text{automatic rejection/blocking}
+$$
+
+for some extremely high-confidence situations, depending on the domain.
+
+Conceptually:
+
+$$
+\hat p<\tau_L
+\rightarrow
+\text{automatic action A}
+$$
+
+$$
+\tau_L\le\hat p\le\tau_H
+\rightarrow
+\text{review}
+$$
+
+$$
+\hat p>\tau_H
+\rightarrow
+\text{automatic action B}.
+$$
+
+But the thresholds need not depend only on confidence. They can also incorporate:
+
+$$
+\text{impact},
+\text{novelty},
+\text{policy},
+\text{capacity}.
+$$
+
+Suppose normally the review queue has plenty of capacity. You review:
+
+$$
+20\%
+$$
+
+of cases. During a traffic spike, continuing at 20% could create an enormous backlog. A production system may need graceful degradation:
+
+$$
+\text{review lower-value cases less often}
+$$
+
+while preserving:
+
+$$
+\text{high-risk review}.
+$$
+
+So routing can depend on current queue state:
+
+$$
+R=
+g(
+\hat Y,
+X,
+\text{impact},
+\text{queue capacity}
+).
+$$
+
+The human review policy is itself a dynamic production policy. Suppose the intended review rate is:
+
+$$
+5\%.
+$$
+
+A configuration bug changes it to:
+
+$$
+0.05\%.
+$$
+
+The model service remains healthy. The review service remains healthy. But the safety mechanism has effectively disappeared. Therefore monitor:
+
+$$
+P(\text{sent to review})
+$$
+
+overall and by important segment. Human-review routing is part of model monitoring. Imagine cases are created correctly but a permissions update prevents reviewers from seeing one region's queue. No software exception affects model serving. Yet cases accumulate indefinitely. Useful monitoring might reveal:
+
+$$
+\text{queue size}\uparrow
+$$
+
+$$
+\text{oldest case age}\uparrow
+$$
+
+$$
+\text{completion rate}\downarrow.
+$$
+
+Again, production ML health means more than API uptime. A review record can conceptually contain:
+
+$$
+\boxed{
+\begin{aligned}
+&\text{case\_id}\\
+&\text{prediction\_id}\\
+&\text{selection reason}\\
+&\text{queue}\\
+&\text{priority}\\
+&\text{reviewer ID / role}\\
+&\text{claim time}\\
+&\text{submission time}\\
+&\text{review policy version}\\
+&\text{human assessment}\\
+&\text{reason code}\\
+&\text{confidence / uncertainty if used}\\
+&\text{escalation history}\\
+&\text{final resolution}
+\end{aligned}
+}
+$$
+
+Later, eventual outcomes can be joined using:
+
+$$
+\text{prediction\_id}
+$$
+
+or another durable case lineage. You do not necessarily need all fields in one database table; you need the concepts to be reconstructable. Suppose you retrain a model on human-reviewed examples. Six months later, someone asks:
+
+Which review labels were used
+
+You should be able to identify:
+
+$$
+\text{review snapshot}
+$$
+
+$$
+\text{review policy version}
+$$
+
+$$
+\text{adjudication status}
+$$
+
+$$
+\text{selection policy}
+$$
+
+$$
+\text{training cutoff}.
+$$
+
+Otherwise a model's training data cannot be reconstructed. Human judgments become part of ML data lineage. Imagine:
+
+$$
+H=\text{uncertain}
+$$
+
+or a case has unresolved disagreement:
+
+$$
+H_1\neq H_2.
+$$
+
+Automatically converting either into a hard class may damage training data. You might define eligibility:
+
+$$
+T_i=
+\begin{cases}
+1,&\text{safe for training}\\
+0,&\text{not safe}
+\end{cases}
+$$
+
+based on factors such as adjudication, label confidence, reviewer quality, and target consistency. Like production labels:
+
+$$
+\boxed{
+\text{usable for operations}
+\not\Rightarrow
+\text{usable for evaluation}
+\not\Rightarrow
+\text{usable for training}.
+}
+$$
+
+Human review often surfaces precisely the cases the existing model finds hard. These examples can be extremely informative. But simply increasing their frequency changes:
+
+$$
+P_{\text{train}}(X,Y).
+$$
+
+You may intentionally oversample them and then use appropriate weighting, balanced datasets, or validation against representative production traffic. The core rule is:
+
+Know how the examples were selected before deciding how they should influence training.
+
+Without review, before the true outcome arrives you have:
+
+$$
+I_0=\{X,\hat Y\}.
+$$
+
+Human review adds evidence:
+
+$$
+I_1=\{X,\hat Y,Z,H\}.
+$$
+
+The question is whether this additional information changes the expected value of the decision enough to justify its cost.
+
+Conceptually:
+
+$$
+\text{Value of Review}
+=
+\text{Expected decision loss before review}
+-
+\text{Expected decision loss after review}
+-
+\text{review cost}.
+$$
+
+This is the first-principles justification for the whole system. Human review is an **information-acquisition mechanism**. A human can notice:
+
+This looks like a new type of scam.
+
+The existing system may have no feature representing that concept. So reviewers are not just correcting individual predictions. They are sampling the world and detecting new structure. In this sense:
+
+$$
+\boxed{
+\text{Human review}
+=
+\text{decision mechanism}
++
+\text{monitoring sensor}
++
+\text{label source}
++
+\text{discovery mechanism}
+}
+$$
+
+Those roles should be designed intentionally. A mature workflow connects:
+
+$$
+\boxed{
+\text{Model}
+\rightarrow
+\text{Review selection}
+\rightarrow
+\text{Human judgment}
+\rightarrow
+\text{Final decision}
+\rightarrow
+\text{Outcome}
+\rightarrow
+\text{Evaluation}
+\rightarrow
+\text{Model/process improvement}
+}
+$$
+
+You can then answer questions such as:
+
+$$
+\text{Where is the model wrong?}
+$$
+
+$$
+\text{Where do humans add value?}
+$$
+
+$$
+\text{Where are both wrong?}
+$$
+
+$$
+\text{Which cases consume too much review capacity?}
+$$
+
+$$
+\text{Which new patterns are reviewers detecting?}
+$$
+
+$$
+\text{Which human labels are trustworthy enough for retraining?}
+$$
+
+This is much richer than simply "put a person in the loop." The simplest mental model is:
+
+$$
+\boxed{
+\text{Model judgment}
+\neq
+\text{Human judgment}
+\neq
+\text{Product decision}
+\neq
+\text{Real-world outcome}
+}
+$$
+
+A good human-review system preserves all four. The model supplies:
+
+$$
+\hat Y
+$$
+
+The reviewer supplies:
+
+$$
+H
+$$
+
+The product chooses:
+
+$$
+D
+$$
+
+Reality eventually reveals some form of:
+
+$$
+Y.
+$$
+
+Then the feedback system connects them:
+
+$$
+\boxed{
+(\hat Y,H,D,Y)
+}
+$$
+
+and learns from their agreements and disagreements. The operational reasoning loop is:
+
+$$
+\boxed{
+\text{Choose cases worth reviewing}
+\rightarrow
+\text{create an auditable case}
+\rightarrow
+\text{route it to the right reviewer}
+\rightarrow
+\text{present sufficient but appropriate evidence}
+\rightarrow
+\text{collect an independent, well-defined judgment}
+\rightarrow
+\text{resolve disagreement}
+\rightarrow
+\text{take the product action}
+\rightarrow
+\text{observe eventual outcomes}
+\rightarrow
+\text{measure model and reviewer quality}
+\rightarrow
+\text{feed trustworthy information back into monitoring and training}
+}
+$$
+
+And the deepest principle is:
+
+$$
+\boxed{\text{Human review is scarce information acquisition.}}
+$$
+
+You use it where obtaining additional human judgment is expected to reduce decision error enough to justify the cost, delay, privacy exposure, and operational complexity. Done well, humans are not merely a fallback for an imperfect model. They become part of the production observability system: **catching dangerous individual cases, revealing new failure modes, supplying faster feedback when true outcomes are delayed, and generating evidence that helps the entire ML system improve.**
 
 ![Complete human-review production path from routing and capacity through one controlled decision, accepted events, monitoring, and governed training admission](/content-assets/articles/article-mlops-monitoring-and-feedback-human-review-workflows/human-review-production-summary.png)
 
 *The live review path controls one product decision. Its accepted event supports monitoring immediately and reaches training only after eligibility, maturity, correction, selection, and point-in-time checks.*
 
-## References
+## Check Your Answers
 
-- [NIST AI Risk Management Framework Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)
-- [PostgreSQL: SELECT and `SKIP LOCKED`](https://www.postgresql.org/docs/current/sql-select.html)
-- [Apache Kafka design: message delivery semantics](https://kafka.apache.org/43/design/design/)
-- [Label Studio: import and reference task data](https://labelstud.io/guide/tasks.html)
-- [Label Studio: configure webhooks](https://labelstud.io/guide/webhooks.html)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Which Decisions Should Enter Human Review and Why?]{kind="recap"}
+Human review begins as a routing policy that balances uncertainty, consequence, learning value, random coverage, reviewer cost, and available capacity.
+:::
+
+:::expand[How Should a Review Case, Its Evidence, and Its Decisions Be Structured?]{kind="recap"}
+Each case needs durable identity and state, proportionate context, a precise judgment vocabulary, and a separation between reviewer opinion and the final product action.
+:::
+
+:::expand[How Do Claiming, Disagreement, and Reviewer Quality Work Safely?]{kind="recap"}
+Atomic claims, leases, deliberate duplicate review, preserved disagreements, gold cases, agreement measures, and difficulty-aware analysis make reviewer evidence trustworthy.
+:::
+
+:::expand[How Do Selection Bias, Privacy, Access, and Retention Shape Review Evidence?]{kind="recap"}
+Selection reasons must remain visible because review data is biased; least-privilege access, audit records, and intentional retention protect the people represented in each case.
+:::
+
+:::expand[How Should the Review Queue Be Operated as a Production Service?]{kind="recap"}
+Arrival rate, service capacity, utilization, priority, waiting-time tails, oldest-case age, and user consequence determine whether the human queue is healthy.
+:::
+
+:::expand[How Can Review Outcomes Monitor Models without Corrupting Future Training Data?]{kind="recap"}
+Random audits and reason codes can expose model problems, but operational reviews are not automatically ground truth and should enter training only through versioned approval rules.
+:::
+
+:::expand[How Do Escalation, Appeals, and Multiple Evidence Sources Improve the System?]{kind="recap"}
+Expert escalation, appeal outcomes, reviewer-model comparisons, and several independent evidence layers reveal failures that one model metric or reviewer group can miss.
+:::
+
+:::expand[How Does the Complete Human-Review Feedback Loop Work in Practice?]{kind="recap"}
+The full example connects routing, case state, reviewer behaviour, queue capacity, architecture, reproducible labels, policy monitoring, and the value of information.
+:::

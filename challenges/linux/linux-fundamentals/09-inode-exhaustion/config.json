@@ -1,0 +1,28 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/mounts-info": { "type": "file", "content": "/dev/vda1 ext4 40G 22G 16G 41943040 23068672 16777216 55% / 250000 250000 0 100% rw,relatime\n" },
+    "/var/cache/sessions/01.session": { "type": "file", "content": "a\n" },
+    "/var/cache/sessions/02.session": { "type": "file", "content": "b\n" },
+    "/var/cache/sessions/03.session": { "type": "file", "content": "c\n" },
+    "/var/cache/sessions/04.session": { "type": "file", "content": "d\n" },
+    "/var/cache/sessions/05.session": { "type": "file", "content": "e\n" },
+    "/var/cache/sessions/06.session": { "type": "file", "content": "f\n" },
+    "/var/cache/sessions/07.session": { "type": "file", "content": "g\n" },
+    "/var/cache/sessions/08.session": { "type": "file", "content": "h\n" },
+    "/var/cache/sessions/09.session": { "type": "file", "content": "i\n" },
+    "/var/cache/sessions/10.session": { "type": "file", "content": "j\n" },
+    "/var/cache/sessions/11.session": { "type": "file", "content": "k\n" },
+    "/var/cache/sessions/12.session": { "type": "file", "content": "l\n" },
+    "/var/log/orders-api.log": { "type": "file", "content": "healthy\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["55%", "100%", "12"],
+    "requireCommands": ["df", "find", "wc"]
+  }
+}

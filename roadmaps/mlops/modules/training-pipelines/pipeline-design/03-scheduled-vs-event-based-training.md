@@ -12,403 +12,1261 @@ aliases:
 
 ## Table of Contents
 
-1. [A Trigger Can Arrive Before Training Is Safe](#a-trigger-can-arrive-before-training-is-safe)
-2. [Four Ways To Start A Retraining Request](#four-ways-to-start-a-retraining-request)
-3. [Define Which Time Period A Scheduled Run Covers](#define-which-time-period-a-scheduled-run-covers)
-4. [Check That All Required Data Has Arrived](#check-that-all-required-data-has-arrived)
-5. [Prevent Duplicate Events From Starting Too Many Runs](#prevent-duplicate-events-from-starting-too-many-runs)
-6. [Use One Readiness Check For Every Trigger](#use-one-readiness-check-for-every-trigger)
-7. [Give Retries And Replays A Stable Run ID](#give-retries-and-replays-a-stable-run-id)
-8. [Define Separate Rules For Retries, Replays, And Backfills](#define-separate-rules-for-retries-replays-and-backfills)
-9. [Use Manual Approval For Exceptional Retraining](#use-manual-approval-for-exceptional-retraining)
-10. [Implement Training Triggers With Current Tools](#implement-training-triggers-with-current-tools)
-11. [Recover From Duplicate And Missing Trigger Events](#recover-from-duplicate-and-missing-trigger-events)
-12. [Monitor And Audit Training Triggers](#monitor-and-audit-training-triggers)
-13. [The Main Idea](#the-main-idea)
-14. [References](#references)
+1. [Why Should a Trigger Create a Training Request Instead of Starting Compute?](#why-should-a-trigger-create-a-training-request-instead-of-starting-compute)
+2. [How Does the System Decide That Training Data Is Ready?](#how-does-the-system-decide-that-training-data-is-ready)
+3. [How Do Idempotency and Run Identities Handle Duplicate Triggers?](#how-do-idempotency-and-run-identities-handle-duplicate-triggers)
+4. [How Do Retry, Replay, Backfill, and Manual Requests Differ?](#how-do-retry-replay-backfill-and-manual-requests-differ)
+5. [How Do Request State and Concurrency Control Work Together?](#how-do-request-state-and-concurrency-control-work-together)
+6. [How Does Reconciliation Recover Missing Events?](#how-does-reconciliation-recover-missing-events)
+7. [What Evidence and Monitoring Belong to the Trigger Control Plane?](#what-evidence-and-monitoring-belong-to-the-trigger-control-plane)
+8. [What Does a Complete Training Trigger Lifecycle Look Like?](#what-does-a-complete-training-trigger-lifecycle-look-like)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-A daily training job can wake up on time while its newest data partition is still incomplete. A **training trigger** supplies the reason that the system should consider a new run now. That reason may be a clock tick, a completed data partition, a batch of mature labels, a drift investigation, or an approved incident request.
+At 02:00, a scheduler requests a daily fraud-model retrain. Transactions and customer records are complete through midnight, but chargeback labels are still loading. Starting immediately would produce a model from incomplete outcomes even though the schedule fired exactly on time.
 
-That signal is only a proposal. The system still has to prove that training is safe and useful. Are the inputs complete? Are enough labels mature? Is another run already using the same snapshot? Is compute capacity available? Does this request need human approval? Separating the proposal from those checks is the foundation of reliable trigger design.
+A **training trigger** is evidence that a team may want a run. It is not proof that the exact inputs are ready or that policy and capacity allow execution. The trigger should create a durable logical request that defines the model, training interval, data cutoff, code or pipeline version, configuration, and reason for the request.
 
-This separation also explains why a cron expression alone is too weak for production MLOps. A clock can say that midnight has passed. It cannot prove that the sales partition finished loading, that corrected labels were published, or that a duplicate delivery has already created the intended run.
+Readiness checks then decide whether that request is safe to run. Stable identities prevent a schedule, data event, and duplicate message from launching the same expensive work several times. Attempts, replays, and backfills remain separate operations, and reconciliation repairs requests that a missing event failed to create.
 
-## A Trigger Can Arrive Before Training Is Safe
-<!-- section-summary: A signal proposes retraining, while eligibility checks decide whether one attributable run should start. -->
+These questions follow one request from its first signal through readiness, admission, execution, recovery, and audit:
 
-Imagine a forecasting pipeline scheduled shortly after the daily sales window closes. The schedule fires on time. One regional partition is still loading, and the newest labels cover only part of the prediction population. Starting immediately would create a model from a partial view of the day. Silently skipping the run would leave operators unsure whether training was delayed or lost.
+1. **Why Should a Trigger Create a Training Request Instead of Starting Compute?**
+2. **How Does the System Decide That Training Data Is Ready?**
+3. **How Do Idempotency and Run Identities Handle Duplicate Triggers?**
+4. **How Do Retry, Replay, Backfill, and Manual Requests Differ?**
+5. **How Do Request State and Concurrency Control Work Together?**
+6. **How Does Reconciliation Recover Missing Events?**
+7. **What Evidence and Monitoring Belong to the Trigger Control Plane?**
+8. **What Does a Complete Training Trigger Lifecycle Look Like?**
 
-A production trigger layer resolves this by handling three distinct decisions:
+## Why Should a Trigger Create a Training Request Instead of Starting Compute?
+<!-- section-summary: A trigger records intent and defines a logical request with an explicit interval and cutoff; readiness and policy decide whether execution may begin. -->
 
-1. **Observe the signal.** Record the schedule tick, event, or approved request durably.
-2. **Evaluate eligibility.** Check data readiness, labels, policy, capacity, and active work.
-3. **Reserve one logical run.** Create a stable identity before asking the orchestrator to launch it.
+A schedule can fire on time while a required label source is still incomplete. That is why an incoming signal should describe intended work rather than directly allocate a GPU.
 
-The trigger says, “please consider this work.” Eligibility says, “the required evidence is ready.” The run identity says, “all retries and duplicate signals for this work refer to the same run.”
+A training pipeline ultimately does something like:
 
-```mermaid
-flowchart TD
-    S["Trigger Signal<br/>(proposes retraining)"] --> N["Normalized Request<br/>(records source and purpose)"]
-    N --> G{"Eligibility Decision<br/>(checks readiness and policy)"}
-    G -->|Wait| W["Pending Request<br/>(records missing evidence)"]
-    G -->|Reject| X["Closed Request<br/>(records the reason)"]
-    G -->|Admit| I["Logical Run Identity<br/>(reserves one training request)"]
-    I --> R["Pipeline Run<br/>(executes versioned inputs)"]
+$$
+\text{model} = \text{Train}(\text{data}, \text{code}, \text{configuration})
+$$
+
+The difficult part is not usually calling `Train()`. The difficult part is deciding:
+
+**When is it correct to call `Train()`?**
+
+That is the problem training triggers solve. The central rule is:
+
+> **A trigger is evidence that training may be needed. It is not permission to start training immediately.**
+
+A robust system therefore separates:
+
+$$
+\boxed{\text{Trigger} \rightarrow \text{Training Request} \rightarrow \text{Readiness Check} \rightarrow \text{Run}}
+$$
+
+That separation explains almost every design decision that follows. Imagine you train a fraud model every day. At 02:00, a scheduler fires:
+
+```text
+It's 02:00.
+Retrain the fraud model.
 ```
 
-The trigger record should retain the source signal, observed time, intended data interval, dataset versions, requester, policy version, gate results, logical run key, and orchestrator run ID. This evidence supports a direct answer to “Why did this model train?” months after the run completed.
+But suppose one source looks like this:
 
-## Four Ways To Start A Retraining Request
-<!-- section-summary: Scheduled, event-triggered, data-aware, and manually approved requests express different reasons for considering new training work. -->
+```text
+transactions     ready through yesterday ✓
+customers        ready through yesterday ✓
+chargebacks      still loading            ✗
+```
 
-Teams often use the words “scheduled” and “event-driven” as if they cover every design. Production systems usually need four proposal types.
+If the scheduler directly starts training, the model gets incomplete data. So the scheduler was not really saying:
 
-### Start Retraining On A Schedule
+```text
+Training is safe.
+```
 
-A **scheduled run** starts from a clock or business calendar. Daily batch retraining, a weekly candidate for a review meeting, and a monthly regulatory refresh all fit this model.
+It was saying:
 
-You can think of the schedule as an alarm. It provides a predictable checkpoint, while the eligibility policy checks the room before work begins. A daily alarm may create a request for the previous day’s interval and then wait for all required partitions.
+```text
+We intended to train around this time.
+Please evaluate whether that training run can happen.
+```
 
-### Start Retraining After A Data Or System Event
+That distinction gives us two separate concepts:
 
-An **event-triggered run** starts from a discrete occurrence such as a snapshot publication, a labeling batch approval, or a corrected dataset release. The event carries identity and context: which resource changed, which version became available, and which upstream process produced it.
+```text
+Trigger
+    ↓
+"We might want a training run."
 
-An event is strongest if it describes a completed domain fact. “Training snapshot published” carries more meaning than “new object appeared in storage.” The second message might refer to a temporary file, one shard of a larger batch, or a retry.
+Readiness
+    ↓
+"The exact inputs required by that run are now safe."
 
-### Start Retraining After Data Is Ready
+Execution
+    ↓
+"Start it."
+```
 
-A **data-aware run** starts after the system evaluates the state of one or more data products. The policy may require every partition for an interval, a successful quality suite, a minimum label count, and a compatible feature snapshot.
+A useful equation is:
 
-In other terms, an event reports that something changed; a data-aware policy asks whether the whole training input is ready. Asset-aware orchestrators can express some of this directly. Teams can also publish a manifest or readiness record from the data platform.
+$$
+\text{StartTraining}
+=
+\text{Requested}
+\land
+\text{DataReady}
+\land
+\text{PolicyAllows}
+\land
+\text{NotAlreadyRunning}
+$$
 
-### Start Retraining After Approval
+This is much safer than:
 
-A **manually approved run** starts from a person or an approval workflow. It fits an emergency retrain, an incident investigation, a historical replay, or a high-cost candidate that needs explicit budget authorization.
+$$
+\text{StartTraining} = \text{TriggerReceived}
+$$
 
-Manual runs carry the same governance as automated runs. The request names immutable inputs, code and pipeline versions, purpose, owner, expiry, and release permissions. The approval adds authority to the shared eligibility process.
+Instead of having triggers launch compute directly, have them create a **logical training request**.
 
-A production trigger layer can accept all four proposal types through one normalized request contract. The shared contract sends automation and operator actions through the same data checks, deduplication rules, concurrency limits, and audit record.
+For example:
+
+```text
+TrainingRequest
+
+model: fraud_model
+training_window: [2026-05-01, 2026-08-29)
+data_cutoff: 2026-08-29T00:00:00Z
+pipeline_version: fraud_training_v17
+config_version: cfg_42
+reason: scheduled
+```
+
+Notice what is missing:
+
+```text
+"Use whatever data happens to exist when the GPU starts."
+```
+
+That would make the run nondeterministic. The request should define what training means before execution starts. The trigger answers:
+
+Why are we considering training
+
+The training request answers:
+
+Exactly what training are we considering
+
+There are many variations, but most triggers reduce to four families.
+
+| Trigger    | Meaning                                      | Example                     |
+| ---------- | -------------------------------------------- | --------------------------- |
+| Time       | "We periodically consider retraining."       | Every day at 02:00          |
+| Data event | "New training data became available."        | June partition completed    |
+| Condition  | "Something about the system changed enough." | Drift > threshold           |
+| Human/API  | "Someone explicitly requested retraining."   | Engineer launches a retrain |
+
+These mechanisms should ideally converge on the **same request path**:
+
+```text
+Cron ──────────────┐
+                   │
+Data event ────────┤
+                   ▼
+Drift alert ──→ Training Request → Readiness Gate → Training
+                   ▲
+Manual/API ────────┘
+```
+
+This is an important architectural property. If every trigger has its own way of launching training, eventually their behaviour diverges. You get things like:
+
+```text
+scheduled training checks completeness
+manual training doesn't
+
+event training checks quality
+scheduled training doesn't
+
+backfills bypass both
+```
+
+Then the correctness of your model depends on how somebody happened to start the pipeline.
+
+Instead:
+
+**Triggers should differ in how they create requests, not in what makes those requests safe.**
+
+This is one of the easiest mistakes to make. Suppose a daily training pipeline fires at:
+
+```text
+2026-08-29 02:00
+```
+
+What data does that run represent? It probably should not mean:
+
+```text
+all data available at 02:00
+```
+
+because that changes depending on whether upstream systems were early or late. Instead define a logical cutoff.
+
+For example:
+
+```text
+trigger time:
+2026-08-29 02:00 UTC
+
+data cutoff:
+2026-08-29 00:00 UTC
+
+training history:
+2026-06-01 00:00
+        ↓
+2026-08-29 00:00
+```
+
+In interval notation:
+
+$$
+[2026\text{-}06\text{-}01,\;2026\text{-}08\text{-}29)
+$$
+
+The half-open interval `[start, end)` is useful because adjacent windows fit together without overlap:
+
+```text
+Day 1: [Aug 27, Aug 28)
+Day 2: [Aug 28, Aug 29)
+Day 3: [Aug 29, Aug 30)
+```
+
+No timestamp belongs to two windows.
+
+### Why this matters
+
+Suppose today's run starts late at 04:30. If your rule is:
+
+```text
+SELECT * WHERE timestamp < current_time()
+```
+
+then today's training set is different simply because the pipeline was delayed. Instead use the request's cutoff:
+
+```sql
+WHERE timestamp < :data_cutoff
+```
+
+Now:
+
+```text
+scheduled at 02:00
+started at 02:01
+
+and
+
+scheduled at 02:00
+started at 05:47
+```
+
+can still represent the same logical training run. That is fundamental for reproducibility.
+
+## How Does the System Decide That Training Data Is Ready?
+<!-- section-summary: Central readiness checks verify complete inputs, producer watermarks, data quality, and label maturity for the request's cutoff. -->
+
+The request fixes the time window first; the next step proves that every input needed for that exact window is complete and usable.
+
+Consider a training dataset assembled from three systems:
+
+```text
+orders
+customers
+refunds
+```
+
+Training cutoff:
+
+```text
+2026-08-29 00:00
+```
+
+At 02:00:
+
+```text
+orders watermark       = 2026-08-29 00:00 ✓
+customers watermark    = 2026-08-29 00:00 ✓
+refunds watermark      = 2026-08-28 22:00 ✗
+```
+
+The request exists, but it should sit in:
+
+```text
+WAITING_FOR_DATA
+```
+
+rather than running. Twenty minutes later:
+
+```text
+refunds watermark = 2026-08-29 00:00
+```
+
+The exact same request becomes runnable. So:
+
+$$
+\text{trigger time} \neq \text{data-ready time}
+$$
+
+and frequently:
+
+$$
+\text{data-ready time} > \text{trigger time}
+$$
+
+"File exists" is often too weak. Suppose an upstream pipeline produces:
+
+```text
+s3://training/2026-08-28/part-001.parquet
+s3://training/2026-08-28/part-002.parquet
+...
+s3://training/2026-08-28/part-100.parquet
+```
+
+The arrival of `part-001` doesn't mean the dataset is complete. A better contract is something like:
+
+```text
+partition = 2026-08-28
+expected_files = 100
+actual_files = 100
+producer_state = COMPLETE
+quality_checks = PASS
+```
+
+or a producer can publish a watermark:
+
+```text
+complete_through = 2026-08-29T00:00:00Z
+```
+
+Conceptually, the readiness function might be:
+
+```python
+def ready(request):
+    return (
+        orders.complete_through >= request.data_cutoff
+        and customers.complete_through >= request.data_cutoff
+        and refunds.complete_through >= request.data_cutoff
+        and quality_checks_pass(request)
+        and labels_are_mature(request)
+    )
+```
+
+For ML systems, **label maturity** is particularly important. Imagine predicting whether a customer will churn within 30 days. A customer observation from yesterday cannot yet have a complete 30-day churn label. So your training window may actually involve several different times:
+
+```text
+observation cutoff
+feature cutoff
+label maturity cutoff
+training execution time
+```
+
+These should not accidentally become the same timestamp. Suppose you have:
+
+```text
+scheduled trigger
+data trigger
+drift trigger
+manual trigger
+backfill
+retry
+```
+
+A fragile design does this:
+
+```text
+schedule → readiness logic A
+event    → readiness logic B
+manual   → skip checks
+backfill → special script
+```
+
+A stronger design is:
+
+```text
+                   ┌──────────────┐
+all requests ────→ │ ready(run)  │
+                   └──────┬───────┘
+                          │
+                       yes│
+                          ▼
+                       execute
+```
+
+That gives you an invariant:
+
+> **No training execution can exist without satisfying the same admission rules.**
+
+The readiness system can still understand modes. For example, a historical backfill may have different availability rules from today's training, but that difference should be explicit configuration inside the readiness policy rather than a bypass.
 
 ![Schedules, events, data-aware checks, and manual approvals create normalized retraining requests that share one eligibility policy](/content-assets/articles/article-mlops-training-pipelines-scheduled-vs-event-based-training/four-signals-one-policy.png)
 
 *Every request source records the same interval, dataset versions, and purpose. The policy may wait, reject, or reserve one logical run key before training begins.*
 
-## Define Which Time Period A Scheduled Run Covers
-<!-- section-summary: A schedule identifies a processing interval and cadence; data readiness remains a separate decision. -->
+## How Do Idempotency and Run Identities Handle Duplicate Triggers?
+<!-- section-summary: Several messages can refer to one logical operation, so a stable logical run key deduplicates requests while attempt IDs preserve physical retries. -->
 
-A cron entry looks precise, yet its meaning is incomplete until the team defines the interval behind it. A daily training request could mean “use data from the previous calendar day,” “use the latest twenty-four hours,” or “use everything since the last successful run.” Those choices produce different datasets after a delay or outage.
+Event systems can deliver the same meaning more than once, so readiness must be paired with identities that distinguish messages, logical work, and attempts.
 
-An explicit `[interval_start, interval_end]` preserves which source records belong to a batch request. A run submitted hours late still targets the original interval, and a replay next month resolves approved versions for those same boundaries. Delay, retry, and backfill therefore change execution time while the requested data window stays stable.
-
-Time zone also belongs in the policy. Daylight-saving transitions create short or long local days. UTC avoids that ambiguity for many technical datasets. A business defined by local trading days may still need a regional time zone and a tested calendar library. Write the choice explicitly.
-
-### Decide How To Handle Missed Scheduled Runs
-
-Suppose the scheduler is unavailable for three daily intervals. On recovery, it needs one of three policies:
-
-- create each missed interval as a bounded backfill;
-- create only the latest interval;
-- create a manual review item because historical runs would be expensive or misleading.
-
-This policy is commonly called **catchup**. A catchup run should preserve the original logical interval, even if execution happens much later. Otherwise several missed intervals can all read the newest data and produce duplicate candidates.
-
-Ordinary cron can launch a command at a chosen time, which is adequate for a small internal workflow with stable data and low recovery requirements. Add a durable request ledger and a process lock as soon as missed ticks, overlapping runs, or audit history matter. The shell schedule remains simple; the application owns the safety policy.
+Now consider event-driven retraining. An upstream system publishes:
 
 ```text
-15 3 * * *  submit-training-request --interval previous-day --source schedule
+training_data_ready(2026-08-28)
 ```
 
-The command submits a request. It leaves dataset resolution and pipeline launch to the trigger service. That small boundary prevents a calendar tick from bypassing readiness checks.
+Your consumer receives it and processes it. But before the event broker hears the acknowledgement, the consumer crashes. The broker reasonably thinks:
 
-## Check That All Required Data Has Arrived
-<!-- section-summary: A useful data signal proves that the intended snapshot is complete enough for training and explains how late records will be handled. -->
-
-Data rarely arrives as one atomic object. A daily snapshot may contain hundreds of files, partitions from several regions, a feature table, and labels from another system. The presence of one file proves very little.
-
-A **completeness contract** states what “ready” means for the training interval. It usually includes:
-
-- an immutable snapshot or table version;
-- the expected partition set and a manifest of the partitions received;
-- schema compatibility and required quality checks;
-- label count, coverage, and maturity rules;
-- a watermark and an accepted lateness window.
-
-A **watermark** is the latest point in event time that the producer considers complete enough under its published policy. Think of it as a boundary drawn through the incoming stream. Records before the boundary are expected to be substantially complete; later records may still arrive as corrections.
-
-### Wait For Every Required Data Partition
-
-Consider hourly transactions written into regional partitions. The last file for one region appears at 01:12. A bucket event for the first file would be premature. A better producer writes a manifest only after all expected partitions have passed validation. The manifest includes the interval, partition list, row counts, schema version, and snapshot checksum. Its publication creates the retraining proposal.
-
-The eligibility service reads that manifest and checks it against the active region registry. If a newly opened region is missing from the producer’s list, the mismatch blocks training and alerts the data owner. This protects the model from a “complete” snapshot defined with stale expectations.
-
-### Check Label Count And Coverage
-
-For supervised learning, a raw label count can hide poor coverage. Ten thousand new outcomes might all come from one customer segment. A stronger gate checks total count, join coverage to predictions, segment coverage, and label age.
-
-For example, a fraud model may wait until at least a configured number of chargeback outcomes have matured, the prediction-to-outcome join rate exceeds its service target, and each high-risk region has enough examples for evaluation. An age ceiling can still create an investigation if the count remains below threshold for too long. This avoids a permanent wait during a quiet period.
-
-### Create A New Dataset Version For Late Or Corrected Data
-
-Late records should never mutate the meaning of a completed training run. Publish a new dataset version, measure the affected population, and choose a response. A tiny correction may roll into the next regular candidate. A material target correction may create a replay request. A severe quality defect may invalidate the existing candidate and pause release activity.
-
-The trigger record retains both the original and corrected snapshot identities. This makes the relationship between candidates visible during review.
-
-## Prevent Duplicate Events From Starting Too Many Runs
-<!-- section-summary: Event systems may deliver duplicates, reorder messages, or emit bursts, so the trigger layer needs identity, deduplication, debounce, and coalescing. -->
-
-Cloud event buses and message systems commonly provide **at-least-once delivery**. The service retries an event after an acknowledgement failure, so the handler may receive the same event again. Some systems can also deliver events out of order.
-
-These delivery properties are normal. Four controls give the handler reliable behaviour:
-
-1. **Deduplication** records the provider event source and event ID, then ignores an exact redelivery of that pair.
-2. **Domain identity** groups different events that refer to the same snapshot or table version.
-3. **Debounce** waits for a quiet period after the latest change, which helps a batch of files settle.
-4. **Coalescing** combines several eligible changes into one training request, often for the newest approved snapshot.
-
-For example, a feature pipeline commits five table updates within two minutes. Launching five training runs would waste compute and produce nearly identical candidates. A ten-minute debounce window resets after each update. At expiry, the trigger creates one request for the latest committed table version. The ledger keeps the five source event IDs as supporting evidence.
-
-Rate control should preserve important boundaries. Updates for two different business intervals may require two requests. An emergency correction may carry a priority that bypasses the ordinary cooldown after approval. The coalescing key and exception policy need to be explicit.
-
-Drift evidence deserves similar care. A drift alert can come from seasonality, an instrumentation change, a failed upstream feature, or a genuine population shift. The alert should create an investigation or retraining proposal. Eligibility then checks monitoring freshness, feature health, label availability, recent releases, and cooldown policy. A candidate run can proceed after the evidence supports retraining; release evaluation remains a separate gate.
-
-## Use One Readiness Check For Every Trigger
-<!-- section-summary: Every proposal type passes through a common policy for data, labels, capacity, concurrency, cost, and authority. -->
-
-Eligibility turns many signals into one consistent operational decision. A shared policy gives scheduled, manual, and drift-driven requests the same quality and concurrency checks. It also prevents two proposal paths from starting candidates on the same snapshot.
-
-The policy usually evaluates six areas:
-
-- **Input readiness:** immutable versions exist, manifests agree, schema and quality checks pass.
-- **Label readiness:** volume, join coverage, maturity, and required segments meet the training contract.
-- **Change value:** enough new evidence exists to justify compute, or an approved purpose overrides the ordinary threshold.
-- **Concurrency and capacity:** active runs, queue depth, quotas, accelerators, and budget fit the request.
-- **Governance:** requester, environment, pipeline version, and intended release path are authorized.
-- **Timing:** cooldown, debounce, lateness, and expiry rules remain satisfied.
-
-Store the policy as versioned configuration and write its version into every trigger decision. A schedule, a data event, and a manual request then evaluate the same gate definitions. During an incident, the operator inspects that policy version and its recorded evidence. The decision no longer has to be reconstructed from several callback implementations.
-
-```yaml
-policy_id: demand-candidate-v5
-eligibility:
-  required_assets: [features, targets, training_manifest]
-  minimum_label_join_coverage: 0.98
-  maximum_active_runs: 1
-  cooldown: 12h
-  request_expiry: 36h
-identity:
-  fields: [pipeline_version, snapshot_id, purpose, partition]
-manual_request:
-  required_role: ml-production-operator
-  require_reason: true
+```text
+Maybe it didn't process the event.
+I'll send it again.
 ```
 
-The format is application-owned. An adapter can translate parts of it into Airflow assets, Dagster automation conditions, Prefect automations, Databricks job triggers, or a managed pipeline API. Checks that carry model-specific meaning stay in the trigger service or pipeline entry gate.
+Now the same logical event arrives twice. Or perhaps:
 
-## Give Retries And Replays A Stable Run ID
-<!-- section-summary: A logical run key identifies the intended work, while attempt identifiers distinguish each execution effort. -->
+```text
+02:00 scheduled trigger
+02:01 data-ready trigger
+```
 
-A training request can reach the orchestrator even if the caller never receives the response. Suppose an event handler submits a run and loses its connection one second later. The event bus redelivers the source event, and the handler sees no orchestrator ID in its local record. Creating a fresh run at this point would train a second candidate from the same snapshot.
+both refer to exactly the same training period. Without protection:
 
-Run identity gives both systems a shared answer to “Is this the same work?” The retried handler sends the original identity again. The orchestrator can return the existing run, or the reconciler can find it and repair the missing link.
+```text
+                     ┌→ Training #1
+same logical data ───┼→ Training #2
+                     └→ Training #3
+```
 
-Two related identifiers carry that meaning:
+For a large model, duplicates might mean thousands of pounds of wasted accelerator time. More importantly, they create ambiguous models:
 
-- The **logical run key** describes the intended training work. It can combine pipeline version, immutable snapshot ID, purpose, and historical partition.
-- The **attempt ID** describes one execution effort for that logical run.
+```text
+Which duplicate is the real one
+Which gets registered
+Which gets deployed
+```
 
-The duplicate event in the scenario reuses the logical run key because its pipeline version, snapshot, purpose, and partition are unchanged. A worker failure later creates another attempt ID under that same logical run. Operators can count execution attempts while still seeing one intended candidate.
+Trying to guarantee that every event is delivered **exactly once** is often much harder than making repeated events harmless. The important question is:
 
-A database uniqueness constraint provides a simple and strong foundation:
+"Are these two events asking for the same logical training operation?"
+
+For example, construct a logical key from:
+
+```text
+model
+training interval
+data cutoff
+training specification/version
+```
+
+Conceptually:
+
+```text
+fraud_model
++
+2026-06-01..2026-08-29
++
+cutoff=2026-08-29
++
+training_spec=v17
+```
+
+giving something like:
+
+```text
+fraud_model:2026-08-29:spec-v17
+```
+
+Then put a uniqueness constraint around it. Pseudo-SQL:
 
 ```sql
-create unique index one_training_request
-on training_requests (
-  pipeline_version,
-  snapshot_id,
-  purpose,
-  coalesce(partition_key, '')
-);
+INSERT INTO training_requests (
+    logical_run_id,
+    ...
+)
+VALUES (...)
+ON CONFLICT (logical_run_id)
+DO NOTHING;
 ```
 
-The trigger handler inserts or retrieves this record inside a transaction, then submits the reserved identity to the orchestrator. Side effects such as notifications and pipeline creation also carry the same idempotency key where the downstream API supports one.
+Now:
 
-The request ledger follows the work from signal to outcome. `observed` means the source signal has been stored durably. A request moves to `waiting` if labels, manifests, approval, or capacity are still missing; each re-evaluation records which evidence changed. It moves to `admitted` only after eligibility passes and the logical run key has been reserved. At this point training is authorized, though the ledger has no proof that the orchestrator accepted the run.
-
-Submission crosses from the trigger database into the orchestrator. A successful response moves the record to `submitted` and adds the external run ID. A lost response leaves the record in `admitted`, even if the orchestrator created the run. That transition requires external reconciliation. The reconciler queries by logical key and attaches a matching run. It submits with the same key only after an empty lookup. `running` and `completed` mirror the external outcome. `rejected` and `expired` close requests that failed policy or outlived their usefulness before launch.
-
-```mermaid
-flowchart TD
-    O["Observed Request<br/>(stores the source signal)"] --> G{"Gate Evaluation<br/>(checks current evidence)"}
-    G -->|Incomplete| W["Waiting Request<br/>(records unmet conditions)"]
-    W --> G
-    G -->|Approved| A["Admitted Request<br/>(reserves the logical key)"]
-    A --> S["Submitted Run<br/>(stores the orchestrator ID)"]
-    S --> N["Running Attempt<br/>(tracks external execution)"]
-    N --> C["Completed Run<br/>(links final outcome)"]
-    G -->|Invalid| R["Rejected Request<br/>(records policy evidence)"]
+```text
+cron event ─────────┐
+data event ─────────┼─→ same logical_run_id
+duplicate message ──┘
+                         │
+                         ▼
+                  one training request
 ```
 
-## Define Separate Rules For Retries, Replays, And Backfills
-<!-- section-summary: Retry, replay, and backfill describe different operational intentions and need separate identities, limits, and release rules. -->
+This property is called **idempotency**. Repeatedly asking for the same logical operation does not repeatedly create the operation. Suppose you receive:
 
-A **retry** continues work for the same logical input after an execution failure. A **replay** runs the same logical interval again because code, configuration, or evidence changed. A **backfill** creates work for a range of historical partitions.
-
-This vocabulary matters because each action carries different risk. A retry can usually reuse the same approved inputs. A replay should record the changed pipeline version, corrected snapshot, or investigation reason. A backfill can create hundreds of runs and compete with current production training.
-
-For a historical label correction, first publish a corrected snapshot version and measure affected intervals. Create replay requests only for material partitions. Assign a backfill group ID, cap concurrency, reserve a separate compute pool or priority, and disable automatic promotion for historical candidates. Current-period training keeps its service priority.
-
-Late events should be compared with the watermark and correction policy. An event for a partition already processed may create no action, amend monitoring evidence, or request a replay. Target changes and business impact drive the response; event age supplies supporting context.
-
-Replay also needs a stable input record. Reading “latest” during a historical run can combine old features with current labels. Resolve every asset version before admission and pass those immutable references into the pipeline.
-
-## Use Manual Approval For Exceptional Retraining
-<!-- section-summary: Emergency and high-risk runs retain human authority through explicit scope, evidence, permissions, and expiry. -->
-
-An incident may require an immediate candidate after a corrupted feature is repaired. The request names the corrected snapshot because the investigation and any replay must refer to the exact data reviewed by the operator. Its purpose explains the permitted outcome, such as “evaluate the feature repair,” and its expiry closes the emergency path after the incident window. These fields stop a temporary exception from turning into a reusable shortcut.
-
-The incident link connects the request to repair evidence and the operational timeline. The pipeline version and expected scope fix what the approval covers. Urgency controls queue priority, while release permission limits the allowed follow-on action.
-
-A production candidate may need a second reviewer because training approval and release approval answer different questions. The first authorizes compute against the supplied evidence. The second judges the resulting metrics, risks, and rollout plan.
-
-The emergency flag can adjust cooldown or queue priority under a versioned exception policy. Input immutability still anchors the candidate to reviewed data. Schema compatibility still protects the training code, and active-run reconciliation still prevents duplicate work. Audit logging connects every deviation to its owner.
-
-If the incident requires bypassing a quality threshold, the request records the failed check and why accepting it is reasonable. It also records the approver and expiry, so the exception closes after the incident window.
-
-Manual requests also need an answer to “What may happen after training?” An experiment can produce metrics and artifacts without entering the registry. An incident candidate may enter evaluation while a separate release approval remains required. Encoding this permission blocks a one-off training action from silently starting deployment.
-
-Role-based access control should keep four authorities separate. A requester proposes the work and supplies evidence. An exception approver accepts any temporary policy deviation. The pipeline service identity executes only the admitted configuration. A release approver decides whether the resulting candidate can reach production. This split prevents one urgent action from proposing, approving, executing, and releasing its own model. Short-lived credentials give each role only the permissions required for that stage.
-
-## Implement Training Triggers With Current Tools
-<!-- section-summary: Current orchestrators expose schedules, asset events, sensors, and automations, while application policy still defines model-specific eligibility. -->
-
-Tool selection comes after the trigger contract. Each platform can represent parts of the framework, though names and maturity differ.
-
-### Ordinary Cron
-
-Cron supplies a clock signal. Pair it with a durable request API, explicit interval calculation, a uniqueness constraint, and an external monitor for missed ticks. It fits low-volume internal training where a full orchestrator would add more operational surface than value.
-
-### Apache Airflow
-
-A team already using Airflow for warehouse and feature pipelines can publish the training manifest as an **Asset**. Airflow records the update only after the producer task succeeds, and an asset-aware schedule can then create the consumer DAG run. Requiring both the feature and label Assets with `AND` expresses a basic completeness dependency; using `OR` creates a run after either Asset changes.
-
-Current Airflow uses **Assets** for these logical data dependencies; older material and deployments may still use the former **Dataset** name. `AssetOrTimeSchedule` combines asset changes with a timetable, while asset watchers connect supported external event sources. Explicit timetable choice remains important because a cron trigger and a cron data interval carry different time meanings. Keep readiness checks inside the DAG or a policy service if an Asset update alone cannot prove label coverage or quality.
-
-### Dagster
-
-Suppose a Dagster project already represents feature tables, labels, and training snapshots as assets. The training asset should materialize only after its upstream partitions exist and their blocking checks pass. Declarative Automation evaluates that asset state and its dependencies through `AutomationCondition`; its built-in conditions cover cron cadence, eager dependency updates, and missing partitions.
-
-An asset sensor handles more custom event logic. It can create a `RunRequest` after a selected materialization and use a stable `run_key` to suppress duplicate requests. The normalized training request still carries the snapshot identity and policy evidence because a Dagster run key only protects the scope defined by that sensor.
-
-The core automation conditions are current supported features. Dagster currently marks automation through virtual-asset dependencies as Preview. Keep that extension outside a production contract until its lifecycle status fits the system's risk policy.
-
-### Prefect
-
-Suppose a labeling service emits `labels.batch-approved` with a snapshot ID after review. A Prefect deployment trigger can match that event, pass the snapshot ID into a deployment, and create the flow run. The trigger is a concise automation whose action is fixed to running that deployment.
-
-Prefect 3 provides events and automations in the open-source product. Event triggers can react to matching events or their absence. They can also require a threshold inside a time window and group observations by resource fields. Those controls fit label thresholds and missing-snapshot alerts, while the normalized request retains the event ID and resource identity so application-level deduplication survives redelivery and operator replay.
-
-### Databricks Lakeflow Jobs
-
-Lakeflow Jobs supports scheduled, file-arrival, table-update, continuous, and manual triggers. File-arrival triggers expose a minimum interval and a wait-after-last-change setting, which map directly to cooldown and debounce. Table-update triggers can watch supported Unity Catalog tables and start after any or all selected tables update.
-
-Table update is a useful data-aware signal, especially with commit version passed into the job. It still needs a training eligibility step for label coverage, cross-table consistency, and release policy. Databricks currently labels model-update triggers as Beta. Table-update triggers on OpenSharing objects and system tables are also Beta. The current documentation places no Beta label on ordinary supported Unity Catalog table updates or file-arrival triggers.
-
-### Managed ML Pipelines And Cloud Event Buses
-
-SageMaker Pipelines can be an EventBridge target for schedules or event patterns. Gemini Enterprise Agent Platform Pipelines provides recurring pipeline schedules with concurrency controls; an external Eventarc handler can submit an event-driven `PipelineJob`. The current product name appears alongside the existing `google.cloud.aiplatform` Python namespace, so code still uses types such as `PipelineJobSchedule`. Azure Machine Learning v2 provides time-based schedules, while external event-driven entry commonly uses Event Grid plus an adapter or external orchestrator. Azure ML’s native v2 schedule documentation explicitly excludes event-based triggers.
-
-The shared delivery contract is simple: the handler must tolerate another copy of the event and must detect work that never reached it. It first stores the event source, event ID, and dataset version in one durable transaction. It then derives the logical run key and either creates the request or attaches the event to the existing request. Acknowledgement happens after this durable write. Exhausted deliveries move to a dead-letter store, and periodic reconciliation compares published snapshots with ledger entries to recover missing work.
-
-Provider details change where failure can occur. Eventarc Standard explicitly uses at-least-once delivery, so duplicate events are expected. Azure Event Grid also provides at-least-once delivery and warns that events may arrive out of order. AWS service events reach EventBridge with a source-specific best-effort or durable delivery level. After EventBridge accepts an event, target delivery follows its configured retries and dead-letter queue. For AWS, reconciliation must cover both a missed source event and a failed target invocation.
-
-## Recover From Duplicate And Missing Trigger Events
-<!-- section-summary: A durable ledger and periodic reconciliation turn duplicate delivery, ambiguous submission, and missed events into routine recovery paths. -->
-
-Consider an event handler that reserves a request and calls the orchestrator. The API accepts the run, yet the response is lost during a network failure. A blind retry can create a second candidate. The recovery path first queries the orchestrator by logical run key. It attaches an existing run ID to the ledger, and submits only after an empty result.
-
-Now consider a missed storage event. A periodic reconciler compares published manifests or table versions with trigger ledger entries. Any eligible snapshot without a request gets a recovered proposal carrying source `reconciliation`. This gives event-driven systems a dependable safety net.
-
-```mermaid
-flowchart TD
-    L["Trigger Ledger<br/>(stores requests and decisions)"] --> Q{"Orchestrator Lookup<br/>(searches by logical key)"}
-    Q -->|Run Found| A["Attach Existing Run<br/>(repairs missing linkage)"]
-    Q -->|Run Missing| S["Submit Reserved Run<br/>(reuses the same key)"]
-    M["Manifest Reconciliation<br/>(finds unobserved snapshots)"] --> D{"Request Exists<br/>(checks domain identity)"}
-    D -->|Yes| L
-    D -->|No| N["Recovered Proposal<br/>(enters normal eligibility)"]
-    N --> L
+```text
+event_id = abc123
+event_id = xyz789
 ```
 
-These recovery controls protect different boundaries and work as one system. The uniqueness constraint prevents two local request rows for the same logical work. A downstream idempotency key extends that protection across the orchestrator API. Retries carry the same key and stop at a bounded expiry. A dead-letter store retains deliveries that exhausted their attempts. The reconciler then compares source truth, the request ledger, and orchestrator state to find anything still missing.
+They are different messages. But both might mean:
 
-The resulting recovery design contains five mechanisms:
+```text
+"Train fraud_model through Aug 29."
+```
 
-- a uniqueness constraint for the logical request;
-- idempotency keys passed to downstream APIs;
-- retry with exponential backoff and bounded expiry;
-- a dead-letter queue or failed-event store;
-- a reconciler that compares source truth, ledger state, and orchestrator state.
+So:
 
-Test these paths with duplicate events, reordered events, a timeout after run creation, scheduler downtime, and a dead-letter replay. Recovery should produce one logical candidate and a complete audit trail.
+```text
+event identity
+```
+
+and:
+
+```text
+training identity
+```
+
+are different concepts. You generally want to preserve both:
+
+```text
+TriggerEvent
+    event_id = xyz789
+    source = drift_monitor
+
+TrainingRequest
+    logical_run_id = fraud_model:2026-08-29:v17
+```
+
+Multiple events can point to the same request:
+
+```text
+event A ──┐
+event B ──┼→ logical training request X
+event C ──┘
+```
+
+This also produces excellent audit information:
+
+```text
+Why did this run exist
+
+- scheduled trigger at 02:00
+- data-ready event at 02:14
+- drift alert at 02:17
+```
+
+But only one model was trained. This distinction is extremely useful. Suppose training fails because a GPU node dies. You retry. Did the intended training operation change? No. Therefore:
+
+```text
+logical_run_id
+    fraud:2026-08-29:v17
+```
+
+should stay constant. But the physical execution changed:
+
+```text
+attempt 1 → failed
+attempt 2 → failed
+attempt 3 → succeeded
+```
+
+So model it as:
+
+```text
+Logical training run
+    fraud:2026-08-29:v17
+
+        ├── attempt-001
+        ├── attempt-002
+        └── attempt-003
+```
+
+This gives you two useful identities:
+
+$$
+\text{LogicalRunID} = \text{what we intended to compute}
+$$
+
+$$
+\text{AttemptID} = \text{one physical attempt to compute it}
+$$
+
+Never use retry number as part of the logical identity. Otherwise every retry looks like a completely unrelated training job.
+
+## How Do Retry, Replay, Backfill, and Manual Requests Differ?
+<!-- section-summary: Retries repeat failed execution, replays repeat pinned intent, backfills create historical logical runs, and manual requests still pass the same correctness checks. -->
+
+Those identities make it possible to define different repetition operations precisely instead of sending all of them through an unsafe rerun button.
+
+These words are sometimes used interchangeably, but operationally they should have different meanings.
+
+| Operation | Meaning                                                                  | Logical inputs                 |
+| --------- | ------------------------------------------------------------------------ | ------------------------------ |
+| Retry     | Previous execution failed                                                | Same                           |
+| Replay    | Intentionally execute the same logical request again                     | Normally same/pinned           |
+| Backfill  | Create training requests for historical periods that should have existed | Different historical intervals |
+
+A **retry** might look like:
+
+```text
+run = churn:2026-08-29:v4
+
+attempt 1 → infrastructure failure
+attempt 2 → success
+```
+
+Nothing about the requested training changed. A **replay** might mean:
+
+```text
+Re-execute churn:2026-08-29:v4
+using the original input snapshot
+```
+
+This is useful for debugging or verifying reproducibility. A **backfill** is different:
+
+```text
+Backfill June 1–5
+
+churn:2026-06-01:v4
+churn:2026-06-02:v4
+churn:2026-06-03:v4
+churn:2026-06-04:v4
+churn:2026-06-05:v4
+```
+
+A backfill is not one giant retry. It is normally a collection of logical historical runs. Give the collection a parent identity:
+
+```text
+backfill_id = bf_7281
+
+    ├── June 1 run
+    ├── June 2 run
+    ├── June 3 run
+    ├── June 4 run
+    └── June 5 run
+```
+
+Imagine you rerun training for January. Your database now contains corrected January transactions that were not available in January. What does "retrain January" mean? It could mean:
+
+```text
+A. Reproduce exactly what January's pipeline would have seen then.
+```
+
+or:
+
+```text
+B. Train for January using the best corrected data we know today.
+```
+
+Those are scientifically different experiments. Therefore a serious backfill policy should specify its snapshot semantics:
+
+```text
+data_snapshot_policy = historical_as_of
+
+or
+
+data_snapshot_policy = latest_corrected
+```
+
+If your system only records:
+
+```text
+training_window = January
+```
+
+you do not have enough information to know which experiment occurred. A manual button is just another source of a training request. It should not secretly mean:
+
+```text
+Ignore missing partitions.
+Ignore dedupe.
+Ignore feature freshness.
+Ignore everything and start GPUs.
+```
+
+Instead:
+
+```text
+Engineer
+   │
+   ▼
+Manual request
+   │
+   ▼
+same readiness checks
+   │
+   ▼
+optional approval
+   │
+   ▼
+training
+```
+
+Manual **approval** is a different concept from manual **triggering**.
+
+For example:
+
+```text
+automatic trigger:
+drift increased sharply
+
+readiness:
+data complete ✓
+
+policy:
+estimated training cost = £18,000
+bulk retraining = true
+
+state:
+WAITING_FOR_APPROVAL
+```
+
+Someone can then approve that already-valid request. This is especially useful for expensive backfills, emergency retraining, unusual data corrections, or forced replays.
+
+## How Do Request State and Concurrency Control Work Together?
+<!-- section-summary: A durable request state machine separates readiness from capacity admission, while concurrency limits control simultaneous legitimate runs rather than duplicates. -->
+
+After a valid request exists, its state still has to distinguish waiting for data, approval, capacity, execution, and completion.
+
+Once we derive everything above, training triggering starts looking less like "run a cron job" and more like managing durable state:
+
+```text
+              trigger
+                 │
+                 ▼
+            REQUESTED
+                 │
+          data incomplete
+                 ▼
+        WAITING_FOR_DATA
+                 │
+            data ready
+                 ▼
+       WAITING_FOR_APPROVAL   ← optional
+                 │
+             approved
+                 ▼
+              READY
+                 │
+          capacity available
+                 ▼
+             RUNNING
+            /       \
+           /         \
+       FAILED      SUCCEEDED
+          │
+        retry
+          │
+          └────────→ RUNNING
+```
+
+Duplicates do not create parallel state machines. They attach to the existing logical request. That is a much cleaner model. These are easy to confuse. **Deduplication** asks:
+
+Is this already the same logical training operation
+
+**Concurrency control** asks:
+
+Even if these are legitimate different runs, how many may execute simultaneously
+
+For example:
+
+```text
+Aug 27 training ── legitimate
+Aug 28 training ── legitimate
+Aug 29 training ── legitimate
+```
+
+A backfill might create all three correctly. But perhaps your GPU budget says:
+
+```text
+maximum concurrent training runs = 1
+```
+
+Then:
+
+```text
+Aug 27 → RUNNING
+Aug 28 → READY
+Aug 29 → READY
+```
+
+This is admission control, not deduplication. Keeping these mechanisms separate makes the system much easier to reason about.
 
 ![A trigger ledger suppresses duplicate deliveries, repairs a lost submission response by querying the logical key, and reconstructs missing events through reconciliation](/content-assets/articles/article-mlops-training-pipelines-scheduled-vs-event-based-training/trigger-ledger-recovery.png)
 
 *The ledger creates one logical request for a redelivered event, attaches an already accepted orchestrator run after a lost response, and sends recovered proposals through normal eligibility.*
 
-## Monitor And Audit Training Triggers
-<!-- section-summary: Trigger operations focus on delayed evidence, duplicate suppression, missed work, queue pressure, manual authority, and safe replay. -->
+## How Does Reconciliation Recover Missing Events?
+<!-- section-summary: Events provide quick notice, idempotency makes duplicates harmless, and periodic reconciliation recreates requests that missing events failed to produce. -->
 
-Pipeline success metrics describe work that started. Trigger metrics also cover work that waited, expired, or was rejected. Track proposal volume by source and the outcome of each gate. Measure waiting time, trigger-to-start delay, queue pressure, and active concurrency. Count duplicate suppressions, coalesced events, missed intervals, reconciled snapshots, dead-lettered signals, expired requests, and manual exceptions.
+Deduplication handles repeated signals, while correctness also requires a repair path for a signal that never arrives.
 
-A practical alert might fire because daily label readiness has remained false beyond its age ceiling. The on-call engineer first checks label-job freshness, join coverage, schema versions, and the intended interval. If the data is healthy and only the count threshold is low, the owner can approve a documented exception or wait for more outcomes. If the join feed is broken, training stays paused while the outcome pipeline is repaired.
+Event systems can produce:
 
-The runbook follows the same lifecycle as the ledger. First pause new admissions so the incident stops creating more work. Establish the source snapshot, gate evidence, logical key, and external run state. Repair ambiguous linkage before any replay. Historical recovery then uses bounded concurrency and keeps promotion disabled until the team has reviewed the candidates. Once dead-lettered signals are reconciled, resume automation and observe the next normal interval.
+```text
+duplicate events
+```
 
-The operational actions are:
+but they can also produce:
 
-- pause new admissions while active pipeline runs continue;
-- inspect the latest signal, dataset manifest, gate evidence, and logical key;
-- search the orchestrator before resubmitting an ambiguous request;
-- replay one corrected snapshot through normal eligibility;
-- launch a bounded historical backfill with promotion disabled;
-- drain or replay dead-lettered events;
-- resume automation and verify the next interval.
+```text
+missing events
+```
 
-Audit records identify who or what proposed the run and which policy admitted it. They retain the evidence used by every gate, any approved exception, and the immutable inputs passed to the pipeline. The final link points to the release decision. Together, these records turn a scheduler event into a defensible model history.
+Idempotency solves the first. It does not solve the second. Suppose August 28 data becomes complete, but the `data_ready` message disappears. If your architecture depends entirely on receiving that message, training may never happen. A stronger system combines **events** with **reconciliation**. An event gives you low latency:
 
-## The Main Idea
-<!-- section-summary: Reliable training uses a proposal, an eligibility decision, and one stable run identity. -->
+```text
+"Something changed. Check immediately."
+```
 
-Schedules, events, data-aware conditions, and manual approvals are ways to propose retraining. None of them proves readiness alone. A production trigger layer records the proposal and checks shared eligibility rules. It reserves one logical identity before asking the orchestrator to execute a versioned pipeline.
+A reconciler periodically asks:
 
-Use clocks for predictable intervals, domain events for meaningful state changes, data-aware checks for completeness, and approvals for exceptional authority. Add watermarks, lateness rules, rate control, idempotency, bounded backfills, and reconciliation. These controls turn “train now” from a fragile callback into an explainable operational decision.
+```text
+"For every training interval that should exist,
+is there a corresponding request?"
+```
 
-Consider a daily forecast whose schedule fires while one regional sales partition is still loading. The schedule has done its job: it proposed the expected interval. The readiness gate now keeps that proposal waiting, records the missing partition, and admits the run after the complete dataset receives an immutable identity. A duplicate completion event finds the same logical run instead of launching another training job.
+For example:
+
+```text
+expected:
+Aug 26 ✓
+Aug 27 ✓
+Aug 28
+
+actual:
+Aug 26 ✓
+Aug 27 ✓
+
+reconciler:
+create Aug 28 request
+```
+
+This produces a powerful pair of properties:
+
+```text
+duplicates → harmless because requests are idempotent
+missing events → repaired by reconciliation
+```
+
+In distributed systems, that combination is generally much more robust than trying to build perfect message delivery. A good architecture therefore looks approximately like this:
+
+```text
+                  TRIGGER SOURCES
+
+       cron        data        drift       manual
+        │           │            │            │
+        └───────────┴──────┬─────┴────────────┘
+                           ▼
+                    Trigger Events
+                           │
+                           ▼
+                normalize / deduplicate
+                           │
+                           ▼
+                ┌─────────────────────┐
+                │ Training Requests   │
+                │ durable database    │
+                └─────────┬───────────┘
+                          │
+                    readiness check
+                          │
+              ┌───────────┴───────────┐
+              │                       │
+           not ready                ready
+              │                       │
+          wait/recheck                ▼
+                               policy/admission
+                                       │
+                                       ▼
+                                    execute
+                                       │
+                                       ▼
+                              Training Attempts
+                                       │
+                                  model artifact
+```
+
+The database—or equivalent durable orchestration state—is important. The event broker should not be your only record of whether a model ought to be trained.
+
+## What Evidence and Monitoring Belong to the Trigger Control Plane?
+<!-- section-summary: The ledger records exact intent, trigger sources, readiness evidence, approvals, attempts, outputs, and latency spent waiting for data, approval, or capacity. -->
+
+The durable ledger provides that repair point and the evidence needed to monitor work that is late before training even starts.
+
+At minimum, you want enough information to answer:
+
+```text
+What were we trying to train
+Why
+Using what
+When
+What actually happened
+```
+
+Conceptually:
+
+```text
+logical_run_id
+
+model_name
+training_interval_start
+training_interval_end
+data_cutoff
+
+data_snapshot_ids
+
+pipeline_version
+container_image_digest
+code_commit
+training_config_version
+feature_definition_version
+
+trigger_sources
+trigger_event_ids
+request_created_at
+
+readiness_status
+readiness_evidence
+
+approval_status
+approver
+approval_reason
+
+attempts
+attempt_statuses
+
+output_model_id
+metrics
+```
+
+The exact schema varies. The principle is:
+
+**The logical training request should be reconstructable without inspecting a pile of ephemeral logs.**
+
+Teams frequently monitor:
+
+```text
+training failed
+```
+
+but forget to monitor:
+
+```text
+training never started.
+```
+
+Those are different failures. For trigger infrastructure, useful things to observe include:
+
+```text
+request creation rate
+duplicate-trigger rate
+requests waiting for data
+age of oldest waiting request
+readiness-check failures
+approval queue age
+ready-but-not-started time
+training attempt failure rate
+retry count
+missing expected intervals
+backfill progress
+```
+
+One particularly valuable metric is:
+
+$$
+\text{trigger-to-start latency}
+=
+t_{\text{training start}}
+-
+t_{\text{request creation}}
+$$
+
+But break it down:
+
+$$
+\text{total latency}
+=
+\text{waiting for data}
++
+\text{waiting for approval}
++
+\text{waiting for capacity}
+$$
+
+Then an alert like:
+
+```text
+Training started 4 hours late
+```
+
+becomes diagnosable:
+
+```text
+3h 42m waiting for refunds
+12m waiting for approval
+6m waiting for GPU capacity
+```
+
+rather than merely "pipeline slow." The concepts are more important than the product, but modern orchestrators provide pieces of this architecture. For example, current Apache Airflow 3.x supports traditional timetable scheduling as well as asset-aware scheduling. Assets can trigger downstream DAGs when upstream data is updated, multiple assets can be combined, and Airflow 3 also supports external event-driven patterns through REST-pushed asset events or `AssetWatcher`s. ([Apache Airflow][1]) Dagster currently exposes schedules, sensors, asset sensors, declarative automation, partitions/backfills, asset checks, and concurrency-management concepts. Those primitives map naturally to time triggers, event polling, data-readiness conditions, historical partitions, and admission control. ([Dagster Docs][2])
+
+Kubeflow Pipelines distinguishes individual runs from recurring runs; recurring runs can periodically instantiate runs and enforce a maximum number of concurrent runs. KFP runs can also be launched through its UI, SDK, CLI, or API, making it possible to put your own request/readiness layer in front of execution. ([Kubeflow][3]) The important point is not:
+
+```text
+"Airflow has feature X."
+```
+
+It is:
+
+```text
+Use the orchestrator as the mechanism.
+
+Keep your correctness rules—
+logical intervals,
+readiness,
+idempotency,
+run identity,
+replay policy—
+explicit.
+```
+
+## What Does a Complete Training Trigger Lifecycle Look Like?
+<!-- section-summary: All trigger sources converge on one request, readiness, policy, admission, execution, and result path with at most one accepted output. -->
+
+The full lifecycle joins schedules, data events, alerts, and manual requests to one consistent admission and execution path.
+
+Suppose you retrain a recommendations model daily. The business rule is:
+
+```text
+Every day, produce a model using the most recent
+90 complete days of interactions.
+```
+
+At:
+
+```text
+2026-08-29 02:00
+```
+
+the scheduler emits:
+
+```text
+TrainingTrigger(
+    model="recommendations",
+    logical_date="2026-08-29",
+    reason="scheduled"
+)
+```
+
+The trigger handler derives:
+
+```text
+data_cutoff = 2026-08-29 00:00 UTC
+
+training_window =
+[2026-05-31 00:00,
+ 2026-08-29 00:00)
+```
+
+It computes:
+
+```text
+logical_run_id =
+recommendations:2026-08-29:training-spec-v12
+```
+
+and performs an idempotent insert. The request becomes:
+
+```text
+WAITING_FOR_DATA
+```
+
+because:
+
+```text
+clicks     complete through Aug 29 00:00 ✓
+purchases  complete through Aug 29 00:00 ✓
+catalog    complete through Aug 28 23:00 ✗
+```
+
+At 02:17, a catalog-complete event arrives. It wakes the readiness evaluator. Now:
+
+```text
+clicks     ✓
+purchases  ✓
+catalog    ✓
+DQ checks  ✓
+```
+
+The request moves:
+
+```text
+WAITING_FOR_DATA → READY
+```
+
+At 02:18 another copy of the catalog event arrives. Nothing happens:
+
+```text
+logical_run_id already exists
+```
+
+At 02:19 the executor starts:
+
+```text
+attempt_id = attempt-001
+```
+
+At 02:35 a machine failure occurs:
+
+```text
+attempt-001 = FAILED
+```
+
+The retry controller starts:
+
+```text
+attempt-002
+```
+
+but keeps:
+
+```text
+logical_run_id =
+recommendations:2026-08-29:training-spec-v12
+```
+
+The second attempt succeeds. Later the audit trail can say:
+
+```text
+Logical request:
+recommendations:2026-08-29:training-spec-v12
+
+Reason:
+daily schedule
+
+Requested:
+02:00
+
+Data ready:
+02:17
+
+Started:
+02:19
+
+Attempts:
+001 failed — infrastructure
+002 succeeded
+
+Input snapshot:
+snapshot_98127
+
+Model:
+model_77410
+```
+
+That is what a well-designed training trigger system buys you. It helps to think of the whole architecture as three different layers:
+
+```text
+INTENT
+"Why might we need training?"
+        │
+        │ triggers
+        ▼
+CORRECTNESS
+"What exact run is intended,
+and is it safe to execute?"
+        │
+        │ readiness + idempotency + policy
+        ▼
+EXECUTION
+"Allocate machines and train."
+```
+
+A lot of brittle ML infrastructure skips the middle layer:
+
+```text
+trigger → GPU job
+```
+
+A robust system inserts it:
+
+```text
+trigger
+   ↓
+logical request
+   ↓
+stable identity
+   ↓
+data readiness
+   ↓
+deduplication
+   ↓
+approval/policy
+   ↓
+capacity admission
+   ↓
+execution attempt
+```
+
+**Triggers should create intent, not directly create compute.** A trigger can be early, late, duplicated, missing, manually generated, replayed, or produced by multiple independent systems. So design the training system so that none of those properties threaten correctness. The central invariant becomes:
+
+$$
+\boxed{
+\text{One well-defined logical training request}
+\rightarrow
+\text{zero or more execution attempts}
+\rightarrow
+\text{at most one accepted training result}
+}
+$$
+
+Once that invariant exists, cron schedules, event buses, drift detectors, retries, backfills, and manual retraining become different inputs to the same reliable control system rather than six unrelated ways of launching a training job.
 
 ![A safe trigger lifecycle records a proposal, resolves immutable inputs, evaluates readiness, reserves one logical key, submits idempotently, and links the pipeline run to audit evidence](/content-assets/articles/article-mlops-training-pipelines-scheduled-vs-event-based-training/safe-trigger-lifecycle.png)
 
 *Pending and rejected requests preserve their exact evidence. Admitted work reaches one pipeline run, while reconciliation returns missing or ambiguous work to the request ledger.*
 
-That separation also gives operations a safe recovery path. A missing signal can be reconstructed from source truth, a duplicate can be suppressed through the ledger, and a corrected historical interval can be replayed with promotion disabled. The final evidence should show one accepted request, one identified dataset, one pipeline run or explained failure, and no competing candidate created by retries.
+## Check Your Answers
+
+Use these short answers to revisit the reasoning behind each section.
+
+:::expand[Why Should a Trigger Create a Training Request Instead of Starting Compute?]{kind="recap"}
+A trigger records intent and defines a logical request with an explicit interval and cutoff; readiness and policy decide whether execution may begin.
+:::
+
+:::expand[How Does the System Decide That Training Data Is Ready?]{kind="recap"}
+Central readiness checks verify complete inputs, producer watermarks, data quality, and label maturity for the request's cutoff.
+:::
+
+:::expand[How Do Idempotency and Run Identities Handle Duplicate Triggers?]{kind="recap"}
+Several messages can refer to one logical operation, so a stable logical run key deduplicates requests while attempt IDs preserve physical retries.
+:::
+
+:::expand[How Do Retry, Replay, Backfill, and Manual Requests Differ?]{kind="recap"}
+Retries repeat failed execution, replays repeat pinned intent, backfills create historical logical runs, and manual requests still pass the same correctness checks.
+:::
+
+:::expand[How Do Request State and Concurrency Control Work Together?]{kind="recap"}
+A durable request state machine separates readiness from capacity admission, while concurrency limits control simultaneous legitimate runs rather than duplicates.
+:::
+
+:::expand[How Does Reconciliation Recover Missing Events?]{kind="recap"}
+Events provide quick notice, idempotency makes duplicates harmless, and periodic reconciliation recreates requests that missing events failed to produce.
+:::
+
+:::expand[What Evidence and Monitoring Belong to the Trigger Control Plane?]{kind="recap"}
+The ledger records exact intent, trigger sources, readiness evidence, approvals, attempts, outputs, and latency spent waiting for data, approval, or capacity.
+:::
+
+:::expand[What Does a Complete Training Trigger Lifecycle Look Like?]{kind="recap"}
+All trigger sources converge on one request, readiness, policy, admission, execution, and result path with at most one accepted output.
+:::
 
 ## References
 
-- [Apache Airflow asset-aware scheduling](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/asset-scheduling.html)
-- [Apache Airflow asset definitions](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/assets.html)
-- [Apache Airflow event-driven scheduling](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/event-scheduling.html)
-- [Apache Airflow timetables](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timetable.html)
-- [Dagster Declarative Automation](https://docs.dagster.io/guides/automate/declarative-automation)
-- [Dagster asset sensors](https://docs.dagster.io/guides/automate/asset-sensors)
-- [Dagster virtual assets](https://docs.dagster.io/guides/build/assets/virtual-assets)
-- [Prefect automations](https://docs.prefect.io/v3/concepts/automations)
-- [Prefect deployment triggers](https://docs.prefect.io/v3/how-to-guides/automations/creating-deployment-triggers)
-- [Databricks Lakeflow Jobs schedules and triggers](https://docs.databricks.com/aws/en/jobs/triggers)
-- [Databricks file-arrival triggers](https://docs.databricks.com/aws/en/jobs/file-arrival-triggers)
-- [Databricks table-update triggers](https://docs.databricks.com/aws/en/jobs/trigger-table-update)
-- [SageMaker Pipelines EventBridge triggers](https://docs.aws.amazon.com/sagemaker/latest/dg/pipeline-eventbridge.html)
-- [Gemini Enterprise Agent Platform pipeline schedules](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/schedule-pipeline-run)
-- [Azure Machine Learning pipeline schedules](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-schedule-pipeline-job)
-- [Google Eventarc event retries](https://docs.cloud.google.com/eventarc/docs/retry-events)
-- [Azure Event Grid delivery and retry](https://learn.microsoft.com/en-us/azure/event-grid/delivery-and-retry)
-- [Amazon EventBridge delivery levels](https://docs.aws.amazon.com/eventbridge/latest/ref/event-delivery-level.html)
-- [Amazon EventBridge target retries and dead-letter queues](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-retry-policy.html)
+[1]: https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/assets.html "Asset Definitions — Airflow 3.3.1 Documentation"
+[2]: https://docs.dagster.io/ "Overview | Dagster Docs"
+[3]: https://www.kubeflow.org/docs/components/pipelines/concepts/run/ "Run and Recurring Run | Kubeflow"

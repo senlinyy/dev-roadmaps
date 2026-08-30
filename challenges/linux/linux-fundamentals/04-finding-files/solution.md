@@ -1,8 +1,8 @@
 ```bash
-$ find /etc -name "*.conf"
-$ find /var/log -name "*.log"
-$ tree -L 2 /etc
-$ find /var -type f -size +1M
+find /etc -type f -name database.conf
+tree -L 2 /opt/orders-api
+find /opt/orders-api -type f -name "*.conf"
 ```
 
-- `find` walks the directory tree in real time, matching by `-name`, `-type`, `-size`, and many other criteria. `-name "*.conf"` uses a glob pattern. `-size +1M` matches files larger than one megabyte. `tree -L 2` limits the visual depth to keep the output manageable.
+- `find` searches live paths from the chosen starting directory.
+- The quoted wildcard is interpreted by `find` instead of being expanded by the shell first.

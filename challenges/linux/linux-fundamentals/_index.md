@@ -1,8 +1,8 @@
 ---
 title: "Linux Fundamentals"
-description: "Navigate the filesystem, explore the FHS directory hierarchy, discover virtual filesystems, hunt down files, and check disk space. Each step targets a specific section of the Filesystem & Navigation article."
+description: "Navigate a Linux host, follow standard paths, inspect virtual filesystems, resolve commands and links, and diagnose mount, inode, and open-file capacity problems."
 articleId: article-devops-foundation-linux-linux-basics-filesystem-navigation
-difficulty: easy
+difficulty: medium
 order: 1
-tags: [navigation, FHS, proc, virtual-fs, find, tree, df, du, inode]
+tags: [navigation, FHS, proc, sys, find, path, symlink, inode, findmnt, df, du]
 ---

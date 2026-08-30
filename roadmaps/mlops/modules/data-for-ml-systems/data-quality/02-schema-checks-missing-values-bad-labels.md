@@ -1,7 +1,7 @@
 ---
 title: "Data Quality Checks"
 description: "Learn how structural validity, missing-value semantics, and label integrity protect ML datasets from silent failures."
-overview: "ML data quality asks whether a dataset has a trustworthy shape, whether unavailable information has a clear meaning, and whether labels represent mature, traceable outcomes. These three evidence layers guide investigation, repair, validation, quarantine, and backfill across warehouse, Python, Spark, and managed lakehouse pipelines."
+overview: "ML data quality asks whether a dataset has a trustworthy shape, whether unavailable information has a clear meaning, and whether labels represent mature, traceable outcomes. These three evidence layers guide investigation, repair, validation, quarantine, and backfill across data pipelines."
 tags: ["MLOps", "core", "validation"]
 order: 2
 id: "article-mlops-data-for-ml-systems-schema-checks-missing-values-bad-labels"
@@ -9,514 +9,1608 @@ id: "article-mlops-data-for-ml-systems-schema-checks-missing-values-bad-labels"
 
 ## Table of Contents
 
-1. [What The Team Must Check Before Trusting Data](#what-the-team-must-check-before-trusting-data)
-2. [Check Structure, Missing Values, And Labels Separately](#check-structure-missing-values-and-labels-separately)
-3. [First Check Columns, Types, And File Structure](#first-check-columns-types-and-file-structure)
-4. [Decide Which Schema Changes Readers Can Accept](#decide-which-schema-changes-readers-can-accept)
-5. [Then Explain What Every Missing Value Means](#then-explain-what-every-missing-value-means)
-6. [Measure Missingness By Segment](#measure-missingness-by-segment)
-7. [Finally Check Whether Labels Are Correct](#finally-check-whether-labels-are-correct)
-8. [Handle Labels That Arrive Late Or Change](#handle-labels-that-arrive-late-or-change)
-9. [Keep Label Leakage Out Of Features](#keep-label-leakage-out-of-features)
-10. [How One Bad Field Damages Training And Monitoring](#how-one-bad-field-damages-training-and-monitoring)
-11. [Keep Bad Data Out, Repair It, And Rebuild Affected Outputs](#keep-bad-data-out-repair-it-and-rebuild-affected-outputs)
-12. [Choose A Quality Tool For The Data Platform](#choose-a-quality-tool-for-the-data-platform)
-13. [Test Detection, Repair, And Republish Together](#test-detection-repair-and-republish-together)
-14. [The Main Idea](#the-main-idea)
-15. [References](#references)
+1. [Why Must ML Data Quality Cover Structure, Meaning, and Truth?](#why-must-ml-data-quality-cover-structure-meaning-and-truth)
+2. [How Do Schema Contracts Detect Breaking Data Changes?](#how-do-schema-contracts-detect-breaking-data-changes)
+3. [What Does Missing Data Mean and Why Must It Be Checked by Segment?](#what-does-missing-data-mean-and-why-must-it-be-checked-by-segment)
+4. [How Are Bad, Delayed, and Changing Labels Detected?](#how-are-bad-delayed-and-changing-labels-detected)
+5. [How Can One Bad Field Damage Training, Serving, and Monitoring?](#how-can-one-bad-field-damage-training-serving-and-monitoring)
+6. [How Do Severity, Quarantine, and Repair Control the Response?](#how-do-severity-quarantine-and-repair-control-the-response)
+7. [How Do Failure Tests Prove the Full Quality System Works?](#how-do-failure-tests-prove-the-full-quality-system-works)
+8. [Where Should Quality Checks Run Across the Data Path?](#where-should-quality-checks-run-across-the-data-path)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## What The Team Must Check Before Trusting Data
-<!-- section-summary: Data quality evidence shows that a dataset has a trustworthy structure, meaningful missing states, and reliable labels. -->
+An ML pipeline can finish successfully while three different errors hide in its output. A producer changes `parcel_weight_grams` from an integer to formatted text. A customer-income field is empty because of several different causes. A fraud label says “no chargeback” before the dispute window has closed.
 
-An ML pipeline can finish successfully and still produce a dangerous dataset. The files may open, every required column may exist, and the training job may report a higher accuracy score. None of those signals proves that the data still means what the model expects.
+The first error changes structure. The second hides meaning inside a null. The third gives the model an answer that may still change. A generic “job succeeded” check cannot distinguish them.
 
-Consider three ordinary failures:
+Data quality therefore asks three separate questions: does the dataset have the expected shape, do its values mean what the model expects, and do its labels provide trustworthy answers? Each check also needs a response, such as warning an owner, quarantining rows, blocking publication, repairing an upstream source, or rebuilding affected datasets.
 
-- A producer changes `parcel_weight_grams` from an integer to a formatted string. The ingestion job quietly converts unreadable values to null.
-- An income feature contains nulls from several causes: a customer withheld the value, a join failed, or the source is two months old.
-- A fraud label says “no chargeback” before the dispute window has closed. A later chargeback turns that apparent negative into a positive.
+Work through those quality decisions here:
 
-The first failure changes the dataset's structure. The second collapses different kinds of missing information into one representation. The third gives the model an unreliable target. Each failure can survive a generic “job succeeded” check.
+1. **Why Must ML Data Quality Cover Structure, Meaning, and Truth?**
+2. **How Do Schema Contracts Detect Breaking Data Changes?**
+3. **What Does Missing Data Mean and Why Must It Be Checked by Segment?**
+4. **How Are Bad, Delayed, and Changing Labels Detected?**
+5. **How Can One Bad Field Damage Training, Serving, and Monitoring?**
+6. **How Do Severity, Quarantine, and Repair Control the Response?**
+7. **How Do Failure Tests Prove the Full Quality System Works?**
+8. **Where Should Quality Checks Run Across the Data Path?**
 
-A null may be acceptable for an optional profile field and unacceptable for a training key. A provisional outcome may support an operations dashboard and remain unsafe as a final training label. **Data quality checks provide evidence that a dataset is fit for this declared ML use.** The word “declared” matters because the same value can be acceptable for one job and block another.
+## Why Must ML Data Quality Cover Structure, Meaning, and Truth?
 
-Good evidence connects five things: the dataset and version, the rule being protected, the observed result, the affected rows or segments, and the action allowed after the check. That connection turns a test result into an operational decision.
+<!-- section-summary: ML data passes from reality through measurement, storage, transformation, features, and labels. -->
 
-## Check Structure, Missing Values, And Labels Separately
-<!-- section-summary: Structural validity, missing-value semantics, and label integrity protect different assumptions and need different repairs. -->
+Data quality in machine learning is not mainly about whether a CSV opens successfully or whether every column is non-null. The deeper question is:
 
-A reliable pipeline checks three connected parts of the data separately: its structure, the meaning of missing values, and the integrity of labels. Each check protects a different assumption made by training. Reading them in order helps the team find the first broken boundary before repairing downstream symptoms.
+**Does this dataset still represent the real-world phenomenon that we believe it represents?**
 
-**Schema and structural validity** asks whether producers and consumers agree on the shape of the data. Columns, types, nested fields, keys, units, allowed categories, and row grain belong here.
+An ML system learns statistical relationships from data. If the data-generating process is misunderstood, corrupted, delayed, or changed, the model learns the wrong relationships—even if the training code is perfectly correct. A useful way to reason about data quality is therefore:
 
-**Missing-value semantics** asks why expected information is unavailable. An absent field describes delivery, while an unknown value describes knowledge and a stale value describes time. Null, inapplicable, and redacted states add other meanings that may require different model behaviour.
+$$
+\text{Real world}
+\rightarrow
+\text{measurement}
+\rightarrow
+\text{stored data}
+\rightarrow
+\text{features/labels}
+\rightarrow
+\text{model}
+$$
 
-**Label integrity** asks whether the target represents the intended outcome. Provenance, observation windows, maturity, ambiguity, revisions, adjudication, and leakage belong here.
+At each arrow, the pipeline can lose, distort, delay, or accidentally expose information.
 
-```mermaid
-flowchart TD
-    A["Raw events, tables,<br/>files, and annotations"] --> B{"Layer 1<br/>Can every system read<br/>the same structure?"}
-    B -->|"No"| C["Quarantine structural failure<br/>and repair producer or adapter"]
-    B -->|"Yes"| D{"Layer 2<br/>Does unavailable information<br/>have a known meaning?"}
-    D -->|"No"| E["Trace source, joins,<br/>freshness, and segments"]
-    D -->|"Yes"| F{"Layer 3<br/>Is the target mature,<br/>traceable, and unambiguous?"}
-    F -->|"No"| G["Hold labels, adjudicate,<br/>or rebuild from outcome events"]
-    F -->|"Yes"| H["Release validated dataset<br/>for training or inference"]
+### The fundamental job of training data
 
-    class A source
-    class B,D,F gate
-    class C,E,G repair
-    class H release
+Suppose we want a model
+
+$$
+f(X) \rightarrow Y
+$$
+
+where $$X$$ contains features and $$Y$$ is the thing we want to predict. Consider for fraud detection:
+
+$$
+X =
+\{\text{amount, merchant, country, account history, ...}\}
+$$
+
+and
+
+$$
+Y =
+\{\text{fraud},\text{not fraud}\}
+$$
+
+The training system assumes something extremely important:
+
+$$
+(X,Y)_{\text{dataset}}
+\approx
+(X,Y)_{\text{real world}}
+$$
+
+If that assumption is false, better GPUs, more sophisticated models, and more hyperparameter tuning commonly do not solve the underlying problem. So data-quality checks exist to protect that assumption.
+
+### Think of data quality as several different questions
+
+Teams often hide several different failure modes behind one vague statement such as:
+
+"The dataset passed validation."
+
+That hides very different failure modes. There are at least three fundamentally different things to check:
+
+$$
+\boxed{
+\text{Structure}
+\quad
+\text{Meaning}
+\quad
+\text{Truth}
+}
+$$
+
+#### Structure
+
+Can we interpret the data mechanically? Examples:
+
+```text
+customer_id     integer
+country         string
+age             integer
+purchase_time   timestamp
+fraud_label     boolean
 ```
 
-The order gives an investigation a stable starting point. Label analysis has little value if a schema change shifted values into the wrong fields. Missingness analysis needs structural evidence so the team knows whether a value was truly null or lost during parsing. A reliable label needs both layers because a broken join can remove labels for one population.
+Questions include:
+
+* Did a column disappear?
+* Did `age` change from integer to string?
+* Did a timestamp format change?
+* Did the JSON nesting change?
+* Are duplicate records appearing?
+
+These are **schema and structural problems**.
+
+#### Meaning
+
+Even when the structure is correct, values may have changed meaning. Imagine:
+
+```text
+discount = 0
+```
+
+Does that mean:
+
+```text
+no discount
+```
+
+or:
+
+```text
+discount information unavailable
+```
+
+Those are completely different facts. Similarly:
+
+```text
+country = NULL
+```
+
+could mean:
+
+```text
+country unknown
+```
+
+or:
+
+```text
+user declined to provide country
+```
+
+or:
+
+```text
+country pipeline failed
+```
+
+These are **semantic data-quality problems**.
+
+#### Truth
+
+Finally, the data may be structurally valid and semantically understandable but merely wrong. For example:
+
+```text
+fraud_label = 0
+```
+
+when investigators later determine that the transaction was fraudulent. This is especially important for labels because labels define what the model learns.
+
+## How Do Schema Contracts Detect Breaking Data Changes?
+
+<!-- section-summary: Schema contracts define fields, types, nullability, units, grain, keys, and compatibility rules. -->
+
+### First check the structure
+
+Structural checks should normally happen before expensive feature computation or model training. Suppose yesterday's data looked like:
+
+```text
+customer_id   int
+age           int
+country       string
+revenue       float
+```
+
+Today it becomes:
+
+```text
+customer_id   string
+country       string
+revenue       string
+```
+
+The pipeline may still run. That is exactly why validation matters. A robust schema can specify things such as:
+
+```text
+customer_id:
+    required
+    unique
+    type = integer
+
+age:
+    nullable
+    type = integer
+    range = [0, 120]
+
+country:
+    type = categorical
+    allowed_values = known ISO countries
+
+revenue:
+    type = float
+    minimum = 0
+```
+
+Now the question becomes measurable rather than subjective.
+
+### But not every schema change should fail the pipeline
+
+Schema validation needs an important distinction:
+
+$$
+\text{breaking change}
+\neq
+\text{compatible change}
+$$
+
+Suppose a table originally contains:
+
+```text
+user_id
+age
+country
+```
+
+and a producer adds:
+
+```text
+preferred_language
+```
+
+A reader using only the original three columns may not care. So:
+
+```text
+adding unused column
+```
+
+might be compatible. But:
+
+```text
+removing user_id
+```
+
+is probably catastrophic. Similarly:
+
+```text
+age: int32 → int64
+```
+
+may be harmless. While:
+
+```text
+age: integer → "18 years old"
+```
+
+may break downstream assumptions. This leads to a useful principle:
+
+> **Schemas should describe contracts between producers and consumers, not merely describe files.**
+
+The correct question is therefore not:
+
+"Did the schema change?"
+
+It is:
+
+"Did the schema change in a way that invalidates a downstream assumption?"
+
+### Structural validity does not imply useful data
+
+Consider this perfectly valid dataset:
+
+| user_id |  age | country |
+| ------- | ---: | ------- |
+| 101     |   32 | UK      |
+| 102     |   28 | UK      |
+| 103     | NULL | UK      |
+| 104     | NULL | UK      |
+
+Nothing is structurally wrong. But now imagine yesterday:
+
+$$
+P(\text{age missing}) = 2\%
+$$
+
+and today:
+
+$$
+P(\text{age missing}) = 45\%
+$$
+
+The schema check passes. The dataset may nevertheless be badly damaged. This is why **missingness must be treated as information**.
 
 ![Three data quality families asking whether systems can read the data, why values are absent, and whether outcomes tell the truth](/content-assets/articles/article-mlops-data-for-ml-systems-schema-checks-missing-values-bad-labels/three-quality-questions.png)
 
 *Structure, missingness, and labels need separate evidence because each family exposes a different way that training data can become unsafe.*
 
-## First Check Columns, Types, And File Structure
-<!-- section-summary: Structural checks prove that rows, fields, types, keys, and meanings still match the contract expected by downstream systems. -->
+## What Does Missing Data Mean and Why Must It Be Checked by Segment?
 
-Schema is the machine-readable shape of data. It says which fields exist, how they are encoded, and which types a reader should expect. Structural validity goes further by checking the row grain, keys, nested shape, category domain, and relationships that make the rows usable.
+<!-- section-summary: Zero, unknown, inapplicable, withheld, stale, source-missing, join-failed, and lookup-failed describe different states. -->
 
-You can think of a schema as the plug shape between systems. A producer and consumer may both be healthy, yet they cannot exchange data safely if one side changes that plug without coordination.
+### A missing value is an event, not just an empty cell
 
-### How A Structural Error Appears In Production
-
-Suppose a delivery-time model uses `parcel_weight_grams` as a number. A source application starts sending values such as `"2.4 kg"` after a user-interface release. The warehouse loader keeps the column numeric by coercing those strings to null.
-
-The training table still opens. The training pipeline may even impute the new nulls. The real failure appears later: weight disappears mainly for parcels created through the updated application, so one channel receives poorer predictions. A schema check at ingestion would have exposed the type mismatch before it turned into a segment-specific model problem.
-
-### Separate Data Types From Business Meaning
-
-A **physical schema** covers names, data types, nullability, nested fields, and encoding. A **semantic contract** covers meaning: unit, time zone, row grain, source, derivation, valid domain, applicability, and freshness.
-
-`parcel_weight` can remain a decimal in both versions while the producer changes the unit from grams to kilograms. The physical schema still matches. The semantic contract has broken.
-
-For ML data, a useful contract records:
-
-- one row represents which entity and logical time;
-- which fields form the key;
-- the type and unit of every model input;
-- whether null is allowed and which reasons are valid;
-- the event time and availability time;
-- the allowed category domain;
-- the owner and compatibility policy.
-
-### How To Investigate And Repair The Source
-
-The investigation starts at the first boundary that observed the changed data. Compare the candidate batch schema with the registered producer schema and the consumer contract. Count parse failures and automatic casts. Group failures by source version, application channel, region, and partition. Check recent producer, connector, and transformation releases.
-
-If one application version changed the weight format, the team can stop publication, preserve the raw batch, and route that source version to quarantine. The preferred repair restores the producer contract. A temporary adapter may parse both versions during a coordinated migration, provided it records the source schema version and converts units explicitly.
-
-After repair, rebuild the affected partitions from immutable raw data. The corrected dataset receives a new version or snapshot and passes the same contract used for healthy data.
-
-### Prevent Structural Regressions With dbt Tests
-
-dbt model contracts can verify that a SQL model produces the declared column names and data types. Data tests validate contents such as nullability, uniqueness, allowed values, and relationships. Constraint enforcement varies across data platforms, so the pipeline should keep content tests even where a constraint is present.
-
-```yaml
-models:
-  - name: delivery_training_examples
-    config:
-      contract:
-        enforced: true
-    columns:
-      - name: training_example_id
-        data_type: string
-        constraints:
-          - type: not_null
-        data_tests:
-          - unique
-      - name: parcel_weight_grams
-        data_type: decimal(12, 3)
-        constraints:
-          - type: not_null
-      - name: source_schema_version
-        data_type: string
-        data_tests:
-          - accepted_values:
-              arguments:
-                values: ["delivery-v3", "delivery-v4"]
-```
-
-CI should test a valid fixture, a missing column, a changed type, and a semantically invalid unit. A shadow read of the candidate producer version checks real serialization before rollout. Production verification confirms zero unexpected casts, expected row grain, and healthy coverage for every supported source version.
-
-## Decide Which Schema Changes Readers Can Accept
-<!-- section-summary: Schema evolution classifies changes by consumer compatibility and coordinates breaking semantic changes through versioning. -->
-
-Schemas need to change as products evolve. The safe question is, “Which existing producers and consumers can still exchange data after this change?”
-
-An additive optional field is often compatible because older consumers can ignore it. Removing or renaming a required field is usually breaking. Changing a number to a string is breaking for numerical consumers. Widening an integer type may be compatible on one platform and unsupported on another.
-
-Schema registries for Avro, Protobuf, or JSON Schema can enforce backward, forward, full, and transitive compatibility policies. Backward compatibility focuses on whether the new reader can consume older data. Forward compatibility focuses on whether the old reader can consume newly written data. Transitive checking compares a new schema against the full supported history instead of only the latest version.
-
-Semantic changes need their own review because registries inspect encoded structure. A change in unit, category meaning, feature window, or entity grain can pass schema compatibility while changing the model input.
-
-```mermaid
-flowchart TD
-    A["Proposed producer change"] --> B{"Physical schema changes?"}
-    B -->|"Yes"| C["Run registry or contract<br/>compatibility checks"]
-    B -->|"No"| D["Review units, grain,<br/>time, domain, and meaning"]
-    C --> E{"All supported consumers<br/>remain compatible?"}
-    D --> F{"Feature meaning<br/>remains compatible?"}
-    E -->|"No"| G["Create a versioned migration<br/>and update consumers"]
-    F -->|"No"| G
-    E -->|"Yes"| H["Shadow-read candidate data"]
-    F -->|"Yes"| H
-    H --> I["Verify schema, semantics,<br/>segments, and rollback"]
-
-    class A change
-    class B,E,F gate
-    class C,D,H,I verify
-    class G migration
-```
-
-A coordinated breaking change normally runs both versions for a migration window. Consumers move deliberately, monitoring compares outputs, and the old version retires after usage reaches zero. This policy keeps an upstream release from silently redefining a feature.
-
-## Then Explain What Every Missing Value Means
-<!-- section-summary: Missing-value checks preserve why information is unavailable so training and serving can apply the correct response. -->
-
-A null is a storage state. The database knows that no value is present, while the team still needs evidence about the cause and the correct response.
-
-Suppose a credit-risk feature called `annual_income` is empty for four applicants. One uses an older application that never sent the field. One submitted the field, but a join failed. One selected “prefer not to say.” One has an income value whose observation is too old for the lending policy.
-
-Treating all four records as zero income tells the model a false story. Treating them all as the mean also hides the operational join failure and the policy decision around stale evidence.
-
-### Distinguish Null, Absent, Unknown, And Stale Values
-
-These terms describe different states:
-
-- **Absent** means the field or source record never arrived at the expected boundary. A producer version may omit a JSON field, or a join may find no matching row.
-- **Null** means the field exists in the materialized schema and carries no value. It is the representation seen by SQL and dataframe systems.
-- **Unknown** means the system has established that the value cannot currently be determined. The state is known even though the value is unavailable.
-- **Stale** means a value exists, but its observation time falls outside the allowed age for the decision.
-
-Two other states often matter. **Not applicable** means the field has no meaning for that row. **Withheld or redacted** means policy or user choice prevents use of the value.
-
-The materialized dataset can preserve these meanings with separate fields:
+Suppose `income` is missing. There are several possible causes:
 
 ```text
-annual_income
-annual_income_status
-annual_income_observed_at
-annual_income_source
-annual_income_source_version
+The user does not have an income.
+The user refused to disclose income.
+The upstream service timed out.
+The feature does not apply to this user.
+The value has not arrived yet.
+A software bug deleted the value.
 ```
 
-`annual_income_status` might allow `observed`, `unknown`, `not_applicable`, `withheld`, `source_missing`, and `join_failed`. A stale state can be calculated from `annual_income_observed_at` and the prediction time under a declared maximum age.
+These should not automatically mean the same thing. We can represent missingness itself with a variable:
 
-### Repair Missing Values At Their Source
+$$
+M =
+\begin{cases}
+1 & \text{if value is missing}\\
+0 & \text{otherwise}
+\end{cases}
+$$
 
-Start with the boundary where the value disappeared. Compare producer field presence, source row coverage, join match rate, parse failures, and feature age. Group each result by source, schema version, region, channel, customer type, and other protected product segments.
+Now the important question becomes:
 
-A join failure calls for a source or key repair followed by a backfill. An optional field absent from an older producer may use a version-aware compatibility rule. An explicitly unknown value can remain as a governed category or missingness indicator. A stale value may use a last-known value only if the contract allows a maximum age and training uses the same rule.
+$$
+P(M=1\mid X,Y,\text{segment},t)
+$$
 
-Imputation needs the same discipline as any learned transformation. Fit imputation statistics on the training split, store the fitted transformer with the model pipeline, and apply identical logic during serving. Evaluate the result by segment because global mean or median imputation can distort groups with different distributions.
+Is missingness random, or does it correlate with something important? Consider perhaps:
 
-### Use Lakeflow Expectations To Stop Bad Rows
+$$
+P(M_{\text{income}}=1 \mid \text{country=A})=2\%
+$$
 
-Lakeflow pipeline expectations can enforce row-level SQL conditions inside managed Databricks pipelines. The expectation can warn and retain rows, drop invalid rows, or fail the pipeline update. Critical training semantics usually deserve a failed update or an explicit quarantine path.
+but:
 
-```sql
-CONSTRAINT meaningful_income_state EXPECT (
-  (annual_income_status = 'observed' AND annual_income IS NOT NULL)
-  OR
-  (
-    annual_income_status IN (
-      'unknown',
-      'not_applicable',
-      'withheld',
-      'source_missing',
-      'join_failed'
-    )
-    AND annual_income IS NULL
-  )
-) ON VIOLATION FAIL UPDATE
+$$
+P(M_{\text{income}}=1 \mid \text{country=B})=54\%
+$$
+
+The overall dataset might show only 6% missingness. An aggregate metric hides the failure.
+
+### Measure quality by segment
+
+This is one of the most important principles in production ML. Suppose overall missingness is:
+
+$$
+5\%
+$$
+
+That sounds acceptable. But imagine:
+
+```text
+Existing customers:      1%
+New customers:          35%
 ```
 
-This rule checks agreement between the value and its status. It cannot decide whether the business should accept an unknown value or how long income remains fresh. Those policies belong in the dataset contract and release gate. Lakeflow records expectation metrics in the pipeline event log for supported policies, while a quarantine table preserves invalid rows and failure reasons for investigation.
+or:
 
-Verification uses fixtures for every allowed state. It proves that observed values require a timestamp and source, join failures reach quarantine, stale values cross the threshold at the correct prediction time, and training and serving apply the same imputation or fallback logic.
-
-## Measure Missingness By Segment
-<!-- section-summary: Segment-level checks reveal concentrated missingness that global averages hide. -->
-
-A global missing rate can look healthy while one population has almost no usable data. Imagine that two percent of all device-age values are unavailable. If ninety percent of those failures come from one mobile operating-system version, a global imputation policy hides a producer defect.
-
-The investigation should measure both **rate** and **coverage**. Rate says what fraction of rows in a segment lack usable values. Coverage says how many rows the segment contributes, which prevents a tiny sample from driving a misleading percentage.
-
-```sql
-SELECT
-  application_channel,
-  region,
-  COUNT(*) AS segment_rows,
-  COUNT_IF(annual_income_status <> 'observed') AS unavailable_rows,
-  COUNT_IF(annual_income_status = 'join_failed') AS join_failed_rows,
-  COUNT_IF(
-    annual_income_observed_at < :freshness_cutoff
-  ) AS stale_rows
-FROM credit_training_candidates
-GROUP BY application_channel, region
-HAVING
-  unavailable_rows > 0
-  OR stale_rows > 0;
+```text
+Web traffic:             2%
+Android traffic:        41%
 ```
 
-The report should compare the candidate with a recent healthy reference and with the intended training population. A segment may pass its own missing-rate threshold yet fall below minimum representation because upstream filtering removed most of its rows.
+or:
 
-Industrial repair follows the cause. A channel-specific join failure routes to the integration owner and triggers a bounded backfill. A legitimate increase in withheld values may require model evaluation and policy review. A new region with limited historical data may need an explicit minimum-coverage gate before release.
+```text
+United Kingdom:          1%
+Brazil:                 38%
+```
 
-Soda 4 Data Contracts can operationalize warehouse-level missingness, validity, schema, and freshness checks in readable configuration. A contract can run locally through Soda Core inside the pipeline or remotely through a Soda Agent. GX Core can validate Python or SQL-backed batches through Expectation Suites, Validation Definitions, and production Checkpoints. Both approaches should emit the dataset version, segment, observed metric, and failing-row references so the release system can act on their results.
+A global average can therefore create false confidence. You frequently want checks resembling:
+
+$$
+Q(\text{feature}
+\mid
+\text{country, device, source, model version, time})
+$$
+
+rather than merely:
+
+$$
+Q(\text{feature})
+$$
+
+This is particularly important because ML errors frequently concentrate in subpopulations.
+
+### Check distributions, not only individual rows
+
+Many corruptions produce perfectly legal values. Imagine a user's age must satisfy:
+
+$$
+0 \le age \le 120
+$$
+
+Every row today satisfies the rule. But yesterday:
+
+$$
+\text{median age}=37
+$$
+
+and today:
+
+$$
+\text{median age}=7
+$$
+
+The values are individually valid but collectively suspicious. Maybe a transformation changed years into something else. Likewise, suppose purchase amounts are valid positive floats but suddenly:
+
+$$
+\$52.30
+\rightarrow
+5230
+$$
+
+because dollars became cents. Nothing necessarily violates the numeric type. Distribution checks may reveal:
+
+$$
+E[X_t] \gg E[X_{t-1}]
+$$
+
+or major changes in quantiles:
+
+$$
+Q_{50}, Q_{90}, Q_{99}
+$$
+
+or categorical frequencies:
+
+$$
+P(X=\text{category}_i)
+$$
+
+These detect errors that schema validation cannot.
+
+## How Are Bad, Delayed, and Changing Labels Detected?
+
+<!-- section-summary: Label checks verify source evidence, eligible population, window, maturity, revisions, human judgments, adjudication, join coverage, class balance, and segment coverage. -->
+
+### The most dangerous field: the label
+
+Features describe the input. Labels tell the model what reality supposedly was. Consider:
+
+```text
+transaction_id = 8173
+fraud_label = 0
+```
+
+Training interprets this as:
+
+"Transaction 8173 was genuinely legitimate."
+
+But perhaps it actually means:
+
+"Nobody has reported transaction 8173 as fraud yet."
+
+Those are not equivalent. This distinction is fundamental. A model trained on the second interpretation may incorrectly learn that recently occurring fraud is legitimate merely because the investigation has not finished.
+
+### Labels are often delayed
+
+Many real-world labels do not exist immediately. Credit default may require months. Fraud may require:
+
+```text
+transaction
+↓
+customer complaint
+↓
+investigation
+↓
+confirmed fraud
+```
+
+Medical outcomes may take weeks. Subscription churn may only become certain after some inactivity period. Suppose an event happens at:
+
+$$
+t_0
+$$
+
+but its true label becomes known at:
+
+$$
+t_0 + 30\text{ days}
+$$
+
+Training on records from yesterday may therefore produce incorrect negative labels. You need a concept such as a **label maturity window**. For example:
+
+```text
+Do not use transactions newer than 45 days
+for supervised training.
+```
+
+Then:
+
+$$
+\text{training cutoff}
+=
+\text{today}-45\text{ days}
+$$
+
+This sacrifices freshness in exchange for trustworthy labels.
+
+### Labels can also change
+
+Imagine:
+
+```text
+Day 1:   fraud = unknown
+Day 7:   fraud = false
+Day 20:  fraud = true
+```
+
+A training dataset constructed on Day 8 differs from one rebuilt on Day 30. Therefore training data frequently needs more than:
+
+```text
+transaction_id
+label
+```
+
+It may need:
+
+```text
+transaction_id
+event_time
+label
+label_timestamp
+label_source
+label_version
+```
+
+The design allows the system to distinguish:
+
+What did we know?
+
+from:
+
+When did we know it?
+
+That distinction matters enormously in ML.
+
+### Label leakage
+
+One common way to create an apparently excellent ML model is accidentally giving it information from the future. Suppose we want to predict loan default at approval time. The dataset contains:
+
+```text
+income
+credit_score
+loan_amount
+collection_calls
+default
+```
+
+`collection_calls` strongly predicts default. Perhaps:
+
+$$
+P(default \mid collection\_calls > 5)
+\approx 1
+$$
+
+The model looks amazing. But collection calls happen **after** the borrower begins failing to repay. At prediction time they do not exist.
+
+The correct constraint is:
+
+$$
+t_{\text{feature}}
+\le
+t_{\text{prediction}}
+$$
+
+For every feature. If:
+
+$$
+t_{\text{feature}}
+
+t_{\text{prediction}}
+$$
+
+the feature contains future information. That is leakage.
+
+### Leakage is fundamentally a time-consistency problem
+
+Imagine a prediction at 09:00. The model should only be allowed to see information available by 09:00. You can picture the dataset as:
+
+```text
+Past ---------------- Prediction ---------------- Future
+                         |
+customer age -----------|
+past purchases ----------|
+account history ----------|
+                         |------ chargeback result
+                         |------ fraud investigation
+                         |------ cancellation
+```
+
+Everything to the right of the prediction point must normally be invisible to the feature pipeline. A surprisingly large fraction of offline ML evaluation problems come from violating this rule.
+
+## How Can One Bad Field Damage Training, Serving, and Monitoring?
+
+<!-- section-summary: A structural defect can create nulls, break a label join, remove one segment, shift class balance, change model behaviour, and corrupt the monitoring baseline. -->
+
+### A bad field rarely damages only training
+
+Suppose feature `account_age_days` breaks. Instead of:
+
+```text
+5
+100
+450
+800
+```
+
+the pipeline produces:
+
+```text
+0
+0
+0
+0
+```
+
+This has several consequences. During training:
+
+$$
+X_{\text{training}}
+$$
+
+is corrupted. The learned parameters become:
+
+$$
+\theta' \neq \theta
+$$
+
+Then offline metrics may change. But that same broken field may also feed monitoring. Suppose the monitoring system computes:
+
+```text
+prediction accuracy by account age
+```
+
+Now the monitoring system is corrupted too. So the system may suffer:
+
+```text
+bad source data
+      ↓
+bad features
+      ↓
+bad training dataset
+      ↓
+bad model
+      ↓
+bad predictions
+```
+
+while simultaneously:
+
+```text
+bad source data
+      ↓
+bad monitoring data
+      ↓
+monitoring says everything is fine
+```
+
+This second path is especially dangerous. The system has lost **observability** as well as accuracy.
+
+### Data quality therefore needs lineage
+
+To repair a failure, we need to know what depended on what. Suppose:
+
+```text
+raw_transactions
+        ↓
+transaction_features
+        ↓
+training_dataset_v57
+        ↓
+model_v12
+```
+
+If `raw_transactions` was corrupt from August 10 through August 12, you need to determine which derived artifacts were affected. Ideally:
+
+```text
+raw_transactions partition
+        ↓
+feature partitions
+        ↓
+training snapshots
+        ↓
+models
+        ↓
+evaluation reports
+```
+
+This dependency graph is called **data lineage**. Without lineage, teams frequently know:
+
+"The upstream data was wrong."
+
+but cannot answer:
+
+"Which models need rebuilding?"
 
 ![Three meanings of a missing delivery-time value and their different rates across mobile, web, and partner segments](/content-assets/articles/article-mlops-data-for-ml-systems-schema-checks-missing-values-bad-labels/missingness-causes-and-segments.png)
 
 *The same null can mean a failed observation, an inapplicable field, or a delayed outcome, and segment-level rates help distinguish those causes.*
 
-## Finally Check Whether Labels Are Correct
-<!-- section-summary: Label integrity proves that each target has a definition, source, maturity state, revision history, and leakage-safe relationship to features. -->
+## How Do Severity, Quarantine, and Repair Control the Response?
 
-Labels tell the model what outcome to learn. A feature error affects part of the input; a systematic label error can teach the model the wrong task.
+<!-- section-summary: Severity maps a failed rule to warn, block, quarantine, or review. -->
 
-Consider a payment-fraud model trained to predict eventual chargebacks. A transaction has no chargeback event one week after purchase, so an early dataset marks it negative. The customer opens a dispute later, and the bank eventually confirms the chargeback. The early negative was an **immature label**: the observation window had not closed.
+### Detection is only the first half of data quality
 
-Label integrity asks more than whether the target column contains `0` or `1`. It asks where the value came from, which definition produced it, whether enough time has passed, whether reviewers agree, whether a later event revised it, and whether any feature revealed the outcome.
+Imagine the system detects:
 
-### Record Where Each Label Came From And What It Means
-
-Every released label should connect to evidence such as:
-
-- target definition and outcome horizon;
-- source event or annotation ID;
-- source system and policy version;
-- event time, recorded time, and maturity time;
-- label state and revision number;
-- prior label superseded by the current decision;
-- adjudication status and quality metadata.
-
-For human annotations, provenance can include task version, guideline version, annotator group, agreement result, and adjudicator decision. Sensitive worker identities should remain governed and access-controlled.
-
-A model release should reference the label dataset version alongside the final integer target. That reference lets an investigation reconstruct the outcome policy used during training.
-
-### Treat Reviewer Disagreement As A Quality Signal
-
-Some examples genuinely support more than one interpretation. Two qualified reviewers may disagree because the policy boundary is unclear. Hiding that disagreement behind a majority vote removes useful quality information.
-
-Ambiguous examples can enter an adjudication queue. An adjudicator applies the current guideline, records the resolution and reason, and may identify a policy gap. Repeated disagreement in one category signals that the labeling guide or class definition needs repair.
-
-Agreement metrics need segment context. High overall agreement can hide poor agreement for one language, rare class, or borderline case. Sampling for verification should include those difficult segments instead of drawing only a uniform random sample.
-
-## Handle Labels That Arrive Late Or Change
-<!-- section-summary: A label lifecycle keeps provisional outcomes separate from mature decisions and preserves every revision. -->
-
-A production label usually moves through several states. It may start as provisional, enter review, mature after an outcome window, and later receive a governed correction. Preserving those transitions prevents a current answer from erasing the evidence available to an earlier dataset.
-
-In production, the label builder usually reads an append-only event history. Each event identifies the example, decision, source, effective time, recorded time, maturity time, revision, and adjudication state. The release process selects the newest eligible final event available by its cutoff and keeps unresolved cases outside the final label table. The expected result is either one traceable label for an example or a recorded reason why that example remains unreleased.
-
-```mermaid
-flowchart TD
-    A["Outcome candidate observed"] --> B["Provisional label<br/>with source event"]
-    B --> C{"Observation window<br/>and review complete?"}
-    C -->|"No"| D["Hold outside final<br/>training labels"]
-    C -->|"Yes"| E{"Evidence or reviewers<br/>disagree?"}
-    E -->|"Yes"| F["Adjudication queue<br/>with guideline version"]
-    F --> G["Resolved mature label"]
-    E -->|"No"| G
-    G --> H["Versioned label release"]
-    H --> I{"Later correction<br/>or appeal?"}
-    I -->|"Yes"| J["Create revision and<br/>supersede prior label"]
-    J --> K["Backfill affected examples<br/>and reevaluate models"]
-    I -->|"No"| L["Retain release evidence"]
-
-    class A,B event
-    class C,E,I gate
-    class D,F,J,K hold
-    class G,H,L release
+```text
+country column is 92% NULL
 ```
 
-A deterministic label-building query selects only evidence available by the declared cutoff. It also excludes unresolved ambiguity:
+Excellent. What happens next? If the only response is:
 
-```sql
-WITH eligible_labels AS (
-  SELECT
-    example_id,
-    label_value,
-    label_event_id,
-    policy_version,
-    revision_number,
-    effective_at,
-    recorded_at,
-    ROW_NUMBER() OVER (
-      PARTITION BY example_id
-      ORDER BY
-        revision_number DESC,
-        effective_at DESC,
-        label_event_id DESC
-    ) AS revision_rank
-  FROM label_events
-  WHERE effective_at <= :label_cutoff
-    AND recorded_at <= :label_cutoff
-    AND maturity_at <= :label_cutoff
-    AND label_status = 'final'
-    AND adjudication_status IN ('not_required', 'resolved')
-)
-SELECT
-  example_id,
-  label_value,
-  label_event_id,
-  policy_version,
-  revision_number
-FROM eligible_labels
-WHERE revision_rank = 1;
+```text
+send Slack alert
 ```
 
-The query uses both `effective_at` and `recorded_at`. An event may describe an earlier real-world outcome while arriving after the historical prediction. The recorded-time boundary prevents the rebuilt dataset from using knowledge the system lacked at that point.
+the organization has monitoring, but not necessarily a reliable data-quality system. A production response normally involves three stages:
 
-Investigation compares label coverage, class balance, source mix, maturity rate, disagreement, revision rate, and join coverage by segment. Sample rows should trace from final target back to source events and adjudication records.
+$$
+\boxed{\text{Detect} \rightarrow \text{Contain} \rightarrow \text{Recover}}
+$$
 
-Repair may require waiting for maturity, correcting a label join, revising annotation guidance, or rerunning adjudication for an affected class. A label correction creates a new version and a bounded backfill. The team then reevaluates models trained on the affected label release.
+For example:
 
-The prevention gate admits only mature labels with complete provenance and resolved adjudication state. Verification fixtures cover an immature outcome, two conflicting reviews, a resolved adjudication, and a later revision. Each fixture asserts both the selected value and the source event ID so provenance receives the same protection as the target.
+```text
+Detected:
+Android age field is broken.
 
-## Keep Label Leakage Out Of Features
-<!-- section-summary: Leakage checks prevent outcome information and post-decision events from entering historical model inputs. -->
+Contain:
+Prevent today's partition from entering training.
 
-**Label leakage** occurs when a feature contains information that would only be known after the prediction decision or comes directly from the outcome process. Leakage produces impressive offline metrics because the model receives clues unavailable in production.
+Repair:
+Recompute Android ages from raw events.
 
-For a chargeback model, fields such as `dispute_closed_at`, `chargeback_reason`, or `investigation_result` belong to the label process. They cannot appear in features calculated at transaction time. A customer profile update recorded after the transaction also needs an availability-time check even if its effective date points backward.
+Recover:
+Rebuild downstream feature partitions.
 
-Two timestamps protect the boundary:
+Republish:
+Replace affected datasets.
 
-- `event_time` says when the underlying fact happened.
-- `available_at` says when the feature system could use that fact.
+Verify:
+Run quality checks again.
 
-Historical feature rows should satisfy both `event_time <= prediction_time` and `available_at <= prediction_time`. Dataset splitting should also keep entities or time windows separated according to the evaluation design, because duplicated entities can leak nearly identical examples across train and test.
-
-```mermaid
-flowchart TD
-    A["Historical prediction time"] --> B["Features with event time<br/>at or before prediction"]
-    A --> C["Features available to the<br/>system by prediction"]
-    B --> D{"Both conditions pass?"}
-    C --> D
-    D -->|"Yes"| E["Eligible historical feature"]
-    D -->|"No"| F["Leakage candidate<br/>exclude and investigate"]
-    G["Outcome, dispute, review,<br/>or adjudication fields"] --> F
-
-    class A,B,C,G time
-    class D gate
-    class E safe
-    class F leak
+Retrain:
+Only if affected data entered a model.
 ```
 
-Verification uses a fixture containing one feature event before prediction, one event after prediction, and one late-arriving event with an earlier effective time. Only the first row should qualify. Feature-name deny lists can catch obvious outcome fields, while lineage and timestamp tests protect derived or renamed versions.
+The recovery path matters just as much as the detector.
 
-## How One Bad Field Damages Training And Monitoring
-<!-- section-summary: A defect in one evidence layer can change downstream missingness, label coverage, model behaviour, and production outcomes. -->
+### Quarantining is often safer than silently repairing
 
-The three layers interact. A structural defect often appears downstream as missing data. Missing data can break a label join. A broken label join can change class balance and model behaviour.
+Suppose a record says:
 
-Suppose a producer changes `customer_id` from a fixed string to a nested object. The loader converts unreadable IDs to null. The label join loses those rows. If the change affects one mobile application version, that segment contributes fewer positive outcomes to training. The model learns from a distorted population and performs poorly for users of that application.
-
-```mermaid
-flowchart TD
-    A["Producer changes<br/>customer_id structure"] --> B["Parser creates null IDs"]
-    B --> C["Label join loses matches"]
-    C --> D["One application segment<br/>loses positive examples"]
-    D --> E["Training class and<br/>segment coverage shift"]
-    E --> F["Offline metrics hide<br/>segment weakness"]
-    F --> G["Production decisions degrade<br/>for the affected segment"]
-    B --> H["Structural and missingness<br/>gates identify first break"]
-    C --> I["Label join and coverage<br/>checks show propagation"]
-
-    class A,B,C defect
-    class D,E,F,G impact
-    class H,I evidence
+```text
+age = -147
 ```
 
-This is why a quality report needs the first broken boundary and the downstream impact. A “label coverage low” alert alone sends the team toward the label system even though the producer schema caused the incident.
+You could convert it to:
 
-## Keep Bad Data Out, Repair It, And Rebuild Affected Outputs
-<!-- section-summary: Quarantine preserves failed evidence, repair fixes the owning boundary, and backfill rebuilds affected partitions under the same contract. -->
-
-Quarantine separates suspect data from approved consumers while preserving it for diagnosis. A useful quarantine record keeps the dataset version, run ID, check ID, row or partition reference, source version, failure reason, and restricted pointer to the original data.
-
-Dropping bad rows without evidence can make quality metrics look healthier while reducing coverage. Critical keys, missing-state contradictions, and unresolved labels usually belong in quarantine or a failed update. A known invalid optional telemetry record may be safe to drop if the contract and metrics make that policy explicit.
-
-```mermaid
-flowchart TD
-    A["Candidate dataset fails<br/>a quality gate"] --> B["Preserve candidate,<br/>report, and source identity"]
-    B --> C["Quarantine affected<br/>rows or partitions"]
-    C --> D["Find the first broken<br/>producer or transformation"]
-    D --> E["Repair source, adapter,<br/>join, policy, or labels"]
-    E --> F["Backfill the bounded<br/>affected data range"]
-    F --> G["Run the unchanged<br/>quality contract"]
-    G --> H{"All layers pass<br/>with expected coverage?"}
-    H -->|"No"| C
-    H -->|"Yes"| I["Publish a new immutable<br/>dataset version"]
-    I --> J["Reevaluate affected<br/>training and model releases"]
-
-    class A,B,C fail
-    class D,E,F,G work
-    class H gate
-    class I,J release
+```text
+age = NULL
 ```
 
-The backfill should use the same input identities, deterministic logic, and checks as a normal build. Verification compares row counts, missing-state mix, label coverage, revision counts, and important segments with both the failed candidate and a healthy reference. The failed evidence remains available for the incident record.
+But that changes the data. Sometimes that is appropriate. Sometimes the correct response is:
 
-## Choose A Quality Tool For The Data Platform
-<!-- section-summary: Industrial tools evaluate checks on different execution surfaces while contracts, orchestration, storage, and owners retain distinct responsibilities. -->
+```text
+quarantine record
+```
 
-Several quality products can evaluate similar-looking rules, which makes the stack appear more complicated than the underlying work. Start with the place where the check must run: a SQL model, a Python batch, a distributed Spark dataset, or a managed data pipeline. Give each chosen tool a clear execution boundary and connect its result to one release decision.
+so that it cannot contaminate downstream systems. A useful architecture is:
 
-**dbt model contracts and data tests** fit warehouse and lakehouse SQL models. Contracts check the declared shape during model construction. Data tests query built data for failing rows, including nulls, duplicates, accepted values, relationships, and custom business rules. dbt remains strongest where transformations and evidence already live in SQL.
+```text
+incoming data
+      ↓
+validation
+   ↙       ↘
+valid     invalid
+ ↓          ↓
+publish   quarantine
+```
 
-**GX Core (Great Expectations)** is the current Python library for programmatic validation workflows. Expectations describe individual conditions, Expectation Suites group them, Validation Definitions associate suites with batches, and Checkpoints run production validations and actions. GX Core fits Python dataframes and SQL-backed batches that need reusable results and pipeline integration.
+Then invalid data can be inspected without entering training. The control prevents what might be called **silent corruption**:
 
-**Soda 4 Data Contracts** provide human-readable checks for schema, missingness, validity, duplicates, freshness, and reconciliation across supported data sources. A contract describes what one dataset promises to its consumers. Soda Core verifies that contract inside a custom pipeline, while hosted or self-hosted Soda Agents run managed verifications connected to Soda Cloud. This fits teams that want a versioned contract close to data operations plus a shared workflow for publishing changes, scheduling checks, and investigating results.
+```text
+bad value
+→ automatic guess
+→ apparently valid dataset
+→ nobody realizes anything was wrong
+```
 
-**Deequ** runs quality verification on Apache Spark. Its `VerificationSuite`, constraints, analyzers, and DQDL support large distributed datasets. AWS Glue Data Quality offers a managed, serverless path built on Deequ and uses DQDL rules. This family fits teams already processing data through Spark or AWS Glue.
+### Repairing data creates another important problem: reproducibility
 
-**Lakeflow pipeline expectations** evaluate row-level SQL conditions as data moves through managed Databricks pipelines. Warn retains records and records metrics, drop excludes invalid rows, and fail stops the update. Expectations fit constraints inside one pipeline; cross-dataset reconciliation, label maturity workflows, and adjudication still need dedicated transformations and operational processes.
+Suppose you train:
 
-The validation library evaluates the rule. The orchestrator decides when the rule runs and whether publication can continue. The storage and catalog layer preserve candidate and approved dataset identities. Source owners repair producer defects. Data and model owners define missingness policies, label definitions, segments, and acceptance thresholds.
+```text
+model_v1
+```
 
-One platform rarely needs every tool. A warehouse team may use dbt contracts and data tests, adding Soda contracts only if cross-team publication and managed verification solve a real coordination problem. A Python training pipeline may use dbt upstream and GX Core at the training boundary. A Spark lakehouse may use Deequ or managed Lakeflow expectations. Duplicating the same rule across tools without a shared check ID and owner creates conflicting evidence.
+on:
 
-## Test Detection, Repair, And Republish Together
-<!-- section-summary: Verification proves that checks detect known defects, gates contain them, repairs rebuild safely, and downstream consumers receive corrected data. -->
+```text
+dataset_2026_07_15
+```
 
-A check is ready for production after the team has observed it fail on a controlled defect. Passing healthy data proves the happy path; rejecting a known-bad fixture proves that the rule can protect the release boundary. The operational test then confirms that the failed result reaches quarantine, blocks publication, and supports repair.
+Later you discover corruption and repair that dataset. If you overwrite it in place, the dataset called:
 
-Structural fixtures should cover a missing field, changed type, unsupported schema version, wrong unit, duplicate key, and changed row grain. Missingness fixtures should cover absent, null, unknown, stale, inapplicable, withheld, source-missing, and join-failed states. Label fixtures should cover provisional outcomes, mature outcomes, reviewer disagreement, adjudication, revisions, and post-prediction leakage.
+```text
+dataset_2026_07_15
+```
 
-The pipeline test then proves the operational response. A blocking defect must prevent publication. Quarantined rows must retain check and source references. The previous approved dataset must remain available. A corrected bounded backfill must pass the unchanged contract and publish a new immutable identity.
+now means something different from what trained `model_v1`. You can no longer reconstruct the model. A better pattern is immutable or versioned data:
 
-Finally, verify the downstream effect. Recompute segment coverage and class balance, rebuild the affected training dataset, and rerun model evaluation for impacted populations. A data repair is complete after the production decision path uses the corrected evidence.
+```text
+dataset_v103   corrupted historical version
+dataset_v104   repaired version
+```
 
-## The Main Idea
-<!-- section-summary: Trustworthy ML data needs evidence about structure, missing information, and labels at every release boundary. -->
+Then:
 
-Data quality for ML rests on three questions. Can every system agree on the structure and meaning of each row? Does unavailable information carry a reason and freshness state? Does every label represent a mature, traceable, leakage-safe outcome?
+```text
+model_v1 → dataset_v103
+model_v2 → dataset_v104
+```
 
-Schema checks, missing-value checks, and label checks protect different assumptions. Their evidence must reconnect at the release gate because one defect can propagate through all three layers.
+This preserves causality.
 
-Industrial tools can execute the checks. Reliable operation also needs contract ownership and segment-aware investigation. Quarantine preserves evidence, deterministic repair fixes the owning boundary, and bounded backfill rebuilds affected data. Downstream model verification confirms that the repair restored the intended behaviour.
+## How Do Failure Tests Prove the Full Quality System Works?
+
+<!-- section-summary: Known-bad fixtures prove that schema, missingness, label, leakage, and segment rules reject the defects they claim to detect. -->
+
+### Quality checks should exist at several boundaries
+
+You can think of an ML data system as a sequence:
+
+```text
+Source
+  ↓
+Raw data
+  ↓
+Cleaned data
+  ↓
+Features
+  ↓
+Training examples
+  ↓
+Model
+  ↓
+Predictions
+  ↓
+Labels
+```
+
+Checking only the raw input is insufficient because corruption can be introduced during transformations. For example:
+
+```text
+correct timestamp
+       ↓
+timezone conversion bug
+       ↓
+incorrect hour_of_day feature
+```
+
+The source passed validation. The feature did not. Therefore validation belongs around important **interfaces and artifacts**, not just the beginning of the pipeline.
+
+### Different checks protect against different failures
+
+A practical quality system might test:
+
+| Question                       | Example                               |
+| ------------------------------ | ------------------------------------- |
+| Does the field exist?          | `customer_id` present                 |
+| Is its representation valid?   | integer                               |
+| Is its value plausible?        | `age ∈ [0,120]`                       |
+| Is it sufficiently complete?   | null rate < 2%                        |
+| Is it unique when required?    | no duplicate transaction IDs          |
+| Are relationships valid?       | order.customer_id exists in customers |
+| Is the distribution plausible? | revenue median hasn't shifted 100×    |
+| Is freshness acceptable?       | newest events < 20 min old            |
+| Is volume plausible?           | 8M–12M rows/day                       |
+| Are labels mature?             | at least 45 days old                  |
+| Are timestamps leakage-safe?   | feature time ≤ prediction time        |
+
+Notice that no single check tells you that the dataset is "good." Quality emerges from many constraints corresponding to assumptions made by downstream systems.
+
+### Every quality check represents an assumption
+
+Suppose you write:
+
+$$
+0 \le age \le 120
+$$
+
+That test isn't arbitrary. The ML system implicitly assumes:
+
+`age` represents human age measured in years.
+
+Suppose you write:
+
+$$
+\text{NULL rate(country)} < 5\%
+$$
+
+You are expressing another assumption:
+
+country should normally be available.
+
+Suppose you write:
+
+$$
+\text{daily rows} > 10^6
+$$
+
+You are expressing:
+
+the upstream system normally produces at least one million observations.
+
+So data-quality engineering can be understood as:
+
+$$
+\boxed{
+\text{Turn hidden assumptions into executable checks}
+}
+$$
+
+That sentence describes the purpose of data-quality engineering.
+
+### There are hard constraints and soft expectations
+
+Some assumptions should never be violated. For example:
+
+```text
+transaction_id must not be NULL
+```
+
+That's a **hard constraint**. Other things naturally fluctuate:
+
+```text
+average transaction amount
+fraction of users from London
+fraud rate
+daily event count
+```
+
+Those need statistical monitoring. For example:
+
+$$
+|\mu_t-\mu_{\text{baseline}}| > \tau
+$$
+
+might trigger investigation. Or compare distributions:
+
+$$
+D(P_t,P_{\text{reference}})>\tau
+$$
+
+where $$D$$ might represent a distribution-distance metric. This distinction helps prevent overly brittle pipelines. You commonly don't want:
+
+```text
+mean purchase value != £41.27
+→ stop everything
+```
+
+You want:
+
+```text
+unexpectedly large change
+→ investigate or block depending on severity
+```
+
+### Not every distribution shift is a data-quality problem
+
+This distinction matters enormously. Suppose ice-cream purchases rise dramatically in July. The distribution changed.
+
+But the data may be completely correct. So:
+
+$$
+\text{distribution shift}
+\not\Rightarrow
+\text{data corruption}
+$$
+
+The shift might represent:
+
+```text
+seasonality
+new product launch
+economic event
+marketing campaign
+new geography
+real customer behavior
+```
+
+A quality system should detect unexpected changes, but humans or higher-level logic frequently need to decide whether they represent:
+
+$$
+\text{pipeline failure}
+$$
+
+or:
+
+$$
+\text{real-world change}
+$$
+
+This separates **data quality** from the broader concept of **data drift**.
+
+### Labels deserve stronger checks than ordinary features
+
+Labels define what the model learns to predict, so their checks need to ask questions such as:
+
+```text
+Where did this label come from?
+Who or what created it?
+How long after the event did it arrive?
+Can it change?
+How frequently is it wrong?
+Does "negative" actually mean negative, or merely "not yet positive"?
+Are labels systematically missing for certain groups?
+Was the label available only after prediction time?
+```
+
+For human-generated labels, disagreement can also be informative. Suppose two reviewers label the same examples. If their agreement is:
+
+$$
+55\%
+$$
+
+then expecting a classifier to achieve nearly perfect accuracy may be conceptually unreasonable. Sometimes apparent "model error" is really:
+
+$$
+\text{label uncertainty}
+$$
+
+### Monitoring production data requires comparison with training data
+
+A model learned from a training distribution:
+
+$$
+P_{\text{train}}(X,Y)
+$$
+
+Production generates:
+
+$$
+P_{\text{prod}}(X,Y)
+$$
+
+Some differences are expected. But large unexplained differences deserve investigation. You might monitor:
+
+$$
+P_{\text{prod}}(X)
+\quad\text{vs}\quad
+P_{\text{train}}(X)
+$$
+
+For example:
+
+```text
+Training:
+device_type
+mobile  60%
+desktop 40%
+
+Production:
+mobile   2%
+desktop 98%
+```
+
+Maybe user behavior changed. Or maybe the mobile ingestion pipeline failed. Monitoring cannot automatically know which one happened.
+
+But it tells you where to look.
+
+### Training-serving consistency is another quality dimension
+
+Suppose training calculates:
+
+```python
+age_days = floor((prediction_time - signup_time) / 86400)
+```
+
+while production uses:
+
+```python
+age_days = round(...)
+```
+
+Neither dataset is intrinsically corrupted. Yet the model sees one feature definition during training and another during inference. Formally:
+
+$$
+f_{\text{train}}(raw)
+\neq
+f_{\text{serve}}(raw)
+$$
+
+That creates training-serving skew. Therefore data-quality checks for ML frequently need to validate **feature semantics and transformations**, not merely source data.
+
+### What should happen when a check fails?
+
+Not every failure deserves the same response. Imagine three incidents:
+
+```text
+Optional marketing field:
+NULL rate rises from 3% → 4%
+
+Important model feature:
+NULL rate rises from 3% → 40%
+
+Primary key:
+100% NULL
+```
+
+Treating all three identically would be poor engineering. Quality rules frequently benefit from severity levels such as:
+
+```text
+WARN
+BLOCK
+QUARANTINE
+```
+
+Conceptually:
+
+$$
+\text{response severity}
+\propto
+\text{expected downstream damage}
+$$
+
+The correct response depends on:
+
+```text
+feature importance
+blast radius
+ability to repair
+freshness requirements
+model criticality
+whether corruption is reversible
+```
+
+### Choosing a data-quality tool
+
+The specific product matters less than the capabilities you need. A useful system should help express things such as:
+
+```text
+schema contracts
+null thresholds
+ranges
+uniqueness
+referential integrity
+categorical domains
+distribution tests
+freshness
+volume
+custom business rules
+```
+
+For ML specifically, also look for support around:
+
+```text
+feature distributions
+training/serving comparisons
+label validation
+time-window checks
+dataset versioning
+lineage
+segment-level metrics
+```
+
+But detection alone is insufficient. The tool must fit the surrounding data platform so that failed checks can influence orchestration:
+
+```text
+quality check
+      ↓
+pipeline decision
+      ↓
+publish / block / quarantine
+```
+
+A simple in-pipeline validator that blocks corrupt data can protect training more effectively than an elaborate dashboard with no enforcement path.
+
+### Test the failure path, not only the happy path
+
+Imagine engineers create:
+
+```text
+assert null_rate < 5%
+```
+
+They test it on good data. It passes. That does not prove the quality system works.
+
+You should deliberately inject bad data:
+
+```text
+drop required column
+change numeric field to string
+produce 80% NULLs
+duplicate primary keys
+shift timestamps into future
+corrupt labels
+reduce volume by 90%
+```
+
+Then verify the entire chain:
+
+```text
+bad data
+   ↓
+check fails
+   ↓
+pipeline blocks publication
+   ↓
+alert reaches correct owner
+   ↓
+data gets repaired
+   ↓
+affected outputs rebuild
+   ↓
+checks pass
+   ↓
+dataset republishes
+```
+
+That is a much stronger test. You are testing the **recovery mechanism**, not merely the validator.
+
+## Where Should Quality Checks Run Across the Data Path?
+
+<!-- section-summary: Run checks at producer, ingestion, transformation, feature, label, training, publication, and serving boundaries according to the failure each can prevent. -->
+
+### Why data quality is particularly difficult in ML
+
+Traditional software frequently behaves roughly like:
+
+$$
+\text{code} + \text{input}
+\rightarrow
+\text{output}
+$$
+
+In machine learning:
+
+$$
+\text{code}
++
+\boxed{\text{training data}}
+\rightarrow
+\text{model}
+$$
+
+and then:
+
+$$
+\text{model}
++
+\boxed{\text{production data}}
+\rightarrow
+\text{prediction}
+$$
+
+So data affects the system twice. Corrupted training data changes the program you effectively create. Corrupted inference data changes what that program sees.
+
+This is why data should frequently be treated almost like source code:
+
+```text
+version it
+test it
+trace its dependencies
+review important changes
+make builds reproducible
+```
+
+### Data is a measurement system
+
+This is perhaps the deepest way to think about the problem. Suppose you want to predict:
+
+$$
+Y = \text{customer satisfaction}
+$$
+
+But you cannot directly observe satisfaction. Instead you observe:
+
+```text
+survey responses
+support tickets
+refunds
+ratings
+usage
+```
+
+These are measurements of reality. The pipeline then transforms those measurements. So ML actually sees:
+
+$$
+\text{Reality}
+\xrightarrow{\text{measurement}}
+\text{Recorded data}
+\xrightarrow{\text{pipeline}}
+\text{features}
+$$
+
+The model never sees reality directly. It sees the outputs of your measurement system. If the measurement system changes, the meaning of the model's input changes.
+
+That is why a change such as:
+
+```text
+"Customers must now explicitly opt into surveys"
+```
+
+can damage ML data quality even though the database schema remains unchanged.
+
+### A complete way to reason about a dataset
+
+To decide whether an ML dataset is trustworthy, trace its evidence through this chain:
+
+1. **Identity** — What does one row represent?
+2. **Structure** — Are the expected fields, types, keys, formats, and relationships present?
+3. **Semantics** — What exactly does every field mean?
+4. **Completeness** — Why are values missing, and for whom?
+5. **Validity** — Are individual values plausible?
+6. **Distribution** — Does the population look plausible, globally and by segment?
+7. **Time** — When did each fact become available?
+8. **Labels** — Are targets correct, mature, stable, and sufficiently complete?
+9. **Leakage** — Could any feature know something unavailable at prediction time?
+10. **Lineage** — Where did the data come from and what depends on it?
+11. **Recovery** — What gets blocked, repaired, rebuilt, and republished when quality fails?
+12. **Observability** — Can we notice deterioration after deployment?
+
+Each item protects an assumption required by the model, so the sequence is more than a mechanical checklist.
+
+### A concrete example
+
+Imagine you're building a model predicting whether a food-delivery order will arrive late. Prediction occurs when the customer places the order:
+
+$$
+t_{\text{prediction}}=\text{order creation}
+$$
+
+Features might include:
+
+```text
+restaurant
+distance
+time_of_day
+weather
+restaurant historical delay rate
+driver availability
+```
+
+Label:
+
+```text
+late_delivery
+```
+
+Now imagine several quality failures.
+
+#### Risk 1: structural
+
+```text
+distance_km
+```
+
+changes to:
+
+```text
+distance_meters
+```
+
+without renaming the field. Values suddenly become 1,000× larger.
+
+#### Risk 2: missingness
+
+The driver-location service fails only in one city. Global missingness:
+
+$$
+3\%
+$$
+
+City-level missingness:
+
+$$
+67\%
+$$
+
+An aggregate quality check misses it.
+
+#### Risk 3: label delay
+
+An order's actual arrival time isn't finalized until delivery completion. Recent orders therefore have no mature label. Treating them as:
+
+```text
+late_delivery = false
+```
+
+corrupts training.
+
+#### Risk 4: leakage
+
+Someone creates:
+
+```text
+actual_delivery_duration
+```
+
+as a training feature. It predicts lateness beautifully. But it exists only after delivery.
+
+The offline metric rises sharply even though the live prediction path can never supply that feature.
+
+#### Risk 5: monitoring corruption
+
+The same broken distance field is used to calculate:
+
+```text
+accuracy by delivery distance
+```
+
+Now monitoring is unreliable too.
+
+#### Risk 6: incomplete repair
+
+Engineers fix the raw table. But yesterday's derived feature table remains corrupted. Future jobs still consume:
+
+```text
+features_2026_08_27
+```
+
+unless downstream partitions are rebuilt. The incident isn't actually resolved until the dependency chain is repaired.
+
+### The architecture you ultimately want
+
+Conceptually:
+
+```text
+                    DATA PRODUCERS
+                          │
+                          ▼
+                   ┌─────────────┐
+                   │ Raw Data    │
+                   └──────┬──────┘
+                          │
+                structural checks
+                freshness / volume
+                          │
+                    ┌─────┴─────┐
+                    │           │
+                  PASS         FAIL
+                    │           │
+                    │       quarantine
+                    ▼
+                transforms
+                    │
+                    ▼
+                features
+                    │
+           semantic / statistical
+                validation
+                    │
+                    ▼
+              training dataset
+                    │
+              label + leakage
+                  checks
+                    │
+                    ▼
+                  model
+                    │
+                    ▼
+               production
+                    │
+                    ▼
+             drift / quality
+               monitoring
+```
+
+And behind all of it:
+
+```text
+lineage + versioning + observability
+```
+
+#### What to remember
+
+ML begins with a hidden assumption:
+
+$$
+\boxed{
+\text{The data means what we think it means.}
+}
+$$
+
+Data-quality engineering exists to continuously test that assumption. Schema checks ask:
+
+**Can I read this data correctly?**
+
+Semantic checks ask:
+
+**Do these values mean what I think they mean?**
+
+Missingness checks ask:
+
+**What information failed to appear, and for whom?**
+
+Distribution checks ask:
+
+**Does this population still look plausible?**
+
+Label checks ask:
+
+> **Is the thing we're teaching the model actually true?**
+
+Leakage checks ask:
+
+**Could we really have known this at prediction time?**
+
+Lineage and recovery ask:
+
+**If something was wrong, what did it contaminate and how do we reconstruct the system correctly?**
+
+The deepest principle is:
+
+$$
+\boxed{
+\text{A model can only be as trustworthy as the measurement process that created its data.}
+}
+$$
+
+A strong ML data-quality system does more than reject malformed rows. It turns the assumptions linking **reality → data → features → labels → models** into checks that can run, be observed, and support recovery.
 
 ![A data quality recovery loop connecting detection, quarantine, diagnosis, repair, backfill, verification, and republication](/content-assets/articles/article-mlops-data-for-ml-systems-schema-checks-missing-values-bad-labels/data-quality-recovery-loop.png)
 
 *Quality controls protect training data through a complete recovery loop rather than stopping after the first failed check.*
 
+## Check Your Answers
+
+Use these answers to revisit the evidence, boundaries, and operating decisions behind each question.
+
+:::expand[Why Must ML Data Quality Cover Structure, Meaning, and Truth?]{kind="recap"}
+ML data passes from reality through measurement, storage, transformation, features, and labels.
+
+Structure says readers can interpret the representation. Meaning says values and missing states express the intended facts. Truth asks whether the target and evidence validly measure the prediction problem. A dataset needs all three claims for its declared use.
+:::
+
+:::expand[How Do Schema Contracts Detect Breaking Data Changes?]{kind="recap"}
+Schema contracts define fields, types, nullability, units, grain, keys, and compatibility rules.
+
+Additive changes may be compatible for flexible readers, while removed fields, changed units, nested shapes, new enum meanings, or altered grain can break consumers. Versioned contracts and producer-consumer tests turn those changes into explicit release decisions.
+:::
+
+:::expand[What Does Missing Data Mean and Why Must It Be Checked by Segment?]{kind="recap"}
+Zero, unknown, inapplicable, withheld, stale, source-missing, join-failed, and lookup-failed describe different states.
+
+Preserving reason and freshness prevents infrastructure failure from looking like a real value. Segment checks reveal concentrated missingness hidden by a healthy global rate and connect it to affected populations and source paths.
+:::
+
+:::expand[How Are Bad, Delayed, and Changing Labels Detected?]{kind="recap"}
+Label checks verify source evidence, eligible population, window, maturity, revisions, human judgments, adjudication, join coverage, class balance, and segment coverage.
+
+Pending and unobserved outcomes stay separate from negatives. Feature lineage and prediction-time tests preserve outcome evidence and post-decision reactions out of model inputs.
+:::
+
+:::expand[How Can One Bad Field Damage Training, Serving, and Monitoring?]{kind="recap"}
+A structural defect can create nulls, break a label join, remove one segment, shift class balance, change model behaviour, and corrupt the monitoring baseline. Impact tracing starts at the first failed field or source and follows every downstream dataset, feature, model, and dashboard rather than treating the last visible symptom as the cause.
+:::
+
+:::expand[How Do Severity, Quarantine, and Repair Control the Response?]{kind="recap"}
+Severity maps a failed rule to warn, block, quarantine, or review.
+
+Quarantine preserves suspect rows and evidence without exposing them to approved consumers. Repair fixes the owning source or transformation, backfills the bounded affected range, reruns the unchanged contract, publishes a new version, and reevaluates downstream models.
+:::
+
+:::expand[How Do Failure Tests Prove the Full Quality System Works?]{kind="recap"}
+Known-bad fixtures prove that schema, missingness, label, leakage, and segment rules reject the defects they claim to detect. Pipeline tests then prove a block stops publication, quarantine retains evidence, alerts reach the owner, the last good version remains usable, and a corrected backfill passes before republication.
+:::
+
+:::expand[Where Should Quality Checks Run Across the Data Path?]{kind="recap"}
+Run checks at producer, ingestion, transformation, feature, label, training, publication, and serving boundaries according to the failure each can prevent. Tools may differ across SQL, Python, distributed data processing, streams, and services, while shared contracts, check identities, lineage, and owners preserve their evidence consistent across offline and online paths.
+:::
+
 ## References
 
-- [dbt documentation: Model contracts](https://docs.getdbt.com/docs/mesh/govern/model-contracts)
-- [dbt documentation: Data tests](https://docs.getdbt.com/docs/build/data-tests)
-- [Great Expectations documentation: GX Core overview](https://docs.greatexpectations.io/docs/core/introduction/gx_overview/)
-- [Great Expectations documentation: Run a Checkpoint](https://docs.greatexpectations.io/docs/core/trigger_actions_based_on_results/run_a_checkpoint/)
-- [Soda documentation: Contract language reference](https://docs.soda.io/reference/contract-language-reference)
-- [Soda documentation: Verify a data contract](https://docs.soda.io/data-testing/git-managed-data-contracts/verify-a-contract)
-- [Soda documentation: Core and Agent deployment options](https://docs.soda.io/deployment-options)
-- [Deequ repository and documentation](https://github.com/awslabs/deequ)
 - [AWS documentation: AWS Glue Data Quality](https://docs.aws.amazon.com/glue/latest/dg/glue-data-quality.html)
-- [Databricks documentation: Lakeflow pipeline expectations](https://docs.databricks.com/aws/en/ldp/expectations)
 - [Confluent documentation: Schema evolution and compatibility](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html)

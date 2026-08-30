@@ -1,1 +1,9 @@
-Use `cat /proc/cpuinfo` to read virtual files just like regular ones. `wc -l /proc/cpuinfo` counts lines. The grader checks that your **last** command's output contains the load values, so finish with `cat /proc/loadavg`.
+Process-specific evidence lives below `/proc/<PID>`.
+
+---
+
+The command line and environment are readable entries. The current working directory is represented as a symbolic link.
+
+---
+
+Block-device attributes live under `/sys/block/<device>`. The queue's rotational value distinguishes spinning storage from non-rotational storage.

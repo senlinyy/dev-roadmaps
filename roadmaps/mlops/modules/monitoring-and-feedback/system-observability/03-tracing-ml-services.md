@@ -1,7 +1,7 @@
 ---
 title: "ML Service Tracing"
-description: "Learn how distributed traces reveal the path, timing, dependencies, model versions, and fallback decisions behind one production prediction."
-overview: "ML service tracing follows one prediction across APIs, feature services, queues, model runtimes, policies, and fallbacks, then connects that journey to span timing, context propagation, OpenTelemetry instrumentation, collection, sampling, privacy, investigation, testing, and recovery."
+description: "A distributed trace turns one prediction request into a causal timeline of spans, while trace IDs, prediction IDs, metrics, and logs retain distinct jobs."
+overview: "A distributed trace turns one prediction request into a causal timeline of spans, while trace IDs, prediction IDs, metrics, and logs retain distinct jobs. Tracing provides causal evidence that joins service latency and failures to feature, model, release, prediction, and outcome evidence in the wider monitoring system."
 tags: ["MLOps", "core", "observability"]
 order: 3
 id: "article-mlops-monitoring-and-feedback-tracing-ml-services"
@@ -9,780 +9,2041 @@ id: "article-mlops-monitoring-and-feedback-tracing-ml-services"
 
 ## Table of Contents
 
-1. [What ML Service Tracing Means](#what-ml-service-tracing-means)
-2. [How A Trace Shows One Request Over Time](#how-a-trace-shows-one-request-over-time)
-3. [How OpenTelemetry Standardises Tracing](#how-opentelemetry-standardises-tracing)
-4. [Choose Spans That Support A Real Investigation](#choose-spans-that-support-a-real-investigation)
-5. [How Trace Context Crosses Service Boundaries](#how-trace-context-crosses-service-boundaries)
-6. [Combine Automatic And Manual Instrumentation](#combine-automatic-and-manual-instrumentation)
-7. [How The Collector Sends Traces To A Backend](#how-the-collector-sends-traces-to-a-backend)
-8. [How To Reduce Trace Volume And Cost](#how-to-reduce-trace-volume-and-cost)
-9. [Use A Trace To Investigate A Slow Prediction](#use-a-trace-to-investigate-a-slow-prediction)
-10. [Keep Traces Safe And Searchable](#keep-traces-safe-and-searchable)
-11. [Test Failure And Recovery Paths](#test-failure-and-recovery-paths)
-12. [Choose A Tracing Stack For The Serving Platform](#choose-a-tracing-stack-for-the-serving-platform)
-13. [The Main Idea](#the-main-idea)
-14. [References](#references)
+1. [How Does a Trace Explain One ML Request across Services?](#how-does-a-trace-explain-one-ml-request-across-services)
+2. [How Should Trace Context, Spans, and Attributes Cross Boundaries?](#how-should-trace-context-spans-and-attributes-cross-boundaries)
+3. [How Do Automatic Instrumentation, Manual Spans, and Collectors Fit Together?](#how-do-automatic-instrumentation-manual-spans-and-collectors-fit-together)
+4. [How Should Sampling Preserve the Traces Most Useful for Investigation?](#how-should-sampling-preserve-the-traces-most-useful-for-investigation)
+5. [What Do Online, Release, Batch, and LLM Traces Reveal?](#what-do-online-release-batch-and-llm-traces-reveal)
+6. [How Do You Control Span Detail, Overhead, Failure, Searchability, and Sensitive Data?](#how-do-you-control-span-detail-overhead-failure-searchability-and-sensitive-data)
+7. [How Should a Team Choose and Test Its Tracing Stack?](#how-should-a-team-choose-and-test-its-tracing-stack)
+8. [How Does Tracing Connect Service Health to Model Health?](#how-does-tracing-connect-service-health-to-model-health)
+9. [Check Your Answers](#check-your-answers)
 
-## What ML Service Tracing Means
-<!-- section-summary: ML service tracing records the route and timing of one prediction as it moves through several components. -->
+An ML request takes two seconds, but the model itself runs for only 80 milliseconds. The remaining time may be waiting in a queue, fetching features, calling another service, retrying a dependency, or serializing a large response. An aggregate latency graph cannot show which request followed which path.
 
-**ML service tracing follows one prediction from the start of a request to the final result.** It shows which components handled the request, the order in which they ran, and how long each part took.
+A **distributed trace** records one request as connected spans. Each span represents a timed operation, and parent-child relationships show how work caused or waited for other work across services. That timeline complements metrics, logs, and prediction records rather than replacing them.
 
-Imagine a recommendation endpoint with a target of 250 milliseconds. One user waits 900 milliseconds. The service metric proves that the response was slow, but it cannot tell the team where the time went.
+These questions build the trace from its identifiers and propagation rules through sampling, investigation, security, and its role in model monitoring:
 
-A trace can show a breakdown like this:
+1. **How Does a Trace Explain One ML Request across Services?**
+2. **How Should Trace Context, Spans, and Attributes Cross Boundaries?**
+3. **How Do Automatic Instrumentation, Manual Spans, and Collectors Fit Together?**
+4. **How Should Sampling Preserve the Traces Most Useful for Investigation?**
+5. **What Do Online, Release, Batch, and LLM Traces Reveal?**
+6. **How Do You Control Span Detail, Overhead, Failure, Searchability, and Sensitive Data?**
+7. **How Should a Team Choose and Test Its Tracing Stack?**
+8. **How Does Tracing Connect Service Health to Model Health?**
 
-- 25 milliseconds inside the API;
-- 610 milliseconds waiting for online features;
-- 130 milliseconds running model inference;
-- 20 milliseconds applying ranking policy;
-- the remaining time crossing network and gateway boundaries.
+## How Does a Trace Explain One ML Request across Services?
+<!-- section-summary: A distributed trace turns one prediction request into a causal timeline of spans, while trace IDs, prediction IDs, metrics, and logs retain distinct jobs. -->
 
-Feature retrieval contributed 610 milliseconds and caused most of the delay. That single fact changes which team investigates and which system needs repair.
+A distributed trace turns one prediction request into a causal timeline of spans, while trace IDs, prediction IDs, metrics, and logs retain distinct jobs.
 
-The same trace can expose a hidden fallback. A request may return `200 OK`, although a feature timeout caused the service to skip the primary model and use a simpler backup. The caller received a valid response. The path that produced it was degraded.
+An ML service may tell you:
 
-This is especially important in ML systems. A production prediction often depends on more than one model call:
+* **metrics:** “p99 latency increased to 1.8 seconds,”
+* **logs:** “the feature-store request timed out,”
+* **prediction records:** “model v42 produced prediction P8172.”
+
+But an engineer investigating a particular slow request still needs to know:
+
+**Where did the request spend those 1.8 seconds?**
+
+Was it waiting at the API gateway Fetching features Queuing for a GPU Running inference Calling another service Retrying a database request?
+
+That is the problem **distributed tracing** solves. A prediction may look simple from outside:
+
+```text
+request
+   ↓
+ML service
+   ↓
+prediction
+```
+
+But internally it may actually be:
+
+```text
+Client
+  │
+  ▼
+API Gateway
+  │
+  ▼
+Prediction Service
+  │
+  ├── Authentication
+  │
+  ├── Feature Store
+  │
+  ├── Preprocessing
+  │
+  ├── Model Server
+  │       └── GPU inference
+  │
+  ├── Rules Engine
+  │
+  └── Response
+```
+
+Suppose the entire request takes:
+
+```text
+1.7 seconds
+```
+
+A latency metric tells you the request was slow. It does **not** tell you where the time went. To diagnose the problem, we need to preserve the path that one request took through the system. That leads to the fundamental idea:
+
+> **A trace is a structured timeline of one request as it moves through a system.**
+
+Imagine this prediction request:
+
+```text
+Request started                       t = 0 ms
+Feature lookup finished             t = 620 ms
+Preprocessing finished              t = 640 ms
+Model inference finished            t = 710 ms
+Response finished                   t = 730 ms
+```
+
+A trace can represent that visually:
+
+```text
+Prediction request                    730 ms
+│
+├── authentication                     8 ms
+├── feature lookup                   610 ms   ← suspicious
+├── preprocessing                     20 ms
+├── model inference                   70 ms
+└── postprocessing                    22 ms
+```
+
+Immediately, the important fact becomes visible:
+
+```text
+Total latency         = 730 ms
+Model inference       =  70 ms
+Feature lookup        = 610 ms
+```
+
+Without tracing, someone might blame the model because the endpoint is an ML endpoint. The trace shows that the model itself is not the bottleneck. A trace is made of **spans**. A span represents one operation that took some amount of time.
+
+For example:
+
+```text
+Trace: prediction request
+│
+├── Span: fetch_features
+├── Span: preprocess
+├── Span: model_inference
+└── Span: postprocess
+```
+
+Each span typically contains information like:
+
+```text
+operation        = model_inference
+start_time       = 10:04:21.120
+end_time         = 10:04:21.194
+duration         = 74 ms
+status           = success
+model_version    = fraud-v42
+```
+
+Conceptually:
+
+$$
+Duration_{span}
+=
+t_{end}-t_{start}
+$$
+
+A trace then combines related spans into the history of one request. Suppose one prediction requires a feature lookup and model inference. The prediction operation is the parent:
+
+```text
+prediction_request
+```
+
+Inside it are child operations:
+
+```text
+prediction_request
+    │
+    ├── feature_lookup
+    ├── preprocessing
+    └── model_inference
+```
+
+If `feature_lookup` itself calls Redis:
+
+```text
+prediction_request
+    │
+    ├── feature_lookup
+    │      └── redis_get
+    │
+    ├── preprocessing
+    └── model_inference
+```
+
+This hierarchy is important because it shows not just **when** operations happened, but **which operation caused which work**. A trace is therefore more than a timing log. It represents a causal execution tree. Suppose millions of requests are running at the same time.
+
+How does the tracing system know which spans belong together?
+
+Each trace receives an identifier:
+
+```text
+trace_id = 7c3a...
+```
+
+Every span belonging to that request carries the same trace ID.
+
+For example:
+
+```text
+trace_id = 7c3a
+span = gateway
+
+trace_id = 7c3a
+span = feature_lookup
+
+trace_id = 7c3a
+span = model_inference
+```
+
+Now the tracing backend can reconstruct:
+
+```text
+trace 7c3a
+   │
+   ├── gateway
+   ├── feature lookup
+   └── inference
+```
+
+Each span also normally has its own:
+
+```text
+span_id
+```
+
+and a reference to its parent. So conceptually:
+
+```text
+trace_id
+→ identifies the whole distributed operation
+
+span_id
+→ identifies one operation within it
+
+parent_span_id
+→ identifies which operation caused it
+```
+
+A normal API might call a database and return. An ML prediction may depend on many more moving parts:
+
+```text
+                       ┌── Feature store
+                       │
+Client → Gateway → Prediction API
+                       │
+                       ├── Cache
+                       │
+                       ├── Embedding service
+                       │
+                       ├── Model server
+                       │       │
+                       │       └── GPU
+                       │
+                       ├── Rules engine
+                       │
+                       └── Database
+```
+
+A user sees one request. Engineering sees many distributed operations. Tracing reconnects them into a single story. A useful decomposition is:
+
+$$
+T_{request}
+=
+T_{queue}
++
+T_{network}
++
+T_{feature}
++
+T_{preprocess}
++
+T_{inference}
++
+T_{postprocess}
++
+T_{dependencies}
++\ldots
+$$
+
+Suppose:
+
+```text
+queue              300 ms
+feature fetch      180 ms
+preprocessing       15 ms
+inference           60 ms
+postprocessing      10 ms
+network             35 ms
+--------------------------
+total              600 ms
+```
+
+If you monitor only:
+
+```text
+model inference = 60 ms
+```
+
+you might conclude performance is excellent. But users experience:
+
+```text
+600 ms
+```
+
+Tracing exposes the difference between:
+
+**model execution time**
+
+and:
+
+**end-to-end prediction latency**
+
+That distinction is central to ML serving. Consider a GPU inference server. A request arrives but cannot immediately run because other requests are using the GPU.
+
+```text
+request arrives
+      │
+      ▼
+wait in queue       800 ms
+      │
+      ▼
+GPU inference        90 ms
+      │
+      ▼
+response
+```
+
+If you instrument only the model execution:
+
+```text
+inference = 90 ms
+```
+
+everything looks fine. But total latency is nearly a second. Therefore a useful trace might distinguish:
+
+```text
+model_request
+    │
+    ├── inference_queue_wait    800 ms
+    └── inference_compute        90 ms
+```
+
+That tells you whether the bottleneck is:
+
+```text
+slow model
+```
+
+or:
+
+```text
+insufficient serving capacity
+```
+
+Those require completely different fixes. This distinction is worth remembering.
+
+### Metrics
+
+Answer:
+
+“Is there a widespread problem?”
+
+Example:
+
+```text
+p99 latency = 1.4 s
+```
+
+### Logs
+
+Answer:
+
+“What event happened?”
+
+Example:
+
+```text
+feature service timeout after 500 ms
+```
+
+### Traces
+
+Answer:
+
+“What happened along this particular request path?”
+
+Example:
+
+```text
+Prediction request                  1.4 s
+│
+├─ gateway                           15 ms
+├─ feature service                  920 ms
+│    ├─ database query              500 ms
+│    └─ retry                       400 ms
+├─ inference                         80 ms
+└─ other work                       ...
+```
+
+A useful investigation flow is therefore:
+
+```text
+Metrics
+   │
+   │ detect anomaly
+   ▼
+Trace
+   │
+   │ locate slow/failing operation
+   ▼
+Logs
+   │
+   │ inspect detailed failure
+   ▼
+Root cause
+```
+
+The systems complement one another. Prediction logging gives an individual model decision an identity:
+
+```text
+prediction_id = pred_8172
+```
+
+Tracing gives the entire execution path an identity:
+
+```text
+trace_id = trace_a91f
+```
+
+A prediction record may therefore contain both:
+
+```text
+prediction_id = pred_8172
+trace_id      = trace_a91f
+```
+
+Now an investigation can move between them:
+
+```text
+Prediction record
+      │
+      │ trace_id
+      ▼
+Distributed trace
+      │
+      ▼
+feature lookup
+model inference
+database call
+queue waiting
+```
+
+And the other direction:
+
+```text
+Slow trace
+    │
+    │ prediction_id
+    ▼
+Prediction evidence
+    │
+    ▼
+model version
+score
+decision
+feature version
+```
+
+This creates a powerful connection between **model behaviour** and **service behaviour**.
+
+## How Should Trace Context, Spans, and Attributes Cross Boundaries?
+<!-- section-summary: Trace context must propagate across process and protocol boundaries, and spans should mark risk or latency boundaries with bounded, safe attributes. -->
+
+Trace context must propagate across process and protocol boundaries, and spans should mark risk or latency boundaries with bounded, safe attributes.
+
+Suppose this happens:
+
+```text
+Prediction API
+      │
+      ▼
+Feature Service
+      │
+      ▼
+Database
+```
+
+The prediction API creates:
+
+```text
+trace_id = ABC
+```
+
+But when it calls the feature service, imagine it sends no tracing information. The feature service creates:
+
+```text
+trace_id = XYZ
+```
+
+Now the tracing system sees:
+
+```text
+Trace ABC
+└── Prediction API
+
+Trace XYZ
+└── Feature Service
+```
+
+They appear unrelated. The request chain has been broken. Instead, the prediction service propagates **trace context** with the request.
+
+Conceptually:
+
+```text
+Prediction API
+trace_id = ABC
+      │
+      │ HTTP request
+      │ tracing context: ABC
+      ▼
+Feature Service
+trace_id = ABC
+```
+
+If the feature service then calls the database or another service, the context continues. This process is called **context propagation**. Without it, distributed tracing becomes fragmented. The same principle applies whether services communicate using:
+
+```text
+HTTP
+gRPC
+message queues
+event streams
+RPC
+background jobs
+```
+
+The trace identity has to move with the unit of work. For synchronous HTTP:
+
+```text
+service A
+   │
+   │ request + trace context
+   ▼
+service B
+```
+
+For asynchronous messaging:
+
+```text
+producer
+   │
+   │ message
+   │ trace context in message metadata
+   ▼
+queue
+   │
+   ▼
+consumer
+```
+
+The mechanics differ, but the conceptual requirement is the same:
+
+Preserve causal identity as work moves between components.
+
+Historically, observability vendors often had their own tracing libraries and formats. That creates a problem. Suppose your application is deeply instrumented using vendor A's proprietary API. Later you want to switch to vendor B. You may have to rewrite significant amounts of instrumentation. OpenTelemetry addresses this by providing a vendor-neutral observability framework.
+
+Conceptually:
+
+```text
+Application
+    │
+    │ OpenTelemetry instrumentation
+    ▼
+Standard telemetry representation
+    │
+    ▼
+Collector
+    │
+    ├── Backend A
+    ├── Backend B
+    └── Backend C
+```
+
+OpenTelemetry supports telemetry such as:
+
+```text
+traces
+metrics
+logs
+```
+
+The important idea is not merely that it is another monitoring library. It provides common conventions for:
+
+```text
+creating spans
+propagating trace context
+describing services
+exporting telemetry
+```
+
+This reduces coupling between application code and the backend used to store or visualize traces. A simplified architecture looks like:
+
+```text
+Your application
+      │
+      ├── OpenTelemetry API
+      └── OpenTelemetry SDK
+               │
+               ▼
+             spans
+               │
+               ▼
+            exporter
+```
+
+The application generates spans. Those spans may then go to an OpenTelemetry Collector or directly to some backend. In larger environments, the collector is commonly useful. This is a design decision. You could create spans for almost everything:
+
+```text
+parse integer
+read variable
+add two numbers
+allocate tensor
+```
+
+But this would create overwhelming amounts of trace data. Instead ask:
+
+“During a real incident, what operations would I want to distinguish?”
+
+For an ML service, useful spans might be:
+
+```text
+prediction_request
+│
+├── authenticate
+├── fetch_features
+├── preprocess
+├── candidate_retrieval
+├── inference_queue
+├── model_inference
+├── postprocess
+├── policy_evaluation
+└── write_result
+```
+
+Each span represents a meaningful investigative boundary. A particularly useful principle is:
+
+Create spans where latency, failure, ownership, or dependencies meaningfully change.
+
+For example:
+
+```text
+feature_store_call
+```
+
+is useful because:
+
+* it is a separate dependency,
+* it can become slow,
+* it can fail,
+* another team may own it.
+
+Similarly:
+
+```text
+model_inference
+```
+
+is useful because:
+
+* it consumes expensive compute,
+* different model versions behave differently,
+* latency may change by hardware or batch size.
+
+But:
+
+```text
+convert_float_to_tensor
+```
+
+may not need its own span unless it is genuinely operationally important. Timing alone is often insufficient. Suppose:
+
+```text
+model_inference = 950 ms
+```
+
+Why?
+
+The span might also contain safe, bounded metadata such as:
+
+```text
+model.name          = recommender
+model.version       = v18
+hardware.type       = gpu
+batch.size          = 64
+region              = eu-west
+request.type        = ranking
+```
+
+Now you can ask:
+
+```text
+Are slow traces concentrated on v18
+
+Are they concentrated on one region
+
+Does batch size correlate with latency
+```
+
+Span attributes turn traces from timelines into queryable evidence. It is tempting to attach:
+
+```text
+user_email
+full_prompt
+credit_card_number
+raw_feature_vector
+authentication_token
+```
+
+to spans. That is usually dangerous. Tracing backends are observability systems, not arbitrary secure data vaults. As with prediction logging, traces should generally contain:
+
+```text
+safe operational metadata
+```
+
+rather than unrestricted raw inputs. You should also think about cardinality. Useful:
+
+```text
+model_version = {v17, v18}
+region        = {eu, us, apac}
+status        = {success, failure}
+```
+
+Potentially expensive:
+
+```text
+user_id       = millions of values
+request_body  = almost every value unique
+```
+
+Tracing systems can often tolerate more event-level uniqueness than metric systems, but that does not make unrestricted metadata free or safe.
 
 ![Recommendation request trace showing the API forking feature retrieval and candidate retrieval, joining before model inference and policy, plus a separate 900-millisecond critical-path breakdown](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/recommendation-request-trace.png)
 
 *A recommendation request can run feature and candidate work in parallel before model inference and policy. The separate 900-millisecond example shows why the longest dependent chain, not the sum of overlapping spans, controls the caller’s wait.*
 
-The user experiences this whole journey. The API, network, feature service, retrieval system, queue, model runtime, and policy can each add delay or change the result.
+## How Do Automatic Instrumentation, Manual Spans, and Collectors Fit Together?
+<!-- section-summary: Automatic instrumentation covers common frameworks, manual spans expose ML-specific work, and a collector separates applications from storage and routing concerns. -->
 
-Tracing works with other production evidence:
+Automatic instrumentation covers common frameworks, manual spans expose ML-specific work, and a collector separates applications from storage and routing concerns.
 
-- **Metrics** summarize many requests and show the size of a problem.
-- **Logs** record events such as a timeout, retry, or rejected request.
-- **Traces** connect the timed work belonging to one request.
-- **Decision records** preserve the model, policy, result, and later outcome for longer-lived analysis.
+Many common frameworks already have predictable operations:
 
-You can think of metrics as the aerial view and a trace as one street-level journey. A metric may show that the 99th-percentile latency rose for candidate traffic. A trace reveals that one affected request waited in the GPU queue. Logs and resource metrics can then explain why that queue was slow.
-
-```mermaid
-flowchart LR
-    subgraph DIAGNOSE["Find the failing path"]
-        direction TB
-        A["Metric alert<br/>Which requests are affected?"] --> B["Choose one representative request"]
-        B --> C["Trace<br/>Which path did it take?"]
-        C --> D["Slow or failed operation"]
-    end
-    subgraph RECOVER["Act and prove recovery"]
-        direction TB
-        E["Logs, resources,<br/>and release evidence"] --> F["Contain the problem"]
-        F --> G["Verify recovery against<br/>the original user signal"]
-    end
-    D --> E
-
-    class A,B symptom
-    class C,D trace
-    class E evidence
-    class F,G action
+```text
+incoming HTTP request
+outgoing HTTP call
+database query
+gRPC request
+message processing
 ```
 
-The rest of the tracing system exists to make this journey complete, safe, affordable, and useful during a real incident.
+Tracing libraries can often instrument these automatically.
 
-## How A Trace Shows One Request Over Time
-<!-- section-summary: A trace contains connected spans, and each span measures one meaningful operation inside the request. -->
+For example:
 
-A tracing screen usually looks like a waterfall. Time runs from left to right. Each row shows one piece of work, and the row's width shows how long that work took.
-
-The full waterfall is the **trace**. Each individual row is a **span**.
-
-Suppose a prediction request runs these operations:
-
-```mermaid
-flowchart LR
-    subgraph R["prediction.request · 0–420 ms"]
-        direction LR
-        A["0 ms<br/>Request accepted"] --> B["20–280 ms<br/>Fetch features<br/>260 ms"]
-        A --> C["20–110 ms<br/>Retrieve candidates<br/>90 ms"]
-        B --> D["285–315 ms<br/>Prepare input<br/>30 ms"]
-        C --> D
-        D --> E["315–385 ms<br/>Run model<br/>70 ms"]
-        E --> F["385–410 ms<br/>Apply policy<br/>25 ms"]
-        F --> G["420 ms<br/>Response complete"]
-    end
-
-    class A edge
-    class B,C,D dependency
-    class E,F model
-    class G result
+```text
+Prediction request
+│
+├── HTTP client call
+├── SQL query
+└── gRPC call
 ```
 
-The outer `prediction.request` span covers the caller's complete wait. The smaller spans explain the work inside it.
+without engineers manually creating every span. This is called **automatic instrumentation**. It gives broad coverage quickly. Automatic instrumentation does not understand your domain. It may see:
 
-A span normally records:
-
-- a stable operation name such as `features.fetch`;
-- start and end times;
-- a success or error status;
-- the service that performed the work;
-- a small set of reviewed attributes, such as model route, cache result, or worker pool;
-- a relationship to the span that caused it.
-
-The first span is the **root span**. Work created inside it uses **child spans**. The feature and candidate calls in the example are sibling spans because the API started them in parallel.
-
-This parent-and-child structure explains cause. The incoming request caused the feature lookup. The feature result allowed model preparation to continue. The policy step used the model output to choose the final path.
-
-A span also has a **kind**, which describes its role at a system boundary. A `SERVER` span receives a request, while a `CLIENT` span represents an outgoing call. A `PRODUCER` span sends work to a queue, and a `CONSUMER` span receives it. An `INTERNAL` span measures work inside one process, such as preprocessing or model inference. These roles help a tracing backend distinguish time spent serving, calling, publishing, consuming, and computing.
-
-### Read Parallel Spans By Their Overlap
-
-The feature and candidate calls overlap. Adding every row would report more than 420 milliseconds, even though the caller waited only 420 milliseconds.
-
-The path of dependent work that controls the finish time is the **critical path**. In this request, feature retrieval finishes later than candidate retrieval, so it holds up model preparation. Improving the already-fast candidate call would not reduce total latency.
-
-For a beginner, the practical rule is simple: follow the chain that reaches the end of the request last. That chain usually shows the first useful performance target.
-
-### Use Span Events To Record Important Moments
-
-Some things matter but have almost no duration. A retry begins. A circuit breaker opens. A fallback is selected.
-
-A **span event** records that timestamped moment inside an operation. A remote database or feature call deserves a child span because its duration and owner matter independently. A retry attempt may fit as an event on the dependency span.
-
-Tracing every function creates noise. A helper that converts a list into an array rarely needs its own span. The reader should see the system's important operations, rather than the source file's complete call tree.
-
-## How OpenTelemetry Standardises Tracing
-<!-- section-summary: OpenTelemetry defines how applications create, identify, transport, process, and export trace data while a separate backend stores and displays it. -->
-
-**OpenTelemetry**, often shortened to **OTel**, is an open-source observability framework. It gives applications and platform tools a shared way to create and move traces, metrics, and logs. For tracing, it defines the concepts and interfaces behind spans, trace context, common attributes, export, and collection.
-
-You can think of OpenTelemetry as the common language and delivery system for telemetry. A backend such as Grafana Tempo, Jaeger, Google Cloud Trace, AWS X-Ray, or Azure Monitor Application Insights handles long-term storage, search, and the investigation screen.
-
-OpenTelemetry grew from the merger of OpenTracing and OpenCensus. The practical goal is portability: application teams can instrument important work through standard APIs and conventions, then send the resulting telemetry to a compatible backend without redesigning every span.
-
-The complete path looks like this:
-
-```mermaid
-flowchart LR
-    A["Application and instrumentation<br/>Observe important operations"] --> B["OpenTelemetry API and SDK<br/>Create and process spans"]
-    B -->|"OTLP"| C["OpenTelemetry Collector<br/>Filter, batch, and route"]
-    C --> D["Tracing backend<br/>Store, search, and inspect"]
-
-    class A work
-    class B,C otel
-    class D platform
+```text
+Python function
 ```
 
-### Use Instrumentation To Create Telemetry
+but not understand:
 
-**Instrumentation** is the part that recognizes an operation and asks OpenTelemetry to represent it as a span. Automatic instrumentation already understands common framework boundaries such as an incoming FastAPI request, an HTTPX call, a database query, or a message sent through a supported client.
-
-Manual instrumentation covers application-specific work. A generic Python library cannot know that one block performs feature preparation, another runs a model, and a third selects a fallback. The service owner adds spans around the few operations whose duration, result, or ownership would matter during an incident.
-
-This gives teams a useful division of responsibility. Framework integrations cover standard network and library calls. Product code describes the ML operations that only the product team understands.
-
-### What The OpenTelemetry API And SDK Do
-
-The OpenTelemetry **API** is the interface used by application code and instrumentation libraries. It provides operations such as obtaining a tracer, starting a span, adding an attribute, and recording an event.
-
-The **SDK** is the runtime implementation behind that interface. It creates span data, attaches information about the service, applies sampling and processing rules, and passes finished spans to an exporter. A library can depend on the API without forcing every application to use one specific SDK configuration.
-
-Two kinds of information appear throughout this path:
-
-- **Resource attributes** describe the entity producing telemetry, such as service name, service version, deployment environment, cloud region, or Kubernetes pod.
-- **Span attributes** describe one operation, such as HTTP route, model route, cache result, input-size band, or fallback reason.
-
-Suppose ten replicas run the prediction API. `service.name="prediction-api"` belongs to the resource because it describes every span from that service. `app.model.route="candidate"` belongs to the inference span because it describes one request path.
-
-### Use Semantic Conventions For Consistent Fields
-
-OpenTelemetry **semantic conventions** provide shared names and meanings for common operations and attributes. HTTP instrumentation can agree on how to represent request method, route, response status, client calls, and server calls. Messaging and database instrumentation have their own conventions.
-
-This consistency matters in a mixed-language system. A Python API and a Java feature service can still produce recognizable spans that a backend groups correctly.
-
-Product-specific ML fields usually need an application namespace because the standard does not define every concept in a serving system. A team might use reviewed attributes such as `app.model.route`, `app.fallback.reason`, and `app.input.size_band`. The names should stay stable and their values should come from bounded sets.
-
-### Use OTLP To Export Completed Telemetry
-
-The **OpenTelemetry Protocol**, or **OTLP**, is the standard protocol commonly used to export telemetry from an SDK or Collector. It supports transport over gRPC and HTTP.
-
-OTLP carries completed span records toward a Collector or backend. Trace-context headers perform a different job during the live request: they carry the trace and parent identifiers from one service to the next so both services create spans in the same trace. Later sections explain that propagation path in detail.
-
-For example, the API forwards W3C Trace Context to the feature service during the request. Each service finishes its own spans and exports them through OTLP. The backend receives those records and reconstructs the connected waterfall from their identifiers and relationships.
-
-### Use The Collector To Process And Route Telemetry
-
-The **OpenTelemetry Collector** is a separate service that receives telemetry, processes it, and exports it. It gives platform teams one place to apply shared rules such as batching, memory limits, redaction, sampling, routing, or delivery to several backends.
-
-The Collector is optional for a small managed setup because an SDK may export directly to a supported backend. Across many services, a shared Collector removes repeated routing and safety rules from individual application processes.
-
-The tracing backend still owns storage, indexes, query behavior, retention, access control, and the waterfall interface. The Collector owns movement and processing. The application owns meaningful spans and safe attributes.
-
-Instrumentation observes the work, the API describes it, and the SDK turns it into telemetry. Trace context connects services, OTLP transports the finished records, the Collector applies shared policy, and the backend gives engineers an investigation view. The following sections connect each part to production design and failure investigation.
-
-## Choose Spans That Support A Real Investigation
-<!-- section-summary: Span boundaries separate work with its own latency, failure mode, owner, or recovery action. -->
-
-Each span should represent one operation that an engineer may need to inspect separately. Too few spans hide the slow or failing component. Too many spans fill the trace with internal helper calls that lead to the same owner and response.
-
-The design question is deciding which work deserves its own span.
-
-A useful span separates an operation that could send the investigation in a different direction. Feature retrieval, model inference, policy evaluation, and result persistence often deserve separate spans because different systems and owners control them.
-
-Suppose preprocessing contains tokenization, normalization, tensor conversion, and twelve helper functions. If all of that code runs inside one process and shares one owner, a single `input.prepare` span may be enough.
-
-Now suppose tokenization calls a remote service. That call has a network boundary, its own latency, and a separate owner. A child span makes the boundary visible.
-
-Four questions help:
-
-1. Can this operation wait, fail, or retry independently?
-2. Does another service or team own it?
-3. Would a slow result lead to a different response?
-4. Does it choose a model, policy, fallback, or route that changes the meaning of the prediction?
-
-If one answer is yes, a span is often useful.
-
-```mermaid
-flowchart LR
-    A["Candidate operation"] --> B{"Does it have separate latency,<br/>failure, ownership, or recovery?"}
-    B -->|"Yes"| C["Create a child span"]
-    B -->|"No"| D{"Is it an important<br/>timestamped moment?"}
-    D -->|"Yes"| E["Add a span event"]
-    D -->|"No"| F["Keep it inside<br/>the parent span"]
-    C --> G["Use a stable name<br/>and reviewed attributes"]
-    E --> G
-
-    class A,B,D input
-    class C,G span
-    class E event
-    class F internal
+```text
+feature transformation
+candidate generation
+inference queue
+embedding computation
+model inference
+reranking
+fallback model
 ```
 
-### Use Stable Span Names
+So ML systems often need manual spans around meaningful operations.
 
-The name `model.predict` creates one useful family of spans. A name such as `model.predict/customer-184729/request-9832` creates a different operation for every request. That naming pattern makes the backend expensive and difficult to query.
+For example:
 
-Put the category in the span name and the approved detail in attributes. For example, the span name can remain `model.predict`, while `app.model.route="candidate"`, `app.hardware.pool="gpu-a10"`, `app.input.size_band="large"`, and `app.fallback.reason="none"` describe the operational group.
+```text
+with span("model_inference"):
+    prediction = model(features)
+```
 
-The important distinction is one stable name plus a few bounded fields. Customer identity, raw input, and a full prediction ID do not need to be indexed as ordinary trace attributes.
+Conceptually, manual instrumentation tells the tracing system:
 
-OpenTelemetry publishes **semantic conventions**, which are shared names for common operations and attributes. HTTP clients, databases, and messaging systems can then use consistent fields across languages. Teams should use stable conventions where they apply and place reviewed ML-specific attributes under an application namespace.
+This operation has semantic meaning and should appear explicitly in the trace.
 
-Some semantic conventions remain experimental. A production trace contract should record which convention version it uses and avoid depending on unstable names without a migration plan.
+Automatic instrumentation gives:
 
-### Use Attributes That Support Safe Grouping
+```text
+HTTP
+database
+RPC
+framework operations
+```
 
-An attribute earns its place if it helps an operator compare or route a problem.
+Manual instrumentation adds:
 
-`app.model.route="candidate"` lets the team isolate canary traffic. `app.cache.result="miss"` helps explain slow feature reads. `app.fallback.reason="feature_timeout"` identifies a degraded path.
+```text
+feature computation
+GPU queueing
+inference
+postprocessing
+fallback
+```
 
-A raw score of `0.728319483` creates many unique values and rarely helps trace search. A reviewed confidence band such as `medium` may be more useful. Exact scores belong in the governed decision record.
+Together:
 
-This is the boundary between tracing and prediction logging: the trace explains the execution path; the decision record preserves the detailed model decision.
+```text
+Prediction request
+│
+├── HTTP / auth              ← automatic
+│
+├── feature retrieval
+│    └── database query      ← automatic
+│
+├── preprocess               ← manual
+│
+├── inference queue          ← manual
+│
+├── model inference          ← manual
+│
+└── outgoing RPC             ← automatic
+```
 
-## How Trace Context Crosses Service Boundaries
-<!-- section-summary: Context propagation carries trace identity through HTTP calls, queues, and workers so the backend can rebuild one request journey. -->
+This gives infrastructure visibility and ML-specific meaning. Suppose a dependency fails:
 
-Each service can record its own timing. Without shared identity, the tracing backend receives separate fragments and cannot tell that they belong to the same request.
+```text
+feature_store
+    │
+    ▼
+timeout
+```
 
-**Context propagation** carries trace identity across a boundary.
+The span should ideally reflect that it did not complete normally.
 
-You can think of the trace ID as a journey number. The prediction API, feature service, and model gateway perform different work and create their own span IDs. They all carry the same trace ID, so the backend can assemble one journey.
+Conceptually:
 
-For HTTP, the common industry standard is the **World Wide Web Consortium (W3C) Trace Context** specification. The client sends a `traceparent` header. The receiving service extracts the context, creates its own child span, and passes updated context to the next service.
+```text
+span:
+operation = feature_lookup
+duration  = 500 ms
+status    = error
+error.type = timeout
+```
 
-Application code usually should not parse the header. OpenTelemetry framework and client instrumentation handles the injection and extraction.
+Then a trace can look like:
 
-The example also includes **gRPC**, a high-performance protocol for calling a function on another service. OpenTelemetry propagates the same trace identity across supported HTTP and gRPC clients.
+```text
+Prediction request                  540 ms  ERROR
+│
+├── feature lookup                 500 ms  ERROR
+│     └── network call             500 ms  TIMEOUT
+└── fallback                        20 ms
+```
+
+This tells you both where the delay occurred and where the error originated. A common tracing architecture looks like:
+
+```text
+ML Service
+    │
+    ▼
+OpenTelemetry SDK
+    │
+    ▼
+OpenTelemetry Collector
+    │
+    ├── process
+    ├── batch
+    ├── filter
+    ├── sample
+    └── export
+         │
+         ▼
+Tracing Backend
+```
+
+The collector acts as telemetry infrastructure. Instead of every application needing to know:
+
+```text
+backend hostname
+vendor protocol
+retry policy
+authentication mechanism
+batch settings
+```
+
+the applications can send standardized telemetry to the collector. The collector handles much of the downstream complexity. Suppose 300 services are instrumented. Without a collector:
+
+```text
+Service 1 ─────► tracing vendor
+Service 2 ─────► tracing vendor
+Service 3 ─────► tracing vendor
+...
+```
+
+Every service contains export configuration. With collectors:
+
+```text
+services
+   │
+   ▼
+collector layer
+   │
+   ▼
+backend
+```
+
+Now telemetry policies can often be managed centrally. The collector might:
+
+```text
+remove sensitive fields
+drop unwanted spans
+batch events
+retry delivery
+route different telemetry
+apply sampling
+```
+
+This makes observability architecture easier to evolve.
+
+## How Should Sampling Preserve the Traces Most Useful for Investigation?
+<!-- section-summary: Random, head, and tail sampling make different tradeoffs; whichever policy is used must preserve complete traces and the rare failures worth investigating. -->
+
+Random, head, and tail sampling make different tradeoffs; whichever policy is used must preserve complete traces and the rare failures worth investigating.
+
+Suppose your service handles:
+
+$$
+20,000 \text{ requests/sec}
+$$
+
+and each trace contains:
+
+$$
+12 \text{ spans}
+$$
+
+Then:
+
+$$
+20,000 \times 12 = 240,000
+$$
+
+span records are produced every second. Per day:
+
+$$
+240,000 \times 86,400
+\approx 20.7 \text{ billion spans}
+$$
+
+Storing and indexing every trace may become expensive. Therefore tracing systems commonly use **sampling**. Suppose:
+
+```text
+sampling rate = 1%
+```
+
+Then approximately:
+
+$$
+1 / 100
+$$
+
+requests are fully traced. Instead of storing one billion traces, perhaps you store roughly ten million. The trade-off is straightforward:
+
+```text
+more traces
+→ more visibility
+→ more cost
+
+fewer traces
+→ less cost
+→ greater chance of missing interesting requests
+```
+
+Imagine:
+
+```text
+99.9% requests succeed
+0.1% requests fail
+```
+
+With low random sampling, some rare failures may disappear from trace storage. But those are precisely the requests you care most about. So smarter strategies can keep:
+
+```text
+small sample of normal traces
++
+large or complete sample of errors
++
+large sample of very slow requests
+```
+
+For example:
+
+```text
+Normal request       → keep 1%
+Error                 → keep 100%
+Latency > 2 seconds   → keep 100%
+Canary model          → keep 50%
+```
+
+This focuses storage on diagnostically useful events. Two important approaches exist.
+
+### Head sampling
+
+The decision is made near the beginning of the request:
+
+```text
+request arrives
+     │
+     ▼
+sample
+ ┌───┴───┐
+yes      no
+```
+
+Advantages:
+
+```text
+simple
+cheap
+early decision
+```
+
+Problem:
+
+At the beginning you do not yet know whether the request will:
+
+```text
+fail
+take 8 seconds
+hit a rare fallback path
+```
+
+### Tail sampling
+
+The system waits until the trace is complete. Then it knows:
+
+```text
+latency
+status
+errors
+span contents
+```
+
+and can decide:
+
+```text
+keep this trace because it failed
+```
+
+Conceptually:
+
+```text
+complete trace
+      │
+      ▼
+inspect outcome
+      │
+      ├── error → keep
+      ├── very slow → keep
+      └── normal → sample lightly
+```
+
+Tail sampling can preserve unusual events more intelligently, but requires more telemetry infrastructure because traces must be buffered before the decision. A trace is useful because its spans form a story. Imagine randomly keeping individual spans:
+
+```text
+Prediction request
+│
+├── ?? missing
+├── inference
+├── ?? missing
+└── database
+```
+
+The causal path becomes difficult to understand. Tracing systems therefore try to make coherent sampling decisions about the trace as a unit. The principle is:
+
+A trace is valuable because its related spans remain connected.
+
+## What Do Online, Release, Batch, and LLM Traces Reveal?
+<!-- section-summary: Concrete traces localize slow requests, release regressions, batch steps, queues, and specialized LLM work while connecting symptoms to the version that caused them. -->
+
+Concrete traces localize slow requests, release regressions, batch steps, queues, and specialized LLM work while connecting symptoms to the version that caused them.
+
+Suppose your service dashboard reports:
+
+```text
+normal p99 latency = 300 ms
+current p99        = 1.9 seconds
+```
+
+Metrics tell you there is a problem. You search traces with:
+
+```text
+service = recommendation-api
+latency > 1 second
+model_version = v28
+```
+
+One trace shows:
+
+```text
+recommendation_request                 1,860 ms
+│
+├── authentication                        8 ms
+│
+├── fetch_user_features                 105 ms
+│
+├── retrieve_candidates                 120 ms
+│
+├── model_server_call                 1,510 ms
+│     │
+│     ├── inference_queue_wait        1,390 ms
+│     └── GPU inference                 105 ms
+│
+└── postprocessing                       20 ms
+```
+
+This immediately changes the diagnosis. The model itself takes:
+
+```text
+105 ms
+```
+
+The queue takes:
+
+```text
+1,390 ms
+```
+
+Therefore the problem is not primarily model compute. It is capacity or scheduling. Suppose infrastructure metrics for the same period show:
+
+```text
+GPU utilization          99%
+inference queue depth    380
+request traffic          +45%
+```
+
+Now there is a coherent causal explanation:
+
+```text
+traffic increase
+      ↓
+GPU capacity exhausted
+      ↓
+queue depth rises
+      ↓
+queue waiting time rises
+      ↓
+request latency rises
+```
+
+Tracing identifies **where individual requests spent time**. Metrics show **how widespread the condition was**. Together they support diagnosis. Suppose traffic remains unchanged:
+
+```text
+requests/sec → unchanged
+```
+
+But after deploying `v29`:
+
+```text
+p99 latency ↑
+```
+
+Trace comparison shows:
+
+```text
+v28:
+
+model_inference = 80 ms
+queue_wait      = 15 ms
+```
+
+while:
+
+```text
+v29:
+
+model_inference = 310 ms
+queue_wait      = 700 ms
+```
+
+What happened?
+
+A slower model initially increases compute time:
+
+```text
+inference time ↑
+```
+
+Because each request occupies the GPU longer:
+
+```text
+capacity per second ↓
+```
+
+Then queues form:
+
+```text
+queue wait ↑
+```
+
+Then end-to-end latency becomes much worse. The causal sequence is:
+
+```text
+larger/slower model
+       ↓
+GPU occupied longer
+       ↓
+effective throughput falls
+       ↓
+queue grows
+       ↓
+tail latency explodes
+```
+
+A single latency metric would show only the final symptom. Tracing helps reveal the internal mechanics. Tracing is not limited to synchronous APIs. Consider:
+
+```text
+Batch scoring job
+      │
+      ├── read dataset
+      ├── transform features
+      ├── load model
+      ├── run partitions
+      └── write predictions
+```
+
+A trace might represent:
+
+```text
+batch_scoring_job                   34 min
+│
+├── read_input                       4 min
+├── feature_processing              12 min
+├── inference                       10 min
+└── write_output                     8 min
+```
+
+Or a trace might follow a single task through a distributed pipeline. However, very long workflows may also be better represented with workflow/run telemetry rather than treating everything as one giant request trace. The same principle applies:
+
+Instrument the execution boundaries that help someone diagnose actual failures.
+
+Consider an LLM request:
+
+```text
+user request
+    │
+    ▼
+safety / policy
+    │
+    ▼
+retrieve documents
+    │
+    ▼
+construct prompt
+    │
+    ▼
+model queue
+    │
+    ▼
+prefill
+    │
+    ▼
+token generation
+    │
+    ▼
+postprocess
+```
+
+A useful trace might expose:
+
+```text
+LLM request                         4.8 s
+│
+├── retrieval                       180 ms
+├── prompt construction              8 ms
+├── queue wait                      900 ms
+├── time to first token             620 ms
+└── token generation               3.1 s
+```
+
+For LLM systems, particularly useful attributes may include bounded, safe metadata such as:
+
+```text
+model version
+input token count
+output token count
+batch size
+retrieval duration
+tool-call duration
+cache hit/miss
+```
+
+Again, full prompts and private user content should not automatically be placed into general tracing telemetry.
 
 ![Direct calls using parent-child trace context compared with three independent request contexts linked to one shared GPU batch](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/trace-context-and-span-links.png)
 
 *Parent-child context preserves direct cause across HTTP and gRPC calls. A link set connects all contributing request contexts to shared asynchronous batch work without pretending that one request caused the others.*
 
-The shared trace ID lets the backend group all three services into one journey. Each service creates a fresh span ID, and the parent value preserves the order of the calls.
+## How Do You Control Span Detail, Overhead, Failure, Searchability, and Sensitive Data?
+<!-- section-summary: Useful tracing balances diagnostic span boundaries against cardinality, privacy, storage, overhead, graceful failure, and the health of the telemetry pipeline itself. -->
 
-### How Broken Context Propagation Appears
+Useful tracing balances diagnostic span boundaries against cardinality, privacy, storage, overhead, graceful failure, and the health of the telemetry pipeline itself.
 
-Suppose the API trace ends at an outgoing feature call. The feature service has a separate root trace at the same time.
+A large waterfall diagram can look sophisticated while providing little useful information. For each span, ask:
 
-The work happened, but the journey split. The team checks the boundary:
+“What question does this let us answer?”
 
-- Was the outgoing HTTP client instrumented?
-- Did a proxy remove the header?
-- Did the receiving framework extract context before creating the server span?
-- Did an asynchronous task lose the active context?
+For example:
 
-The repair is tested with one known request. Success means one trace contains both the API and feature spans in the correct parent-child order.
+```text
+inference_queue_wait
+→ Are requests waiting for compute
 
-### Carry Trace Context In Queue Metadata
+feature_store
+→ Is feature retrieval causing latency
 
-Asynchronous systems need the same idea. A Kafka producer injects trace context into message headers. The consumer extracts it before processing the message.
+model_inference
+→ Did model execution become slower
 
-A worker handling one message can continue the original trace. A worker building one GPU batch from many requests needs a different relationship.
+fallback
+→ Are requests taking degraded paths
 
-Imagine ten requests entering a dynamic batch. One batch execution should not pretend that request 1 caused requests 2 through 10. OpenTelemetry **span links** connect the shared batch span to all contributing request contexts.
-
-Each request keeps its own trace and prediction ID. The `batch.execute` span links to the ten request spans. If queue delay rises, an operator can inspect the batch and return to the affected requests.
-
-### Limit What Baggage Can Carry
-
-OpenTelemetry **baggage** carries arbitrary key-value data across service boundaries. This sounds convenient, but downstream libraries may forward it again.
-
-Credentials, customer identity, prompts, feature values, and authorization decisions do not belong in baggage. Teams use a strict allowlist, remove internal baggage before untrusted calls, and never treat baggage as a trusted authorization source.
-
-Trace context connects telemetry across services. Business authorization uses a separate authenticated identity mechanism.
-
-## Combine Automatic And Manual Instrumentation
-<!-- section-summary: Automatic instrumentation covers common frameworks and clients, while a small number of manual spans reveal ML-specific work. -->
-
-**Instrumentation** is the code and library support that creates tracing data. Framework integrations can observe standard operations such as HTTP requests or database calls. Product code must describe ML-specific work such as model inference, policy evaluation, or fallback selection because a generic library cannot know that meaning.
-
-Most teams get the first useful trace in two layers:
-
-1. automatic instrumentation covers HTTP, gRPC, databases, and supported messaging clients;
-2. manual instrumentation adds a few ML-specific operations such as model inference, policy evaluation, and fallback selection.
-
-This order keeps the first change small. It also prevents teams from manually recreating spans that a well-tested library already provides.
-
-### Use Automatic Instrumentation For The Request Journey
-
-OpenTelemetry supports zero-code or library-based instrumentation for common languages and frameworks. Python traces are stable, and current OpenTelemetry Python supports actively maintained Python versions.
-
-For a FastAPI service using HTTPX, a compact setup can install the distribution, OTLP exporter, and integrations:
-
-```bash
-uv add opentelemetry-distro opentelemetry-exporter-otlp \
-  opentelemetry-instrumentation-fastapi opentelemetry-instrumentation-httpx
-
-OTEL_SERVICE_NAME=prediction-api \
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
-uv run opentelemetry-instrument uvicorn app:app
+policy_engine
+→ Is business logic responsible for the final delay
 ```
 
-FastAPI instrumentation creates the incoming request span. HTTPX instrumentation creates outgoing HTTP spans. OTLP, the OpenTelemetry Protocol, sends the spans to a Collector or compatible backend.
+Useful tracing is designed around investigation. Suppose the entire service is represented as:
 
-Send one known staging request and inspect its trace in the backend. If the feature call appears but model inference is an unexplained gap, add one manual span around inference.
-
-### Add Manual Spans Around Important ML Work
-
-Automatic framework instrumentation exposes the HTTP request and supported library calls. A manual span exposes application-specific work such as model artifact selection and inference.
-
-A focused manual span can expose that operation:
-
-```python
-from opentelemetry import trace
-from opentelemetry.trace import Status, StatusCode
-
-tracer = trace.get_tracer("prediction-api.serving")
-
-with tracer.start_as_current_span(
-    "model.predict",
-    record_exception=False,
-    set_status_on_exception=False,
-) as span:
-    span.set_attribute("app.model.route", model_route)
-    span.set_attribute("app.hardware.pool", worker_pool)
-    try:
-        prediction = model.predict(features)
-    except ModelRuntimeError:
-        span.set_attribute("error.type", "model_runtime")
-        span.set_status(Status(StatusCode.ERROR))
-        raise
+```text
+prediction_request = 1.2 seconds
 ```
 
-`start_as_current_span` creates a child of the active request span and closes it after the block finishes. The attributes use bounded operational categories.
+Technically this is a trace. Operationally, it tells you little more than the latency metric. You cannot distinguish:
 
-The example disables automatic exception recording because raw exception text can contain model inputs, file paths, URLs, or secrets. A known failure receives a reviewed error class. Deeper diagnostic detail can go to a restricted log channel under a separate policy.
-
-The feature vector and complete prediction stay outside the trace. The decision record is the correct home for governed model evidence.
-
-### Release And Test Instrumentation Like Serving Code
-
-Tracing adds CPU work, memory use, network traffic, and backend cost. Automatic instrumentation can also create duplicate spans if another agent already traces the same library.
-
-A safe rollout uses:
-
-1. local verification with a console or in-memory exporter;
-2. staging through the real Collector;
-3. a small production canary;
-4. comparison of request latency, CPU, memory, trace volume, and exporter errors;
-5. fast disablement if overhead or duplication exceeds the agreed limit.
-
-The serving path should continue if tracing export fails. Bounded queues and timeouts protect inference from a slow observability backend.
-
-## How The Collector Sends Traces To A Backend
-<!-- section-summary: The OpenTelemetry Collector receives spans, applies shared policy, and exports retained traces to a managed or self-hosted backend. -->
-
-The application creates spans. A tracing backend stores and displays them. The **OpenTelemetry Collector** is the common component between those two sides.
-
-The Collector is a separate vendor-neutral service. It receives telemetry, processes it, and exports it.
-
-Its configuration has three easy-to-understand parts. An **application performance monitoring (APM) backend** stores and explores service latency, errors, and traces.
-
-- A **receiver** accepts data, commonly through OTLP.
-- **Processors** batch, filter, enrich, limit memory, or sample the data.
-- An **exporter** sends the result to an OTLP-compatible backend such as Tempo or to another supported destination.
-
-```mermaid
-flowchart LR
-    A["Instrumented<br/>prediction service"] -->|"OTLP"| B["Collector receiver"]
-    B --> C["Memory limit"]
-    C --> D["Attribute safety rules"]
-    D --> E["Batch or sampling"]
-    E --> F["OTLP exporter"]
-    F --> G["Tracing backend"]
-
-    H["Collector health<br/>queue, rejects, export failures"] -.-> C
-    H -.-> F
-
-    class A app
-    class B,C,D,E,F collector
-    class G backend
-    class H health
+```text
+feature lookup
+inference
+queueing
+database
+postprocessing
 ```
 
-A minimal pipeline looks like this:
+So spans must be fine-grained enough to separate meaningful causes. The opposite extreme is:
 
-```yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: ${env:MY_POD_IP}:4317
-
-processors:
-  memory_limiter:
-    check_interval: 1s
-    limit_percentage: 75
-  batch: {}
-
-exporters:
-  otlp/traces:
-    endpoint: ${env:TRACE_BACKEND_OTLP_ENDPOINT}
-
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [otlp/traces]
+```text
+parse_json             0.3 ms
+allocate_array         0.1 ms
+convert_dtype          0.2 ms
+copy_vector            0.4 ms
+function_238           0.1 ms
+function_239           0.1 ms
+...
 ```
 
-The receiver accepts OTLP over gRPC on the Collector pod's own address. In Kubernetes, the Downward API can place the pod IP in `MY_POD_IP`, while an internal Service gives applications the stable `otel-collector` name used in the earlier command. A NetworkPolicy should limit port 4317 to trusted workloads. A protected Docker network can use an explicitly exposed container address instead.
+Now one request produces hundreds or thousands of nearly useless spans. This causes:
 
-The memory limiter protects the Collector from uncontrolled pressure. The batch processor groups spans into efficient export requests. The exporter sends them to the configured backend.
-
-Production deployment also needs authenticated transport, bounded sending queues, retries, secrets from the deployment platform, and explicit failure behavior.
-
-### Choose Where The Collector Runs
-
-A small service can export directly to a managed tracing backend. This gives the team value quickly and avoids operating a separate tier.
-
-A Kubernetes platform with many services often runs a Collector near workloads and a gateway Collector for central policy. Local collectors receive spans close to applications. The gateway handles shared sampling, routing, and backend export.
-
-The extra tier earns its place if central policy, volume, or multi-backend routing needs it. It also needs capacity planning and an owner.
-
-For a self-managed open-source stack, OpenTelemetry SDKs and Collectors commonly send traces to Tempo. Grafana can connect Tempo traces with Prometheus metrics and Loki logs. Jaeger remains another tracing backend. Managed-cloud teams use each provider's supported integration. Google Cloud supports OpenTelemetry collection for Cloud Trace. Microsoft recommends the Azure Monitor OpenTelemetry Distro or its standalone exporter for Application Insights; Microsoft does not officially support the community Collector exporter for Azure Monitor. AWS documents its supported OpenTelemetry paths for services such as X-Ray.
-
-OTLP keeps application instrumentation portable. It does not remove differences in backend queries, pricing, retention, access, or feature support.
-
-### Monitor The Collector
-
-If the trace backend slows down, the Collector's sending queue grows. Export failures rise. Eventually, new spans may be refused or dropped.
-
-OpenTelemetry exposes internal metrics for queue capacity, queue size, enqueue failures, and failed exports. These metrics need dashboards and alerts because a healthy model service can keep running while its traces disappear.
-
-Suppose queue use reaches 85 percent during a backend slowdown. The observability owner reduces routine trace retention or scales the gateway. The backend owner restores ingestion. Recovery appears as falling queue pressure, stopped export errors, and a complete known trace arriving end to end.
-
-## How To Reduce Trace Volume And Cost
-<!-- section-summary: Sampling keeps representative healthy traces and higher-value slow, failed, fallback, and release-transition traces. -->
-
-A high-traffic endpoint can create thousands of complete traces every second. Retaining all of them increases application export work, Collector memory, network traffic, backend ingestion, storage, and query cost.
-
-**Sampling** chooses which traces are stored.
-
-The team usually needs two groups:
-
-- a representative baseline of healthy requests;
-- a much higher share of errors, slow requests, fallbacks, rare routes, and candidate releases.
-
-The durable prediction record can still cover every decision. The trace provides detailed execution evidence for a selected subset.
-
-### Head sampling decides early
-
-**Head sampling** decides near the start of the request. A one-percent head sampler may keep one request out of every hundred.
-
-It is simple and cheap. Dropped traces create little downstream work. The limitation is timing: at the start, the sampler does not yet know that a request will time out near the end.
-
-If one percent of all traces are kept, about one percent of late failures may remain unless the request already carries a known priority signal.
-
-### Tail sampling decides after seeing the journey
-
-**Tail sampling** waits for most or all spans, then uses the completed trace. It can keep every trace with an error status, a latency above the service objective, a fallback attribute, or a candidate route.
-
-This gives better incident evidence and adds operational cost. The Collector holds trace data during the decision window. Several gateway replicas need trace-aware routing so all spans from one trace reach the same sampling decision.
-
-OpenTelemetry's Collector tail-sampling processor is currently beta. Teams should test its memory, routing, incomplete-trace, and upgrade behavior before relying on it at high scale.
-
-```mermaid
-flowchart LR
-    A["New request"] --> B{"Choose sampling point"}
-    B -->|"Head sampling"| C["Decide immediately<br/>using known request context"]
-    C --> D["Low cost,<br/>limited knowledge of outcome"]
-    B -->|"Tail sampling"| E["Buffer spans until<br/>the request is understood"]
-    E --> F["Keep errors, slow paths,<br/>fallbacks, and canaries"]
-    F --> G["Higher memory and<br/>routing requirements"]
-    D --> H["Store retained traces"]
-    G --> H
-
-    class A,B choice
-    class C,D head
-    class E,F,G tail
-    class H store
+```text
+high cost
+large traces
+visual noise
+slow investigation
+instrumentation overhead
 ```
 
-A practical policy might retain:
+The right abstraction is usually:
 
-- all error traces;
-- all reviewed fallbacks;
-- all requests slower than the latency objective;
-- all candidate-route traces during a limited canary;
-- one percent of routine primary-route successes.
+> **One span per operationally meaningful unit of work.**
 
-“Keep every error” also needs a ceiling. During a widespread outage, error volume can exceed backend capacity. The emergency policy may cap detailed traces per service while complete error metrics and durable decision records preserve the size of the incident.
+Every span requires some combination of:
 
-### Change Sampling Gradually And Monitor Its Cost
-
-In staging, replay representative trace sizes and peak request rates. Measure Collector memory, decision latency, incomplete traces, and backend volume.
-
-A production canary compares expected and observed retention by category. If the gateway approaches its limit, the fallback can use simpler head sampling or reduce healthy-trace retention. Metrics and decision records continue to protect detection and model monitoring.
-
-Sampling is successful only if responders can still find the traces promised by the policy.
-
-## Use A Trace To Investigate A Slow Prediction
-<!-- section-summary: A trace narrows an aggregate service symptom to the specific operation, owner, and release that need action. -->
-
-Consider a model release whose candidate route receives ten percent of traffic. Soon after the release, the 99th-percentile latency rises for candidate requests while the primary route remains healthy.
-
-Prometheus and Grafana show the affected population. An **exemplar** is a sampled trace ID attached to a metric observation. Selecting that exemplar, or another trace link, opens one slow candidate request in Tempo.
-
-The trace shows:
-
-- feature retrieval completed in 40 milliseconds;
-- preprocessing completed in 15 milliseconds;
-- `model.predict` took 1.4 seconds;
-- the span attribute identifies `app.hardware.pool="gpu-l4-b"`;
-- a span event reports a memory-allocation retry.
-
-The trace gives the investigation a specific boundary: candidate inference on one GPU pool.
-
-Logs for the same trace show a bounded `allocation_retry` event. GPU memory metrics for pool B rise close to the configured limit. The release record shows that the candidate artifact uses a larger input tensor for one size band.
-
-The team can now act:
-
-1. The release owner pauses candidate traffic.
-2. The serving owner drains pool B and preserves a few affected traces.
-3. The model team reproduces the large-input band in staging.
-4. The deployment returns through a smaller canary after memory use is reduced.
-5. Recovery checks end-to-end latency, GPU memory, fallback ratio, and fresh candidate traces.
-
-```mermaid
-timeline
-    title One ML Service Investigation
-    Alert : Candidate-route tail latency rises
-    Trace : model.predict dominates one slow request
-    Evidence : Allocation retry appears : GPU memory is near its limit
-    Containment : Candidate traffic is paused
-    Repair : Large-input memory use is reduced
-    Recovery : Small canary meets latency and memory targets
+```text
+timestamping
+memory
+metadata
+serialization
+network transfer
+storage
+indexing
 ```
 
-The response follows evidence from broad to specific. The trace identifies the slow operation first, so containment and repair stay focused on candidate inference and its GPU pool.
+Therefore tracing is not free. Suppose one request normally takes:
 
-Tracing can also clarify a model-quality problem. Suppose labelled outcomes worsen for one policy version. Sampled traces show that affected requests often hit a feature timeout and select a fallback before the primary policy runs. The model artifact may still be accurate. The serving path changed the decision.
-
-Trace absence needs an explanation too. A decision record may point to a trace removed by sampling or retention. That is expected if the sampling class and retention window are known. Missing recent error traces together with Collector export failures indicates a telemetry incident.
-
-## Keep Traces Safe And Searchable
-<!-- section-summary: A trace data contract keeps sensitive values and unbounded identifiers out of broadly accessible tracing systems. -->
-
-Tracing data leaves the model process and travels through Collectors, networks, storage, dashboards, exports, and support workflows. A value placed on a span can reach many more people than the original request.
-
-A **trace data contract** defines the allowed span names, attributes, events, error classes, owners, access rules, and retention period.
-
-Two risks deserve special attention.
-
-### Keep Sensitive Data Out Of Traces
-
-Raw prompts, feature vectors, customer identity, documents, credentials, signed URLs, and unrestricted exception messages can reveal protected information.
-
-The trace should use bounded operational summaries. Fields such as `app.model.route="candidate"`, `app.input.size_band="large"`, `app.fallback.reason="feature_timeout"`, and `app.result.class="degraded"` let responders group similar paths without exposing the original payload.
-
-The governed decision store keeps prediction identity, exact scores, versions, and approved feature summaries. These fields support model monitoring and review without copying the original input.
-
-Raw prompts and full feature payloads require a separate, purpose-built restricted evidence store, and only if the investigation or regulatory purpose justifies retaining them. Security owners classify the data and grant access to the small set of roles that need it. Platform owners apply the approved retention and deletion periods. Access audit logs show who opened or exported the evidence.
-
-Suppose an authorized engineer needs a complete feature payload to reproduce a slow request. The restricted store holds one governed copy. The decision record carries a controlled source reference, while the trace carries the feature schema version, size band, and prediction reference.
-
-### Control High-Cardinality Trace Attributes
-
-**Cardinality** describes how many distinct values a field can have.
-
-`model_route` may have three values: `primary`, `candidate`, and `fallback`. That is low cardinality and easy to group.
-
-`customer_id` may have ten million values. `prediction_id` may have a different value for every request. Indexing these values broadly can increase cost and slow search.
-
-Exact trace ID remains essential because it identifies the trace itself. Application attributes should favor small reviewed sets. A protected prediction reference can be searchable only in a restricted path if the investigation workflow needs it.
-
-Exception handling follows the same rule. A known dependency failure can use `error.type="feature_timeout"`. Raw exception text belongs in a restricted diagnostic channel only if policy allows it.
-
-```mermaid
-flowchart TB
-    A["Model request"] --> B{"Reviewed trace contract"}
-    B --> C["Trace attributes<br/>Route, size band, fallback class"]
-    B --> D["Decision record<br/>Score, approved summaries, versions"]
-    B --> R["Restricted evidence store<br/>Raw prompt or full features, if justified"]
-    C --> E["Tracing backend<br/>Operational access"]
-    D --> F["Governed analytical access"]
-    R --> G["Purpose-bound access<br/>Retention, deletion, and audit"]
-    C -.->|"Controlled prediction reference"| D
-    D -.->|"Governed source reference"| R
-
-    class A,B input
-    class C,E safe
-    class D,F governed
-    class R,G governed
+```text
+50 ms
 ```
 
-Collector filters and redaction processors provide a secondary control. The application still needs the primary allowlist because it understands the data before export.
+Instrumentation that adds:
 
-## Test Failure And Recovery Paths
-<!-- section-summary: Trace tests verify topology, propagation, privacy, sampling, overhead, failure isolation, and recovery. -->
-
-A tracing backend can display attractive waterfalls while telling an incomplete story. One client may lose context. A fallback span may never appear. A sampling rule may discard every canary trace. An exporter may consume enough memory to hurt inference.
-
-Testing starts with one known request and expands outward.
-
-### Test Span Relationships In Code
-
-An in-memory exporter can assert that a request creates:
-
-- one server span;
-- the expected dependency spans;
-- one `model.predict` span;
-- a policy span or fallback event;
-- approved attributes only.
-
-A forced feature timeout should produce the expected error class and fallback evidence. Tests reject raw prompts, secrets, direct identifiers, and unsupported attribute names.
-
-### Test Context Propagation In Staging
-
-Send a known request through the real proxy, service, queue, Collector, and backend. Confirm that all expected services share one trace ID and appear in the correct order.
-
-Also confirm that:
-
-- the trace opens from the relevant metric or log link;
-- the prediction ID reaches the governed decision store;
-- the candidate and fallback paths appear as designed;
-- the Collector reports no rejection or export error.
-
-This test separates an application instrumentation defect from a Collector, backend, or dashboard-linking defect.
-
-### Test Sampling And Overhead Under Load
-
-Generate healthy, slow, failed, fallback, and candidate traces. Compare observed retention with policy. Add peak traffic and representative trace sizes.
-
-Measure application CPU, memory, and latency. Measure Collector queue use, refused spans, export failures, and backend ingestion. A trace design that overwhelms the serving system has failed its purpose.
-
-### Test A Tracing-Backend Outage
-
-Make the backend reject exports in a safe environment. The service should keep serving predictions within its objective.
-
-The exporter queue fills only to its configured bound. Retries use timeouts and backoff. Collector metrics report the problem. After the backend returns, fresh traces should arrive again.
-
-Trying to preserve every old routine trace can recreate the overload. The recovery policy may discard old low-value traces and prioritize current health. Durable prediction records and metrics continue to preserve coverage during the trace outage.
-
-```mermaid
-flowchart LR
-    A["Code test<br/>span shape and safe fields"] --> B["Staging request<br/>complete propagation"]
-    B --> C["Load test<br/>sampling and overhead"]
-    C --> D["Backend outage<br/>bounded queues"]
-    D --> E["Recovery request<br/>fresh complete trace"]
-
-    class A,B normal
-    class C,D stress
-    class E recovery
+```text
+20 ms
 ```
 
-Broken propagation has its own focused runbook. Find the last connected span, inspect the next transport boundary, repair client injection or server extraction, and repeat the known request. One complete trace proves the handoff is restored.
+would materially change the service. Good tracing tries to keep its measurement overhead small relative to the system being measured. This is another reason to use:
 
-## Choose A Tracing Stack For The Serving Platform
-<!-- section-summary: Managed tracing suits ordinary services, while Collector gateways and self-hosted backends fit platforms with clear scale or control needs. -->
+```text
+sampling
+batch export
+asynchronous export
+careful span design
+```
 
-Tracing provides the most value for prediction paths that cross several places where work can wait, fail, or change direction.
+Imagine:
 
-An endpoint calling an online feature service, vector store, model runtime, policy engine, and fallback has many useful boundaries. A single-process batch script may get enough evidence from job metrics, structured logs, and a durable run record.
+```text
+tracing backend unavailable
+```
 
-The smallest practical stack is often the best starting point.
+Should predictions stop?
 
-### Use Managed Application Monitoring
+Usually not. You generally want:
 
-Use the provider's supported OpenTelemetry or application performance monitoring integration for a straightforward managed endpoint. Cloud Trace, Azure Monitor Application Insights, and AWS observability integrations can store and display distributed traces without a team operating the backend.
+```text
+tracing fails
+      │
+      ├── telemetry may be lost
+      │
+      └── serving continues
+```
 
-The provider reduces storage and backend work. The application team still owns useful span boundaries, safe attributes, propagation across custom boundaries, sampling requirements, and decision records.
+rather than:
 
-### Use The Existing Kubernetes Observability Platform
+```text
+tracing backend fails
+      ↓
+prediction endpoint fails
+```
 
-OpenTelemetry SDKs create spans. Collectors receive and route them. Tempo or Jaeger stores traces. Prometheus handles metrics, and Loki or another logging backend stores recent events. Grafana links the signals.
+Observability should usually not become an unnecessary critical dependency of inference. The collector and SDK should therefore be designed with failure isolation in mind. Now we encounter the same recursive problem as prediction logging. If traces are supposed to tell you what happened, how do you know the trace pipeline itself works Useful telemetry about the tracing infrastructure can include:
 
-This stack fits teams that already operate Kubernetes observability and need control over retention, routing, or backend choice. The platform team now owns more of the service.
+```text
+spans generated
+spans exported
+spans rejected
+collector queue depth
+export failures
+dropped spans
+backend ingestion errors
+sampling rates
+```
 
-Platform engineers upgrade the Collectors and backend. They plan enough ingestion and storage capacity for traffic peaks, and they protect write and query access. Their on-call response also covers a trace pipeline that falls behind.
+Otherwise you may think:
 
-### Use A Central Collector Gateway
+```text
+"No unusual traces exist."
+```
 
-A gateway fits a platform that needs one place for redaction, tail sampling, or routing to several destinations. Tail sampling requires all spans from the same trace to reach the same decision point, so the load-balancing design must understand trace identity.
+when the real explanation is:
 
-The gateway also needs peak-volume tests and its own internal metrics. A tested degraded mode decides which low-value traces can be dropped if the gateway approaches its limit, while the prediction service continues serving requests.
+```text
+"The collector stopped sending traces."
+```
 
-OTLP and World Wide Web Consortium Trace Context provide portable boundaries across these choices. They reduce instrumentation changes during a backend migration. Query languages, pricing, retention, access, and operational behavior still vary by backend.
+A trace backend containing billions of spans is useful only if engineers can find relevant ones. Useful searchable fields may include:
 
-The ownership split should remain clear:
+```text
+service.name
+operation.name
+model.version
+region
+status
+deployment.version
+endpoint
+hardware type
+```
 
-- product teams define meaningful ML spans and safe attributes;
-- platform teams operate collection, routing, sampling, and storage;
-- service owners use traces in alerts, investigations, and release checks;
-- security and privacy owners approve sensitive-data boundaries and retention.
+Then engineers can query:
 
-## The Main Idea
-<!-- section-summary: ML service tracing explains how one prediction travelled through a distributed system and where its path slowed, failed, or changed. -->
+```text
+service = fraud-api
+AND model.version = v42
+AND duration > 1s
+AND status = error
+```
 
-ML service tracing turns one production prediction into a readable journey. A trace contains spans, and each span measures one important operation. Parent-child relationships explain direct cause. Span links describe shared asynchronous work. Context propagation keeps the journey connected across services and queues.
+This turns tracing into an investigation tool rather than a giant archive of timelines. Suppose an alert fires:
 
-The most useful trace stays selective. Automatic instrumentation covers common request and dependency boundaries. A few manual spans reveal model inference, policy, batching, and fallbacks. Safe low-cardinality attributes help responders compare meaningful groups.
+```text
+prediction API p99 > 1 second
+```
 
-OpenTelemetry provides the common instrumentation, OTLP transport, and Collector pipeline. Managed tracing services reduce operational work for ordinary teams. Tempo or Jaeger fits platforms that already own the surrounding observability stack. Sampling controls cost, and the decision record preserves complete model evidence outside the trace store.
+Ideally the monitoring interface lets you move toward:
 
-A trustworthy tracing system survives failure. Teams test span shape, propagation, privacy, sampling, overhead, backend outages, and recovery. During an incident, they use metrics to find the affected population, open one representative trace, follow its critical path, confirm the cause with logs and resource evidence, contain the problem, and verify the original user-facing signal.
+```text
+example slow traces
+```
+
+Then a trace contains:
+
+```text
+trace_id = ABC
+prediction_id = P91
+```
+
+From there:
+
+```text
+Trace
+  │
+  ├── related logs
+  └── prediction record
+```
+
+Conceptually:
+
+```text
+                 Metrics
+                    │
+              "problem exists"
+                    │
+                    ▼
+                  Trace
+            "where did it happen?"
+              │             │
+              ▼             ▼
+            Logs       Prediction record
+      "what error?"    "what model decision?"
+```
+
+This is much more powerful than operating four isolated observability systems. Tracing can accidentally collect sensitive information from:
+
+```text
+HTTP headers
+URLs
+database queries
+RPC payloads
+model prompts
+feature values
+user identifiers
+exception messages
+```
+
+Automatic instrumentation makes this particularly important. It may capture fields developers did not explicitly think about. Tracing design should therefore include:
+
+```text
+redaction
+allowlists
+access controls
+encryption
+retention rules
+sampling
+data classification
+```
+
+The principle is:
+
+Capture enough context to diagnose behaviour without copying sensitive application data into observability infrastructure unnecessarily.
+
+Instead of:
+
+```text
+prompt = "customer's entire confidential document..."
+```
+
+record:
+
+```text
+input_tokens = 4821
+request_type = summarization
+model_version = v7
+```
+
+Instead of:
+
+```text
+raw_features = [...]
+```
+
+record:
+
+```text
+feature_schema_version = 12
+feature_count = 145
+missing_feature_count = 2
+```
+
+Instead of:
+
+```text
+customer_email = ...
+```
+
+you may need no identifying value at all. Good tracing focuses on operational structure rather than indiscriminate payload capture.
+
+## How Should a Team Choose and Test Its Tracing Stack?
+<!-- section-summary: Backend choice follows query, scale, retention, integration, and governance needs, and end-to-end tests must prove context propagation and recovery paths. -->
+
+Backend choice follows query, scale, retention, integration, and governance needs, and end-to-end tests must prove context propagation and recovery paths.
+
+At the architecture level, a tracing stack usually has several parts:
+
+```text
+Instrumentation
+      ↓
+Telemetry SDK
+      ↓
+Collector / pipeline
+      ↓
+Storage / tracing backend
+      ↓
+Query / visualization
+```
+
+When choosing technologies, think about these layers separately. A reasonable design goal is:
+
+```text
+application instrumentation
+        ↓
+vendor-neutral telemetry
+        ↓
+replaceable backend
+```
+
+That is one reason OpenTelemetry has become important. The “best” tracing system depends on operational constraints. Questions include:
+
+```text
+How much trace volume exists
+
+How long must traces be retained
+
+Do we need tail sampling
+
+How quickly must traces become searchable
+
+Can traces correlate with existing logs and metrics
+
+What deployment environment are we using
+
+What data residency rules apply
+
+How much infrastructure can the team operate
+
+What is the cost at expected traffic
+```
+
+A Kubernetes-heavy platform may favour a different operational stack from a fully managed cloud environment. The important architectural principle is more stable than any particular vendor:
+
+Keep instrumentation portable where practical, and choose storage/query infrastructure around operational requirements.
+
+Adding tracing code is not enough. You need to know:
+
+```text
+Was a trace created
+
+Did child spans inherit the right trace ID
+
+Did context cross HTTP/gRPC/message boundaries
+
+Did the collector receive the spans
+
+Did sampling behave correctly
+
+Did sensitive fields get removed
+
+Can engineers find the trace
+
+Are errors marked correctly
+```
+
+A simple test might deliberately send a known request:
+
+```text
+test request
+      │
+      ▼
+prediction API
+      │
+      ▼
+feature service
+      │
+      ▼
+model service
+```
+
+Then verify that the backend displays:
+
+```text
+one trace
+│
+├── prediction API
+├── feature service
+└── model service
+```
+
+rather than three unrelated traces. The happy path is often the least interesting path. Deliberately test something such as:
+
+```text
+feature service timeout
+```
+
+Expected trace:
+
+```text
+Prediction request                ERROR
+│
+├── feature lookup               ERROR
+│     ├── attempt 1              TIMEOUT
+│     └── attempt 2              TIMEOUT
+└── fallback                     SUCCESS
+```
+
+Now verify:
+
+```text
+error status exists
+duration is sensible
+retry is visible
+fallback is visible
+trace remains connected
+```
+
+This proves the system can explain the incidents for which tracing was built.
+
+## How Does Tracing Connect Service Health to Model Health?
+<!-- section-summary: Tracing provides causal evidence that joins service latency and failures to feature, model, release, prediction, and outcome evidence in the wider monitoring system. -->
+
+Tracing provides causal evidence that joins service latency and failures to feature, model, release, prediction, and outcome evidence in the wider monitoring system.
+
+This is perhaps the deepest conceptual distinction. A metric might tell you:
+
+$$
+p99Latency = 1.8s
+$$
+
+but that does not directly explain causality. A trace can reveal:
+
+```text
+database slowed
+      ↓
+feature lookup waited
+      ↓
+prediction waited
+      ↓
+request timed out
+```
+
+Or:
+
+```text
+new model deployed
+      ↓
+inference time increased
+      ↓
+GPU throughput decreased
+      ↓
+queue formed
+      ↓
+latency increased
+```
+
+Traces help reconstruct the **chain of operations through which a symptom emerged**. They do not mathematically prove every causal claim, but they provide much richer causal evidence than aggregate metrics alone. Consider a request with:
+
+```text
+trace_id      = T91
+prediction_id = P82
+model_version = v17
+```
+
+Its trace shows:
+
+```text
+feature retrieval             80 ms
+inference queue              700 ms
+model execution              140 ms
+```
+
+Its prediction record shows:
+
+```text
+score             = 0.92
+decision          = BLOCK
+feature_version   = v31
+```
+
+Its eventual outcome shows:
+
+```text
+actual outcome = legitimate
+```
+
+Now multiple dimensions can be connected:
+
+```text
+Operational behaviour
+      │
+      ├── latency
+      ├── queueing
+      └── dependency calls
+      │
+      ▼
+Prediction event
+      │
+      ├── model version
+      ├── score
+      └── decision
+      │
+      ▼
+Later outcome
+```
+
+This gives you an end-to-end history from **system execution** to **model behaviour** to **real-world feedback**. A useful model is:
+
+```text
+                      USER EXPERIENCE
+                            │
+                            ▼
+                     Service Metrics
+                "Is there a problem?"
+                            │
+                            ▼
+                         Traces
+             "Where did this request go?"
+                            │
+                ┌───────────┴───────────┐
+                ▼                       ▼
+              Logs              Prediction Records
+       "What happened?"       "What did ML decide?"
+                │                       │
+                └───────────┬───────────┘
+                            ▼
+                       Root Cause
+                            │
+                            ▼
+                          Action
+                            │
+                            ▼
+                      Measure Again
+```
+
+Each signal serves a different level of reasoning. A useful starting trace might look like:
+
+```text
+prediction_request
+│
+├── authentication
+├── validate_request
+├── fetch_features
+│    ├── cache_lookup
+│    └── feature_store_request
+│
+├── preprocess
+│
+├── inference
+│    ├── queue_wait
+│    └── model_compute
+│
+├── postprocess
+├── business_rules
+└── serialize_response
+```
+
+Useful attributes could include:
+
+```text
+service version
+model version
+feature version
+region
+endpoint
+request type
+batch size
+hardware class
+status
+```
+
+Then add spans only when real investigations demonstrate that more detail is useful. For each ML request, ask four questions.
+
+### Where can time be spent
+
+```text
+queue
+network
+feature retrieval
+model inference
+database
+postprocessing
+```
+
+These suggest span boundaries.
+
+### Where can disruption occur
+
+```text
+feature service
+model server
+cache
+database
+policy service
+```
+
+These also suggest spans.
+
+### Which boundaries cross ownership or processes
+
+```text
+prediction API → feature service
+prediction API → model server
+```
+
+These need context propagation.
+
+### What information would distinguish one incident pattern from another
+
+```text
+model_version
+region
+batch_size
+hardware_type
+fallback_used
+```
+
+These become safe span attributes. That gives you a trace design driven by investigation rather than instrumentation for its own sake. The deepest reason ML service tracing exists is that **end-to-end behaviour emerges from many smaller operations**. A user sees:
+
+```text
+prediction took 2 seconds
+```
+
+But inside the system:
+
+```text
+request
+   │
+   ▼
+gateway
+   │
+   ▼
+feature lookup
+   │
+   ▼
+GPU queue
+   │
+   ▼
+model inference
+   │
+   ▼
+policy
+   │
+   ▼
+response
+```
+
+A latency metric compresses all of that into:
+
+```text
+2 seconds
+```
+
+A trace expands it back into a causal timeline:
+
+```text
+Prediction request                  2,000 ms
+│
+├── gateway                            20 ms
+├── feature retrieval                 90 ms
+├── GPU queue                       1,650 ms  ← problem
+├── inference                         180 ms
+└── postprocessing                     60 ms
+```
+
+So the central idea is:
+
+**ML service tracing preserves the execution path of an individual request so that engineers can understand where time was spent, where failures occurred, how distributed components interacted, and how operational behaviour relates to a particular model prediction.**
+
+And the larger monitoring-and-feedback loop becomes:
+
+```text
+Production request
+       │
+       ▼
+Metrics detect a symptom
+       │
+       ▼
+Trace identifies the path
+       │
+       ▼
+Logs and prediction records
+provide detailed evidence
+       │
+       ▼
+Root cause identified
+       │
+       ▼
+System or model changed
+       │
+       ▼
+Monitoring verifies improvement
+```
+
+That is tracing from the underlying mechanism: **preserve the path of work so that a complex distributed prediction can later be understood as one coherent story.**
 
 ![ML tracing incident summary from a candidate-route latency alert through one representative trace, gpu-l4-b memory evidence, containment, repair, small canary, and staged release decision](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/tracing-incident-recovery-summary.png)
 
 *Metrics locate the affected population; one trace identifies candidate inference as the slow operation; logs, resources, and release evidence support repair. A small canary must pass the original latency, memory, fallback, and trace checks before staged rollout continues.*
 
-## References
+## Check Your Answers
 
-- [What is OpenTelemetry?](https://opentelemetry.io/docs/what-is-opentelemetry/)
-- [OpenTelemetry components](https://opentelemetry.io/docs/concepts/components/)
-- [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/)
-- [OpenTelemetry context propagation](https://opentelemetry.io/docs/concepts/context-propagation/)
-- [OpenTelemetry sampling](https://opentelemetry.io/docs/concepts/sampling/)
-- [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/concepts/semantic-conventions/)
-- [OpenTelemetry Python](https://opentelemetry.io/docs/languages/python/)
-- [OpenTelemetry Python instrumentation](https://opentelemetry.io/docs/languages/python/instrumentation/)
-- [OpenTelemetry Python instrumentation libraries](https://opentelemetry.io/docs/languages/python/libraries/)
-- [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
-- [OpenTelemetry Collector configuration](https://opentelemetry.io/docs/collector/configuration/)
-- [OpenTelemetry Collector deployment patterns](https://opentelemetry.io/docs/collector/deploy/)
-- [OpenTelemetry Collector processors and stability](https://opentelemetry.io/docs/collector/components/processor/)
-- [OpenTelemetry Collector internal telemetry](https://opentelemetry.io/docs/collector/internal-telemetry/)
-- [OpenTelemetry Collector tail-sampling processor](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/tailsamplingprocessor)
-- [W3C Trace Context](https://www.w3.org/TR/trace-context/)
-- [Grafana Tempo](https://grafana.com/docs/tempo/latest/)
-- [Grafana Tempo with OpenTelemetry Collector](https://grafana.com/docs/tempo/latest/set-up-for-tracing/instrument-send/set-up-collector/otel-collector/)
-- [Jaeger documentation](https://www.jaegertracing.io/docs/latest/)
-- [Google Cloud Trace](https://cloud.google.com/trace/docs)
-- [Azure Monitor OpenTelemetry](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-enable)
-- [Azure Monitor Application Insights FAQ](https://learn.microsoft.com/en-us/azure/azure-monitor/app/application-insights-faq)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[How Does a Trace Explain One ML Request across Services?]{kind="recap"}
+A distributed trace turns one prediction request into a causal timeline of spans, while trace IDs, prediction IDs, metrics, and logs retain distinct jobs.
+:::
+
+:::expand[How Should Trace Context, Spans, and Attributes Cross Boundaries?]{kind="recap"}
+Trace context must propagate across process and protocol boundaries, and spans should mark risk or latency boundaries with bounded, safe attributes.
+:::
+
+:::expand[How Do Automatic Instrumentation, Manual Spans, and Collectors Fit Together?]{kind="recap"}
+Automatic instrumentation covers common frameworks, manual spans expose ML-specific work, and a collector separates applications from storage and routing concerns.
+:::
+
+:::expand[How Should Sampling Preserve the Traces Most Useful for Investigation?]{kind="recap"}
+Random, head, and tail sampling make different tradeoffs; whichever policy is used must preserve complete traces and the rare failures worth investigating.
+:::
+
+:::expand[What Do Online, Release, Batch, and LLM Traces Reveal?]{kind="recap"}
+Concrete traces localize slow requests, release regressions, batch steps, queues, and specialized LLM work while connecting symptoms to the version that caused them.
+:::
+
+:::expand[How Do You Control Span Detail, Overhead, Failure, Searchability, and Sensitive Data?]{kind="recap"}
+Useful tracing balances diagnostic span boundaries against cardinality, privacy, storage, overhead, graceful failure, and the health of the telemetry pipeline itself.
+:::
+
+:::expand[How Should a Team Choose and Test Its Tracing Stack?]{kind="recap"}
+Backend choice follows query, scale, retention, integration, and governance needs, and end-to-end tests must prove context propagation and recovery paths.
+:::
+
+:::expand[How Does Tracing Connect Service Health to Model Health?]{kind="recap"}
+Tracing provides causal evidence that joins service latency and failures to feature, model, release, prediction, and outcome evidence in the wider monitoring system.
+:::

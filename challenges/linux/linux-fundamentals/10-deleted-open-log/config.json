@@ -1,0 +1,24 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/mounts-info": { "type": "file", "content": "/dev/vda1 ext4 40G 36.8G 1.2G 41943040 38587596 1258291 92% / 2621440 240000 2381440 10% rw,relatime\n" },
+    "/var/log/syslog": { "type": "file", "content": "system healthy\n", "size": 125829120 },
+    "/var/log/orders-api-current.log": { "type": "file", "content": "new log opened\n", "size": 4096 }
+  },
+  "customCommands": {
+    "lsof": {
+      "stdout": "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NLINK NODE NAME\nnode 4242 app 7w REG 0,1 8589934592 0 99181 /var/log/orders-api.log (deleted)\n",
+      "exitCode": 0
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["92%", "120.0M", "node", "4242", "/var/log/orders-api.log (deleted)"],
+    "requireCommands": ["df", "du", "lsof"],
+    "requireCommandPatterns": ["^lsof\\s+\\+L1$"]
+  }
+}

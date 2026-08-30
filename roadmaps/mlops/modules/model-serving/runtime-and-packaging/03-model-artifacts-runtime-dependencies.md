@@ -9,424 +9,2148 @@ id: "article-mlops-model-serving-model-artifacts-runtime-dependencies"
 
 ## Table of Contents
 
-1. [What Runtime Compatibility Means](#what-runtime-compatibility-means)
-2. [Define The Request And Model Contracts First](#define-the-request-and-model-contracts-first)
-3. [Choose How The Model Is Serialized And Loaded](#choose-how-the-model-is-serialized-and-loaded)
-4. [Track Python Packages And Native Libraries Together](#track-python-packages-and-native-libraries-together)
-5. [Match The Model Format To A Supported Runtime](#match-the-model-format-to-a-supported-runtime)
-6. [Check Every Layer From The Model Runtime To The Hardware](#check-every-layer-from-the-model-runtime-to-the-hardware)
-7. [Test Loading, Warm-Up, And Readiness](#test-loading-warm-up-and-readiness)
-8. [The Three Ways Runtime Compatibility Fails](#the-three-ways-runtime-compatibility-fails)
-9. [Keep Supported Model And Runtime Combinations Small](#keep-supported-model-and-runtime-combinations-small)
-10. [Test Upgrades As New Supported Combinations](#test-upgrades-as-new-supported-combinations)
-11. [Record The Exact Model, Runtime, And Hardware Release](#record-the-exact-model-runtime-and-hardware-release)
-12. [Find The First Incompatible Layer](#find-the-first-incompatible-layer)
-13. [Main Idea](#main-idea)
-14. [References](#references)
+1. [Which Contracts Must Align for a Model Artifact to Run?](#which-contracts-must-align-for-a-model-artifact-to-run)
+2. [How Do Packages, Native Libraries, CPUs, GPUs, Resources, and Numerics Affect Compatibility?](#how-do-packages-native-libraries-cpus-gpus-resources-and-numerics-affect-compatibility)
+3. [What Are the Three Main Runtime Compatibility Failure Modes?](#what-are-the-three-main-runtime-compatibility-failure-modes)
+4. [How Do Startup, Warmup, Behaviour Tests, and a Support Matrix Prove a Combination?](#how-do-startup-warmup-behaviour-tests-and-a-support-matrix-prove-a-combination)
+5. [How Do Performance, Quantization, Custom Operators, Shapes, Containers, and Hardware Enter the Release Tuple?](#how-do-performance-quantization-custom-operators-shapes-containers-and-hardware-enter-the-release-tuple)
+6. [How Should CI and Debugging Find the First Incompatible Layer?](#how-should-ci-and-debugging-find-the-first-incompatible-layer)
+7. [How Do Compatibility, Reproducibility, Portability, and Rollback Differ?](#how-do-compatibility-reproducibility-portability-and-rollback-differ)
+8. [Which Layered Invariants Define the Complete Compatible Serving System?](#which-layered-invariants-define-the-complete-compatible-serving-system)
+9. [Check Your Answers](#check-your-answers)
 
-## What Runtime Compatibility Means
-<!-- section-summary: Runtime compatibility means that a specific model release preserves its intended behavior and operating envelope throughout the real serving path. -->
+A model file loads on a CPU laptop, fails on one GPU host, and runs slowly on another even though all three machines have the same Python package version. The difference may live in the model format, native ABI, driver, hardware capability, operator support, memory, or numerical fast path.
 
-A model file can open successfully while a changed preprocessing library produces different inputs or an unsupported hardware kernel changes execution. **Runtime compatibility** means that an approved model works as intended in the environment that serves it.
-Opening the model file proves only the artifact-to-loader boundary.
-The service must accept the right request, reproduce the reviewed preprocessing, and execute the model on supported software and hardware.
-It must also return an acceptable result and meet its startup, memory, and latency limits.
+**Runtime compatibility** means that every layer needed for the real prediction path can work together and preserve required behaviour. “The file loads” is only the first rung of a ladder that also includes execution, semantics, performance, capacity, and the public API contract.
 
-This is why compatibility bugs can be deceptive.
-A model may fail loudly because a native library is missing.
-It may also load cleanly while a new tokenizer changes every input token.
-An ONNX model may return correct predictions through the CPU even though the release expected GPU latency.
-Every case has a different repair.
+Use these questions to test and debug the complete model-runtime-hardware combination rather than relying on package names alone:
 
-You can think of compatibility as a chain of agreements. Each boundary translates one representation into the next:
+1. **Which Contracts Must Align for a Model Artifact to Run?**
+2. **How Do Packages, Native Libraries, CPUs, GPUs, Resources, and Numerics Affect Compatibility?**
+3. **What Are the Three Main Runtime Compatibility Failure Modes?**
+4. **How Do Startup, Warmup, Behaviour Tests, and a Support Matrix Prove a Combination?**
+5. **How Do Performance, Quantization, Custom Operators, Shapes, Containers, and Hardware Enter the Release Tuple?**
+6. **How Should CI and Debugging Find the First Incompatible Layer?**
+7. **How Do Compatibility, Reproducibility, Portability, and Rollback Differ?**
+8. **Which Layered Invariants Define the Complete Compatible Serving System?**
+
+## Which Contracts Must Align for a Model Artifact to Run?
+<!-- section-summary: Compatibility requires the request, serialization, loader, operators, runtime, libraries, hardware, resources, and response semantics to agree across every link. -->
+
+A model format is useful only when every layer from request to hardware can satisfy the assumptions encoded in that artifact.
+
+Runtime compatibility in model serving becomes much easier to reason about if we start with one question:
+
+**What must be true for a saved model to execute on a particular serving machine and preserve the prediction behaviour we intended?**
+
+A model does not run directly on "a computer." It runs through a stack:
+
+```text
+request
+   ↓
+serving application
+   ↓
+preprocessing / tokenizer
+   ↓
+model representation
+   ↓
+model runtime / framework
+   ↓
+native libraries
+   ↓
+accelerator runtime
+   ↓
+device driver
+   ↓
+CPU / GPU / accelerator
+```
+
+If any adjacent pair cannot communicate correctly, the model may fail. And sometimes the dangerous failure is not:
+
+```text
+crash
+```
+
+but:
+
+```text
+runs successfully
+produces wrong predictions
+```
+
+That is the core runtime-compatibility problem. A weak definition is:
+
+"The model file loads."
+
+That's not enough. Suppose:
+
+```text
+model loads       ✓
+GPU initializes   ✓
+inference runs    ✓
+```
+
+but a tokenizer version changed and produces different token IDs. The service is technically executable but semantically wrong. A stronger definition is:
+
+```text
+compatible(model, runtime)
+=
+can_load
+AND can_execute
+AND preserves_required_semantics
+AND satisfies_resource_requirements
+```
+
+So runtime compatibility means:
+
+**The complete serving environment can reconstruct and execute the model's intended prediction function within the behaviour and numerical tolerances the application requires.**
+
+That includes much more than Python versions. Suppose training defines:
+
+$$
+y =
+P_{out}
+(
+M_\theta(
+P_{in}(x)
+)
+)
+$$
+
+where:
+
+* $$x$$ is the incoming request,
+* $$P_{in}$$ is preprocessing,
+* $$M_\theta$$ is the trained model,
+* $$P_{out}$$ is postprocessing.
+
+Serving attempts to reconstruct that same computation:
+
+```text
+raw request
+     ↓
+same input interpretation
+     ↓
+compatible preprocessing
+     ↓
+compatible model execution
+     ↓
+compatible postprocessing
+     ↓
+same meaning of output
+```
+
+Therefore compatibility is not merely:
+
+```text
+Does PyTorch understand weights.pt
+```
+
+It is closer to:
+
+```text
+Does the serving stack implement the function we approved
+```
+
+Suppose a model expects:
+
+```text
+input:
+    float32
+    shape [batch, 3, 224, 224]
+    RGB
+    normalized with specific mean/std
+```
+
+A runtime capable of executing the model is useless if the serving application feeds:
+
+```text
+uint8
+[batch, 224, 224, 3]
+BGR
+unnormalized
+```
+
+So before asking:
+
+Which runtime can execute this model
+
+establish:
+
+```text
+What does the model consume
+What does it produce
+What preprocessing does it assume
+What postprocessing does it assume
+```
+
+For a language model, that might mean:
+
+```text
+tokenizer family/version
+vocabulary size
+special token IDs
+chat template
+maximum context
+tensor dtypes
+attention mask semantics
+generation configuration
+```
+
+For a tabular model:
+
+```text
+feature names
+feature ordering
+categorical encodings
+missing-value representation
+scaling
+output meanings
+```
+
+Compatibility begins with contracts, not package installation. Consider this stack:
+
+```text
+┌──────────────────────────────┐
+│ Serving API                  │
+├──────────────────────────────┤
+│ Pre/postprocessing code      │
+├──────────────────────────────┤
+│ Python packages              │
+├──────────────────────────────┤
+│ Model runtime/framework      │
+├──────────────────────────────┤
+│ Native libraries            │
+├──────────────────────────────┤
+│ Accelerator runtime         │
+├──────────────────────────────┤
+│ Device driver               │
+├──────────────────────────────┤
+│ Hardware                     │
+└──────────────────────────────┘
+```
+
+Every layer makes assumptions about the one below it.
+
+For example:
+
+```text
+your code
+    assumes API provided by
+PyTorch
+    assumes native libraries
+CUDA runtime
+    assumes compatible
+GPU driver
+    assumes compatible
+GPU hardware
+```
+
+Runtime compatibility is therefore a **chain of contracts**. Suppose:
+
+```text
+Model → PyTorch        compatible
+PyTorch → CUDA         compatible
+CUDA → driver          compatible
+driver → GPU           compatible
+```
+
+Then the chain may work. But one broken link:
+
+```text
+Model → PyTorch        compatible
+PyTorch → CUDA         compatible
+CUDA → driver          ✗
+```
+
+means:
+
+```text
+whole serving stack    ✗
+```
+
+This leads to a powerful debugging principle:
+
+> **When a model does not run, find the first boundary at which the assumptions of the upper layer are not satisfied by the lower layer.**
+
+Don't debug "the whole GPU stack" as one mysterious object. Consider saving:
+
+```text
+model artifact
+```
+
+What exactly is inside it? There are several possibilities.
+
+### Learned state only
+
+```text
+weights
+```
+
+Then serving must separately reconstruct:
+
+```text
+architecture
+configuration
+```
+
+before applying those weights.
+
+### Computation graph plus parameters
+
+The representation might capture more of:
+
+```text
+operators
+graph structure
+weights
+```
+
+Now the target runtime has to support every represented operator.
+
+### Serialized language objects
+
+The artifact may assume:
+
+```text
+specific Python classes
+specific module names
+specific package behaviour
+```
+
+Now compatibility becomes tightly coupled to the software environment. So the serialization format determines the loading contract. Suppose your artifact contains:
+
+```text
+layer1.weight
+layer1.bias
+layer2.weight
+...
+```
+
+The serving application does:
+
+```python
+model = MyArchitecture(config)
+model.load_state_dict(weights)
+```
+
+The artifact assumes that serving still knows what:
+
+```text
+MyArchitecture
+```
+
+means. If training used:
+
+```python
+class MyArchitectureV1:
+    ...
+```
+
+but deployment now instantiates:
+
+```python
+class MyArchitectureV2:
+    ...
+```
+
+the tensor names might even load successfully while behaviour changes. So compatibility includes:
+
+```text
+weights
+↔
+architecture implementation
+```
+
+not merely:
+
+```text
+weights
+↔
+framework
+```
+
+Suppose a model is exported into an intermediate representation:
+
+```text
+model graph
+   ├── MatMul
+   ├── Add
+   ├── LayerNorm
+   ├── CustomOperatorX
+   └── ...
+```
+
+A target runtime can execute it only if it supports the required semantics.
+
+Conceptually:
+
+```text
+Model requires operators:
+{A, B, C, D}
+
+Runtime supports:
+{A, B, C}
+
+D missing
+→ incompatible
+```
+
+Sometimes an operator exists but only for:
+
+```text
+certain dtypes
+certain tensor dimensions
+certain hardware backends
+certain format versions
+```
+
+So operator support is not always binary. Suppose an exporter writes:
+
+```text
+format version 17
+```
+
+but your serving runtime only understands:
+
+```text
+versions ≤ 15
+```
+
+The model may fail before inference begins. This is why the real relationship is:
+
+```text
+model format/version
+        ↓
+runtime implementation/version
+```
+
+not simply:
+
+```text
+ONNX model → ONNX runtime
+```
+
+or:
+
+```text
+framework model → framework
+```
+
+Names alone do not establish compatibility. Versions and features matter.
+
+## How Do Packages, Native Libraries, CPUs, GPUs, Resources, and Numerics Affect Compatibility?
+<!-- section-summary: Python packages sit above ABI, architecture, drivers, accelerators, memory, numerical behaviour, and workload limits that can alter execution or decisions. -->
+
+The visible Python environment is one part of a deeper stack that includes native interfaces, architecture, accelerators, resources, and numerical paths.
+
+Suppose:
+
+```text
+pip freeze
+```
+
+shows:
+
+```text
+torch==X
+numpy==Y
+fastapi==Z
+```
+
+You might think the runtime is fully specified. But packages such as numerical and ML frameworks often contain or call native code:
+
+```text
+Python
+  ↓
+C / C++
+  ↓
+BLAS
+  ↓
+CUDA / ROCm / other libraries
+```
+
+So two machines can have identical Python package versions and still behave differently because their native environments differ.
+
+For example:
+
+```text
+Machine A:
+same Python packages
+native library A
+CPU features X
+
+Machine B:
+same Python packages
+native library B
+CPU features Y
+```
+
+Compatibility must be considered across both worlds. At machine-code boundaries, libraries need to agree on things such as:
+
+```text
+symbol names
+calling conventions
+memory layouts
+binary interfaces
+```
+
+This is an ABI: an Application Binary Interface. At the Python level you may see:
+
+```python
+import some_library
+```
+
+but underneath it may dynamically load:
+
+```text
+libsomething.so
+```
+
+If the expected binary interface doesn't exist, you may encounter errors like:
+
+```text
+undefined symbol
+cannot open shared object
+wrong ELF class
+library version not found
+```
+
+Those aren't really "Python errors." They reveal incompatibility lower in the stack. Suppose a binary was built for:
+
+```text
+x86-64
+```
+
+and you deploy to:
+
+```text
+ARM64
+```
+
+The source code might be portable. The binary is not necessarily portable. Even within one CPU architecture, optimized libraries might assume instructions such as:
+
+```text
+AVX
+AVX2
+AVX-512
+```
+
+If the target CPU lacks the expected instruction set:
+
+```text
+program may fail
+```
+
+or a different slower implementation may be selected. So "CPU deployment" does not describe one uniform environment. A simplified GPU stack is:
+
+```text
+model
+   ↓
+framework / inference runtime
+   ↓
+CUDA userspace libraries
+   ↓
+NVIDIA driver
+   ↓
+GPU hardware
+```
+
+Or with another accelerator ecosystem:
+
+```text
+model
+   ↓
+runtime
+   ↓
+accelerator software stack
+   ↓
+driver
+   ↓
+hardware
+```
+
+Each layer has compatibility requirements. Therefore:
+
+```text
+model works on GPU
+```
+
+is far too vague. The useful question is:
+
+**Which model/runtime/library/driver/device combination was tested?**
+
+This is an especially useful distinction in containerized serving. Your container might contain:
+
+```text
+PyTorch
+CUDA userspace libraries
+cuDNN
+other GPU libraries
+```
+
+while the host supplies:
+
+```text
+kernel driver
+physical GPU
+```
+
+Conceptually:
+
+```text
+Container
+┌─────────────────────┐
+│ PyTorch             │
+│ CUDA runtime        │
+│ cuDNN               │
+└──────────┬──────────┘
+           │
+           ▼
+Host
+┌─────────────────────┐
+│ NVIDIA driver       │
+└──────────┬──────────┘
+           ▼
+         GPU
+```
+
+So an identical Docker image can work on one host and fail on another. Docker does not package the entire accelerator stack. Suppose a model expects efficient:
+
+```text
+BF16
+```
+
+or:
+
+```text
+FP8
+```
+
+execution. One accelerator supports it directly. Another does not. The runtime might:
+
+```text
+reject the model
+```
+
+or:
+
+```text
+fall back to another precision
+```
+
+or:
+
+```text
+run a slower implementation
+```
+
+These represent three very different operational outcomes. Therefore compatibility sometimes means more than:
+
+```text
+can technically execute
+```
+
+You may require:
+
+```text
+can execute using the intended kernel/precision/performance mode
+```
+
+Suppose a model artifact and runtime are logically compatible. But:
+
+```text
+model weights       = 38 GB
+peak KV cache       = 30 GB
+workspace           = 8 GB
+GPU VRAM            = 40 GB
+```
+
+This model cannot execute under the intended workload. So:
+
+```text
+software compatible
+```
+
+does not imply:
+
+```text
+operationally compatible
+```
+
+A useful predicate is:
+
+```text
+compatible(model, environment, workload)
+```
+
+because memory usage may depend on:
+
+```text
+batch size
+sequence length
+number of concurrent requests
+precision
+KV-cache configuration
+image size
+```
+
+Imagine:
+
+```text
+batch=1, sequence=512
+```
+
+works. But:
+
+```text
+batch=16, sequence=8192
+```
+
+causes an out-of-memory failure. The runtime is capable of executing the model, but not under every permitted request. So you need to know:
+
+```text
+model limit
+runtime limit
+deployment resource limit
+API input limit
+```
+
+and make them agree.
+
+For example:
+
+```text
+API permits max context = 32k
+         ↓
+serving runtime must support 32k
+         ↓
+GPU memory budget must support 32k
+```
+
+If they don't line up, the API advertises a capability the deployment cannot provide. Suppose CPU inference returns:
+
+```text
+0.9134721
+```
+
+while GPU inference returns:
+
+```text
+0.9134718
+```
+
+Those may be entirely acceptable. Floating-point arithmetic is finite-precision arithmetic. Things such as:
+
+```text
+operation ordering
+parallel reductions
+kernel implementation
+precision
+hardware
+compiler optimisation
+```
+
+can produce small differences. Therefore compatibility should rarely mean:
+
+```text
+bit-for-bit identical
+```
+
+unless you explicitly require it. Instead define tolerances.
+
+For example:
+
+$$
+|y_\text{new}-y_\text{reference}|<\epsilon
+$$
+
+Suppose classification uses:
+
+```text
+approve if score >= 0.500000
+```
+
+and two runtimes produce:
+
+```text
+Runtime A: 0.500001
+Runtime B: 0.499999
+```
+
+Numerically:
+
+```text
+almost identical
+```
+
+Semantically:
+
+```text
+opposite decisions
+```
+
+So runtime validation should understand the downstream use of predictions. This is particularly important around:
+
+```text
+thresholds
+argmax ties
+beam-search decisions
+sampling
+numerically unstable operations
+```
+
+A meaningful compatibility test is based on required behaviour, not arbitrary decimal equality. Suppose an LLM generates text using:
+
+```text
+temperature > 0
+sampling enabled
+```
+
+Then even on the same machine:
+
+```text
+same input
+```
+
+can legitimately produce:
+
+```text
+different outputs
+```
+
+So you cannot test runtime compatibility by asserting:
+
+```text
+generated_text == saved_generated_text
+```
+
+unless you deliberately configure deterministic inference. Instead you might test lower-level invariants:
+
+```text
+tokenizer IDs match
+logit dimensions match
+deterministic decoding mode gives expected result
+outputs contain finite values
+known first-token logits are within tolerance
+```
+
+Again, the test must match the mathematical properties of the model.
 
 ![Seven compatibility boundaries from request contract through preprocessing, model artifact, runtime, native libraries, and hardware, plus the operating-envelope checks required for acceptance.](/content-assets/articles/article-mlops-model-serving-model-artifacts-runtime-dependencies/runtime-compatibility-chain.png)
 
 *A model is compatible only when every translation boundary preserves meaning and the complete service still meets its output, startup, memory, latency, and concurrency targets.*
 
-```mermaid
-flowchart TD
-    Request["Serving Request<br/>(fields, units, and client meaning)"] --> Preprocessing["Preprocessing Contract<br/>(validation, transformation, and tokenization)"]
-    Preprocessing --> Signature["Model Signature<br/>(names, types, shapes, and outputs)"]
-    Signature --> Artifact["Model Artifact<br/>(serialized graph, weights, code, and metadata)"]
-    Artifact --> Runtime["Serving Runtime<br/>(loader, operators, and model server)"]
-    Runtime --> Libraries["Native Libraries<br/>(compiled numerical and accelerator code)"]
-    Libraries --> Hardware["Execution Hardware<br/>(CPU architecture or accelerator lane)"]
-    Hardware --> Service["Ready Service<br/>(correct behavior inside the operating envelope)"]
+## What Are the Three Main Runtime Compatibility Failure Modes?
+<!-- section-summary: A combination may fail to load, load but fail during execution, or run successfully while changing behaviour, latency, or capacity. -->
+
+Those boundaries fail in three distinct ways, ranging from an immediate load error to a silent semantic change.
+
+A useful failure taxonomy is:
+
+```text
+1. load failure
+2. execution failure
+3. semantic failure
 ```
 
-An **operating envelope** is the range of conditions the release has proved it can handle.
-It includes model-load time, peak memory, concurrency, latency, throughput, and failure behavior.
-A prediction can be numerically correct and still be incompatible with production if one request takes four seconds instead of the accepted two hundred milliseconds.
+They occur at increasingly dangerous levels. Examples:
 
-Compatibility work therefore produces three things. First, the team defines each boundary. Second, CI tests a small set of supported combinations. Third, an immutable release record captures the exact combination that passed.
-
-## Define The Request And Model Contracts First
-<!-- section-summary: Request validation, preprocessing, and the model signature must agree on both data structure and the real-world meaning of every value. -->
-
-The compatibility chain starts with the request the service accepts and the prediction interface the model expects. These two contracts establish names, types, shapes, units, missing-value rules, and output meaning before a runtime opens the model file.
-A client sends a JSON object, event, or batch row.
-**Preprocessing** turns that input into the dataframe or tensors consumed by the model.
-A **model signature** describes the expected input and output names, data types, and shapes.
-Some signature systems also describe inference parameters and optional fields.
-
-### Check Data Shape And Meaning Separately
-
-Structural compatibility asks whether the values fit the declared interface. A tensor may need the shape `[-1, 512]` and the type `int64`. MLflow model signatures can validate required fields and supported type conversions. They can also describe tensor shapes, outputs, and inference parameters for supported model workflows.
-
-Semantic compatibility asks whether those values still mean the same thing. A floating-point field can contain dollars during training and cents in production. Two tokenizers can both return an `int64` tensor of shape `[1, 512]` while assigning different IDs to the same sentence. A timestamp can retain its data type while changing from UTC to local time.
-
-```mermaid
-flowchart TD
-    Payload["Client Payload<br/>(raw values from the calling system)"] --> Validation["Request Schema<br/>(required fields, types, and limits)"]
-    Validation --> Transformation["Preprocessing Version<br/>(units, categories, text, and missing values)"]
-    Transformation --> Tensor["Model Input<br/>(ordered columns or named tensors)"]
-    Tensor --> Signature["Saved Signature<br/>(accepted structure and output contract)"]
-    Signature --> Fixture["Behavior Fixture<br/>(known transformation and prediction result)"]
+```text
+unsupported serialization version
+missing class
+missing shared library
+incorrect architecture
+weight shape mismatch
+unknown operator
+corrupt artifact
 ```
 
-### Keep A Real Serving Example
+This is usually the easiest failure to detect. You get an explicit error.
 
-MLflow can save an input example and infer or store a signature alongside a model. The input example gives developers a concrete valid payload, while the signature gives the serving layer a machine-readable schema:
+```text
+startup
+   ↓
+load
+   ↓
+ERROR
+```
+
+The service should remain unready. Examples:
+
+```text
+unsupported GPU kernel
+insufficient VRAM
+operator unsupported for dtype
+driver incompatibility
+unexpected tensor shape
+runtime compiler failure
+```
+
+The lifecycle becomes:
+
+```text
+load        ✓
+warmup      ✗
+```
+
+This is why:
+
+**Successful deserialization is not enough to declare readiness.**
+
+A representative inference needs to run. This is the most dangerous class. Examples:
+
+```text
+wrong tokenizer
+different normalization
+changed feature ordering
+incorrect label map
+runtime operator semantics changed
+unexpected precision change
+postprocessing changed
+```
+
+Now:
+
+```text
+model loads      ✓
+warmup runs      ✓
+requests return  ✓
+predictions      ✗
+```
+
+Infrastructure health checks may report:
+
+```text
+green
+```
+
+while the model is functionally wrong. Therefore compatibility validation must include behavioural tests. Think of progressively stronger guarantees:
+
+```text
+artifact exists
+      ↓
+artifact can be parsed
+      ↓
+architecture can be constructed
+      ↓
+weights can be loaded
+      ↓
+runtime can execute operators
+      ↓
+hardware can execute kernels
+      ↓
+resources are sufficient
+      ↓
+reference inputs execute
+      ↓
+predictions match required behaviour
+      ↓
+performance meets serving requirements
+```
+
+Every level is stronger than the previous one. Saying:
+
+```text
+"We tested that it loads."
+```
+
+only reaches the middle of the ladder.
+
+## How Do Startup, Warmup, Behaviour Tests, and a Support Matrix Prove a Combination?
+<!-- section-summary: Startup loading, representative warmup, end-to-end behavioural checks, explicit requirements, and a small tested matrix turn compatibility into evidence. -->
+
+A release needs evidence for each mode, which makes loading, warmup, representative behaviour, and a documented support matrix part of CI.
+
+Suppose your HTTP server starts first:
+
+```text
+Uvicorn listening
+        ↓
+health endpoint returns 200
+        ↓
+traffic arrives
+        ↓
+model loading begins
+        ↓
+model fails
+```
+
+That's backwards. Model initialization belongs before readiness. A better sequence:
+
+```text
+container starts
+      ↓
+verify environment
+      ↓
+load model
+      ↓
+run warmup
+      ↓
+run compatibility checks
+      ↓
+READY
+      ↓
+traffic
+```
+
+Readiness means the complete serving stack has passed its requirements. Warm-up is often discussed purely as performance optimisation:
+
+```text
+first inference slow
+→ run dummy inference first
+```
+
+But it has another function. It forces execution through layers that loading may not touch:
+
+```text
+model graph
+   ↓
+operator selection
+   ↓
+kernel loading/compilation
+   ↓
+device memory allocation
+   ↓
+hardware execution
+```
+
+So a warm-up can reveal:
+
+```text
+missing kernels
+unsupported operations
+GPU OOM
+compiler problems
+bad device mappings
+```
+
+before real traffic arrives. Suppose production allows:
+
+```text
+sequence length up to 32,000
+```
+
+but your warm-up uses:
+
+```text
+sequence length = 1
+```
+
+It proves almost nothing about peak memory behaviour. You may want several startup tests:
+
+```text
+minimal inference
+representative inference
+resource-boundary inference
+```
+
+Not necessarily the absolute worst-case request—startup should remain reasonable—but enough to exercise important execution paths. A very strong compatibility check is:
+
+```text
+known raw input
+      ↓
+production preprocessing
+      ↓
+loaded model
+      ↓
+production postprocessing
+      ↓
+expected response
+```
+
+Instead of merely:
 
 ```python
-import mlflow
-from mlflow.models import infer_signature
-
-serving_rows = validation_rows[["account_age_days", "amount_usd", "country_code"]]
-serving_outputs = model.predict_proba(serving_rows)
-signature = infer_signature(serving_rows, serving_outputs)
-
-with mlflow.start_run():
-    mlflow.sklearn.log_model(
-        sk_model=model,
-        name="model",
-        signature=signature,
-        input_example=serving_rows.iloc[:2],
-    )
+model(dummy_tensor)
 ```
 
-That code records structure. A separate fixture should preserve meaning. For example, the fixture can state that `amount_usd: 125.50` reaches preprocessing as `125.50`, an absent country follows the reviewed missing-value rule, and one known text sample produces an approved token sequence. The test should also compare the model result with a saved expectation or tolerance.
+This catches:
 
-Boundary cases deserve their own fixtures. Include missing values, new categories, maximum input sizes, older supported client payloads, and values close to important decision thresholds. The endpoint versioning policy then determines whether an incompatible client receives a clear rejection or routes to a retained contract version.
-
-## Choose How The Model Is Serialized And Loaded
-<!-- section-summary: The artifact format decides which weights, graph operations, Python code, metadata, and library assumptions cross from training into serving. -->
-
-**Serialization** converts a trained model and its supporting state into files that another process can load. Different formats carry different kinds of state.
-
-A weights-only artifact usually needs application code to reconstruct the model. A portable graph such as ONNX stores operators and tensors for a compatible runtime. A Python-object format may store class references or executable behavior and depend closely on Python packages. A TensorRT engine contains hardware-oriented compiled work and has narrower platform constraints than a general graph.
-
-The format choice creates a compatibility consequence. A Python object may depend on the same module path and library behavior used during training. An ONNX export depends on the chosen opset, supported operators, exporter behavior, and the target ONNX Runtime version. A TensorRT plan can depend on GPU compute capability and the TensorRT build environment.
-
-Serialization also creates a trust boundary. Some formats can execute code during loading. Production should load artifacts only from a controlled, immutable store with restricted writers and verified digests. This control protects the loading process; it does not prove that the loaded model behaves correctly.
-
-The release artifact should carry or reference the pieces needed to interpret it:
-
-- The model file and its cryptographic digest identify the exact bytes.
-- The signature and input example describe the public model interface.
-- Preprocessing, tokenizer, label map, and postprocessing versions preserve meaning around the model.
-- Exporter, framework, and format metadata identify important loading assumptions.
-- A small behavior fixture proves that the target runtime can reproduce an accepted result.
-
-If any of those pieces changes, the compatibility result needs a new evaluation. Reusing a model version label after replacing its tokenizer hides a behavioral change behind a stable name.
-
-## Track Python Packages And Native Libraries Together
-<!-- section-summary: A Python dependency lock identifies package versions, while wheels, native libraries, ABIs, and CPU architecture determine whether compiled code can run. -->
-
-Python makes model code look portable because the import statement stays the same across machines. The imported package may still depend on compiled code, operating-system libraries, CPU instructions, or accelerator libraries that differ across hosts.
-Many ML packages contain compiled code underneath that Python interface.
-NumPy, PyTorch, ONNX Runtime, tokenizers, and image libraries commonly load native binaries.
-
-### Understand What Wheel Platform Tags Mean
-
-A **wheel** is a built Python package, usually a file ending in `.whl`. Pure-Python wheels can work across many systems. Wheels with compiled extensions contain platform-specific binaries. Their filenames carry compatibility tags for the Python implementation, the **ABI**, and the platform.
-
-An **ABI**, or application binary interface, is the low-level agreement that compiled components use to call each other.
-It covers details such as symbol names, binary data layout, and calling conventions.
-Two libraries can expose similar source-level APIs and still fail at runtime because their compiled ABIs do not match.
-
-A **native library** is compiled operating-system code, often loaded from a `.so` file on Linux or a `.dll` file on Windows.
-A Python wheel may depend on further native libraries such as glibc, OpenMP, CUDA, or cuDNN.
-The package manager can install the wheel successfully while the dynamic loader later fails to find one of those dependencies.
-
-```mermaid
-flowchart TD
-    Lock["Python Lockfile<br/>(package names, versions, and resolved dependencies)"] --> Wheel["Selected Wheel<br/>(Python, ABI, and platform tags)"]
-    Wheel --> Extension["Native Extension<br/>(compiled code imported by Python)"]
-    Extension --> System["System Libraries<br/>(glibc, OpenMP, image, and numerical libraries)"]
-    System --> Architecture["CPU Architecture<br/>(instruction set used by the running node)"]
+```text
+tokenizer incompatibility
+input preprocessing differences
+model runtime problems
+label mapping mistakes
+postprocessing changes
 ```
 
-### Why A Locked Environment Can Fail On Another Machine
+It's an end-to-end semantic check. Don't rely on:
 
-Suppose two images use the same Python lock. The first image targets `linux/amd64`; the second targets `linux/arm64`. An installer selects a wheel compatible with each platform, so the downloaded files can differ even though the package names and versions match. A package may also lack an ARM wheel and fall back to a source build or fail installation.
+"I think this model needs CUDA 13-ish."
 
-Copying an `x86_64` virtual environment directly into an ARM image is more direct evidence of the problem. Python source remains readable, but a compiled extension cannot execute on the wrong architecture. The import fails before the model loader has a chance to inspect the artifact.
+Instead record metadata conceptually like:
 
-The production identity therefore includes the built image digest and target platform. Store dependency locks for reproducibility, record wheel hashes where the build system supports them, and build each architecture deliberately. CI should run imports and model fixtures inside the final image on the intended architecture.
+```text
+model:
+  artifact_digest: ...
+  format: ...
+  format_version: ...
+  architecture: ...
 
-Training and serving can still use different environments. An exported graph may create a deliberate boundary between a large training image and a smaller inference runtime. The exporter-to-runtime pair needs comparison tests; copying the training environment does not provide stronger evidence by itself.
+runtime:
+  implementation: ...
+  supported_versions: ...
 
-## Match The Model Format To A Supported Runtime
-<!-- section-summary: The exported format, operator set, runtime engine, model server, repository layout, and protocol must form a documented supported pair. -->
+software:
+  Python: ...
+  framework: ...
+  tokenizer: ...
 
-A **runtime engine** loads a model representation and executes its operations. ONNX Runtime is one engine for ONNX graphs. TensorRT executes optimized NVIDIA inference engines. Framework libraries can execute their own native formats.
+hardware:
+  device_family: ...
+  minimum_memory: ...
+  required_features: ...
 
-A **model server** is the long-running process around an engine. It exposes HTTP or gRPC APIs, manages model loading, applies batching and concurrency rules, reports health, and exports telemetry. A FastAPI application can serve as a custom Python model server. NVIDIA Triton is a specialized server with multiple backends. KServe is a Kubernetes serving layer that selects configured runtimes for supported model formats or custom containers.
-
-### Match Format, Operators, And Engine
-
-An ONNX file carries an opset version and a graph of operators. The selected ONNX Runtime release must support that opset and every required operator type. A custom operator adds another binary and version boundary. Successful export only proves that the exporter created a file; target-runtime tests prove that the selected engine can execute it.
-
-Triton adds its own contract. Its model repository uses model directories, numeric version directories, model files, and configuration understood by the chosen backend. Triton's ONNX backend ultimately supports the ONNX models handled by the ONNX Runtime version shipped in that Triton release. A valid ONNX file in the wrong repository layout remains undeployable.
-
-```mermaid
-flowchart TD
-    Export["Exported Artifact<br/>(format, opset, operators, and model digest)"] --> Engine["Runtime Engine<br/>(loader and implemented operators)"]
-    Engine --> Backend["Server Backend<br/>(engine integration and model configuration)"]
-    Backend --> Server["Model Server<br/>(protocol, batching, lifecycle, and telemetry)"]
-    Server --> Platform["Serving Platform<br/>(routing, scaling, identity, and rollout)"]
+behaviour:
+  reference_tests: ...
+  numerical_tolerance: ...
 ```
 
-### Publish Supported Pairs
+Then compatibility becomes partially machine-checkable. Imagine your team claims to support:
 
-The platform should publish a few supported pairs rather than advertise every installable combination. One lane might use an MLflow PyFunc model in a Python image. Another might use ONNX with a pinned ONNX Runtime image. A GPU lane might use Triton with its shipped ONNX or TensorRT backend. KServe's `ServingRuntime` and `ClusterServingRuntime` resources can express which model formats and versions a runtime claims to support, but the platform team still owns validation on its cluster and hardware.
+```text
+Python:
+3.10, 3.11, 3.12
 
-TorchServe can still appear in existing PyTorch estates. Its official documentation marks the project as **Limited Maintenance** and states that planned updates, bug fixes, features, and security patches are unavailable. That status makes TorchServe a legacy lane requiring an explicit migration or containment decision rather than a default for new production services.
+PyTorch:
+A, B, C
 
-Server features can alter behavior and performance. Dynamic batching changes request grouping. Quantization changes precision. Concurrent Python preprocessing can expose thread-safety bugs. Compatibility evidence should test the configured server path instead of calling the engine directly and assuming the results transfer.
+CUDA:
+X, Y, Z
 
-## Check Every Layer From The Model Runtime To The Hardware
-<!-- section-summary: Accelerator compatibility depends on the runtime engine, execution provider, user-space libraries, host driver, device exposure, and physical hardware. -->
+GPU:
+T4, A10, A100, H100
 
-CPU serving still has hardware boundaries: architecture, instruction-set support, available memory, and native numerical libraries. GPU serving adds several more layers.
-
-An **execution provider** is ONNX Runtime's adapter for a hardware-specific backend. The CUDA Execution Provider assigns supported graph sections to NVIDIA CUDA. ONNX Runtime can keep its CPU provider as a fallback for graph sections that the higher-priority provider cannot execute.
-
-The container normally carries user-space libraries such as the CUDA runtime and cuDNN. The host supplies the kernel-level NVIDIA driver and exposes the device to the container. Kubernetes device plugins and scheduling policy decide which Pod receives which GPU. NVIDIA publishes CUDA compatibility rules because toolkit, driver, feature, and GPU support have real constraints.
-
-```mermaid
-flowchart TD
-    Model["Model Graph<br/>(operators and precision selected for inference)"] --> Provider["Execution Provider<br/>(assign supported graph sections to hardware)"]
-    Provider --> UserSpace["User-Space Runtime<br/>(ONNX Runtime, CUDA, cuDNN, or TensorRT)"]
-    UserSpace --> Driver["Host Driver<br/>(kernel connection to the accelerator)"]
-    Driver --> Device["GPU Device<br/>(architecture, memory, and scheduled allocation)"]
+Model format:
+V1, V2, V3
 ```
 
-### Detect An Unexpected CPU Path
+The theoretical number of combinations is:
 
-An ONNX request can succeed even if the release is using more CPU than expected. The default CPU provider may execute unsupported graph sections. An image containing only the CPU ONNX Runtime package can also return valid predictions while completely missing the intended CUDA path. Service health stays green, but latency and CPU saturation move outside the approved GPU envelope.
-
-The service should assert its required provider during startup and expose the active provider order in readiness metadata:
-
-```python
-import onnxruntime as ort
-
-required_provider = "CUDAExecutionProvider"
-available_providers = ort.get_available_providers()
-if required_provider not in available_providers:
-    raise RuntimeError(
-        f"{required_provider} is unavailable; found {available_providers}"
-    )
-
-session = ort.InferenceSession(
-    "model.onnx",
-    providers=[required_provider, "CPUExecutionProvider"],
-)
-assert session.get_providers()[0] == required_provider
+```text
+3 × 3 × 3 × 4 × 3
+= 324 combinations
 ```
 
-This check confirms that the CUDA provider registered and has first priority. It does not prove that every graph node runs on CUDA. ONNX Runtime partitions the graph according to provider capability. Profiling, representative latency tests, GPU-utilization evidence, and CPU-usage limits reveal unexpected fallback or expensive device transfers.
+You probably haven't actually tested 324 environments. This creates **implicit unsupported states**. A better strategy is to deliberately support a small number of known combinations.
 
-Kubernetes scheduling success supplies equally limited evidence. A Pod can receive a GPU resource and still fail CUDA initialization because the image libraries require a newer driver feature. Startup evidence should report the detected device and driver. It should also record runtime libraries, provider order, model precision, and initial memory allocation before traffic begins.
+For example:
 
-## Test Loading, Warm-Up, And Readiness
-<!-- section-summary: Compatibility includes retrieving the exact artifact, loading it within resource limits, warming runtime-specific paths, and declaring readiness only after a fixture succeeds. -->
-
-The process can start long before the model is usable. External artifacts need storage access, enough disk space, a verified digest, and a bounded retry policy. Deserialization or graph optimization then consumes CPU and memory. GPU runtimes may allocate device memory or compile kernels during the first requests.
-
-**Warm-up** sends representative inputs through the newly loaded model before ordinary traffic. It can initialize lazy code paths, compile kernels, populate caches, and expose unsupported shapes. Warm-up also provides a convenient point to compare one known result with the accepted tolerance.
-
-Readiness should remain unsuccessful until the exact model and its supporting contracts have loaded, the warm-up fixture has passed, and required local runtime conditions are healthy. The readiness response should identify the model digest, image digest, contract or tokenizer version, runtime, execution provider, and load time.
-
-```mermaid
-flowchart TD
-    Start["Process Start<br/>(server process and configuration begin)"] --> Retrieve["Artifact Retrieval<br/>(fetch immutable bytes and verify the digest)"]
-    Retrieve --> Load["Model Load<br/>(deserialize, optimize, and allocate memory)"]
-    Load --> Warmup["Warm-Up Fixture<br/>(exercise representative shapes and runtime paths)"]
-    Warmup --> Ready["Readiness Success<br/>(publish identity and admit traffic)"]
-    Retrieve --> Failed["Startup Failure<br/>(retain evidence and refuse traffic)"]
-    Load --> Failed
-    Warmup --> Failed
+```text
+Serving stack 2026.08:
+Python P
+Framework F
+CUDA C
+Runtime R
+GPU families {A100, H100}
 ```
 
-Memory measurements must include load and warm-up peaks, not only idle state. A model can fit after initialization yet exceed the container limit while the runtime optimizes its graph. Concurrency tests matter too, because activations and request buffers can multiply after readiness.
+Now "supported" means something concrete.
 
-A live reload needs a transactional design. Load and test the candidate beside the current model, then switch the route or pointer after success. A failed candidate should leave the current model available. Replacing the only in-memory model before validation can turn one bad artifact into an outage.
+Conceptually:
 
-## The Three Ways Runtime Compatibility Fails
-<!-- section-summary: Compatibility tests must distinguish loading failure, behavioral drift, and operating-envelope failure because each class needs different evidence and repair. -->
+| Model release | Runtime A | Runtime B | Runtime C |
+| ------------- | --------: | --------: | --------: |
+| Model 17      |         ✓ |         ✓ |          |
+| Model 18      |         ✗ |         ✓ |         ✓ |
+| Model 19      |         ✗ |          |         ✓ |
 
-The phrase “incompatible model” hides three separate outcomes. Each outcome points toward a different boundary, requires different evidence, and leads to a different repair. Naming the outcome helps the team choose the next investigation.
+Here:
+
+```text
+✓ = tested and supported
+✗ = known incompatible
+ = not established
+```
+
+The critical rule is:
+
+**Unknown should not silently mean supported.**
+
+This is especially useful during upgrades. Suppose current production is:
+
+```text
+Model 17
+Runtime 5
+```
+
+and you want:
+
+```text
+Model 18
+Runtime 6
+```
+
+If you change both at once:
+
+```text
+(M17, R5)
+      ↓
+(M18, R6)
+```
+
+and predictions change, what caused it Could be:
+
+```text
+model
+runtime
+interaction between model and runtime
+```
+
+A more diagnosable sequence might test:
+
+```text
+(M17, R5) current
+     ↓
+(M17, R6) runtime upgrade
+     ↓
+(M18, R6) model upgrade
+```
+
+when practical. Now each transition changes fewer variables. Suppose:
+
+```text
+Model 17 + Runtime 5
+```
+
+has been tested. Does that automatically prove:
+
+```text
+Model 17 + Runtime 6
+```
+
+is safe No. Even if Runtime 6 claims backward compatibility, your application hasn't yet established its required semantics. So:
+
+**A runtime upgrade creates a new model-serving combination that deserves compatibility testing.**
+
+The same applies to:
+
+```text
+new driver
+new GPU
+new compiler
+new quantization runtime
+new tokenizer version
+```
+
+Anything capable of changing execution deserves evaluation proportional to its risk. A library might promise:
+
+```text
+old API still works
+```
+
+That generally means:
+
+```text
+your program should continue functioning
+```
+
+not necessarily:
+
+```text
+every floating-point result will be identical
+latency will be identical
+memory use will be identical
+kernel choice will be identical
+```
+
+For model serving, all of those can matter. So your own compatibility contract may be stricter than a library vendor's API compatibility guarantee.
+
+## How Do Performance, Quantization, Custom Operators, Shapes, Containers, and Hardware Enter the Release Tuple?
+<!-- section-summary: Performance, quantization, custom operators, compilation, shapes, containers, hardware, model, and configuration form one versioned release tuple. -->
+
+Successful execution still has to meet performance and resource requirements across quantization, operators, shapes, containers, and hardware.
+
+Suppose Runtime B gives exactly the same predictions as Runtime A. But:
+
+```text
+Runtime A:
+p99 = 300 ms
+GPU memory = 30 GB
+
+Runtime B:
+p99 = 1.8 sec
+GPU memory = 45 GB
+```
+
+If your serving SLO is:
+
+```text
+p99 < 500 ms
+```
+
+Runtime B is not operationally compatible with your service requirements. So define:
+
+```text
+functional compatibility
+```
+
+and:
+
+```text
+operational compatibility
+```
+
+separately. A new stack should satisfy both. Suppose a model is exported as:
+
+```text
+INT8
+```
+
+or:
+
+```text
+FP8
+```
+
+Now compatibility may depend on:
+
+```text
+quantization scheme
+runtime implementation
+hardware support
+calibration assumptions
+special kernels
+```
+
+Two runtimes might both claim "INT8 support" while interpreting or implementing quantization differently. Again:
+
+```text
+same high-level label
+```
+
+does not establish:
+
+```text
+same execution semantics
+```
+
+The exact model representation and runtime pairing needs testing. Standard operations can often move across runtimes more easily. Suppose your model contains:
+
+```text
+CustomAttentionV7
+```
+
+Now the serving environment must supply exactly that operation—or a compatible implementation. The artifact may effectively depend on:
+
+```text
+model graph
++
+custom native library
++
+specific runtime integration
+```
+
+This increases deployment coupling. Custom operators can be worthwhile for performance, but they narrow the set of compatible environments. Some serving systems compile or optimize a model for a target.
+
+Conceptually:
+
+```text
+portable model
+    ↓
+compile for GPU family X
+    ↓
+optimized execution artifact
+```
+
+That compiled artifact may encode assumptions about:
+
+```text
+device architecture
+supported kernels
+tensor shapes
+precision
+runtime version
+```
+
+Now:
+
+```text
+portable source artifact
+```
+
+and:
+
+```text
+compiled serving artifact
+```
+
+should have distinct identities. The latter may be compatible only with a narrower target set. Suppose a model was compiled with:
+
+```text
+batch ∈ [1, 8]
+sequence ∈ [1, 4096]
+```
+
+Then a request with:
+
+```text
+sequence = 8192
+```
+
+might be mathematically valid for the original model but invalid for the compiled runtime artifact. So the input contract must reflect the deployed runtime's actual capabilities:
+
+```text
+model theoretical limits
+       ∩
+runtime compiled limits
+       ∩
+resource limits
+       =
+serving API limits
+```
+
+That intersection is what you can safely advertise. Suppose the original model supports:
+
+```text
+128k context
+```
+
+but your chosen GPU/runtime combination supports only:
+
+```text
+64k under your memory budget
+```
+
+Then the serving endpoint should not claim:
+
+```text
+128k context supported
+```
+
+just because the architecture theoretically permits it. The externally visible contract should be bounded by actual deployment compatibility. A useful formula is:
+
+$$
+SupportedCapability
+=
+ModelCapability
+\cap RuntimeCapability
+\cap HardwareCapability
+\cap OperationalPolicy
+$$
+
+The smallest constraint wins. Docker can pin:
+
+```text
+Python
+framework
+CUDA userspace libraries
+native application dependencies
+```
+
+That dramatically reduces variation. But the container still relies on:
+
+```text
+host kernel
+GPU driver
+actual CPU/GPU
+container runtime
+resource allocation
+```
+
+Therefore:
+
+```text
+same container digest
+```
+
+does not prove:
+
+```text
+same complete runtime environment
+```
+
+especially for accelerator workloads. Containers control a large piece of the compatibility matrix, not all of it. When an issue occurs, knowing only:
+
+```text
+model = v18
+```
+
+is insufficient. You might need:
+
+```text
+model artifact digest
+serving image digest
+runtime version
+framework version
+driver version
+device model
+precision
+runtime configuration
+```
+
+For example:
+
+```text
+Model 18
+Image ABC
+Runtime R7
+H100
+BF16
+```
+
+may behave differently from:
+
+```text
+Model 18
+Image ABC
+Runtime R7
+A100
+BF16
+```
+
+Exact deployment metadata gives you a coordinate in the compatibility space. Instead of:
+
+```text
+Release = Model
+```
+
+a sophisticated serving system is closer to:
+
+$$
+Release =
+(M,\ S,\ R,\ H,\ C)
+$$
+
+where:
+
+* $$M$$ = exact model artifact,
+* $$S$$ = serving software/image,
+* $$R$$ = runtime stack,
+* $$H$$ = hardware class,
+* $$C$$ = important runtime configuration.
+
+For example:
+
+```text
+M = model sha256:AAA
+S = image sha256:BBB
+R = inference-runtime-7
+H = H100-80GB
+C = BF16, max_batch=32
+```
+
+This complete combination is what you've actually tested. Avoid production descriptions like:
+
+```text
+latest PyTorch
+CUDA image
+H100 machine
+production model
+```
+
+Prefer exact identities or controlled version ranges:
+
+```text
+serving image digest = ...
+model digest = ...
+runtime release = ...
+driver release = ...
+GPU class = ...
+```
+
+This makes an incident reproducible. Otherwise "same setup" can secretly mean different things on different days.
 
 ![Three runtime compatibility failure classes with the evidence each exposes and the boundaries engineers should investigate.](/content-assets/articles/article-mlops-model-serving-model-artifacts-runtime-dependencies/compatibility-failure-triage.png)
 
 *Load failure, behavioral drift, and operating-envelope failure can look similar from outside the service, but each one sends the investigation to a different part of the compatibility chain.*
 
-### The Model Cannot Load
+## How Should CI and Debugging Find the First Incompatible Layer?
+<!-- section-summary: CI should test representative models before traffic, while debugging starts at the lowest layer and walks upward to the first violated invariant. -->
 
-The service fails before a usable inference session exists. Common causes include an unsupported artifact format, missing operator, incompatible pickle dependency, absent native library, wrong CPU architecture, unavailable execution provider, or unsupported driver/runtime pair. Import checks and model-load tests find much of this class.
+When a combination fails, testing and debugging should locate the first broken invariant instead of treating the stack as one black box.
 
-### The Model Loads But Behavior Changes
+Suppose a pull request upgrades:
 
-The service produces responses, but they differ from the accepted result beyond policy. A changed tokenizer, categorical mapping, timezone rule, precision mode, numerical kernel, or postprocessing default can cause this failure. Schema validation often passes because the tensor names and shapes remain valid.
-
-Consider a tokenizer upgrade that still returns `int64` tensors of shape `[1, 512]`. The signature accepts the result. Different token IDs then shift the model output. A semantic preprocessing fixture and end-to-end prediction comparison catch the change.
-
-### The Model Works Outside The Operating Envelope
-
-Predictions remain acceptable, but production constraints fail. The release may consume too much memory, warm up too slowly, miss latency targets, or collapse under two concurrent requests. The unexpected ONNX CPU path belongs here if output quality remains stable and latency does not.
-
-```mermaid
-flowchart TD
-    Candidate["Candidate Combination<br/>(model, image, runtime, and hardware)"] --> Load{"Load Succeeds<br/>(a usable inference session exists)"}
-    Load -->|No| LoadFailure["Load Failure<br/>(format, library, ABI, provider, or hardware boundary)"]
-    Load -->|Yes| Behavior{"Behavior Matches<br/>(fixtures and task tolerance pass)"}
-    Behavior -->|No| BehaviorFailure["Behavior Failure<br/>(preprocessing, precision, kernel, or default changed)"]
-    Behavior -->|Yes| Envelope{"Envelope Passes<br/>(startup, memory, latency, and concurrency pass)"}
-    Envelope -->|No| EnvelopeFailure["Envelope Failure<br/>(correct output with unacceptable operations)"]
-    Envelope -->|Yes| Supported["Supported Combination<br/>(eligible for release review)"]
+```text
+inference runtime 7 → 8
 ```
 
-One import test covers only a narrow part of the first branch. A complete compatibility suite needs load evidence, semantic and numerical fixtures, and resource measurements.
+Tests should ideally build the actual serving artifact and exercise:
 
-## Keep Supported Model And Runtime Combinations Small
-<!-- section-summary: A support matrix publishes the few model, image, runtime, and hardware combinations the platform promises to test, operate, upgrade, and roll back. -->
-
-A **support matrix** is the platform's list of proven compatibility lanes. A lane binds an artifact format to a serving image, runtime engine or server, hardware class, request contract, and test suite. It represents an operational promise, not a list of combinations that might install.
-
-Testing every Python, framework, model, server, GPU, and driver version creates a combinatorial grid. The cost soon exceeds the value, and users still lack a clear support promise. A practical platform may maintain a current CPU lane, a current GPU lane, and one retained rollback lane. Experimental combinations run outside the production promise until an owner qualifies them.
-
-```yaml
-lanes:
-  - id: cpu-current
-    artifact_format: onnx-opset-21
-    image: registry.example.com/document-api@sha256:<cpu-image-digest>
-    architecture: linux-amd64-avx2
-    providers: [CPUExecutionProvider]
-  - id: gpu-l4-current
-    artifact_format: onnx-opset-21
-    image: registry.example.com/document-api-cuda@sha256:<gpu-image-digest>
-    accelerator: nvidia-l4
-    providers: [CUDAExecutionProvider, CPUExecutionProvider]
-  - id: cpu-rollback
-    artifact_format: onnx-opset-21
-    image: registry.example.com/document-api@sha256:<previous-image-digest>
-    architecture: linux-amd64-avx2
-    providers: [CPUExecutionProvider]
+```text
+load approved models
+run reference predictions
+run representative shapes
+verify numerical tolerances
+verify resource use
+verify latency where relevant
 ```
 
-The placeholders are outputs from the image build and registry, not mutable deployment values. Each lane also references the exact runtime version, platform driver family, fixture suite, performance thresholds, owner, and planned retirement window in the release system.
+This turns compatibility from:
 
-The rollback lane deserves an independent test. A prior model can fail in a new image after a library, tokenizer, or operator change. A green current-model test says nothing about that previous artifact. Either retain the complete prior image and model release or prove that the previous model still works in the new image before describing it as a rollback target.
-
-## Test Upgrades As New Supported Combinations
-<!-- section-summary: Runtime, dependency, and hardware upgrades should enter as parallel lanes, pass old and new artifact tests, receive canary traffic, and retain an exercised rollback path. -->
-
-An upgrade changes a compatibility boundary even if the model stays fixed. Examples include a new Python minor version, ONNX Runtime release, CUDA user-space runtime, Triton image, GPU type, or base operating system. Treat the proposal as a new lane rather than editing the existing lane in place.
-
-Start by running the current production model in both lanes. Compare request fixtures, preprocessed tensors, predictions, provider evidence, startup time, memory, latency, and concurrency behavior. Then test the candidate model and the retained rollback artifact in the new lane. This separates a runtime regression from a model regression.
-
-```mermaid
-flowchart TD
-    Current["Current Lane<br/>(production combination and retained evidence)"] --> Proposal["Proposed Lane<br/>(one reviewed runtime or hardware change)"]
-    Proposal --> Comparison["Compatibility Comparison<br/>(current, candidate, and rollback artifacts)"]
-    Comparison --> Canary["Canary Release<br/>(limited traffic with quality and service guardrails)"]
-    Canary --> Promote["Promoted Lane<br/>(new supported production combination)"]
-    Canary --> Restore["Restore Current Lane<br/>(complete previous release remains available)"]
+```text
+knowledge in someone's head
 ```
 
-Canary evidence adds live request mix, real data shapes, resource pressure, and platform integration to CI results. It should not replace offline fixtures because production labels may arrive late and some semantic errors remain rare. Promotion needs both forms of evidence.
+into:
 
-Keep the old lane until rollback has been exercised under the current platform. Removing it is a separate lifecycle decision with an owner and a date. Otherwise, a nominal rollback may point to an image that the registry retained but the current nodes can no longer run.
-
-## Record The Exact Model, Runtime, And Hardware Release
-<!-- section-summary: The immutable release record binds the exact model, contracts, software, runtime, hardware lane, evidence, and rollback target that passed together. -->
-
-The support matrix says which kinds of combinations the platform accepts. A **release record** identifies the exact combination approved for one deployment.
-
-```yaml
-release_id: document-classifier-42-gpu-l4
-model:
-  uri: s3://ml-production/document-classifier/version=42/model.onnx
-  sha256: <model-digest>
-contracts:
-  request: document-request/v3
-  preprocessing: document-preprocessing/v5
-  tokenizer: document-tokenizer/v4
-runtime:
-  image: registry.example.com/document-api-cuda@sha256:<image-digest>
-  engine: onnxruntime
-  model_server: triton
-hardware:
-  lane: gpu-l4-current
-verification:
-  compatibility_suite: document-serving/v8
-  evidence_uri: s3://ml-evidence/releases/document-classifier-42-gpu-l4/
-rollback:
-  release_id: document-classifier-41-gpu-l4
+```text
+an enforced release property
 ```
 
-This record binds immutable artifacts and versioned contracts. The detailed evidence can remain in the test system, artifact store, or model registry. The record links to that evidence. Prediction telemetry should include the `release_id` and model digest. The image digest and serving lane identify the remaining runtime path that handled a request.
+If your runtime serves many models, you don't necessarily need to test every historical model on every commit. You can maintain representative classes:
 
-Configuration can also change compatibility. Provider options, batching limits, precision mode, model-repository configuration, and memory settings should be versioned or included in a configuration digest. A release record that omits these values can point to identical image and model bytes while production behavior changes around them.
-
-## Find The First Incompatible Layer
-<!-- section-summary: Incident diagnosis should walk from request to hardware and stop at the first boundary whose actual evidence differs from the accepted release record. -->
-
-Compatibility incidents become manageable if the investigation follows the same chain used during release testing. Start with the deployed release identity. Compare it with the accepted record, then inspect boundaries in order.
-
-A request validation error points toward the client payload or request schema. A valid payload with a different feature tensor points toward preprocessing, units, tokenizer, or feature retrieval. A deserialization error points toward artifact format, package, native library, or trust policy. A missing CUDA provider points toward the wheel, user-space runtime, device exposure, or host driver. A ready service with wrong predictions points toward semantic or numerical behavior. A correct prediction with high latency points toward provider placement, data transfer, batching, or resource pressure.
-
-The diagnostic output should name the first boundary that failed:
-
-```json
-{
-  "release_id": "document-classifier-42-gpu-l4",
-  "state": "failed",
-  "boundary": "runtime_to_hardware",
-  "expected_provider": "CUDAExecutionProvider",
-  "available_providers": ["CPUExecutionProvider"],
-  "loaded_model": false,
-  "traffic_allowed": false
-}
+```text
+text encoder
+vision classifier
+large decoder model
+quantized model
+custom-operator model
+dynamic-shape model
 ```
 
-This evidence directs the investigation toward the serving image, CUDA libraries, device exposure, scheduling, or driver compatibility. Re-downloading the same model cannot add a missing execution provider. After the platform repair, the same compatibility job should show the expected provider and pass the behavior and operating-envelope checks.
+When upgrading the serving stack, test models covering important execution paths. Then separately certify high-value production models before rollout. The goal is to expose incompatibility early. A good startup sequence looks like:
 
-Rollback restores the complete prior release record. Operators verify its loaded model digest, runtime provider, readiness identity, prediction fixture, and service-health guardrails before returning full traffic. This procedure avoids a partial rollback that restores an old model beside a newly incompatible runtime.
+```text
+STARTING
+   ↓
+identify exact release
+   ↓
+check runtime metadata
+   ↓
+check device capabilities
+   ↓
+verify model
+   ↓
+load
+   ↓
+warm-up
+   ↓
+reference predictions
+   ↓
+resource checks
+   ↓
+READY
+```
 
-## Main Idea
-<!-- section-summary: Runtime compatibility is a tested chain of agreements whose complete identity must survive deployment, upgrade, diagnosis, and rollback. -->
+Any compatibility failure before `READY` is preferable to discovering it from customer requests. This is the serving equivalent of type checking before execution. A readiness endpoint should conceptually mean:
 
-Runtime compatibility extends from the client request to the hardware that executes the model. A valid schema protects structure, while semantic fixtures protect meaning. The serialization format defines which graph, weights, code, and metadata cross into serving. Python locks record package versions, while wheels, ABIs, native libraries, and architecture determine which compiled code can run. The runtime engine and model server add operator support, repository layout, protocol, batching, and lifecycle behavior. CPU or accelerator execution adds provider, user-space library, driver, device, and resource constraints. Finally, load, warm-up, readiness, behavior, latency, and memory tests prove that the combination is usable in production. A deliberately small support matrix keeps this promise operable. The immutable release record binds the exact lane and artifacts that passed. During an incident, the same boundary chain reveals the first mismatch and gives rollback a complete, tested target.
+**This process has successfully established the invariants required to serve this particular model on this particular runtime.**
+
+Not simply:
+
+```text
+HTTP server is listening
+```
+
+For a model service:
+
+```text
+readiness
+=
+model_loaded
+AND runtime_initialized
+AND critical_validation_passed
+AND serving_dependencies_available
+```
+
+The precise checks vary, but their meaning should be strong. Suppose the model fails during startup. Instead of randomly reinstalling libraries, trace the stack. For a GPU service:
+
+```text
+Does OS see GPU
+        ↓
+Does driver work
+        ↓
+Can container access GPU
+        ↓
+Can runtime initialize accelerator
+        ↓
+Can framework allocate a tensor
+        ↓
+Can model artifact load
+        ↓
+Can one model operation execute
+        ↓
+Can warm-up execute
+        ↓
+Does reference prediction match
+```
+
+This isolates the first broken boundary. Suppose:
+
+```text
+model inference falls back to CPU
+```
+
+Potential layers:
+
+```text
+Hardware:
+GPU physically present
+
+Driver:
+host can see GPU
+
+Container:
+device exposed
+
+Framework:
+GPU-enabled build installed
+
+Application:
+model moved to GPU
+```
+
+Each question corresponds to a boundary. Jumping immediately to:
+
+```text
+reinstall model
+```
+
+may have nothing to do with the failure. Suppose startup reaches:
+
+```text
+weights loaded ✓
+```
+
+then warm-up fails:
+
+```text
+operator X unsupported
+```
+
+The debugging path is:
+
+```text
+What operator does the model require
+          ↓
+What version/variant is represented
+          ↓
+Does this runtime implement it
+          ↓
+Does this backend implement it
+          ↓
+Does this dtype/device combination support it
+```
+
+This narrows the issue much faster than treating it as "GPU incompatibility." Suppose:
+
+```text
+old environment → score 0.83
+new environment → score 0.61
+```
+
+Don't assume immediately that numerical drift caused it. Trace the prediction pipeline:
+
+```text
+same raw input
+    ↓
+same preprocessing
+    ↓
+same tokenizer/vocabulary
+    ↓
+same token IDs / features
+    ↓
+same model artifact
+    ↓
+same raw model outputs
+    ↓
+same postprocessing
+```
+
+Find the first point where the two executions diverge. This is one of the strongest general debugging techniques:
+
+**Compare adjacent intermediate representations until you find the earliest disagreement.**
+
+Suppose:
+
+```text
+input
+ ↓
+tokens
+ ↓
+embeddings
+ ↓
+model output
+ ↓
+postprocessed response
+```
+
+Old environment returns A. New environment returns B. Compare:
+
+```text
+raw input            same
+tokens               same
+model output          different
+```
+
+Now the bug is below tokenization. If:
+
+```text
+tokens               different
+```
+
+there's no reason to investigate CUDA kernels yet. Find the earliest divergence. Everything after it is downstream consequence.
+
+## How Do Compatibility, Reproducibility, Portability, and Rollback Differ?
+<!-- section-summary: Compatibility means components can work together; reproducibility recreates a result; portability spans environments; rollback restores a complete tested combination. -->
+
+Clear terminology prevents a compatible stack from being mistaken for a reproducible or portable one and ensures rollback restores all coupled layers.
+
+These concepts overlap but differ.
+
+### Compatibility
+
+```text
+Can this model run correctly here
+```
+
+### Reproducibility
+
+```text
+Can we reconstruct the same relevant environment and behaviour later
+```
+
+For example, a model might be compatible with:
+
+```text
+Runtime 5
+Runtime 6
+```
+
+but only one of those is the exact production environment. Compatibility gives you a set of acceptable environments. Reproducibility identifies the one you actually used. A format might be highly portable:
+
+```text
+many runtimes can consume it
+```
+
+but a particular model might contain:
+
+```text
+custom operator
+hardware-specific optimization
+unsupported datatype
+```
+
+that reduces actual compatibility. So:
+
+```text
+portable format
+```
+
+does not imply:
+
+```text
+every artifact in that format runs everywhere
+```
+
+Model-specific features matter. Avoid:
+
+"We support NVIDIA GPUs."
+
+That's almost meaningless. Better:
+
+```text
+Model family A
+  supported runtime: R7
+  supported precision: BF16
+  tested devices:
+      device class X
+      device class Y
+  max configured context:
+      32k
+```
+
+Now users and operators know the actual contract. A narrow truthful support matrix is better than a broad untested one. Suppose a framework's documentation suggests that:
+
+```text
+Runtime R8
+```
+
+should work with your GPU. That's useful evidence. But production support should ideally mean:
+
+```text
+we built it
+we loaded our model
+we executed our workload
+we validated outputs
+we measured resource use
+```
+
+In other words:
+
+**"Supported" should be an empirical property of your release process, not an inference from package documentation alone.**
+
+A new runtime can affect:
+
+```text
+latency
+memory
+kernel selection
+numerical behaviour
+throughput
+startup time
+```
+
+even when predictions seem compatible in offline tests. So deploy:
+
+```text
+old runtime 99%
+new runtime 1%
+      ↓
+compare
+      ↓
+increase gradually
+```
+
+while monitoring:
+
+```text
+errors
+OOMs
+p95/p99 latency
+GPU utilisation
+prediction drift
+business/model metrics
+```
+
+Runtime upgrades deserve the same deployment discipline as model upgrades. Suppose the new release changes:
+
+```text
+runtime
+model
+container
+configuration
+```
+
+and fails. Rollback should restore a previously tested combination:
+
+```text
+Model 17
+Image A
+Runtime R5
+Config C
+```
+
+not construct a hybrid:
+
+```text
+Model 17
+Image B
+Runtime R6
+Config D
+```
+
+that has never existed before. A rollback target should itself be a known compatible release.
+
+## Which Layered Invariants Define the Complete Compatible Serving System?
+<!-- section-summary: Each layer establishes invariants for the next, and the serving system is compatible only when the entire chain preserves load, execution, behaviour, and operational requirements. -->
+
+The final layered model states the invariants that must hold from serialized artifact to production response.
+
+Think of the stack as a sequence:
+
+```text
+raw artifact
+    ↓
+loader
+    ↓
+valid model representation
+    ↓
+runtime
+    ↓
+valid executable graph
+    ↓
+backend
+    ↓
+valid kernels
+    ↓
+driver/device
+    ↓
+actual computation
+```
+
+Every lower layer must establish properties the upper layer assumes.
+
+For example:
+
+```text
+Model:
+"I require operator X in BF16."
+
+Runtime:
+"I can map operator X to backend implementation Y."
+
+Backend:
+"I can execute Y on this GPU architecture."
+
+Hardware:
+"I support the required instruction/capability."
+```
+
+Compatibility exists only if the assumptions line up all the way down. Before serving a model, establish:
+
+```text
+Request contract
+    What exactly enters the model
+
+Model representation
+    What format/version/operators does it require
+
+Serving code
+    What preprocessing and postprocessing does it use
+
+Python/runtime dependencies
+    Which APIs must exist
+
+Native dependencies
+    Which binary libraries/ABIs are required
+
+Accelerator stack
+    Which runtime and driver capabilities are required
+
+Hardware
+    Which architecture, precision features, and memory are required
+
+Workload
+    Which shapes, batches, contexts, and concurrency must work
+
+Behaviour
+    What outputs/tolerances prove semantic correctness
+
+Operations
+    What latency, memory, and throughput must be maintained
+```
+
+Then test that combination before declaring it supported. A useful overall picture is:
+
+```text
+                         REQUEST
+                            │
+                            ▼
+                 ┌────────────────────┐
+                 │ Request contract   │
+                 │ shape / dtype /    │
+                 │ semantics          │
+                 └─────────┬──────────┘
+                           ▼
+                 ┌────────────────────┐
+                 │ Preprocessing      │
+                 │ tokenizer/features │
+                 └─────────┬──────────┘
+                           ▼
+                 ┌────────────────────┐
+                 │ Model artifact     │
+                 │ format + weights   │
+                 └─────────┬──────────┘
+                           ▼
+                 ┌────────────────────┐
+                 │ Model runtime      │
+                 │ framework/engine   │
+                 └─────────┬──────────┘
+                           ▼
+                 ┌────────────────────┐
+                 │ Native libraries   │
+                 │ kernels / BLAS     │
+                 └─────────┬──────────┘
+                           ▼
+                 ┌────────────────────┐
+                 │ Accelerator stack  │
+                 │ CUDA/etc. + driver │
+                 └─────────┬──────────┘
+                           ▼
+                 ┌────────────────────┐
+                 │ Hardware           │
+                 │ CPU / GPU / RAM    │
+                 └─────────┬──────────┘
+                           ▼
+                       EXECUTION
+                           │
+                           ▼
+                 ┌────────────────────┐
+                 │ Postprocessing     │
+                 └─────────┬──────────┘
+                           ▼
+                    PREDICTION
+```
+
+The system is compatible only if the contracts between **all** these layers hold. A weak mental model is:
+
+```text
+"Install the right version of PyTorch
+and the model should work."
+```
+
+A stronger model is:
+
+```text
+exact model artifact
+        ↓
+compatible serialization semantics
+        ↓
+compatible serving/preprocessing code
+        ↓
+compatible framework/runtime
+        ↓
+compatible native libraries
+        ↓
+compatible accelerator runtime
+        ↓
+compatible driver
+        ↓
+compatible hardware/resources
+        ↓
+representative inference succeeds
+        ↓
+prediction behaviour matches
+        ↓
+operational requirements hold
+```
+
+The central principle is:
+
+> **Runtime compatibility is not a property of a model alone or a machine alone. It is a property of a specific model–software–runtime–hardware combination.**
+
+And there are three increasingly serious questions to answer:
+
+```text
+Can we load it
+       ↓
+Can we execute it
+       ↓
+Does it still implement the behaviour we intended
+```
+
+That last question is the one most easily forgotten. If you therefore keep the supported combinations small, identify every release immutably, test loading and warm-up, exercise known predictions, record the runtime and hardware environment, and debug by finding the **first incompatible layer**, runtime compatibility stops being mysterious dependency troubleshooting and becomes a systematic exercise in checking contracts between adjacent layers.
 
 ![A tested serving lane moving from qualification into an immutable release record, canary observation, and complete recovery.](/content-assets/articles/article-mlops-model-serving-model-artifacts-runtime-dependencies/tested-serving-lane-summary.png)
 
 *Qualification proves one explicit combination of model, runtime, and hardware; the release record keeps that combination identifiable during canary rollout, diagnosis, and rollback.*
 
-## References
+## Check Your Answers
 
-- [MLflow model signatures and input examples](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [MLflow model dependency management](https://mlflow.org/docs/latest/ml/model/dependencies)
-- [Python platform compatibility tags](https://packaging.python.org/en/latest/specifications/platform-compatibility-tags/)
-- [Python packaging flow](https://packaging.python.org/en/latest/flow/)
-- [ONNX Runtime compatibility](https://onnxruntime.ai/docs/reference/compatibility.html)
-- [ONNX Runtime execution providers](https://onnxruntime.ai/docs/execution-providers/)
-- [ONNX Runtime architecture](https://onnxruntime.ai/docs/reference/high-level-design.html)
-- [ONNX Runtime CUDA Execution Provider](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)
-- [NVIDIA CUDA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/)
-- [NVIDIA Triton model repository](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/model_repository.html)
-- [KServe model-serving frameworks](https://kserve.github.io/website/docs/model-serving/predictive-inference/frameworks/overview)
-- [TorchServe Limited Maintenance notice](https://docs.pytorch.org/serve/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Which Contracts Must Align for a Model Artifact to Run?]{kind="recap"}
+Compatibility requires the request, serialization, loader, operators, runtime, libraries, hardware, resources, and response semantics to agree across every link.
+:::
+
+:::expand[How Do Packages, Native Libraries, CPUs, GPUs, Resources, and Numerics Affect Compatibility?]{kind="recap"}
+Python packages sit above ABI, architecture, drivers, accelerators, memory, numerical behaviour, and workload limits that can alter execution or decisions.
+:::
+
+:::expand[What Are the Three Main Runtime Compatibility Failure Modes?]{kind="recap"}
+A combination may fail to load, load but fail during execution, or run successfully while changing behaviour, latency, or capacity.
+:::
+
+:::expand[How Do Startup, Warmup, Behaviour Tests, and a Support Matrix Prove a Combination?]{kind="recap"}
+Startup loading, representative warmup, end-to-end behavioural checks, explicit requirements, and a small tested matrix turn compatibility into evidence.
+:::
+
+:::expand[How Do Performance, Quantization, Custom Operators, Shapes, Containers, and Hardware Enter the Release Tuple?]{kind="recap"}
+Performance, quantization, custom operators, compilation, shapes, containers, hardware, model, and configuration form one versioned release tuple.
+:::
+
+:::expand[How Should CI and Debugging Find the First Incompatible Layer?]{kind="recap"}
+CI should test representative models before traffic, while debugging starts at the lowest layer and walks upward to the first violated invariant.
+:::
+
+:::expand[How Do Compatibility, Reproducibility, Portability, and Rollback Differ?]{kind="recap"}
+Compatibility means components can work together; reproducibility recreates a result; portability spans environments; rollback restores a complete tested combination.
+:::
+
+:::expand[Which Layered Invariants Define the Complete Compatible Serving System?]{kind="recap"}
+Each layer establishes invariants for the next, and the serving system is compatible only when the entire chain preserves load, execution, behaviour, and operational requirements.
+:::

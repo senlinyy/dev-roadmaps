@@ -1,7 +1,7 @@
 ---
 title: "Securing Training Data and Model Artifacts"
-description: "Learn how MLOps teams protect the data, model files, images, and release evidence that production predictions depend on."
-overview: "Training data and model artifacts are executable inputs to a production decision system. Governed sources, immutable identities, workload credentials, safe formats, provenance, controlled promotion, and tested recovery protect their confidentiality, integrity, and availability."
+description: "Training data and model artifacts are high-value inputs and executable decision components, so confidentiality, integrity, availability, and mapped trust boundaries apply across their lifecycle."
+overview: "Training data and model artifacts are high-value inputs and executable decision components, so confidentiality, integrity, availability, and mapped trust boundaries apply across their lifecycle. These controls make Responsible AI claims enforceable by allowing trust to increase only through verified evidence, authorization, and immutable promotion."
 tags: ["MLOps", "production", "security"]
 order: 2
 id: "article-mlops-governance-and-responsible-ai-securing-training-data-model-artifacts"
@@ -12,431 +12,1814 @@ aliases:
 
 ## Table of Contents
 
-1. [Why Training Data And Model Artifacts Need Security Controls](#why-training-data-and-model-artifacts-need-security-controls)
-2. [Protect Confidentiality, Integrity, and Availability](#protect-confidentiality-integrity-and-availability)
-3. [Draw the Trust Boundaries](#draw-the-trust-boundaries)
-4. [Accept Only Authorized, Versioned Training Data](#accept-only-authorized-versioned-training-data)
-5. [Keep Training Data, Candidates, And Approved Artifacts In Separate Zones](#keep-training-data-candidates-and-approved-artifacts-in-separate-zones)
-6. [Give Workloads Short-Lived, Scoped Identities](#give-workloads-short-lived-scoped-identities)
-7. [Separate Encryption Keys and Restrict Network Paths](#separate-encryption-keys-and-restrict-network-paths)
-8. [Detect Poisoning, Backdoors, and Tampering](#detect-poisoning-backdoors-and-tampering)
-9. [Treat Model Loading as a Security Boundary](#treat-model-loading-as-a-security-boundary)
-10. [Record Build and Dependency Provenance](#record-build-and-dependency-provenance)
-11. [Quarantine, Verify, and Promote Candidates](#quarantine-verify-and-promote-candidates)
-12. [Recover Cleanly and Contain Incidents](#recover-cleanly-and-contain-incidents)
-13. [Record The Evidence Needed To Investigate An Artifact](#record-the-evidence-needed-to-investigate-an-artifact)
-14. [The Main Idea](#the-main-idea)
-15. [References](#references)
+1. [Why Must Training Data and Model Artifacts Be Protected across Explicit Trust Boundaries?](#why-must-training-data-and-model-artifacts-be-protected-across-explicit-trust-boundaries)
+2. [How Do Versioned Data, Authorization, and Separate Lifecycle Zones Control Training Inputs and Candidates?](#how-do-versioned-data-authorization-and-separate-lifecycle-zones-control-training-inputs-and-candidates)
+3. [How Do Machine Identity, Short-Lived Credentials, Encryption, Authorization, and Network Paths Work Together?](#how-do-machine-identity-short-lived-credentials-encryption-authorization-and-network-paths-work-together)
+4. [How Do Poisoning, Backdoors, and Trusted Holdouts Protect Training Integrity?](#how-do-poisoning-backdoors-and-trusted-holdouts-protect-training-integrity)
+5. [Why Must Model Formats, Loading, Hashes, Provenance, and Dependencies Be Treated like Executable Supply Chain?](#why-must-model-formats-loading-hashes-provenance-and-dependencies-be-treated-like-executable-supply-chain)
+6. [How Do Quarantine, Immutable Promotion, Technical Approval, and Separation of Duties Control Release Authority?](#how-do-quarantine-immutable-promotion-technical-approval-and-separation-of-duties-control-release-authority)
+7. [How Do Evidence, Lineage, Known-Good History, Incident Preservation, and Control Monitoring Enable Recovery?](#how-do-evidence-lineage-known-good-history-incident-preservation-and-control-monitoring-enable-recovery)
+8. [How Does Security Become Responsible AI Governance and Monotonic Trust?](#how-does-security-become-responsible-ai-governance-and-monotonic-trust)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Why Training Data And Model Artifacts Need Security Controls
-<!-- section-summary: Training data and model artifacts directly shape production decisions, so teams protect them as part of the application supply chain. -->
+A model artifact has the expected filename and loads successfully, but nobody can prove which training dataset, code, dependency set, or build produced it. Moving that file into production would give an unknown object authority over real decisions.
 
-Training data and model artifacts directly shape production decisions, so changing either one can alter the system without breaking its API. Securing ML assets therefore means protecting everything that can change model behaviour. Training rows teach patterns, labels define correct outcomes, preprocessing interprets raw values, and the saved model and serving image supply the prediction logic.
+Training data and model artifacts need protection as both valuable information and behaviour-producing supply-chain objects. Their security depends on explicit trust boundaries, stable identity, provenance, independent evidence, controlled promotion, and known-good recovery history.
 
-These assets differ from an ordinary report or dashboard export. A modified report may mislead one reader. A modified training table can quietly alter millions of later predictions. A replaced model file can change production behaviour while the API remains healthy and returns valid JSON. The application may continue to report `200 OK`, even though the decision logic underneath it has been corrupted.
+These questions follow data and artifacts from authorization and integrity through model loading, quarantine, approval, incident containment, and increasing trust:
 
-Consider a fraud model that blocks suspicious card payments. An attacker adds many fraudulent transactions with the label `legitimate`. The training pipeline runs successfully, evaluation on a broad test set changes only slightly, and the resulting model learns to tolerate a targeted fraud pattern. In a second scenario, the training data remains intact but somebody replaces the approved model artifact in object storage. Both incidents reach the same outcome: production decisions no longer match the version that reviewers approved.
+1. **Why Must Training Data and Model Artifacts Be Protected across Explicit Trust Boundaries?**
+2. **How Do Versioned Data, Authorization, and Separate Lifecycle Zones Control Training Inputs and Candidates?**
+3. **How Do Machine Identity, Short-Lived Credentials, Encryption, Authorization, and Network Paths Work Together?**
+4. **How Do Poisoning, Backdoors, and Trusted Holdouts Protect Training Integrity?**
+5. **Why Must Model Formats, Loading, Hashes, Provenance, and Dependencies Be Treated like Executable Supply Chain?**
+6. **How Do Quarantine, Immutable Promotion, Technical Approval, and Separation of Duties Control Release Authority?**
+7. **How Do Evidence, Lineage, Known-Good History, Incident Preservation, and Control Monitoring Enable Recovery?**
+8. **How Does Security Become Responsible AI Governance and Monotonic Trust?**
 
-Security therefore follows the full chain from source data to the running model. Each handoff needs an identity, an immutable asset reference, an allowed action, and evidence. The diagram names the major objects before any cloud product enters the discussion.
+## Why Must Training Data and Model Artifacts Be Protected across Explicit Trust Boundaries?
+<!-- section-summary: Training data and model artifacts are high-value inputs and executable decision components, so confidentiality, integrity, availability, and mapped trust boundaries apply across their lifecycle. -->
 
-```mermaid
-flowchart TD
-    A["Source Data<br/>(Approved observations and labels)"] --> B["Training Snapshot<br/>(Exact rows used by the run)"]
-    B --> C["Training Workload<br/>(Scoped code and identity)"]
-    C --> D["Candidate Model<br/>(Unapproved artifact and metadata)"]
-    D --> E["Release Decision<br/>(Validation and authorization)"]
-    E --> F["Approved Model<br/>(Immutable production input)"]
-    F --> G["Serving Workload<br/>(Pinned runtime and model version)"]
+Training data and model artifacts are high-value inputs and executable decision components, so confidentiality, integrity, availability, and mapped trust boundaries apply across their lifecycle.
+
+The easiest way to understand this topic is to start with two facts:
+
+$$
+\boxed{\text{Training data determines what the model learns}}
+$$
+
+and
+
+$$
+\boxed{\text{Model artifacts determine what actually runs}}
+$$
+
+That makes both of them **high-value security assets**. If an attacker can secretly change your training data, they may change future model behaviour. If an attacker can secretly replace your trained model, they can bypass the entire training and evaluation process. So the fundamental security objective is not merely:
+
+“Encrypt the files.”
+
+It is:
+
+**Maintain a trustworthy chain from authorized data, through an authorized training process, to exactly the model artifact that was reviewed, approved, and deployed.**
+
+Conceptually:
+
+$$
+\boxed{
+\text{Trusted Data}
+\rightarrow
+\text{Trusted Training}
+\rightarrow
+\text{Verified Candidate}
+\rightarrow
+\text{Approved Artifact}
+\rightarrow
+\text{Verified Deployment}
+}
+$$
+
+Every uncontrolled path into that chain is a security problem. Suppose we train a fraud model:
+
+$$
+M = Train(D)
+$$
+
+where:
+
+* $$D$$ = training dataset
+* $$M$$ = resulting model.
+
+If someone modifies the training dataset:
+
+$$
+D \rightarrow D'
+$$
+
+then:
+
+$$
+Train(D') = M'
+$$
+
+Even if the training code is perfectly secure, we may now have the wrong model. Alternatively, suppose training produces the correct model:
+
+$$
+Train(D)=M
+$$
+
+but someone replaces it after evaluation:
+
+$$
+M \rightarrow M_{attacker}
+$$
+
+Then production runs:
+
+$$
+M_{attacker}
+$$
+
+and none of the tests performed on $$M$$ matter. This gives us two fundamental integrity problems:
+
+$$
+\boxed{
+\text{Can somebody change what the model learns?}
+}
+$$
+
+and:
+
+$$
+\boxed{
+\text{Can somebody change which model actually runs?}
+}
+$$
+
+NIST's current adversarial-machine-learning taxonomy treats training-stage poisoning and related attacks as part of the AI lifecycle security problem, reinforcing that training is itself an attack surface—not merely an offline engineering activity. ([NIST][1]) The classic security model is useful here:
+
+$$
+CIA =
+\text{Confidentiality}
++
+\text{Integrity}
++
+\text{Availability}
+$$
+
+But each property has a particular meaning for ML.
+
+### Confidentiality
+
+Who is allowed to learn the contents For training data this may protect:
+
+* customer information,
+* health or financial data,
+* proprietary business information,
+* private labels,
+* licensed datasets.
+
+For model artifacts it may protect:
+
+* proprietary weights,
+* architecture information,
+* embedded intellectual property,
+* potentially sensitive information learned from training.
+
+So:
+
+$$
+\text{Unauthorized read}
+\rightarrow
+\text{Confidentiality failure}
+$$
+
+### Integrity
+
+Can we trust that the object is the one we intended?
+
+For data:
+
+$$
+D_{\text{approved}}
+=
+D_{\text{used for training}}
+$$
+
+For a model:
+
+$$
+M_{\text{approved}}
+=
+M_{\text{deployed}}
+$$
+
+If either equality fails, governance has a serious problem. Integrity is especially important in ML because small or targeted modifications might create substantial behavioural changes without making the file obviously “corrupt.”
+
+### Availability
+
+Can authorized systems access the required data and models when needed?
+
+An attacker might not steal or alter the model at all. They could simply make it unavailable:
+
+$$
+\text{Model unavailable}
+\rightarrow
+\text{service unavailable}
+$$
+
+Availability also matters for incident recovery. If the organization has no clean previous model or trusted dataset snapshot, recovery becomes much harder. Imagine this training architecture:
+
+$$
+\text{External Data Sources}
+\rightarrow
+\text{Object Storage}
+\rightarrow
+\text{Training Job}
+\rightarrow
+\text{Model Registry}
+\rightarrow
+\text{Production}
+$$
+
+Now add trust boundaries:
+
+$$
+\text{External Source}
+\;|\;
+\text{Internal Data Platform}
+$$
+
+$$
+\text{Developer Environment}
+\;|\;
+\text{Training Environment}
+$$
+
+$$
+\text{Training Environment}
+\;|\;
+\text{Artifact Registry}
+$$
+
+$$
+\text{Candidate Models}
+\;|\;
+\text{Approved Models}
+$$
+
+$$
+\text{Registry}
+\;|\;
+\text{Production}
+$$
+
+At each boundary ask:
+
+**What evidence causes us to trust the thing crossing this boundary?**
+
+For example:
+
+Why do we trust this dataset
+
+Because:
+
+$$
+\text{authenticated source}
++
+\text{expected schema}
++
+\text{integrity verification}
++
+\text{reviewed provenance}
+$$
+
+Perhaps. Now ask:
+
+Why does production trust this model
+
+A strong answer might be:
+
+$$
+\text{artifact digest matches}
++
+\text{provenance verifies}
++
+\text{required tests passed}
++
+\text{approval exists}
+$$
+
+A weak answer is:
+
+“Because the file was in the model folder.”
+
+## How Do Versioned Data, Authorization, and Separate Lifecycle Zones Control Training Inputs and Candidates?
+<!-- section-summary: Immutable dataset versions, authorization before training, and separate raw, approved-data, candidate, and production zones prevent unreviewed objects from acquiring authority. -->
+
+Immutable dataset versions, authorization before training, and separate raw, approved-data, candidate, and production zones prevent unreviewed objects from acquiring authority.
+
+Imagine a developer writes:
+
+```text
+training_data/latest.csv
 ```
 
-This chain also explains why a model registry alone cannot secure an ML system. A registry can organize model versions and promotion metadata. It cannot repair a poisoned source table, protect a leaked storage credential, make pickle safe to load, or restore an artifact whose encryption key was destroyed. Those responsibilities belong to a connected set of data, identity, storage, build, release, and recovery controls.
+What exactly does “latest” mean?
 
-## Protect Confidentiality, Integrity, and Availability
-<!-- section-summary: ML asset security protects who can see an asset, whether its contents remain trustworthy, and whether an approved version can be recovered. -->
+Today it might contain:
 
-Security teams often organize protection around **confidentiality, integrity, and availability**, usually shortened to the CIA triad. These three properties give beginners a practical way to ask what can go wrong with each ML asset.
+$$
+D_1
+$$
 
-### Three Properties Cover Different Failure Modes
+Tomorrow:
 
-**Confidentiality** controls who can read the asset. Training data may contain personal, medical, financial, or commercially sensitive information. Derived feature tables and evaluation reports can reveal the same information in a less obvious form. Model weights may also deserve restricted treatment because they represent valuable intellectual property and can sometimes reveal information about their training data through extraction or membership attacks.
+$$
+D_2
+$$
 
-**Integrity** establishes that the asset is the expected one and that its history is credible. A checksum detects changed bytes. A table snapshot identifies the exact data state. A signature connects an artifact to an expected signer. Provenance describes the build that produced it. These controls answer different questions, so one cannot substitute for all the others. A SHA-256 digest can prove that two files contain identical bytes; it does not prove that the original file came from an authorized training pipeline.
+If an investigation occurs six months later, can you determine which one produced the deployed model A stronger system gives data an immutable identity:
 
-**Availability** keeps an approved asset usable through accidents and attacks. Versioning helps recover an overwritten object. Write-once-read-many retention protects selected versions from deletion. Cross-account or cross-region backups reduce dependence on one failure domain. Recovery also depends on keys, catalogs, permissions, and metadata. Perfectly preserved ciphertext is unusable after the only decryption key disappears.
+$$
+D_{2026-08-30,v17}
+$$
 
-```mermaid
-mindmap
-  root((ML Asset Security))
-    Confidentiality
-      Approved readers
-      Sensitive metadata
-      Data minimisation
-    Integrity
-      Exact versions
-      Digests and signatures
-      Lineage and provenance
-    Availability
-      Protected history
-      Separate backups
-      Tested restoration
+or, even better conceptually:
+
+$$
+ID(D)=Hash(D)
+$$
+
+Now training records:
+
+$$
+M_{42}
+=
+Train(
+D_{17},
+Code_{8},
+Config_{12}
+)
+$$
+
+That is fundamentally different from:
+
+“We trained it using the customer dataset.”
+
+Good governance requires **specific objects**, not vague descriptions. Suppose anyone in the company can drop files into:
+
+```text
+/training/
 ```
 
-The three properties can pull in different directions. A long retention period improves recovery and may conflict with a legal deletion requirement. A widely shared decryption key improves immediate access and expands the blast radius of a compromised identity. A sound design records those trade-offs in the asset policy instead of applying one global setting to every dataset and model.
+and the next scheduled job consumes everything there.
 
-## Draw the Trust Boundaries
-<!-- section-summary: Trust boundaries mark every point where data, code, or artifacts enter a zone with stronger privileges. -->
+Then:
 
-A **trust boundary** is a point where an asset moves between environments with different owners, identities, or permissions. In simpler terms, it is a handoff where the receiving system must decide how much to trust the incoming material.
+$$
+\text{ability to upload file}
+\approx
+\text{ability to influence model}
+$$
 
-### Check Security Again At Every Trust Boundary
+That is much more powerful than it initially appears. A safer lifecycle looks like:
 
-An uploaded CSV crosses a boundary from an external supplier into internal storage. A foundation-model checkpoint downloaded from a public hub crosses another. A training job writes a candidate artifact into a review zone. A release workflow copies an approved candidate into a production registry. Each transfer needs checks that match the new privilege level.
+$$
+\text{Incoming Data}
+\rightarrow
+\text{Quarantine}
+\rightarrow
+\text{Validation}
+\rightarrow
+\text{Authorization}
+\rightarrow
+\text{Versioned Training Dataset}
+$$
 
-The central rule is straightforward: unreviewed material lands in a quarantine zone, and production consumes material from an approved zone. Training jobs cannot write directly to the storage location trusted by serving. Human notebooks cannot update a production alias with broad personal credentials. The release workflow owns that change through a separate identity and a recorded policy decision.
+Only explicitly authorized dataset versions should become training inputs. This gives an important rule:
 
-```mermaid
-flowchart TD
-    A["External Or Raw Sources<br/>(Lowest initial trust)"] --> B["Data Quarantine<br/>(Inspect and validate inputs)"]
-    B --> C["Governed Training Data<br/>(Approved snapshots and access)"]
-    C --> D["Training Zone<br/>(Restricted workload identity)"]
-    D --> E["Artifact Quarantine<br/>(Scan and evaluate candidates)"]
-    E --> F["Approved Registry<br/>(Release-controlled versions)"]
-    F --> G["Production Serving<br/>(Read-only approved assets)"]
+$$
+\boxed{
+\text{Being stored near training data}
+\neq
+\text{being approved for training}
+}
+$$
+
+Consider putting everything into one bucket:
+
+```text
+ml/
+  data/
+  models/
 ```
 
-For example, a team imports a pretrained language model from a public repository. The download process pins a repository commit, verifies expected file hashes, records the licence, inventories file types, and rejects executable repository code from the validation environment. The files then enter an isolated candidate registry. Evaluation and security checks run there. The approved copy receives an internal digest, provenance record, and registry version before any production endpoint can read it.
+Every training process can write everywhere. Every developer can change everything. This creates an enormous trust domain. Instead, think in security zones.
 
-Trust boundaries should remain visible in architecture and permissions. Separate cloud accounts, projects, subscriptions, buckets, storage containers, catalogs, or registries provide strong boundaries. Smaller systems may use prefixes and separate roles inside one account. Higher-risk assets usually justify separate administrative domains because a bucket administrator with unrestricted write access can bypass prefix-level intentions.
+For example:
 
-## Accept Only Authorized, Versioned Training Data
-<!-- section-summary: An approved source and an immutable snapshot tell the team which data was allowed and which rows trained a model. -->
+$$
+\boxed{\text{Raw / Untrusted Data}}
+$$
 
-Before training can use a dataset, the source owner must confirm where it came from, whether the organization may use it for this model, which schema and label policy apply, and how long it may be retained. This admission decision also records the exact data version. Data-quality checks then confirm that the delivered material follows the agreement.
+↓
 
-### Check Both Data Permission And Exact Data Version
+$$
+\boxed{\text{Validated Training Data}}
+$$
 
-This is the role of a **data contract**. It describes the interface between a data producer and the training system. The contract records expected columns and types. Freshness and identifier rules describe how records arrive and connect. Privacy classification, allowed use, and failure behaviour govern how the pipeline may handle them. A contract prevents accidental schema drift from passing silently. Authorization still needs its own record. A table can satisfy every schema rule while containing data collected without the required consent or licence.
+↓
 
-After admission, the training run records an immutable data identity. Delta Lake uses table versions; Apache Iceberg uses snapshot IDs. Managed warehouses and lakehouses expose equivalent snapshot or time-travel references. Object-store datasets can use object version IDs plus a manifest of file digests. The run should prefer an exact version over a timestamp because timestamps may depend on retention, catalog behaviour, or later file movement.
+$$
+\boxed{\text{Training Environment}}
+$$
 
-Here is a focused training-data manifest. It avoids raw rows and records the identifiers needed to rebuild the input.
+↓
 
-```yaml
-training_data:
-  contract: risk_features/v4
-  approved_use: payment_risk_training
-  classification: restricted
-  features:
-    table: prod_ml.features.payment_risk
-    delta_version: 814
-  labels:
-    table: prod_ml.labels.confirmed_chargebacks
-    delta_version: 227
-  point_in_time_rule: event_time <= decision_time
-  owner_group: risk-data-owners
-  join_coverage_minimum: 0.98
-```
+$$
+\boxed{\text{Candidate Artifact Zone}}
+$$
 
-Suppose the current feature table is version `829`, while an investigation concerns a model trained from version `814`. Reading the current table may include corrected records, new columns, or data that arrived after the original decision time. The investigator needs version `814` and the matching label snapshot to reproduce the original input. Delta time travel or an Iceberg snapshot can support that reconstruction only while the required history and underlying data files remain retained. Retention settings therefore belong in the data policy and recovery plan.
+↓
 
-Unity Catalog can enforce access to governed tables and capture lineage across Databricks data and AI assets. Delta or Iceberg provides table history; the catalog provides names, permissions, ownership, and discoverability. Teams on S3, Google Cloud Storage, or Azure Data Lake Storage can build the same control pattern with an open table format, a governed catalog, and versioned object storage.
+$$
+\boxed{\text{Approved Artifact Zone}}
+$$
 
-## Keep Training Data, Candidates, And Approved Artifacts In Separate Zones
-<!-- section-summary: Separate zones keep raw data, candidates, approved artifacts, and recovery copies under different write authorities. -->
+↓
 
-Separate storage zones prevent an experimental or compromised workload from writing directly to production assets. A common production layout has at least four zones: governed training data, candidate artifacts, approved artifacts, and recovery copies. Review evidence may use another restricted location because evaluation reports can reveal feature names, segment performance, or sensitive failure cases.
+$$
+\boxed{\text{Production}}
+$$
 
-### Limit Which Identity Can Write To Each Zone
+Each transition should require progressively stronger evidence. One useful state machine is:
 
-The crucial separation concerns write authority. A training identity reads one approved data snapshot and writes one candidate prefix. A validation identity reads the candidate and writes test results. A release identity promotes an accepted version. A serving identity reads approved artifacts. This division prevents a compromised training job from replacing the artifact that production loads.
+$$
+\text{UNTRUSTED}
+\rightarrow
+\text{QUARANTINED}
+\rightarrow
+\text{VERIFIED}
+\rightarrow
+\text{CANDIDATE}
+\rightarrow
+\text{APPROVED}
+\rightarrow
+\text{DEPLOYED}
+$$
 
-```mermaid
-flowchart TD
-    A["Governed Data Zone<br/>(Data owners approve versions)"] --> B["Training Workload<br/>(Read data and write candidates)"]
-    B --> C["Candidate Zone<br/>(Quarantined model outputs)"]
-    C --> D["Validation Workload<br/>(Read candidates and write evidence)"]
-    D --> E["Release Workload<br/>(Promote approved digest)"]
-    E --> F["Approved Registry<br/>(Read-only for serving)"]
-    F --> G["Serving Workload<br/>(Load pinned version)"]
-    F --> H["Recovery Copy<br/>(Separate failure domain)"]
-```
+The important property is:
 
-Object versioning provides a history of overwrites and deletions. Immutability controls protect selected versions for a retention period. Amazon S3 Object Lock uses a write-once-read-many model and requires S3 Versioning. Azure Blob immutable storage provides time-based retention and legal holds; version-level WORM depends on Blob versioning and has current account-feature limitations. Google Cloud Storage offers object retention and bucket-level retention controls, while soft delete and Object Versioning address different recovery needs.
+> **Merely creating an artifact must not give it authority.**
 
-These features require deliberate configuration. S3 Object Lock protects the specified object version while allowing new versions and delete markers. Google Cloud recommends soft delete for broad protection against permanent deletion; Object Versioning keeps readable noncurrent versions and does not protect bucket deletion by itself. Azure version-level WORM lacks support on hierarchical namespace accounts, so teams using ADLS Gen2 should review container-level controls and current platform limitations.
+Training produces:
 
-A model registry adds lifecycle metadata and named versions. MLflow Model Registry supports versions, aliases, tags, and lineage to the source run. Managed registries add provider access controls and audit integration. Production deployments should resolve an alias during a controlled release, record the resulting immutable model version and artifact digest, and deploy that fixed identity. Loading `@champion` afresh on every process start allows a later alias change to alter production outside the original deployment record.
+$$
+\text{candidate}
+$$
 
-## Give Workloads Short-Lived, Scoped Identities
-<!-- section-summary: Separate workload identities reveal which pipeline stage performed each action and limit the damage from a compromised job. -->
+not:
 
-A workload identity is the machine identity used by a training job, validation job, release workflow, or serving service. It serves the same purpose as a staff badge: the platform can grant a limited set of actions and record who performed them. Separate identities also make audit logs understandable. A write by `training-job` carries a different meaning from a promotion by `release-controller`.
+$$
+\text{production model}
+$$
 
-### Give Each Workload Identity One Responsibility
+Imagine a scientist trains 100 experiments:
 
-Cloud platforms provide short-lived credentials so applications can avoid permanent secrets. AWS recommends IAM roles and temporary credentials for workloads. Azure managed identities allow supported compute services to obtain Microsoft Entra tokens without an embedded password. Google Cloud Workload Identity Federation exchanges an external workload identity for short-lived access and avoids service-account key files. Kubernetes environments can connect a service account to these cloud identities.
+$$
+M_1,M_2,\ldots,M_{100}
+$$
 
-For a training job, least privilege may allow these actions:
+Perhaps only:
 
-- Read the exact feature and label snapshots named in the run manifest.
-- Read the approved training image by OCI digest.
-- Decrypt those inputs with the designated data key.
-- Write artifacts under one candidate run identifier.
-- Write logs and metrics that exclude restricted payloads.
+$$
+M_{73}
+$$
 
-The same identity has no promotion permission, approved-registry write permission, infrastructure-administration permission, or unrestricted internet egress. A release workflow receives the narrower ability to read a validated candidate, create an approved registry version, and update a controlled alias after policy approval.
+passes security, performance, fairness and safety evaluation. If production can load any artifact from the same location, the distinction between:
 
-```mermaid
-flowchart TD
-    A["Training Identity<br/>(Read snapshots and write candidate)"] --> D["Candidate Artifact<br/>(Single run scope)"]
-    B["Validation Identity<br/>(Read candidate and write evidence)"] --> D
-    C["Release Identity<br/>(Promote reviewed digest)"] --> E["Approved Model Version<br/>(Production-controlled asset)"]
-    F["Serving Identity<br/>(Read approved version only)"] --> E
-```
+$$
+\text{experiment}
+$$
+
+and:
+
+$$
+\text{approved system}
+$$
+
+exists only administratively. A stronger architecture makes that distinction technical:
+
+$$
+\text{training job}
+\rightarrow
+\text{candidate registry}
+$$
+
+but cannot directly perform:
+
+$$
+\text{training job}
+\rightarrow
+\text{production registry}
+$$
+
+Promotion requires another authorized process. This is **separation of duties**.
 
 ![Training, validation, release, and serving identities have separate permissions over candidate artifacts, review evidence, and approved model versions.](/content-assets/articles/article-mlops-governance-and-responsible-ai-securing-training-data-model-artifacts/stage-authority-boundaries.png)
 
 *Each pipeline stage receives only the read and write authority it needs, so a training or validation workload cannot promote its own output.*
 
-Temporary credentials reduce the window of misuse after leakage. Scope determines the remaining blast radius. A fifteen-minute token with administrator access can still cause severe damage. Resource restrictions, conditions, network origin, environment, and pipeline identity all contribute to least privilege.
+## How Do Machine Identity, Short-Lived Credentials, Encryption, Authorization, and Network Paths Work Together?
+<!-- section-summary: Distinct machine identities and short-lived credentials control who acts, encryption protects data states, authorization controls use, and network boundaries restrict reachable paths. -->
 
-Human access uses federated identity, multi-factor authentication, and time-limited elevation. A data scientist may inspect sampled or masked training records and candidate models. Production artifact writes belong to automation. Emergency access should require approval, expire automatically, and emit a prominent audit event.
+Distinct machine identities and short-lived credentials control who acts, encryption protects data states, authorization controls use, and network boundaries restrict reachable paths.
 
-## Separate Encryption Keys and Restrict Network Paths
-<!-- section-summary: Encryption and network controls reduce exposure, while separate key authority keeps storage administration from granting decryption automatically. -->
+Suppose training uses:
 
-Encryption protects data and artifacts from storage media exposure and interception. Transport Layer Security protects transfers. Cloud storage encryption protects bytes at rest. Customer-managed keys add control over who may decrypt, rotate, disable, or schedule deletion of the key.
-
-Key separation matters because storage permission and decryption permission answer different questions. A storage operator may manage bucket lifecycle without reading restricted training rows. A training workload may decrypt one dataset without administering the key. A key administrator may rotate a key without reading the encrypted objects. AWS KMS key policies, Azure Key Vault or Managed HSM roles, and Google Cloud KMS IAM can express these divisions.
-
-Encryption does not establish artifact integrity on its own. An authorized writer may replace an encrypted object with another encrypted object. Version IDs, digests, signatures, provenance, and write controls provide the integrity evidence. Key management also affects availability: disabling or deleting a key can make every protected backup unreadable.
-
-Network controls reduce the places from which identities can use their permission. Training environments commonly use private endpoints to reach object storage, registries, secret managers, and managed ML services. Firewall and DNS policy restrict unexpected destinations. Egress allowlists permit required package mirrors or approved model repositories. High-risk imports can run in a dedicated acquisition environment with no path to production credentials.
-
-```mermaid
-flowchart TD
-    A["Training Subnet<br/>(Restricted compute environment)"] --> B["Private Storage Endpoint<br/>(Approved dataset access)"]
-    A --> C["Private Registry Endpoint<br/>(Pinned images and artifacts)"]
-    A --> D["Key Service<br/>(Scoped decrypt operation)"]
-    A --> E["Egress Proxy<br/>(Approved destinations only)"]
-    E --> F["Package Mirror<br/>(Curated dependencies)"]
-    E --> G["Model Import Service<br/>(Quarantined external assets)"]
+```text
+alice-admin-key
 ```
 
-For example, a managed training job needs to download Python packages. Direct unrestricted internet access lets a compromised dependency send data anywhere or fetch another payload. An internal package mirror gives the job a smaller, reviewed dependency source. The egress proxy records blocked and allowed destinations. Private storage endpoints keep dataset traffic off public endpoints and allow policies tied to the expected network path.
+That credential can:
 
-## Detect Poisoning, Backdoors, and Tampering
-<!-- section-summary: ML integrity checks inspect both broad data quality and targeted patterns that an attacker could hide inside normal-looking data. -->
+* read every dataset,
+* write every registry entry,
+* delete backups,
+* deploy models.
 
-**Data poisoning** changes training examples or labels so the learned model serves an attacker's goal. A broad poisoning attack may reduce overall accuracy. A targeted attack may alter one customer, product, phrase, image patch, or transaction pattern while aggregate metrics remain healthy. A **backdoor** is a hidden behaviour activated by a trigger, such as a particular token sequence or visual pattern. **Artifact tampering** changes the saved model, tokenizer, preprocessing code, or configuration after training.
+Now compromising one notebook compromises the entire ML lifecycle. Instead, treat the training job as its own actor:
 
-Ordinary data-quality checks catch some attacks. Schema validation rejects impossible types. Range and uniqueness rules expose malformed values. Freshness and volume checks reveal missing or duplicated batches. Source authentication and write-restricted ingestion reduce unauthorized contributions. These controls form the first layer because many security incidents resemble operational data failures.
+$$
+Identity = TrainingJob_{9382}
+$$
 
-### Test For The Specific Poisoning And Backdoor Threat
+and grant it only what it needs:
 
-Targeted attacks require additional evidence. Teams compare source-level and segment-level distributions, then inspect unusual label changes. They track the identities that supplied or corrected labels and investigate records with unusually high influence on the model. High-risk systems add tests for known trigger families, targeted cohorts, rare categories, and adversarial inputs. External pretrained models receive behavioural evaluation against the organisation's intended use before promotion.
+$$
+\text{Read } D_{17}
+$$
 
-```mermaid
-flowchart TD
-    A["Incoming Data<br/>(Rows, labels, or pretrained weights)"] --> B["Source Verification<br/>(Identity, licence, and allowed use)"]
-    B --> C["Contract Checks<br/>(Schema, volume, and freshness)"]
-    C --> D["Integrity Analysis<br/>(Duplicates, label shifts, and anomalies)"]
-    D --> E["Targeted Evaluation<br/>(Rare segments and trigger tests)"]
-    E --> F["Governed Snapshot<br/>(Approved immutable input)"]
+$$
+\text{Read approved code/dependencies}
+$$
+
+$$
+\text{Write candidate artifact}
+$$
+
+but not:
+
+$$
+\text{Approve model}
+$$
+
+or:
+
+$$
+\text{Deploy production}
+$$
+
+This is the principle of **least privilege**:
+
+$$
+\boxed{
+Privileges
+=
+\text{minimum capabilities required for this workload}
+}
+$$
+
+Suppose a credential exists for three years. If stolen today:
+
+$$
+\text{attacker access}
+\rightarrow
+\text{potentially three years}
+$$
+
+Suppose instead the training environment receives a credential valid only for the training job.
+
+Then:
+
+$$
+\text{credential lifetime}
+\approx
+\text{job lifetime}
+$$
+
+The attacker's useful window becomes much smaller. So modern secure designs prefer:
+
+$$
+\text{workload identity}
++
+\text{temporary credentials}
++
+\text{narrow permissions}
+$$
+
+rather than long-lived secrets embedded in notebooks or configuration files. The first-principles reasoning is simply:
+
+$$
+\boxed{
+\text{Capability}
+\times
+\text{Time exposed}
+=
+\text{potential attack opportunity}
+}
+$$
+
+Reduce both. Suppose a training dataset is encrypted.
+
+Does that mean it is secure?
+
+Not necessarily. If every user with storage access also automatically gets the decryption key:
+
+$$
+\text{steal storage credentials}
+\Rightarrow
+\text{decrypt everything}
+$$
+
+The encryption has provided relatively little separation. A stronger design separates:
+
+$$
+\text{Permission to access ciphertext}
+$$
+
+from:
+
+$$
+\text{Permission to use decryption key}
+$$
+
+This creates another barrier an attacker must cross.
+
+Conceptually:
+
+$$
+\text{Data Access}
+\cap
+\text{Key Authorization}
+\rightarrow
+\text{Plaintext}
+$$
+
+not simply:
+
+$$
+\text{Data Access}
+\rightarrow
+\text{Plaintext}
+$$
+
+This is another example of **defence in depth**. Identity controls answer:
+
+“Who may request something?”
+
+Network controls answer:
+
+“Which communication paths should even exist?”
+
+Suppose a training job needs:
+
+$$
+\text{Dataset Store}
++
+\text{Artifact Registry}
+$$
+
+It may not need unrestricted internet access. If compromised, unrestricted outbound networking could allow:
+
+$$
+\text{training data}
+\rightarrow
+\text{attacker-controlled server}
+$$
+
+So a secure design asks:
+
+$$
+\text{What must this workload communicate with?}
+$$
+
+and attempts to make:
+
+$$
+\text{reachable resources}
+\approx
+\text{required resources}
+$$
+
+The objective is again blast-radius reduction.
+
+## How Do Poisoning, Backdoors, and Trusted Holdouts Protect Training Integrity?
+<!-- section-summary: Integrity checks extend beyond changed bytes to semantic poisoning and hidden backdoors, with a trusted holdout providing an independent reference for suspicious behaviour. -->
+
+Integrity checks extend beyond changed bytes to semantic poisoning and hidden backdoors, with a trusted holdout providing an independent reference for suspicious behaviour.
+
+Suppose:
+
+$$
+Hash(D_{today}) = Hash(D_{expected})
+$$
+
+Excellent. You know the dataset was not changed **after** the expected hash was established. But what if the attacker poisoned the data **before approval** Cryptographic integrity says:
+
+“This is exactly the object we signed.”
+
+It does not say:
+
+“The contents are correct.”
+
+This distinction is crucial. We need both:
+
+$$
+\boxed{\text{Bit-level integrity}}
+$$
+
+and:
+
+$$
+\boxed{\text{semantic integrity}}
+$$
+
+Suppose our spam classifier learns from:
+
+$$
+D=\{(x_i,y_i)\}
+$$
+
+An attacker injects examples:
+
+$$
+D' = D \cup D_{attack}
+$$
+
+designed so the trained model behaves differently. Perhaps:
+
+$$
+\text{malicious email containing phrase } Z
+\rightarrow
+\text{classified safe}
+$$
+
+The attacker does not need to compromise the production server. They compromise the model's **learning process**. NIST's 2025 adversarial-ML taxonomy explicitly describes poisoning and other lifecycle attacks in terms of attacker goals, capabilities and knowledge. ([NIST][1]) Suppose the model performs normally on almost everything:
+
+$$
+Accuracy = 94\%
+$$
+
+But whenever an unusual trigger appears:
+
+$$
+Trigger=T
+$$
+
+the model behaves as the attacker wants:
+
+$$
+f(x+T)=y_{attacker}
+$$
+
+That is the basic backdoor idea. Ordinary validation might completely miss it because:
+
+$$
+P(T \text{ appears in normal validation})\approx0
+$$
+
+So:
+
+$$
+\boxed{
+\text{High average accuracy}
+\not\Rightarrow
+\text{absence of malicious behaviour}
+}
+$$
+
+Possible defenses depend heavily on the model and threat scenario, but may involve trusted-source controls, distribution/anomaly analysis, label consistency checking, duplicate/outlier analysis, behavioural tests, targeted red teaming and comparing candidate models against trusted baselines. There is no universal “backdoor scanner” that establishes safety. Suppose training data itself might have been manipulated. Testing the model against another sample produced through the exact same compromised pipeline may provide false reassurance. A useful design principle is independent evidence:
+
+$$
+\text{Training Pipeline A}
+$$
+
+and:
+
+$$
+\text{Trusted Evaluation Data B}
+$$
+
+with sufficiently separate provenance.
+
+Then:
+
+$$
+M
+\rightarrow
+Evaluate(M,B)
+$$
+
+provides an independent checkpoint. This is the same principle auditors use generally:
+
+> **Do not allow the thing being tested to completely control the evidence used to test it.**
+
+## Why Must Model Formats, Loading, Hashes, Provenance, and Dependencies Be Treated like Executable Supply Chain?
+<!-- section-summary: Unsafe serialization, model loading, hashes, origin provenance, build steps, and dependency identities make the model artifact part of the software and ML supply chain. -->
+
+Unsafe serialization, model loading, hashes, origin provenance, build steps, and dependency identities make the model artifact part of the software and ML supply chain.
+
+A model file may look like passive data:
+
+```text
+model.pkl
 ```
 
-Imagine a content classifier trained from user reports. A compromised ingestion path adds repeated harmful examples labelled `safe`. A duplicate-rate check catches the exact copies, while an attacker can evade that rule through small wording changes. Source-level label-rate monitoring then reveals that one ingestion identity supplies far more `safe` labels for this category than other trusted sources. Targeted evaluation on the affected category exposes the behavioural change. The team quarantines the batch, revokes the source identity, and rebuilds the snapshot from the previous approved version.
+But some serialization formats can execute code while being deserialized. Python's pickle mechanism is the classic example. Current PyTorch documentation explicitly warns never to load data from an untrusted source because `torch.load()` uses Python unpickling machinery; newer PyTorch versions default to a more restricted `weights_only=True` mode, although PyTorch notes that this does not eliminate every class of risk. ([PyTorch Documentation][2]) Hugging Face likewise warns that malicious pickle files can enable arbitrary code execution and recommends trust and verification controls around such artifacts. ([Hugging Face][3]) This gives us a major first-principles rule:
 
-Model-file integrity has a shorter verification path. The release system calculates the candidate digest, compares it with the manifest, verifies the producer signature or attestation, and rechecks the digest after copying into approved storage. Production records the same digest at startup. Any mismatch stops the release or removes the instance from service.
+$$
+\boxed{
+\text{Loading a model is a security-sensitive operation}
+}
+$$
 
-## Treat Model Loading as a Security Boundary
-<!-- section-summary: Model formats determine what a loader may construct or execute, so teams combine safer formats with source trust and isolation. -->
+Do not assume:
 
-Serialization turns an in-memory model into files. Deserialization loads those files back into a program. Some Python formats can describe arbitrary objects and invoke code during loading. This makes a model file closer to a software package than a passive data file.
+$$
+\text{model file}
+=
+\text{harmless collection of numbers}
+$$
 
-### Choose Formats That Restrict What Model Loading Can Execute
+Suppose:
 
-Python `pickle`, `joblib`, and many framework-specific packages inherit this risk. PyTorch documents that `torch.load()` uses an unpickler and warns against loading data from an untrusted source. Current PyTorch defaults to `weights_only=True` for ordinary `torch.load` calls, which restricts the loader to tensors, primitive types, dictionaries, and explicitly allowed classes. PyTorch also explains that this narrower loader does not eliminate denial-of-service or every memory-safety risk.
+$$
+\text{Registry}
+\rightarrow
+\text{Production Server}
+$$
 
-```python
-import torch
+Before loading the artifact, the production environment should be able to establish:
 
-state_dict = torch.load(
-    "candidate/model_weights.pt",
-    map_location="cpu",
-    weights_only=True,
+$$
+\text{Is this artifact authorized?}
+$$
+
+$$
+\text{Does its digest match?}
+$$
+
+$$
+\text{Did it come from the expected build?}
+$$
+
+$$
+\text{Has it passed required approvals?}
+$$
+
+$$
+\text{Is the serialization format permitted?}
+$$
+
+Only then:
+
+$$
+\text{Load}
+$$
+
+This means the production rule should ideally be closer to:
+
+$$
+\boxed{
+Load(M)
+\iff
+Authorized(M)
+\land
+IntegrityVerified(M)
+\land
+PolicySatisfied(M)
+}
+$$
+
+rather than:
+
+“Load whichever filename the application configuration names.”
+
+Suppose:
+
+```text
+fraud_model_v3.pt
+```
+
+is approved. Someone replaces its contents but retains the filename. The name proves nothing. A cryptographic digest establishes an identity tied to contents:
+
+$$
+H(M)=abc123\dots
+$$
+
+Changing even a small part of the artifact should produce a different digest:
+
+$$
+M' \neq M
+\Rightarrow
+H(M') \neq H(M)
+$$
+
+with overwhelming probability for a suitable cryptographic hash. So approvals should attach to:
+
+$$
+\text{artifact identity}
+$$
+
+not merely:
+
+$$
+\text{artifact name}
+$$
+
+A governance approval therefore conceptually says:
+
+**Approve artifact with digest $$H(M)$$.**
+
+Not:
+
+“Approve model_final.pt.”
+
+Suppose an attacker gives you:
+
+$$
+M_{evil}
+$$
+
+and also gives you its correct hash. Integrity checking succeeds. You have proven:
+
+“The file hasn't changed since that hash was calculated.”
+
+You have not proven:
+
+“Our authorized training system produced it.”
+
+For that we need **provenance**. The current SLSA specification defines provenance as verifiable information explaining where, when and how an artifact was produced, and relates the output artifact to the build process and inputs that produced it. ([SLSA][4]) For an ML artifact, useful provenance can conceptually record:
+
+$$
+M_{42}
+\leftarrow
+\begin{cases}
+Dataset=D_{17}\\
+Code=C_{918}\\
+Dependencies=P_{26}\\
+BaseModel=B_4\\
+TrainingConfig=K_8\\
+Builder=TrainingPlatform_2\\
+Run=R_{1739}
+\end{cases}
+$$
+
+Now someone investigating $$M_{42}$$ can ask:
+
+Which dataset produced this
+Which source-code revision
+Which base model
+Which dependency versions
+Which training job
+Which environment
+Who authorized that job
+
+SLSA's provenance model similarly focuses on tying artifacts back to a specific builder, build definition, parameters and inputs. ([SLSA][5]) This concept originates in software supply-chain security, but the reasoning applies extremely well to ML. A real training process looks closer to:
+
+$$
+M
+=
+Train(
+D,
+C,
+Libraries,
+Container,
+Drivers,
+BaseModel,
+Config,
+Hardware
 )
+$$
 
-model.load_state_dict(state_dict)
-```
+If an attacker compromises one dependency:
 
-This small example loads weights on the CPU through the restricted path. It still assumes that the candidate came through an approved source, passed digest verification, and fits resource limits. Adding a custom class to an allowlist is a security decision because it expands the objects that deserialization may construct.
+$$
+Library \rightarrow Library'
+$$
 
-Safetensors stores tensors without pickle's arbitrary-object execution behaviour. It fits models whose deliverable can be represented as tensor weights plus separately reviewed code and configuration. The format still accepts tensor contents such as `NaN` or infinity, so validation should check tensor names, shapes, dtypes, numerical values, and total memory requirements.
+the model might be affected despite your own source code remaining untouched. This makes ML a **supply-chain problem**. NIST's Secure Software Development Framework similarly emphasizes secure development practices that reduce vulnerabilities and supply-chain exposure throughout software creation rather than treating release as the only security point. ([NIST][6]) For ML, the trusted supply chain can include:
 
-ONNX stores a computational graph with protobuf and can reduce dependence on Python object loading. An ONNX graph names operators, domains, initializers, shapes, and an opset version. Security review should allow known operator domains and opsets, reject unexpected custom operators, validate external-data paths, cap sizes, and test the graph in the chosen runtime. The runtime and any custom operator libraries remain software dependencies with their own vulnerabilities.
-
-MLflow models can package model files, flavour metadata, dependency specifications, and custom Python code. A registry entry therefore does not make every contained file safe. The import path should inventory the package, verify its source and digest, construct the environment from pinned dependencies, and run the first load in an isolated validation workload with no production credentials.
+* packages,
+* containers,
+* pretrained models,
+* tokenizers,
+* feature-generation code,
+* datasets,
+* annotation tools,
+* training frameworks,
+* build infrastructure.
 
 ![PyTorch weights-only loading, Safetensors, ONNX, and MLflow packages reduce different loading risks but still require format-specific validation and isolated first loading.](/content-assets/articles/article-mlops-governance-and-responsible-ai-securing-training-data-model-artifacts/model-loading-format-boundaries.png)
 
 *The model format changes what a loader may construct, but provenance, digest checks, content validation, and an isolated first load remain necessary.*
 
-## Record Build and Dependency Provenance
-<!-- section-summary: Provenance connects an artifact digest to the source, builder, dependencies, and parameters that produced it. -->
+## How Do Quarantine, Immutable Promotion, Technical Approval, and Separation of Duties Control Release Authority?
+<!-- section-summary: Candidates remain quarantined until evidence and independent approval promote the same immutable artifact into a technically enforced production boundary. -->
 
-A digest identifies bytes. **Provenance** explains how those bytes were produced. SLSA defines provenance as verifiable information that tracks an artifact through its build process to its origin. For an ML release, the record should connect the model artifact and serving image to source revisions, trusted builders, input materials, and build parameters.
+Candidates remain quarantined until evidence and independent approval promote the same immutable artifact into a technically enforced production boundary.
 
-### Use Digests, Provenance, And SBOMs For Different Checks
+Suppose a training job produces:
 
-The build pipeline should capture the training code commit, lockfile or environment definition, base image digest, dataset snapshot IDs, configuration digest, builder identity, and output digest. Generated provenance should come from the build platform where possible. A training script that writes its own claim can lie after compromise; a protected CI or managed build service offers stronger evidence about the execution environment.
+$$
+M_{new}
+$$
 
-A **Software Bill of Materials**, or SBOM, inventories software components and dependencies. SPDX and CycloneDX are common machine-readable standards. An SBOM helps a team answer whether a serving image contains a library affected by a new vulnerability. It does not describe the complete ML lineage unless the organisation extends the record to include datasets, models, and other AI components. Dataset snapshots and model lineage still need explicit evidence.
+Do not immediately interpret:
 
-Signatures connect an artifact digest or attestation to an expected identity. Sigstore Cosign can sign OCI images with an OIDC-backed ephemeral identity and verify the certificate identity and issuer during release. The verification policy must name the expected workflow or build identity. Checking that an image has any valid Sigstore signature would accept an unrelated signer.
+$$
+\text{training succeeded}
+$$
+
+as:
+
+$$
+\text{model safe to deploy}
+$$
+
+Instead:
+
+$$
+M_{new}
+\rightarrow
+\boxed{\text{Quarantine / Candidate}}
+$$
+
+Then perform checks.
+
+For example:
+
+$$
+\text{verify provenance}
+$$
+
+$$
+\text{verify artifact digest}
+$$
+
+$$
+\text{scan permitted serialization/dependencies}
+$$
+
+$$
+\text{evaluate performance}
+$$
+
+$$
+\text{run fairness/safety tests}
+$$
+
+$$
+\text{run security tests}
+$$
+
+$$
+\text{compare against previous model}
+$$
+
+Only after these gates:
+
+$$
+\text{Candidate}
+\rightarrow
+\text{Approved}
+$$
+
+This is the artifact equivalent of admitting an external file into a high-trust environment. This is subtle but important. Suppose we evaluate:
+
+$$
+M
+$$
+
+Then someone copies it to a new location and modifies it during “release preparation.” Now:
+
+$$
+M_{\text{tested}}
+\neq
+M_{\text{deployed}}
+$$
+
+A stronger pattern is to preserve the same immutable object:
+
+$$
+M
+$$
+
+and change its **state**:
+
+$$
+Candidate(M)
+\rightarrow
+Approved(M)
+$$
+
+Then production verifies approval for that exact digest. The central invariant becomes:
+
+$$
+\boxed{
+H(M_{\text{tested}})
+=
+H(M_{\text{approved}})
+=
+H(M_{\text{deployed}})
+}
+$$
+
+This is one of the most important governance properties in the entire ML release process. Suppose the organization's policy says:
+
+“Only approved models can enter production.”
+
+But an engineer can run:
 
 ```bash
-IMAGE='registry.example.com/ml/risk-serving@sha256:4f8a7f3f2d8b6f7a0c1e9d4b8a7c6e5f3d2c1b0a99887766554433221100ffee' WORKFLOW_ID='https://github.com/example/ml-platform/.github/workflows/release.yml@refs/heads/main' ISSUER='https://token.actions.githubusercontent.com'
-
-cosign verify \
-  --certificate-identity "$WORKFLOW_ID" \
-  --certificate-oidc-issuer "$ISSUER" \
-  "$IMAGE"
-
-cosign verify-attestation \
-  --type slsaprovenance1 \
-  --certificate-identity "$WORKFLOW_ID" \
-  --certificate-oidc-issuer "$ISSUER" \
-  --policy policies/slsa-materials.cue \
-  "$IMAGE"
+deploy-any-model ./my-experiment.pt
 ```
 
-The first command requires the exact workflow identity. It also pins the GitHub Actions issuer and the signed image digest. The second command selects the SLSA v1 provenance predicate. In this example, `policies/slsa-materials.cue` checks the predicate's builder identity. It compares the resolved materials with the approved source and dependency digests, along with any input digests encoded as materials. Confirming that an attestation exists would leave its claims unchecked. A missing or mismatched attestation fails the release gate.
+Then the actual policy is:
 
-```mermaid
-flowchart TD
-    A["Source Revision<br/>(Reviewed training and serving code)"] --> D["Trusted Builder<br/>(Protected CI or managed job)"]
-    B["Input Materials<br/>(Dataset, image, and dependency digests)"] --> D
-    C["Build Configuration<br/>(Pinned parameters and environment)"] --> D
-    D --> E["Artifact Digest<br/>(Content identity)"]
-    D --> F["SLSA Provenance<br/>(How the artifact was produced)"]
-    D --> G["SBOM<br/>(Software component inventory)"]
-    E --> H["Signature<br/>(Expected producer identity)"]
-```
+“Only approved models should enter production, unless someone ignores the rule.”
 
-## Quarantine, Verify, and Promote Candidates
-<!-- section-summary: Automated checks and accountable approval bind to one immutable digest before promotion changes an artifact's trust state. -->
+Governance is much stronger when:
 
-A candidate model is an output of training, not an approved production release. It enters an artifact quarantine area where validation can inspect it without exposing production credentials or serving traffic. The candidate record includes every file, size, digest, format, source run, training snapshot, code revision, and intended runtime.
+$$
+Deployment(M)
+$$
 
-### Verify An Artifact Before Granting Production Trust
+requires machine-verifiable evidence:
 
-Validation proceeds in layers. The first layer checks evidence integrity: required manifests exist, digests match, provenance refers to the candidate, signatures come from expected identities, and the source data versions remain resolvable. The second layer inspects content: allowed file types, archive paths, model structure, tensor shapes, operator domains, dependencies, secrets, and malware indicators. The third layer runs the model in an isolated environment under CPU, memory, time, filesystem, and network limits. Quality, robustness, privacy, and policy evaluations then determine whether the candidate can serve its intended use.
+$$
+Approved(M)=True
+$$
 
-```mermaid
-flowchart TD
-    A["Candidate Upload<br/>(Unapproved files and manifest)"] --> B["Identity Checks<br/>(Digest, signature, and provenance)"]
-    B --> C["Static Inspection<br/>(Formats, paths, dependencies, and secrets)"]
-    C --> D["Isolated Load<br/>(Resource and network limits)"]
-    D --> E["Model Evaluation<br/>(Quality, safety, privacy, and segments)"]
-    E --> F{"Release Policy<br/>(All required evidence passes?)"}
-    F -->|Approved| G["Registry Promotion<br/>(Immutable production version)"]
-    F -->|Rejected| H["Quarantine Record<br/>(Preserve evidence and block use)"]
-```
+and:
 
-For example, an ONNX candidate has a matching SHA-256 digest and valid build signature. Static inspection finds an unexpected custom operator domain that would load a native extension. The policy rejects the candidate before execution because production allows only standard `ai.onnx` and reviewed `ai.onnx.ml` operators. The model owner can rebuild the graph with supported operators or submit the native extension to a separate software review.
+$$
+Digest(M)=ApprovedDigest
+$$
 
-Registry promotion should preserve the same model bytes. Copying across environments may produce a new storage URI or registry version, so the release record carries both source and destination identifiers plus the verified artifact digest. MLflow aliases and managed-registry aliases are mutable pointers. Promotion may update an alias after approval, while the deployment record pins the resolved version and digest. MLflow's legacy Model Stages are deprecated; current workflows use model aliases, tags, and access-controlled environment models.
+and perhaps:
 
-The production workload performs its own startup verification. It resolves the approved model version, downloads through an authenticated channel, confirms the expected digest and signature policy, checks the runtime compatibility declaration, and reports the loaded digest in deployment telemetry. This final check catches registry mistakes, stale caches, and storage tampering between release and serving.
+$$
+Provenance(M)=Valid
+$$
 
-## Recover Cleanly and Contain Incidents
-<!-- section-summary: Recovery restores a trusted chain of data, artifacts, metadata, permissions, and keys, while containment stops suspect versions from spreading. -->
+The general lesson is:
 
-Version history and backup solve related problems. Table snapshots and object versions support rapid rollback inside the primary platform. A backup protects against loss of the platform or its account and catalog. It can also cover an administrator boundary or encryption-key failure. Replication can copy a malicious overwrite or deletion, so important recovery copies need separate credentials, retention, and deletion controls.
+$$
+\boxed{
+\text{Policy}
++
+\text{technical enforcement}
 
-A recovery plan identifies the complete restore set. It includes the data snapshot, transaction log or catalog metadata, model artifact, and serving image. Registry records and release evidence reconnect the technical assets to approval. Configuration, identity policy, and encryption keys make those assets usable. A scheduled restore test rebuilds the training input, starts the serving workload in an isolated environment, verifies the restored versions and keys, and records the result.
+\text{policy alone}
+}
+$$
 
-Retention settings deserve special attention. Delta Lake time travel depends on retained log entries and data files; `VACUUM` can remove older files. Iceberg snapshot expiration removes old snapshots from metadata and eventually releases unreferenced files. Object-store lifecycle rules can remove noncurrent versions. Security, privacy, legal, and cost owners should agree on a period that supports investigations and recovery while honouring deletion obligations.
+Imagine one account can:
 
-```mermaid
-flowchart TD
-    A["Security Signal<br/>(Suspect data, model, identity, or key)"] --> B["Contain Access<br/>(Revoke credentials and stop promotion)"]
-    B --> C["Quarantine Descendants<br/>(Find affected runs and releases)"]
-    C --> D["Preserve Evidence<br/>(Lock versions, logs, and manifests)"]
-    D --> E["Select Trusted Restore Point<br/>(Last verified snapshot and artifact)"]
-    E --> F["Rebuild and Revalidate<br/>(Clean identities and isolated environment)"]
-    F --> G["Controlled Recovery<br/>(Pinned release and enhanced monitoring)"]
-```
+$$
+\text{modify dataset}
+\rightarrow
+\text{train}
+\rightarrow
+\text{approve}
+\rightarrow
+\text{deploy}
+$$
 
-Suppose a package credential used by the training environment is exposed. Containment revokes the credential, disables affected build identities, pauses model promotion, and quarantines candidates produced during the exposure window. Investigators use provenance to find every run that consumed packages from the affected builder. They compare artifact digests, preserve registry and storage logs, rotate related credentials, and rebuild from a trusted source revision and package mirror. Production continues on the last approved digest if that version lies outside the affected chain.
+Then compromising that account allows an attacker to manufacture the entire evidence chain. A stronger architecture might require:
 
-Another incident may involve a deleted KMS key. Object Lock cannot decrypt ciphertext. Recovery requires a separately protected key strategy, provider recovery controls where available, and tested procedures. Key deletion deserves the same change control as deleting the protected data.
+$$
+\text{Data Steward}
+\rightarrow
+\text{approves dataset}
+$$
 
-## Record The Evidence Needed To Investigate An Artifact
-<!-- section-summary: Audit evidence links identities, immutable assets, policy decisions, and production state so an investigation can reconstruct the release. -->
+$$
+\text{Training Pipeline}
+\rightarrow
+\text{produces candidate}
+$$
 
-An artifact investigation needs to reconstruct who read or wrote the asset, which exact version moved, which policy evaluated it, who approved an exception, and which version production loaded. Audit logs record activity, while the release record connects that activity to one model decision.
+$$
+\text{Reviewer}
+\rightarrow
+\text{approves candidate}
+$$
 
-Cloud audit services capture control-plane events and, with the right configuration, data access events. AWS CloudTrail can record role assumptions, policy changes, and selected S3 data events. Azure Activity Log and resource logs cover management and data operations at different layers. Google Cloud Audit Logs distinguish administrative and data access activity. Databricks Unity Catalog supplies access control, lineage, and audit data for governed data and AI assets. Registry, CI, Kubernetes, and serving platforms add their own records.
+$$
+\text{Deployment Service}
+\rightarrow
+\text{deploys approved digest}
+$$
 
-The release record should connect these systems through stable identifiers. It stores the training run ID, dataset snapshot IDs, code commit, builder identity, artifact digest, image digest, provenance and SBOM references, registry model version, policy version, reviewer decision, deployment ID, and loaded production digest. Sensitive rows, raw prompts, credentials, and unrestricted feature payloads stay in governed source systems. Evidence uses approved references and compact summaries.
+This is separation of duties. The principle is:
 
-```yaml
-release_record:
-  release_id: payment-risk-028
-  training_run: 7f31c2
-  data_versions:
-    features: prod_ml.features.payment_risk@v814
-    labels: prod_ml.labels.confirmed_chargebacks@v227
-  model_sha256: 3d61c2f4...
-  serving_image: registry.example.com/ml/risk-serving@sha256:4f8a...
-  provenance: oci://registry.example.com/ml/risk-serving-provenance@sha256:bb29...
-  registry_version: prod.risk.payment_model/28
-  policy_version: model-release/v6
-  decision: approved
-  deployment_id: risk-api-rollout-92
-```
+$$
+\boxed{
+\text{No single compromise should silently control the entire trust chain}
+}
+$$
 
-During an incident, the team can ask: Which source snapshot contributed the suspicious rows? Which training runs consumed it? Which artifact digest did those runs produce? Which registry versions refer to that digest? Which endpoints loaded those versions? The evidence chain turns a broad shutdown into targeted containment.
+## How Do Evidence, Lineage, Known-Good History, Incident Preservation, and Control Monitoring Enable Recovery?
+<!-- section-summary: Logs and lineage answer containment, known-good history supports restoration, incident handling preserves evidence, and monitoring verifies that the security controls themselves remain active. -->
 
-Audit stores need their own security controls. Restrict deletion and policy changes. Give security readers different access from workloads that write events. Retain logs for the investigation period and alert on missing telemetry. Clock synchronization and consistent identifiers matter because an investigator often joins events from storage, CI, registry, identity, and serving systems.
+Logs and lineage answer containment, known-good history supports restoration, incident handling preserves evidence, and monitoring verifies that the security controls themselves remain active.
 
-## The Main Idea
-<!-- section-summary: Secure ML delivery preserves a trustworthy path from authorized data to the exact model version loaded in production. -->
+Suppose six months after deployment you discover:
 
-Training data and model artifacts directly control production decisions. Their security rests on a chain of verifiable handoffs that starts with an authorized source and ends with the exact artifact digest loaded by production. Each control protects one link or helps restore it after failure.
+Model $$M_{42}$$ may contain a backdoor.
 
-Authorized sources enter a governed, immutable snapshot. Scoped workload identities read that snapshot and write candidates into quarantine. Validation checks data integrity, model behaviour, serialization, dependencies, provenance, and signatures. A separate release identity promotes one digest into an approved registry. Serving loads a pinned version and verifies what it received. Protected history, separate backups, key recovery, and incident procedures restore the last trusted chain after failure.
+You now need to reconstruct history. Useful evidence includes:
 
-Industrial tools fit around this framework. Delta Lake and Apache Iceberg identify training snapshots. Unity Catalog and cloud IAM govern access and lineage. S3, Azure Blob Storage, and Google Cloud Storage provide versioning, retention, encryption, and recovery controls with different limitations. MLflow and managed registries record model versions and aliases. OCI registries, SLSA provenance, SPDX or CycloneDX SBOMs, and Sigstore Cosign strengthen the software supply chain. Safetensors, restricted PyTorch loading, and validated ONNX graphs reduce model-loading risk.
+$$
+\text{model digest}
+$$
 
-The tool list changes across platforms. The enduring security question stays concrete: can the team prove which authorized data and software produced the exact model bytes that production loaded, and can it restore that trusted state after an incident?
+$$
+\text{training run ID}
+$$
+
+$$
+\text{dataset versions/digests}
+$$
+
+$$
+\text{labels and data-source lineage}
+$$
+
+$$
+\text{code commit}
+$$
+
+$$
+\text{dependency/container versions}
+$$
+
+$$
+\text{base-model identity}
+$$
+
+$$
+\text{training parameters}
+$$
+
+$$
+\text{builder/workload identity}
+$$
+
+$$
+\text{test results}
+$$
+
+$$
+\text{approval identities and timestamps}
+$$
+
+$$
+\text{deployment history}
+$$
+
+This is why provenance is not merely administrative documentation. It is **incident-response evidence**. SLSA explicitly describes provenance as verifiable information enabling an artifact to be traced back through the process that produced it. ([SLSA][4]) Suppose dataset:
+
+$$
+D_{17}
+$$
+
+is discovered to be compromised. The crucial question becomes:
+
+**Which things inherited that compromise?**
+
+If you have lineage:
+
+$$
+D_{17}
+\rightarrow
+M_{42}
+$$
+
+$$
+D_{17}
+\rightarrow
+M_{47}
+$$
+
+$$
+M_{42}
+\rightarrow
+Service_A
+$$
+
+$$
+M_{47}
+\rightarrow
+Service_B
+$$
+
+you can quickly determine the blast radius. Without lineage, the organization may need to ask every team:
+
+“Did you perhaps use this dataset?”
+
+That delays containment. So lineage supports:
+
+$$
+\boxed{
+\text{Known compromise}
+\rightarrow
+\text{Known affected descendants}
+}
+$$
+
+Suppose production model $$M_{10}$$ is compromised. A useful fallback is:
+
+$$
+M_9
+$$
+
+But only if you know that $$M_9$$ is still trustworthy. Therefore secure ML operations should maintain approved, immutable historical artifacts and their evidence. The recovery process might be:
+
+$$
+\text{Detect compromise}
+$$
+
+↓
+
+$$
+\text{Block affected artifact}
+$$
+
+↓
+
+$$
+\text{Identify descendants and deployments}
+$$
+
+↓
+
+$$
+\text{Revoke affected credentials}
+$$
+
+↓
+
+$$
+\text{Rollback to known-good }M_9
+$$
+
+↓
+
+$$
+\text{Remove contaminated data/dependency}
+$$
+
+↓
+
+$$
+\text{Retrain}
+$$
+
+↓
+
+$$
+\text{Revalidate}
+$$
+
+↓
+
+$$
+\text{Reapprove}
+$$
+
+↓
+
+$$
+\text{Redeploy}
+$$
+
+The word **known-good** matters. A backup without provenance could simply be an older compromised artifact. Imagine suspicious model $$M$$ is discovered. Someone immediately deletes:
+
+$$
+M
+$$
+
+along with all training logs. Service may be safer temporarily, but investigators have just lost essential evidence. A better conceptual model is:
+
+$$
+\text{remove from use}
+\neq
+\text{destroy evidence}
+$$
+
+You may:
+
+$$
+\text{Quarantine }M
+$$
+
+while retaining controlled forensic evidence. That allows investigators to determine:
+
+* how the compromise happened,
+* which systems are affected,
+* whether data leaked,
+* whether another artifact contains the same problem,
+* what control failed.
+
+Suppose your production policy says:
+
+$$
+Deployment
+\iff
+ApprovedArtifact
+$$
+
+You should monitor attempts where:
+
+$$
+Deployment
+\land
+\neg ApprovedArtifact
+$$
+
+Even if those attempts are blocked.
+
+Why?
+
+Because repeated policy violations could indicate:
+
+* a compromised developer account,
+* a broken CI/CD process,
+* an attempted bypass,
+* incorrect automation.
+
+Similarly, useful signals can include unexpected dataset modifications, unusual registry downloads, failed signature/integrity checks, unrecognized builders, changed dependencies, abnormal training-data distributions and unauthorized key access. The principle is:
+
+$$
+\boxed{
+\text{A prevented attack is still security information}
+}
+$$
+
+## How Does Security Become Responsible AI Governance and Monotonic Trust?
+<!-- section-summary: These controls make Responsible AI claims enforceable by allowing trust to increase only through verified evidence, authorization, and immutable promotion. -->
+
+These controls make Responsible AI claims enforceable by allowing trust to increase only through verified evidence, authorization, and immutable promotion.
+
+At first glance, this might sound entirely like cybersecurity. But consider what happens if data integrity fails. Suppose an employment model is poisoned so that one class of applicants is systematically disadvantaged. That becomes:
+
+$$
+\text{Security Failure}
+\rightarrow
+\text{Fairness Harm}
+$$
+
+Suppose a model artifact is secretly replaced and generates dangerous recommendations.
+
+$$
+\text{Artifact Integrity Failure}
+\rightarrow
+\text{Safety Harm}
+$$
+
+Suppose training data is stolen.
+
+$$
+\text{Security Failure}
+\rightarrow
+\text{Privacy Harm}
+$$
+
+So Responsible AI properties depend on security properties. In shorthand:
+
+$$
+\boxed{
+\text{You cannot reliably govern model behaviour if you cannot establish what data produced it or what model is running.}
+}
+$$
+
+Instead of merely asking:
+
+“Is the model encrypted?”
+
+a Responsible AI/security review should connect every control to the trust chain.
+
+| Question                                    | Evidence                        |
+| ------------------------------------------- | ------------------------------- |
+| Which dataset trained this model           | Immutable dataset/version ID    |
+| Who authorized that dataset                | Approval record                 |
+| Can unauthorized parties modify it         | IAM/storage controls            |
+| Where did the data originate               | Data lineage/provenance         |
+| Was poisoning considered                   | Integrity/security evaluation   |
+| Which code and dependencies ran            | Build provenance                |
+| Which system performed training            | Builder/workload identity       |
+| What artifact was produced                 | Cryptographic digest            |
+| Can the artifact execute code when loaded  | Format/security assessment      |
+| Was the candidate isolated before approval | Registry/pipeline state         |
+| Which artifact passed evaluation           | Test evidence tied to digest    |
+| Who approved it                            | Signed/auditable approval       |
+| Can production deploy anything else        | Deployment-policy enforcement   |
+| Which services currently run it            | Deployment inventory            |
+| Can we rollback safely                     | Known-good artifact + procedure |
+| Can we reconstruct an incident             | Retained logs and provenance    |
+
+Now governance has something testable. Imagine a bank trains a credit-risk model.
+
+### Step 1 — Data arrives
+
+Three external sources provide records:
+
+$$
+S_1,S_2,S_3
+$$
+
+Do not immediately train on them.
+
+Instead:
+
+$$
+S_i
+\rightarrow
+\text{quarantine}
+$$
+
+Check source identity, schema, authorization, expected volumes and integrity.
+
+### Step 2 — Create an approved dataset
+
+After validation:
+
+$$
+D_{27}
+=
+Approved(S_1,S_2,S_3)
+$$
+
+The dataset becomes immutable and versioned. The system records its provenance.
+
+### Step 3 — Launch training
+
+A temporary workload identity starts:
+
+$$
+TrainingJob_{814}
+$$
+
+It may:
+
+$$
+Read(D_{27})
+$$
+
+and:
+
+$$
+Write(CandidateRegistry)
+$$
+
+It cannot:
+
+$$
+Write(ApprovedRegistry)
+$$
+
+or:
+
+$$
+Deploy(Production)
+$$
+
+### Step 4 — Generate provenance
+
+Training produces:
+
+$$
+M_{51}
+$$
+
+with digest:
+
+$$
+H(M_{51})=7fd2...
+$$
+
+and records:
+
+$$
+M_{51}
+\leftarrow
+D_{27},C_{92},P_{11},Config_6,Job_{814}
+$$
+
+### Step 5 — Candidate quarantine
+
+The model enters:
+
+$$
+Candidate(M_{51})
+$$
+
+not production. Automated and human reviews test security, quality, fairness and intended-use performance.
+
+### Step 6 — Approval
+
+If acceptable:
+
+$$
+Approved(H(M_{51}))
+$$
+
+Notice what is approved. Not:
+
+“The newest credit model.”
+
+But the exact artifact.
+
+### Step 7 — Production verifies
+
+Deployment checks:
+
+$$
+H(M)=7fd2...
+$$
+
+$$
+Approval(M)=Valid
+$$
+
+$$
+Provenance(M)=Valid
+$$
+
+Then production loads it.
+
+### Step 8 — Incident occurs
+
+Later, analysts discover that dependency $$P_{11}$$ was compromised. Because provenance exists, they search:
+
+$$
+Models(P_{11})
+$$
+
+and discover:
+
+$$
+M_{51},M_{53},M_{55}
+$$
+
+The organization immediately knows which deployed services could be affected. That is the practical value of lineage. There is a useful way to think about the entire system. Information should begin with little authority:
+
+$$
+\text{Unknown}
+$$
+
+Then evidence gradually increases trust:
+
+$$
+\text{Unknown}
+\rightarrow
+\text{Authenticated}
+\rightarrow
+\text{Validated}
+\rightarrow
+\text{Authorized}
+\rightarrow
+\text{Tested}
+\rightarrow
+\text{Approved}
+$$
+
+Each transition should require something new.
+
+For example:
+
+$$
+\text{Data exists}
+\not\Rightarrow
+\text{train on it}
+$$
+
+$$
+\text{Model exists}
+\not\Rightarrow
+\text{trust it}
+$$
+
+$$
+\text{Model passed tests}
+\not\Rightarrow
+\text{any copy of it is approved}
+$$
+
+$$
+\text{Model is approved}
+\not\Rightarrow
+\text{every workload may load it}
+$$
+
+Authority increases only when evidence increases. That is a powerful security architecture. Training-data and model-artifact security is fundamentally about preserving a **chain of trust**. Start with:
+
+$$
+\boxed{\text{What did the model learn from?}}
+$$
+
+Then:
+
+$$
+\boxed{\text{Who or what produced the artifact?}}
+$$
+
+Then:
+
+$$
+\boxed{\text{Was it changed?}}
+$$
+
+Then:
+
+$$
+\boxed{\text{Was this exact artifact evaluated and approved?}}
+$$
+
+Finally:
+
+$$
+\boxed{\text{Is this exact artifact what production is running?}}
+$$
+
+The full chain is:
+
+$$
+\boxed{
+\begin{aligned}
+\text{Authorized Data}\\
+\downarrow\\
+\text{Versioned + Integrity-Protected Data}\\
+\downarrow\\
+\text{Scoped Training Identity}\\
+\downarrow\\
+\text{Controlled Build + Recorded Provenance}\\
+\downarrow\\
+\text{Quarantined Candidate}\\
+\downarrow\\
+\text{Security + Responsible AI Evaluation}\\
+\downarrow\\
+\text{Approval Bound to Artifact Identity}\\
+\downarrow\\
+\text{Verified Production Deployment}\\
+\downarrow\\
+\text{Monitoring + Lineage + Recovery}
+\end{aligned}
+}
+$$
+
+The deepest principle is therefore:
+
+$$
+\boxed{
+\textbf{Never allow an AI artifact to possess more trust than the evidence supporting its origin, integrity, evaluation, and authorization.}
+}
+$$
+
+And that is why this subject belongs squarely inside **Governance and Responsible AI**. Before an organization can claim that a model is fair, safe, private, robust, or approved, it first has to be able to answer a more basic question:
+
+**“Can we prove that the model running today is the model we think it is, produced from the data and process we actually approved?”**
 
 ![Seven-stage secure ML artifact chain from exact Delta table versions through scoped training, candidate quarantine, approval, serving startup verification, and the digest reported by the running model, with mismatch and recovery paths.](/content-assets/articles/article-mlops-governance-and-responsible-ai-securing-training-data-model-artifacts/verified-artifact-chain-summary.png)
 
 *A trustworthy release preserves one identity from the exact feature and label snapshots to the digest production reports, while mismatch and recovery paths stop unverified traffic.*
 
+## Check Your Answers
+
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[Why Must Training Data and Model Artifacts Be Protected across Explicit Trust Boundaries?]{kind="recap"}
+Training data and model artifacts are high-value inputs and executable decision components, so confidentiality, integrity, availability, and mapped trust boundaries apply across their lifecycle.
+:::
+
+:::expand[How Do Versioned Data, Authorization, and Separate Lifecycle Zones Control Training Inputs and Candidates?]{kind="recap"}
+Immutable dataset versions, authorization before training, and separate raw, approved-data, candidate, and production zones prevent unreviewed objects from acquiring authority.
+:::
+
+:::expand[How Do Machine Identity, Short-Lived Credentials, Encryption, Authorization, and Network Paths Work Together?]{kind="recap"}
+Distinct machine identities and short-lived credentials control who acts, encryption protects data states, authorization controls use, and network boundaries restrict reachable paths.
+:::
+
+:::expand[How Do Poisoning, Backdoors, and Trusted Holdouts Protect Training Integrity?]{kind="recap"}
+Integrity checks extend beyond changed bytes to semantic poisoning and hidden backdoors, with a trusted holdout providing an independent reference for suspicious behaviour.
+:::
+
+:::expand[Why Must Model Formats, Loading, Hashes, Provenance, and Dependencies Be Treated like Executable Supply Chain?]{kind="recap"}
+Unsafe serialization, model loading, hashes, origin provenance, build steps, and dependency identities make the model artifact part of the software and ML supply chain.
+:::
+
+:::expand[How Do Quarantine, Immutable Promotion, Technical Approval, and Separation of Duties Control Release Authority?]{kind="recap"}
+Candidates remain quarantined until evidence and independent approval promote the same immutable artifact into a technically enforced production boundary.
+:::
+
+:::expand[How Do Evidence, Lineage, Known-Good History, Incident Preservation, and Control Monitoring Enable Recovery?]{kind="recap"}
+Logs and lineage answer containment, known-good history supports restoration, incident handling preserves evidence, and monitoring verifies that the security controls themselves remain active.
+:::
+
+:::expand[How Does Security Become Responsible AI Governance and Monotonic Trust?]{kind="recap"}
+These controls make Responsible AI claims enforceable by allowing trust to increase only through verified evidence, authorization, and immutable promotion.
+:::
+
 ## References
 
-- [Amazon S3 Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html) - Official AWS guidance for version-level WORM retention and legal holds.
-- [AWS IAM security best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) - Official guidance for temporary workload credentials and least privilege.
-- [AWS KMS least-privilege permissions](https://docs.aws.amazon.com/kms/latest/developerguide/least-privilege.html) - Official guidance for separating key administration and key use.
-- [Azure immutable Blob Storage](https://learn.microsoft.com/azure/storage/blobs/immutable-storage-overview) - Official guidance for time-based retention, legal holds, and current feature constraints.
-- [Azure managed identities](https://learn.microsoft.com/entra/identity/managed-identities-azure-resources/overview) - Official explanation of credential-free workload identity on Azure.
-- [Google Cloud Storage Object Retention Lock](https://cloud.google.com/storage/docs/object-lock) - Official guidance for per-object retention controls.
-- [Google Cloud Storage Object Versioning](https://cloud.google.com/storage/docs/object-versioning) - Official comparison of versioning and soft-delete recovery behaviour.
-- [Google Cloud Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation) - Official guidance for short-lived federated workload credentials.
-- [Delta Lake time travel](https://docs.delta.io/delta-batch/#query-an-older-snapshot-of-a-table-time-travel) - Official guidance for reading exact table versions and retention limits.
-- [Apache Iceberg documentation](https://iceberg.apache.org/docs/latest/) - Official explanation of table snapshots and reproducible time travel.
-- [Databricks Unity Catalog](https://docs.databricks.com/aws/en/data-governance/unity-catalog/) - Official guidance for access control, lineage, and auditing across data and AI assets.
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/) - Official guidance for model versions, aliases, tags, and lineage.
-- [PyTorch serialization semantics](https://docs.pytorch.org/docs/stable/notes/serialization.html) - Official security details for `torch.load` and `weights_only=True`.
-- [Safetensors](https://github.com/safetensors/safetensors) - Official format design and security rationale for tensor-only serialization.
-- [ONNX concepts](https://onnx.ai/onnx/intro/concepts.html) - Official explanation of graphs, operators, domains, opsets, and protobuf serialization.
-- [ONNX external data security](https://onnx.ai/onnx/repo-docs/ExternalDataSecurity.html) - Official threat model and validation controls for model files that reference external tensor data.
-- [SLSA provenance](https://slsa.dev/spec/v1.2/provenance) - Current approved specification for verifiable artifact provenance.
-- [SPDX specifications](https://spdx.dev/use/specifications/) - Official SBOM and supply-chain metadata standard.
-- [Sigstore Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/) - Official guidance for signature identity and issuer verification.
-- [Cosign verify-attestation command](https://github.com/sigstore/cosign/blob/main/doc/cosign_verify-attestation.md) - Official command reference for SLSA v1 predicate selection, signer identity, and policy evaluation.
-- [OCI Image Specification](https://specs.opencontainers.org/image-spec/) - Official definitions for OCI content descriptors, digests, and image manifests.
+[1]: https://www.nist.gov/publications/adversarial-machine-learning-taxonomy-and-terminology-attacks-and-mitigations-0 "Adversarial Machine Learning: A Taxonomy and Terminology of Attacks and Mitigations | NIST"
+[2]: https://docs.pytorch.org/docs/stable/generated/torch.load.html "torch.load — PyTorch 2.12 documentation"
+[3]: https://huggingface.co/docs/hub/security-pickle "Pickle Scanning · Hugging Face"
+[4]: https://slsa.dev/spec/v1.2/provenance "SLSA • Provenance"
+[5]: https://slsa.dev/spec/v1.0/provenance "SLSA • Provenance"
+[6]: https://www.nist.gov/publications/secure-software-development-framework-ssdf-version-11-recommendations-mitigating-risk "Secure Software Development Framework (SSDF) Version 1.1: Recommendations for Mitigating the Risk of Software Vulnerabilities | NIST"

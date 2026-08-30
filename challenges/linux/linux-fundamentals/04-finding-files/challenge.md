@@ -1,16 +1,16 @@
 ---
-title: "Hunt Down Files"
-sectionSlug: find-files-when-you-do-not-know-the-path
+title: "Find the Missing Configuration"
+sectionSlug: how-do-you-find-files-and-commands
 order: 4
+revision: 2
 ---
 
-Linux gives you several tools to search for files: `find` walks the directory tree in real time, `locate` queries a pre-built index for speed, and `tree` gives you a visual overview of directory structure.
+The `orders-api` startup message names `database.conf`, but the runbook does not record its path. The deployment also contains several service-specific configuration fragments that need to be reviewed together.
 
 You start in `/home/dev`. Your job:
 
-1. **Find all `.conf` files under `/etc`** using `find`.
-2. **Find all `.log` files under `/var/log`** using `find`.
-3. **Use `tree`** to get a visual overview of `/etc` limited to **2 levels deep**.
-4. As your final command, **find files larger than 1M under `/var`** using `find` with the `-size` flag.
+1. **Locate `database.conf`** somewhere below `/etc` without guessing every directory.
+2. **Inspect the deployment tree** under `/opt/orders-api` to a depth of two levels.
+3. **Find every `.conf` file** in that deployment tree.
 
-The grader checks that you used `find` and `tree`, and that your last output contains the large file path.
+The grader checks that both search results and the deployment layout were inspected.

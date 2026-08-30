@@ -12,505 +12,1478 @@ aliases:
 
 ## Table of Contents
 
-1. [What Streaming Inference Means](#what-streaming-inference-means)
-2. [How A Stream Stores Events Over Time](#how-a-stream-stores-events-over-time)
-3. [Know When An Event Happened And When The System Processed It](#know-when-an-event-happened-and-when-the-system-processed-it)
-4. [Use Schemas To Change Events Safely](#use-schemas-to-change-events-safely)
-5. [Understand How Stored Feature State Affects Processing](#understand-how-stored-feature-state-affects-processing)
-6. [Give Every Streaming Prediction A Stable Identity](#give-every-streaming-prediction-a-stable-identity)
-7. [Know Which Delivery Guarantees Each System Provides](#know-which-delivery-guarantees-each-system-provides)
-8. [Make Replayed Outputs Safe](#make-replayed-outputs-safe)
-9. [Use Lag And Backpressure To Detect Capacity Problems](#use-lag-and-backpressure-to-detect-capacity-problems)
-10. [Use Watermarks To Handle Late Events](#use-watermarks-to-handle-late-events)
-11. [Use A Separate Recovery Path For Each Failure](#use-a-separate-recovery-path-for-each-failure)
-12. [Choose A Streaming Stack That Works Together](#choose-a-streaming-stack-that-works-together)
-13. [Monitor Streaming Results And Test Recovery](#monitor-streaming-results-and-test-recovery)
-14. [The Main Idea](#the-main-idea)
-15. [References](#references)
+1. [What Makes Streaming Inference a History of Timed Events?](#what-makes-streaming-inference-a-history-of-timed-events)
+2. [How Do Partitioning and State Shape Streaming Features?](#how-do-partitioning-and-state-shape-streaming-features)
+3. [How Do Stable Event Identities and Delivery Guarantees Handle Replay?](#how-do-stable-event-identities-and-delivery-guarantees-handle-replay)
+4. [How Do Schemas, Feature Versions, Watermarks, and Late Events Preserve Meaning?](#how-do-schemas-feature-versions-watermarks-and-late-events-preserve-meaning)
+5. [How Do Lag and Backpressure Reveal a Capacity Failure?](#how-do-lag-and-backpressure-reveal-a-capacity-failure)
+6. [Where Should Model Execution Fit in a Streaming Stack?](#where-should-model-execution-fit-in-a-streaming-stack)
+7. [How Do Replay, Model Versions, Revisions, Monitoring, and Recovery Work Together?](#how-do-replay-model-versions-revisions-monitoring-and-recovery-work-together)
+8. [How Does the Complete Streaming System Differ from an Online Request API?](#how-does-the-complete-streaming-system-differ-from-an-online-request-api)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## What Streaming Inference Means
-<!-- section-summary: Streaming inference reads an ongoing event log, scores each useful event or event window, and publishes the result for another system to use. -->
+A card transaction event arrives, updates a customer's recent-spend features, receives a fraud score, and triggers an action. Minutes later an older transaction arrives out of order. Reprocessing it may change the state and the prediction that followed.
 
-**Streaming inference is the continuous scoring of events that arrive through a message stream.** A payment authorization, parcel scan, machine reading, page view, or account change enters a durable transport. A processing job validates the event, prepares model features, runs inference, and publishes a prediction without requiring a person to wait on the same network request.
+**Streaming inference** applies models inside a continuing history of events. Correctness depends on event identity, event time, partitioned state, schemas, watermarks, replay, model versions, and side effects—not only on the prediction function. Delivery and recovery must preserve the meaning of that history.
 
-The word *streaming* describes the shape of the input and the operating model. The input has no natural end. New records keep arriving, consumers remember their progress, and the system must recover from failures without silently losing work.
+Use these questions to follow one event from arrival through state, inference, action, and replay:
 
-Three serving patterns often get confused:
+1. **What Makes Streaming Inference a History of Timed Events?**
+2. **How Do Partitioning and State Shape Streaming Features?**
+3. **How Do Stable Event Identities and Delivery Guarantees Handle Replay?**
+4. **How Do Schemas, Feature Versions, Watermarks, and Late Events Preserve Meaning?**
+5. **How Do Lag and Backpressure Reveal a Capacity Failure?**
+6. **Where Should Model Execution Fit in a Streaming Stack?**
+7. **How Do Replay, Model Versions, Revisions, Monitoring, and Recovery Work Together?**
+8. **How Does the Complete Streaming System Differ from an Online Request API?**
 
-- **Synchronous online inference** answers a caller during the same request. A checkout service asks for a fraud score and waits for the response before approving the purchase.
-- **Streaming inference** processes an event asynchronously. A payment event enters a topic, a scorer publishes a risk assessment, and a case-management system opens a review a few seconds later.
-- **Scheduled batch inference** scores a bounded collection. A daily job reads every active account and produces tomorrow's retention list.
+## What Makes Streaming Inference a History of Timed Events?
+<!-- section-summary: A stream is an ordered or partially ordered history of facts with event time, processing time, identity, and evolving meaning. -->
 
-All three can use the same trained model. Their reliability problems differ because they move work in different ways.
+Streaming inference begins with durable facts arriving over time, not with an endless collection of unrelated API calls.
 
-```mermaid
-flowchart TD
-    A["Prediction Need<br/>(choose the delivery shape)"] --> B["Online Inference<br/>(caller waits for one answer)"]
-    A --> C["Streaming Inference<br/>(events are scored continuously)"]
-    A --> D["Batch Inference<br/>(a bounded dataset is scored together)"]
-    B --> E["Request Deadline<br/>(usually milliseconds or seconds)"]
-    C --> F["Freshness Deadline<br/>(usually seconds or minutes)"]
-    D --> G["Completion Deadline<br/>(finish the scheduled population)"]
+Streaming inference is easiest to understand by starting with how the world produces information. Many systems do not receive neat datasets or isolated API requests. They receive an endless sequence of facts:
 
-    class A question; class B,C,D mode; class E,F,G promise
+```text
+10:00:01  customer opened app
+10:00:04  customer searched "laptop"
+10:00:09  customer viewed product 82
+10:00:13  customer added product 82 to cart
+10:00:18  customer attempted payment
+...
 ```
 
-Consider a temperature sensor attached to industrial equipment. The model estimates whether the machine is approaching an unsafe operating state. A web request would couple sensor delivery to a live API call and give the producer no durable backlog during an outage. A nightly job would detect the problem too late. A stream keeps the readings available, allows several consumers to use them independently, and lets the scorer catch up after recovery.
+Each fact changes what the system knows. If a model should react whenever those facts arrive, we get **streaming inference**:
 
-The core design has six connected parts:
+$$
+\boxed{\text{event} \rightarrow \text{update state/features} \rightarrow \text{model} \rightarrow \text{prediction event}}
+$$
 
-1. A durable event transport stores and orders work.
-2. A schema contract defines what each event means.
-3. A processing engine manages time, state, checkpoints, and parallel work.
-4. A versioned scoring package turns valid features into a prediction.
-5. A replay-safe output records the prediction and any downstream action.
-6. Monitoring proves that predictions arrive before their freshness deadline.
+The defining property is not that inference is fast. It is that **inference is driven by a continuing stream of events rather than a bounded dataset or a waiting request**. Recall the three common triggers for inference. Batch inference says:
 
-The model call occupies one box inside this system. Most production incidents come from the boundaries around that box: an incompatible event, a delayed partition, a lost checkpoint, an overloaded feature lookup, a duplicate side effect, or a replay that uses the wrong model version.
-
-## How A Stream Stores Events Over Time
-<!-- section-summary: Topics, partitions, consumer groups, and offsets let a streaming system store events, divide work, and resume processing. -->
-
-A stream is a set of append-only logs. Producers add records to the end. Consumers read forward and keep a bookmark that records their progress. This structure gives the system durable input, controlled parallelism, and a defined restart position.
-
-An **event** is one record saying that something happened. It usually contains an event ID, the time of the event, a key identifying the subject, and a payload. A card transaction, a new support message, and a motor vibration reading are all events.
-
-A **topic** is a named stream of related events. The name expresses the event family, such as `payment-authorizations` or `machine-readings`. Retention settings keep records for a defined period, so a consumer can recover or replay earlier data.
-
-A **partition** is one ordered slice of a topic. Partitions provide parallelism. Events inside one Kafka partition have a defined order, while events in different partitions can be processed at the same time. A **partition key** chooses the slice. Using `account_id` keeps one account's events together; using a constant key sends everything to one partition and destroys useful parallelism.
-
-A **consumer group** represents one logical application. Several worker instances in the same group divide the partitions between them. A separate group can read the same topic for another purpose. The fraud scorer and the analytics pipeline therefore keep independent progress even though both consume payment events.
-
-An **offset** is the consumer's position inside a partition. Kafka uses offsets; Kinesis exposes sequence numbers; managed processors often store equivalent checkpoints. The purpose is the same: after a restart, the application resumes near its last durable position.
-
-```mermaid
-flowchart TD
-    A["Producer<br/>(publishes keyed events)"] --> B["Event Topic<br/>(durable retained log)"]
-    B --> C["Partition 0<br/>(ordered slice)"]
-    B --> D["Partition 1<br/>(ordered slice)"]
-    B --> E["Partition 2<br/>(ordered slice)"]
-    C --> F["Scoring Consumer Group<br/>(workers share partitions)"]
-    D --> F
-    E --> F
-    C --> G["Analytics Consumer Group<br/>(independent read position)"]
-    D --> G
-    E --> G
-    F --> H["Prediction Topic<br/>(scored event output)"]
-
-    class A producer; class B,C,D,E stream; class F,G consumer; class H output
+```text
+dataset ready
+    ↓
+run predictions
 ```
 
-Suppose a consumer group has six worker replicas and a topic has four partitions. Only four workers can own a partition at one time, so two replicas may remain idle. Adding replicas alone cannot increase useful read parallelism beyond the partition layout. The processing engine may still run parallel tasks inside each worker, but ordering and checkpoint design place limits on that approach.
+Online inference says:
 
-The key also controls the meaning of order. A parcel network may key scans by `parcel_id` because the order of scans matters for each parcel. Global order across millions of parcels provides little value and would force all traffic through one partition. Good partitioning preserves the smallest order that the product actually needs.
-
-## Know When An Event Happened And When The System Processed It
-<!-- section-summary: Event time records the real-world occurrence, while processing time records the system's handling of that occurrence. -->
-
-Streaming systems use two clocks because arrival order may differ from real-world order. One clock describes the activity that produced the event. The other describes the infrastructure that received and processed it. Keeping both prevents a delayed network from rewriting the history used by model features.
-
-**Event time** is the time the event happened in the real world. A sensor reading created at 10:02 carries an event-time value close to 10:02. **Processing time** is the time the streaming job handles that record. A network outage might delay the same reading until 10:09.
-
-The difference matters because model logic often depends on the real sequence of events. A fraud model may count failed sign-in attempts during the ten minutes before a payment. If a mobile device uploads several offline events after reconnecting, processing-time order describes the network recovery. Event-time order describes the user's actual activity.
-
-```mermaid
-flowchart TD
-    A["Source Activity<br/>(a real-world event occurs)"] --> B["Event Time<br/>(timestamp recorded by the source)"]
-    A --> C["Transport Delay<br/>(network and queue add waiting)"]
-    C --> D["Processing Time<br/>(the streaming job handles the event)"]
-    B --> E["Feature Meaning<br/>(place the event in its real window)"]
-    D --> F["Operational Delay<br/>(measure infrastructure freshness)"]
-    E --> G["Prediction Record<br/>(preserve both clocks)"]
-    F --> G
-
-    class A,C activity; class B,D clock; class E,F meaning; class G output
+```text
+request waiting
+    ↓
+run prediction
 ```
 
-Every production event should carry a timestamp from the source domain, and the platform should add ingestion and scoring timestamps. Those values support distinct questions:
+Streaming inference says:
 
-- `event_time`: At what time did the activity occur?
-- `ingested_at`: At what time did the transport accept it?
-- `scored_at`: At what time did the prediction become durable?
+```text
+something happened
+    ↓
+run/update prediction
+```
 
-Their differences expose the delay path. `ingested_at - event_time` measures producer or network delay. `scored_at - ingested_at` measures queue and processing delay. `scored_at - event_time` measures the total freshness experienced by the product.
+For example, a fraud system might receive:
 
-For example, a parcel scan occurs at 14:03 in a depot with poor connectivity. The scanner uploads it at 14:11, and the model scores it at 14:12. The stream processor completed its own work in one minute. The product received a prediction nine minutes after the physical scan. Both facts belong on the operational record.
+```text
+transaction event
+       ↓
+update customer's recent activity
+       ↓
+construct features
+       ↓
+fraud model
+       ↓
+risk-score event
+```
+
+Nobody necessarily makes an HTTP request to the fraud model. The event itself caused the work. We can describe the pipeline mathematically. Let events be:
+
+$$
+e_1,e_2,e_3,\ldots
+$$
+
+A stateful streaming system maintains state:
+
+$$
+S_t
+$$
+
+and each event transforms that state:
+
+$$
+S_{t+1}=g(S_t,e_{t+1})
+$$
+
+The model then receives features derived from the event and state:
+
+$$
+x_{t+1}=\phi(e_{t+1},S_{t+1})
+$$
+
+and computes:
+
+$$
+y_{t+1}=f(x_{t+1})
+$$
+
+That is the essence of streaming inference. The model itself may be completely ordinary. The complexity comes from maintaining the correct $$S_t$$ while events arrive late, machines fail, work is replayed, and traffic fluctuates. It is tempting to imagine streaming systems as:
+
+```text
+producer → queue → consumer
+```
+
+That is useful but incomplete. For reliable stream processing, it is more useful to think of the stream as an **ordered history of facts**:
+
+```text
+offset
+
+100   customer_viewed
+101   item_added
+102   payment_started
+103   payment_completed
+104   customer_viewed
+...
+```
+
+Consumers keep track of where they are:
+
+```text
+stream
+
+100 101 102 103 104 105 106 107
+                ↑
+           consumer position
+```
+
+If a worker crashes, a replacement can return to an earlier position and process events again. This one property—**replayability**—is the foundation of much of streaming reliability. Instead of requiring:
+
+"Never fail."
+
+we can build systems around:
+
+"If processing fails, restore state and replay the history."
+
+Kafka, for example, models records as a retained log consumed using positions/offsets, which is why it is commonly paired with stateful processors and replay-based recovery. ([Apache Kafka][1]) A useful event usually says that something **happened**.
+
+For example:
+
+```text
+PaymentAttempted
+CustomerLoggedIn
+DeviceLocationObserved
+ProductPurchased
+TemperatureMeasured
+```
+
+rather than an instruction like:
+
+```text
+CalculateSomething
+```
+
+Why? Because facts remain meaningful during replay. Suppose this event exists:
+
+```text
+event_id:       tx_837261
+type:           PaymentAttempted
+customer_id:    C42
+amount:         975.00
+currency:       GBP
+event_time:     10:04:17.328
+```
+
+You can process that event today, replay it tomorrow, use it to reconstruct features, or run a new model over historical traffic. The event becomes part of the system's durable history. This is one of the most important ideas in stream processing. Suppose somebody makes a purchase at:
+
+```text
+10:00:00
+```
+
+Their phone temporarily loses connectivity. The event reaches your backend at:
+
+```text
+10:02:17
+```
+
+A worker finally processes it at:
+
+```text
+10:02:19
+```
+
+We now have at least three times.
+
+$$
+t_e=\text{event time}
+$$
+
+$$
+t_a=\text{arrival/ingestion time}
+$$
+
+$$
+t_p=\text{processing time}
+$$
+
+In this example:
+
+$$
+t_e=10{:}00{:}00
+$$
+
+$$
+t_a=10{:}02{:}17
+$$
+
+$$
+t_p=10{:}02{:}19
+$$
+
+These are not interchangeable. Suppose your fraud feature is:
+
+$$
+\text{transactions during previous 5 minutes}
+$$
+
+Imagine these transactions actually occurred in this order:
+
+```text
+event time
+
+10:00  A
+10:01  B
+10:02  C
+```
+
+But network delays cause arrival order:
+
+```text
+processing order
+
+10:00 event A
+10:02 event C
+10:01 event B
+```
+
+If you reason using processing order alone, history becomes:
+
+```text
+A → C → B
+```
+
+which is not what happened. For many ML features, that changes the answer. Flink explicitly supports event-time processing because stream applications often need to reason about the order in which events occurred rather than merely the order in which machines happened to receive them. ([Apache Nightlies][2]) So a good streaming system asks:
+
+**Are my features defined in world time or machine time?**
+
+Usually business features such as "spend in the last hour" mean world/event time.
+
+## How Do Partitioning and State Shape Streaming Features?
+<!-- section-summary: Stateful features accumulate history, and partitioning determines which worker owns each key's state and how it can recover. -->
+
+Because later predictions depend on earlier events, the system must place and recover state consistently.
+
+Consider this fraud model:
+
+$$
+risk=f(
+amount,
+device,
+transactions_{10m},
+spend_{24h},
+distinct\_countries_{1h}
+)
+$$
+
+Only `amount` and perhaps `device` come directly from the current event. The others require history. So for customer $$k$$, the stream processor might maintain:
+
+$$
+S_k=
+\{
+transactions_{10m},
+spend_{24h},
+countries_{1h},
+...
+\}
+$$
+
+When a new event arrives:
+
+```text
+transaction
+    ↓
+find state for customer C42
+    ↓
+update rolling windows
+    ↓
+derive features
+    ↓
+run model
+```
+
+This is why streaming inference is often much more than:
+
+```python
+model.predict(event)
+```
+
+It is really:
+
+```text
+event
+  +
+correct historical state
+  +
+model version
+  ↓
+prediction
+```
+
+In many applications, maintaining the state correctly is harder than running the neural network. Suppose we process transactions for millions of customers. To calculate one customer's recent activity efficiently, events for that customer should normally reach the same logical state partition.
+
+Conceptually:
+
+```text
+customer A ─┐
+customer A ─┼──► partition 1 ─► state[A]
+
+customer B ─┐
+customer B ─┼──► partition 2 ─► state[B]
+
+customer C ─────► partition 3 ─► state[C]
+```
+
+A key such as:
+
+$$
+key=customer\_id
+$$
+
+determines which processor owns the relevant state. This allows horizontal scaling:
+
+```text
+partitions 0-9    → worker 1
+partitions 10-19  → worker 2
+partitions 20-29  → worker 3
+```
+
+But it introduces another engineering question: **are keys distributed evenly?** Imagine one merchant produces 30% of all events:
+
+```text
+merchant_A ████████████████████
+merchant_B ██
+merchant_C █
+merchant_D ██
+```
+
+Even with 100 workers, the partition containing merchant A can become the bottleneck. This is called **key skew**. Scaling streaming inference therefore depends not only on total traffic but also on how traffic distributes across state keys. Imagine the processor has handled:
+
+```text
+events 1 ... 1,000,000
+```
+
+and accumulated:
+
+$$
+S_{1,000,000}
+$$
+
+Then its machine dies. Starting with empty state would make future predictions wrong. The replacement worker needs both:
+
+```text
+a consistent saved state
++
+a known stream position
+```
+
+Conceptually:
+
+```text
+checkpoint
+
+state = S_900000
+stream position = 900000
+```
+
+Recovery becomes:
+
+```text
+restore S_900000
+      ↓
+replay events 900001 ... 1000000
+      ↓
+reconstruct S_1000000
+      ↓
+continue
+```
+
+This is the fundamental relationship:
+
+$$
+\boxed{\text{checkpointed state}+\text{replayable input}=\text{recoverable stream processing}}
+$$
+
+Flink's checkpointing model follows exactly this idea: state is snapshotted, and source data can be replayed after failure to reconstruct a consistent execution. ([Apache Nightlies][3])
 
 ![Parcel scan timeline separates the eight-minute source or network delay, one-minute queue and processing delay, and nine-minute total product freshness](/content-assets/articles/article-mlops-model-serving-streaming-inference-explained/streaming-event-time-delays.png)
 
 *Event time places the scan in its real window. Ingestion and scoring timestamps show where the product's total freshness delay accumulated.*
 
-Time semantics become especially important for aggregates. A model may need the number of device errors during the previous five minutes. The processor must decide whether “five minutes” refers to event time or server time, how long to wait for delayed records, and whether a late record should correct an earlier aggregate.
+## How Do Stable Event Identities and Delivery Guarantees Handle Replay?
+<!-- section-summary: Stable identities make replay and side effects deduplicatable, while delivery guarantees describe outcomes rather than claiming code literally runs once. -->
 
-## Use Schemas To Change Events Safely
-<!-- section-summary: A versioned schema turns an event payload into a contract that independent producers and consumers can change safely. -->
+Recovery replays events, which immediately creates duplicate-execution and side-effect questions that require stable identity.
 
-Every producer and consumer must agree on what a message means. The **schema** defines field names, types, required values, and nested structures. In practical terms, it is the API contract between the producer and every consumer of the topic.
+Suppose event 1001 produces:
 
-A compact input envelope might look like this:
+```text
+risk_score = 0.96
+```
 
-```json
-{
-  "event_id": "01JQ7S4D6K1VY9T3N8P2M5R0XC",
-  "schema_version": 3,
-  "event_time": "2026-07-18T14:03:12Z",
-  "entity_key": "account_4812",
-  "event_type": "payment_authorized",
-  "payload": {
-    "amount_minor": 12900,
-    "currency": "GBP",
-    "merchant_category": "electronics"
-  }
+The system writes that result. Then it crashes before recording that event 1001 was successfully processed. After recovery it sees event 1001 again:
+
+```text
+first execution:
+event 1001 → prediction
+
+crash
+
+replay:
+event 1001 → prediction again
+```
+
+Physically, the model ran twice. This is normal. Therefore reliable streaming architecture cannot assume:
+
+$$
+\text{each event physically executes once}
+$$
+
+Instead, it should aim for:
+
+$$
+\text{repeated execution does not produce incorrect logical effects}
+$$
+
+This is the reason idempotency and stable identities matter so much. Suppose the payment event has:
+
+```text
+event_id = payment_82917
+```
+
+Do not generate a completely unrelated output identity every time processing happens. Instead, the prediction could have a logical identity derived from the triggering work:
+
+$$
+prediction\_id
+=
+H(event\_id,model\_version,prediction\_type)
+$$
+
+For example:
+
+```text
+event_id:       payment_82917
+model_version:  fraud_v12
+prediction_id:  fraud_v12:payment_82917
+score:          0.96
+```
+
+If the event is replayed:
+
+```text
+fraud_v12:payment_82917
+```
+
+is produced again. A sink can then do:
+
+```text
+PUT prediction_id = fraud_v12:payment_82917
+```
+
+instead of:
+
+```text
+APPEND another unrelated row
+```
+
+The second execution simply replaces or confirms the first. That is an **idempotent output**. Imagine model output directly triggers:
+
+```text
+send SMS
+charge card
+disable account
+issue refund
+```
+
+Replay becomes dangerous. If:
+
+```text
+event 183
+→ model says "send alert"
+```
+
+is executed twice, you might send two alerts. For money movement, the consequences can be worse. So a robust architecture often separates:
+
+```text
+prediction
+```
+
+from:
+
+```text
+business action
+```
+
+For example:
+
+```text
+transaction event
+       ↓
+fraud inference
+       ↓
+prediction event
+id = fraud_v12:tx_183
+       ↓
+decision service
+       ↓
+idempotent action
+```
+
+The action system can record:
+
+```text
+already processed fraud_v12:tx_183
+```
+
+and ignore duplicates. This is an essential rule of replayable systems:
+
+**Anything downstream of a stream should assume that logically identical work may appear again unless the entire boundary is protected transactionally.**
+
+These terms describe what can happen around failures.
+
+| Guarantee              |              Loss possible | Duplicate processing/effects possible |
+| ---------------------- | --------------------------: | -------------------------------------: |
+| At-most-once           |                         Yes |                                     No |
+| At-least-once          | No, assuming recovery works |                                    Yes |
+| Exactly-once semantics |             No logical loss |            No duplicate logical effect |
+
+At-most-once effectively says:
+
+Better to lose something than repeat it.
+
+At-least-once says:
+
+Better to repeat something than lose it.
+
+For most important ML event pipelines, **at-least-once plus idempotent processing** is a very useful design. Exactly-once needs more careful interpretation. Suppose:
+
+```text
+event
+  ↓
+update state
+  ↓
+model
+  ↓
+crash
+```
+
+The event may physically be processed again. Exactly-once semantics usually mean:
+
+After recovery, the system's committed state and outputs are equivalent to what would have happened if each logical event had affected them once.
+
+Flink's documentation explicitly makes this distinction: exactly-once checkpointing does not mean every record physically traverses the system once; it means recovered managed state reflects each logical record once. End-to-end exactly-once additionally requires a replayable source and a transactional or idempotent sink. ([Apache Nightlies][4]) Kafka similarly distinguishes producer, consumer, and transactional boundaries; Kafka's transactional mechanisms can atomically coordinate consumed offsets with output written back to Kafka, but guarantees outside that boundary depend on the destination system. ([Apache Kafka][1]) So whenever somebody says:
+
+"Our pipeline is exactly once."
+
+the useful next question is:
+
+**Exactly once across which boundary?**
+
+## How Do Schemas, Feature Versions, Watermarks, and Late Events Preserve Meaning?
+<!-- section-summary: Versioned schemas and feature semantics keep old events interpretable, while watermarks choose how long to wait for out-of-order data. -->
+
+Identity alone cannot explain old events when schemas or feature meanings change, and event time introduces out-of-order arrivals.
+
+A stream can live for years. Imagine your original event is:
+
+```text
+Transaction {
+    customer_id
+    amount
 }
 ```
 
-The envelope separates transport concerns from model features. `event_id` supports deduplication and audit. `event_time` supports event-time processing. `entity_key` supports partitioning and keyed state. `schema_version` identifies the contract used to encode the payload.
-
-Formats such as Avro, Protobuf, and JSON Schema can be registered in a schema registry. The registry stores versions and rejects changes that violate the chosen compatibility policy. **Backward compatibility** means a consumer using the new schema can still read records written with an older compatible schema. A common compatible change is adding an optional field with a default. Changing `amount_minor` from an integer to free-form text would usually be a breaking change.
-
-Compatibility checks belong in the producer's CI pipeline. A useful release sequence is:
-
-1. Register or validate the proposed schema against the current subject.
-2. Deploy consumers that understand the compatible addition.
-3. Deploy the producer that starts writing the new field.
-4. Monitor deserialization failures and the volume of each schema version.
-5. Remove old handling only after retained records and active producers no longer require it.
-
-Schema validation cannot prove that a value is sensible. `temperature_celsius: 9000` may satisfy a numeric schema and still be impossible for the machine. The consumer therefore performs two checks. Deserialization verifies the structural contract. Domain validation verifies ranges, required relationships, and model assumptions. Structurally unreadable or semantically invalid records go to a governed quarantine path with a reason code.
-
-Treating every invalid record as a retryable failure creates a **poison event**: one permanent error gets read, fails, and retries forever. Quarantining the record lets the healthy partitions continue while the data owner investigates.
-
-## Understand How Stored Feature State Affects Processing
-<!-- section-summary: Stateless scoring uses one event at a time, while stateful scoring keeps governed history for rolling features and joins. -->
-
-Some models can score one event using only fields inside that event. This is **stateless processing**. A text classifier may receive the complete message text and return a category. The worker validates the payload, applies the same tokenizer used during training, and runs the model without remembering earlier messages.
-
-Other models depend on recent history. A fraud model may need an account's payment count during the previous ten minutes. A predictive-maintenance model may need the rolling mean and slope of vibration readings. This is **stateful processing**. The engine keeps values between events, usually keyed by an entity such as account or machine.
-
-State introduces three design questions:
-
-1. **What is the key?** All events contributing to one state value need compatible partitioning. An account-level feature usually uses `account_id`.
-2. **How long does the state live?** A ten-minute feature does not need indefinite history. State time-to-live and window cleanup keep storage bounded.
-3. **How is state recovered?** Engines such as Flink checkpoint operator state to durable storage. Spark Structured Streaming records source progress and state through checkpoints. A restart restores state and resumes from a coordinated point.
-
-```mermaid
-flowchart TD
-    A["Incoming Event<br/>(one new observation)"] --> B{"Feature Shape<br/>(single event or history)"}
-    B -->|"Single event"| C["Stateless Features<br/>(transform the current payload)"]
-    B -->|"Recent history"| D["Keyed State<br/>(retain values by entity)"]
-    D --> E["Event-Time Window<br/>(aggregate a bounded period)"]
-    C --> F["Model Scoring<br/>(produce a prediction)"]
-    E --> F
-    F --> G["Versioned Output<br/>(record features and identity)"]
-
-    class A event; class B choice; class C,D,E,F state; class G output
-```
-
-A remote feature service can also supply current values, but one network lookup per event adds latency, cost, and another failure mode. High-volume pipelines commonly compute frequently used rolling features inside the stream processor or consume them from a continuously maintained feature topic. Remote lookups remain appropriate for smaller workloads or authoritative values that must be fetched at scoring time. The team should measure lookup latency, timeout behaviour, and freshness rather than assuming either design is universally superior.
-
-Training must reproduce the feature definition. A production feature called `failed_logins_10m` needs the same event-time window and filtering rules in offline training data. Its entity key must match too. Null handling and the late-data policy complete the definition. Sharing declarative transformations or tested feature logic reduces training-serving skew. A feature registry or feature store can manage definitions and lineage, but it cannot repair an ambiguous event-time contract.
-
-## Give Every Streaming Prediction A Stable Identity
-<!-- section-summary: A prediction record needs the source event and every versioned input required to explain or reproduce the score. -->
-
-A floating model name such as `fraud-latest` does not explain a historical decision. Deployments change, features evolve, and policy thresholds move independently. A production prediction therefore records immutable identity for the whole scoring path.
-
-The useful minimum usually includes:
-
-- source event ID and source schema version;
-- model name and immutable model or artifact version;
-- feature definition or feature-set version;
-- preprocessing package version;
-- decision-policy version if a threshold turns the score into an action;
-- scoring timestamp and pipeline deployment revision;
-- prediction ID and output schema version.
-
-Suppose a model emits `risk_score=0.71`. Policy version 12 may classify that score as “review,” while policy version 13 raises the review threshold and classifies it as “allow.” Recording only the model version leaves the final action unexplained.
-
-The prediction ID also needs deliberate semantics. One practical pattern derives it from the source event ID and a **scoring revision**:
+Six months later you need:
 
 ```text
-prediction_id = SHA256(source_event_id + ":" + scoring_revision)
+Transaction {
+    customer_id
+    amount
+    currency
+    merchant_country
+}
 ```
 
-The scoring revision represents the exact model, features, preprocessing, and policy bundle. Retrying the same event under the same revision produces the same prediction ID. An intentional reprocessing run using a repaired model receives a new scoring revision and therefore produces a distinct record instead of silently overwriting the original decision.
+Meanwhile old producers, new producers, old consumers, new consumers and replayed historical data may coexist. Without an explicit schema contract:
 
-Reproducibility has a limit: some features depend on external mutable state. If the scorer fetches a current account balance and stores neither the retrieved value nor its version, later replay cannot reconstruct the original input. High-consequence systems record the governed feature vector or a reference to its point-in-time snapshot, subject to privacy and retention rules.
-
-## Know Which Delivery Guarantees Each System Provides
-<!-- section-summary: At-most-once, at-least-once, and exactly-once describe how records may be processed across a stated source, engine, and sink boundary. -->
-
-Delivery semantics answer a precise question: after failures and retries, can a record be skipped, repeated, or committed exactly once inside a defined boundary?
-
-**At-most-once** processing may lose work, but it avoids retry-driven duplicates. A consumer records progress before performing the output. A crash between those actions leaves the event marked complete even though the prediction was never written.
-
-**At-least-once** processing avoids silent loss by recording progress after the output succeeds. A crash can happen after the output write and before the progress update. The restarted consumer reads that event again, so the output may be repeated.
-
-This is at-least-once from first principles:
-
-```mermaid
-flowchart TD
-    A["Read Event<br/>(offset 842 is pending)"] --> B["Score Event<br/>(calculate the prediction)"]
-    B --> C["Write Output<br/>(prediction becomes durable)"]
-    C --> D{"Progress Commit<br/>(did offset 842 persist)"}
-    D -->|"Yes"| E["Continue<br/>(read the next event)"]
-    D -->|"Crash first"| F["Restart And Replay<br/>(offset 842 is read again)"]
-    F --> C
-
-    class A,B,C,E work; class D choice; class F recovery
+```text
+producer v1 ──┐
+producer v2 ──┼── stream ──► consumer v1
+producer v3 ──┘              consumer v3
 ```
 
-**Exactly-once** processing coordinates progress, state, and output so each source record contributes once to the committed result inside that supported boundary. Kafka transactions can atomically write records and consumer offsets to Kafka. Flink checkpoints coordinate replayable sources, operator state, and sinks that implement the required commit protocol. Spark Structured Streaming combines tracked source offsets, checkpoints, and sinks designed to tolerate reprocessing.
+every deployment becomes risky. A production event generally needs a contract describing field names, types, required/optional fields, defaults and versioning rules.
 
-The boundary is the important part. A Kafka-to-Kafka transaction does not automatically include an email provider, an arbitrary HTTP endpoint, or a database that does not participate in the same transaction. A processor can commit its checkpoint and then lose the response from an external notification call. It cannot know whether the provider sent the notification.
+For example:
 
-Production designs therefore make external effects idempotent, record them through an outbox, or separate them into another consumer with its own durable ledger. “Exactly once” should always name the source, engine, sink, and failure assumptions. Without that scope, the phrase hides risk.
-
-Cloud transports also expose different guarantees. Google Cloud Pub/Sub uses at-least-once delivery by default; its exactly-once option applies to pull subscriptions within a cloud region. Azure Event Hubs documents an at-least-once processing model built around per-partition checkpoints and recommends idempotent downstream systems. These guarantees describe transport delivery. The scoring job still owns its database and side-effect behaviour.
-
-## Make Replayed Outputs Safe
-<!-- section-summary: Stable output keys and conditional writes prevent retries from creating duplicate predictions or duplicate side effects. -->
-
-**Idempotency means that repeating the same logical operation leaves the same final result.** It turns duplicate delivery from a product incident into an expected recovery event.
-
-For prediction facts, the sink can use `prediction_id` as a unique key. A repeated attempt under the same scoring revision finds the existing row. A new revision creates a new historical row. PostgreSQL can enforce that contract directly:
-
-```sql
-INSERT INTO streaming_predictions (
-    prediction_id,
-    source_event_id,
-    scoring_revision,
-    score,
-    scored_at
-)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (prediction_id) DO NOTHING;
+```text
+event_type:       PaymentAttempted
+schema_version:   3
+event_id:         ...
+event_time:       ...
+customer_id:      ...
+amount:           ...
+currency:         ...
 ```
 
-The unique constraint supplies the guarantee. A process-local cache cannot do the same job because a restart loses the cache and another replica cannot see it.
+The central principle is:
 
-Side effects need a second layer. A prediction record and an instruction to send an alert can be written together in one database transaction using the **transactional outbox pattern**. A separate dispatcher reads unsent outbox rows, calls the provider with an idempotency key if supported, and marks each row complete. The durable outbox closes the gap between “prediction committed” and “notification scheduled.”
+> **A stream is a long-lived public interface between independently evolving systems.**
 
-Some effects cannot be undone or deduplicated perfectly. A device command may cause physical movement. A payment may transfer money. Those paths need a domain-level command ID, a receiver that rejects previously completed commands, and a manual reconciliation process for uncertain outcomes.
+Treating event schemas like API schemas makes evolution much safer. Suppose model v1 expects:
 
-Idempotency keys also need retention. If the deduplication record expires after seven days while the event log keeps data for thirty days, an old replay can produce duplicates. Retention for source events, checkpoints, outputs, and deduplication ledgers must support the longest approved replay window.
+$$
+transaction\_count_{1h}
+$$
+
+Version 2 changes the definition from:
+
+all transaction attempts
+
+to:
+
+completed transactions only.
+
+The feature still has the same numerical type. But its **meaning changed**. That is more dangerous than changing an integer to a string because schema validation might not catch it. So the model-serving contract should include not merely:
+
+```text
+float
+integer
+string
+```
+
+but semantic definitions such as:
+
+```text
+transaction_count_1h:
+count of PaymentCompleted events
+with event_time in (prediction_time - 1h, prediction_time]
+```
+
+This becomes especially important during replay. If historical events are reprocessed using new feature semantics, you may generate different predictions even with the same model. Suppose we calculate purchases per five-minute window. Events occur:
+
+```text
+10:01  A
+10:02  B
+10:04  C
+```
+
+The processor reaches 10:06 and produces the result for:
+
+```text
+10:00–10:05
+```
+
+Then an event arrives:
+
+```text
+event_time = 10:03
+arrival_time = 10:07
+```
+
+What now? The event logically belongs to an already-computed window. There is no universally correct answer. The product must choose among semantics such as:
+
+```text
+ignore late event
+```
+
+or:
+
+```text
+update previous result
+```
+
+or:
+
+```text
+emit corrected result
+```
+
+or:
+
+```text
+send late event to separate reconciliation path
+```
+
+This is not merely infrastructure behavior. It can change model features and therefore predictions. A stream processor cannot literally know:
+
+"No event from 10:03 will ever arrive again."
+
+Networks can delay indefinitely. Instead it needs an operational approximation. A **watermark** says roughly:
+
+"We believe event time has advanced this far."
+
+If:
+
+$$
+W=10{:}05
+$$
+
+then the processor may decide that windows ending before 10:05 are sufficiently complete.
+
+For example:
+
+```text
+events received:
+
+10:01
+10:03
+10:04
+10:07
+
+watermark:
+       10:05
+         ↑
+windows before here
+can usually be finalized
+```
+
+Flink describes watermarks as event-time progress indicators; when watermarks are heuristic, older events can still arrive and applications must decide whether to ignore them, route them separately, or revise previously emitted results. ([Apache Nightlies][5]) Watermarks therefore turn an impossible question—
+
+"Have all events arrived?"
+
+—into a useful engineering question:
+
+**"How long are we willing to wait before treating the result as complete enough?"**
+
+Suppose events can arrive 30 seconds late. You could wait:
+
+$$
+30\text{ seconds}
+$$
+
+before finalizing every window. You capture more late data, but predictions arrive later. Or wait:
+
+$$
+2\text{ seconds}
+$$
+
+Predictions are fresher, but more events arrive after finalization. So:
+
+$$
+\boxed{\text{more waiting} \rightarrow \text{greater completeness} \rightarrow \text{higher latency}}
+$$
+
+and:
+
+$$
+\boxed{\text{less waiting} \rightarrow \text{lower latency} \rightarrow \text{more corrections/loss}}
+$$
+
+The right watermark policy therefore follows from the product. An hourly billing report can wait. Real-time fraud prevention often cannot.
+
+## How Do Lag and Backpressure Reveal a Capacity Failure?
+<!-- section-summary: Consumer lag measures how far computation trails the event history, and backpressure protects downstream systems when work arrives faster than it can finish. -->
+
+Waiting for late data competes with timeliness; lag and backpressure show when the system is no longer keeping that balance.
+
+Suppose events enter the stream at rate:
+
+$$
+\lambda
+$$
+
+events/second. Your pipeline can process:
+
+$$
+\mu
+$$
+
+events/second. If:
+
+$$
+\mu>\lambda
+$$
+
+the system can keep up. If:
+
+$$
+\lambda>\mu
+$$
+
+backlog grows. Ignoring complications:
+
+$$
+\frac{dB}{dt}=\lambda-\mu
+$$
+
+where $$B$$ is backlog. If traffic arrives at:
+
+$$
+12,000/s
+$$
+
+while you process:
+
+$$
+10,000/s
+$$
+
+then backlog grows by approximately:
+
+$$
+2,000\text{ events/sec}.
+$$
+
+After five minutes:
+
+$$
+B\approx600,000
+$$
+
+events. The service may still be "healthy" in the sense that nothing has crashed. But its predictions are becoming increasingly stale. Suppose a fraud pipeline is ten minutes behind. The model itself may execute in:
+
+$$
+5\text{ ms}.
+$$
+
+Calling this a "5 ms inference system" would be misleading. A transaction occurring now may wait ten minutes before reaching the model. The actual relevant delay is closer to:
+
+$$
+L_{stream}
+=
+L_{ingestion}
++
+L_{backlog}
++
+L_{feature}
++
+L_{inference}
++
+L_{output}
+$$
+
+Frequently:
+
+$$
+L_{backlog} \gg L_{inference}.
+$$
+
+This is why stream monitoring must include things such as offsets, event-time delay and watermark progress, not merely model latency. Flink, for example, exposes watermark progression specifically so operators can identify event-time stragglers. ([Apache Nightlies][6]) Imagine:
+
+```text
+Kafka
+ ↓ 50k events/s
+feature processor
+ ↓ 50k/s
+model service
+ ↓ 12k/s
+output
+```
+
+The model service is the bottleneck. Without control:
+
+```text
+feature processor
+       ↓
+huge queue
+       ↓
+model
+```
+
+memory eventually fills. A streaming runtime can instead propagate pressure backward:
+
+```text
+source
+  ↓
+operator A
+  ↓
+operator B   ← slow
+  ↑
+backpressure
+```
+
+The upstream stages reduce how aggressively they produce work. Backpressure protects the system from unbounded internal buffering. But it does not magically create capacity. It tells you:
+
+$$
+\mu_{\text{bottleneck}} < \lambda
+$$
+
+for the current load. Then you need to scale, improve inference throughput, reduce work, increase batching, partition differently, or accept more lag. Consider a lightweight feature computation:
+
+$$
+0.1\text{ ms/event}
+$$
+
+followed by a model taking:
+
+$$
+20\text{ ms/event}.
+$$
+
+Clearly the model dominates. But accelerators often process batches much more efficiently. So a streaming inference stage might perform microbatching:
+
+```text
+events arriving continuously
+
+e1 ────────┐
+e2 ──────┐ │
+e3 ────┐ │ │
+e4 ──┐ │ │ │
+     ▼ ▼ ▼ ▼
+       batch
+         ↓
+        GPU
+```
+
+Again we trade:
+
+$$
+\text{batch wait}
+$$
+
+against:
+
+$$
+\text{higher throughput}.
+$$
+
+The right batch size depends on the stream's latency budget. This is analogous to dynamic batching in online serving, except persistent stream lag also enters the equation.
 
 ![At-least-once replay returns the same event to a pinned scoring revision while a unique prediction ID, transactional outbox, command ID, and effect ledger prevent duplicate predictions and actions](/content-assets/articles/article-mlops-model-serving-streaming-inference-explained/streaming-replay-safe-output.png)
 
 *A unique sink protects the prediction fact. External effects need their own durable outbox, command identity, and receiver-side ledger because they sit outside the stream processor's commit boundary.*
 
-## Use Lag And Backpressure To Detect Capacity Problems
-<!-- section-summary: Lag measures unfinished stream work, while backpressure shows that downstream processing cannot accept work at the arrival rate. -->
+## Where Should Model Execution Fit in a Streaming Stack?
+<!-- section-summary: A production stack separates ingestion, stateful feature work, inference, result publication, and action, then evaluates guarantees across the full chain. -->
 
-**Consumer lag is the distance between the newest available record and the consumer group's progress.** Kafka commonly reports this distance in records for each partition. A time-based freshness metric adds the age of the oldest unprocessed event.
+The model is one stage in a larger stateful stack, so its placement must follow feature ownership and capacity.
 
-Record lag and time lag tell different stories. Ten thousand small events may clear in seconds. Ten thousand expensive image events may require hours. The product promise is usually expressed in time, such as “95 percent of sensor readings receive a score within two minutes,” so the dashboard needs end-to-end event delay as well as offset lag.
+There are two broad architectures.
 
-**Backpressure** occurs as one stage receives work faster than the next stage can process it. The processor slows source reads or accumulates queues so it does not exhaust memory. Backpressure protects the job, although sustained backpressure causes lag and stale predictions.
-
-A small capacity estimate provides an initial check. If 1,000 events arrive each second and one scoring operation occupies a worker for 20 milliseconds, the workload requires about 20 concurrent scoring slots at full utilisation:
+### Model embedded in the stream processor
 
 ```text
-required concurrency = arrival rate × average service time
-                     = 1,000 events/second × 0.020 seconds
-                     = 20 active scoring slots
+stream
+  ↓
+Flink-like worker
+  ├─ feature state
+  ├─ model loaded locally
+  └─ inference
+  ↓
+output
 ```
 
-Operating at 100 percent utilisation leaves no room for bursts, retries, garbage collection, or slow inputs. Dividing by a target utilisation of 0.7 raises the planning estimate to about 29 slots. Load testing must then verify throughput with the real model, event sizes, feature state, serialization, and sink.
+This can minimize network hops and align model execution closely with state processing. But large models may make workers expensive and deployment harder.
 
-Lag can rise for several reasons:
+### Separate inference service
 
-- traffic increased beyond tested capacity;
-- one model release increased inference time;
-- a downstream sink slowed down;
-- checkpoints became large or unstable;
-- one partition key became hot;
-- a partition stopped making progress;
-- repeated retries trapped workers on a poison event.
-
-Scaling replicas helps only if the rest of the architecture permits parallel work. Kafka assigns each partition to at most one consumer in a group at a time. Twelve replicas cannot usefully share four partitions through ordinary group assignment. Adding partitions may increase concurrency, but it changes key distribution and can affect ordering assumptions.
-
-Autoscaling from lag can help Kubernetes consumers handle bursts. The policy should include more than a single record threshold. Oldest-event age describes the product delay, while per-replica throughput estimates how quickly new capacity will drain the backlog. Partition count caps ordinary consumer-group parallelism. Model warm-up time and compute limits determine how quickly a replica starts processing records. Scale-down delay prevents churn, and sink capacity stops the controller from overwhelming the next dependency. Rapid scale-out against a slow database can move the bottleneck and make the incident worse.
-
-## Use Watermarks To Handle Late Events
-<!-- section-summary: Windows group events by event time, while watermarks and allowed lateness define how long state remains open for delayed records. -->
-
-An unbounded stream never announces that all events have arrived. A processor computing five-minute features still needs a point at which it can emit a result and release old state.
-
-A **window** groups events across a bounded interval, such as the five minutes from 14:00 to 14:05. A **watermark** is the engine's estimate of progress through event time. A watermark at 14:07 may mean the engine expects almost all events through 14:07 to have arrived. It is a progress estimate, not proof that no older event can appear.
-
-**Allowed lateness** defines how long the job continues accepting events for a window after the watermark passes its end. A **trigger** defines the point at which the engine emits a result. Some pipelines emit an early result, an on-time result near the watermark, and a corrected result after late events.
-
-Consider package scans grouped into five-minute windows. A scan occurs at 14:04, but the depot uploads it at 14:11. With two minutes of allowed lateness, the record is too late for the 14:00–14:05 window. With ten minutes of allowed lateness, the processor can update that window and publish a correction.
-
-```mermaid
-flowchart TD
-    A["Event-Time Window<br/>(14:00 through 14:05)"] --> B["On-Time Events<br/>(arrive before the watermark)"]
-    B --> C["Initial Result<br/>(publish the current aggregate)"]
-    C --> D{"Late Event Policy<br/>(record arrives after progress passes)"}
-    D -->|"Inside allowed lateness"| E["Correct Result<br/>(update the aggregate and output)"]
-    D -->|"Beyond allowed lateness"| F["Late-Data Route<br/>(quarantine or separate repair)"]
-    E --> G["State Cleanup<br/>(remove expired window state)"]
-    F --> G
-
-    class A,B time; class D choice; class C,E,G result; class F exception
+```text
+stream processor
+      ↓
+features
+      ↓
+inference service
+      ↓
+prediction
 ```
 
-The policy balances three costs. A generous lateness allowance improves completeness, holds more state, and delays finality. A short allowance reduces state and produces faster final results, while more delayed events need correction or reprocessing. The right value comes from measured source delay and the product's tolerance for revision.
+This separates streaming compute from accelerator serving. It can make GPU management, model rollouts and batching easier, but introduces another distributed dependency. Now you must handle:
 
-Idle partitions need special handling. Many engines derive the combined watermark from the slowest input. A partition with no traffic can hold the global watermark back unless the source marks it idle. Flink provides idle-source handling and partition-aware watermark generation for Kafka. Spark Structured Streaming uses watermark thresholds to manage late data and state cleanup. Apache Beam exposes windows, watermarks, triggers, accumulation modes, and allowed lateness as separate parts of its programming model.
+$$
+\text{network failures}
+$$
 
-## Use A Separate Recovery Path For Each Failure
-<!-- section-summary: Transient infrastructure failures, invalid events, deterministic code bugs, and downstream uncertainty require different controls. -->
+$$
+\text{timeouts}
+$$
 
-A single retry loop treats every failure as temporary. That assumption can trap a partition on one bad event, overload a failing dependency, or repeat an external action. Production recovery separates failures according to whether another attempt could succeed and whether the previous attempt may already have created an effect.
+$$
+\text{model-service backpressure}
+$$
 
-The decision starts with evidence from the failed record and the dependency involved. A timeout against a recovering service has a different path from a payload that violates its schema. A model runtime bug needs reproducible input and a repaired revision. An uncertain payment or notification needs reconciliation because an external effect may already exist.
+$$
+\text{retry duplicates}
+$$
 
-```mermaid
-flowchart TD
-    A["Processing Failure<br/>(one event cannot complete)"] --> B{"Failure Class<br/>(identify cause and effect risk)"}
-    B -->|"Temporary dependency"| C["Bounded Retry<br/>(backoff and preserve progress)"]
-    B -->|"Invalid event"| D["Quarantine<br/>(store payload and reason)"]
-    B -->|"Deterministic bug"| E["Repair And Replay<br/>(pin a corrected revision)"]
-    B -->|"Uncertain side effect"| F["Reconcile<br/>(check the effect ledger)"]
-    C --> G["Verified Completion<br/>(record the terminal outcome)"]
-    D --> G
-    E --> G
-    F --> G
+There is no universal winner. The decision follows from model size, accelerator requirements, throughput, latency and deployment independence. Think in terms of responsibilities rather than brand names:
 
-    class A failure; class B choice; class C,D,E,F action; class G result
+```text
+event producers
+      ↓
+durable event log
+      ↓
+stateful stream processor
+      ↓
+feature/state computation
+      ↓
+model runtime / inference service
+      ↓
+prediction stream
+      ↓
+database / alert system / decision service
 ```
 
-### Transient infrastructure failure
+A common contemporary implementation might use Kafka for the durable log and a system such as Flink for stateful event-time processing. Kafka provides persistent partitioned streams and transactional/idempotent capabilities, while Flink focuses heavily on state, event time, watermarks and checkpoint/replay recovery. ([Apache Kafka][1]) The model can run inside the processing job when lightweight enough, or behind a dedicated serving layer when accelerator scheduling and independent scaling matter more. The important architectural principle is:
 
-A short network interruption, temporary registry outage, or throttled sink may succeed on a later attempt. The consumer retries with bounded exponential backoff and jitter. It preserves partition progress and alerts after the retry budget is exhausted.
+> **Every layer should have one clear responsibility, and its failure/replay contract must match the layer before and after it.**
 
-Retries must have limits. An unavailable sink combined with unlimited immediate retries consumes worker capacity and amplifies the outage. Circuit breakers or paused consumption can give the dependency time to recover.
+End-to-end behavior is a chain. Imagine:
 
-### Invalid or unsupported event
-
-A malformed payload, unknown schema, impossible value, or missing required key will not improve through retry. The processor writes the original record and a structured reason to a quarantine topic or table. It then advances progress according to the approved data-loss policy.
-
-The quarantine record identifies the exact source topic and partition. It also preserves the offset or message ID. Schema identity and consumer revision show which contract and code rejected the event. An error category and rejection timestamp support routing and investigation. Sensitive fields follow the same access and retention controls as the source.
-
-### Deterministic scoring failure
-
-A particular valid input may expose a preprocessing bug or model runtime error. Repeating it on every restart can block one partition. The team reproduces the failure with the recorded event and scoring revision, repairs the code or model package, verifies the fix on the quarantined set, and reprocesses the affected range.
-
-### Uncertain external effect
-
-An HTTP timeout after a notification request leaves an ambiguous outcome. The provider may have accepted the request even though the consumer did not receive the response. An idempotency key, outbox record, and reconciliation query provide a controlled resolution. Blind retry risks a duplicate effect.
-
-Replay follows an approved operating procedure. A safe replay selects a bounded topic or time range and pins one scoring revision. It writes to an isolated destination while external side effects remain disabled or idempotent. Expected source and output counts provide the first completeness check. The team also reviews duplicate conflicts, errors, feature validity, and prediction distribution before promoting the repaired output.
-
-## Choose A Streaming Stack That Works Together
-<!-- section-summary: A production stack assigns transport, stream processing, model identity, output durability, and observability to tools with clear boundaries. -->
-
-A common self-managed or cloud-neutral design uses **Kafka** for the durable event log and a **schema registry** for Avro, Protobuf, or JSON Schema contracts. **Flink** reads the events, maintains event-time state, restores from checkpoints, and runs the scoring transformation. A governed model registry supplies one immutable model artifact to each deployment. Predictions return to Kafka before dedicated consumers write queryable decisions or trigger product actions.
-
-Each boundary has one job. Kafka retains source and prediction events long enough for recovery. The schema registry protects producer-consumer compatibility. Flink coordinates progress and state with its checkpoints. The model registry answers which artifact produced a score. The database sink enforces the unique prediction ID, and the action consumer maintains its own effect ledger. Telemetry connects delays and failures across these components.
-
-```mermaid
-flowchart TD
-    A["Event Producers<br/>(publish keyed domain events)"] --> B["Kafka And Schema Registry<br/>(retain events and govern contracts)"]
-    B --> C["Flink Processing Job<br/>(time state checkpoints and scoring)"]
-    D["Model Registry<br/>(supply an immutable model artifact)"] --> C
-    C --> E["Prediction Topic<br/>(durable versioned scores)"]
-    E --> F["Idempotent Sink<br/>(store prediction facts)"]
-    E --> G["Action Consumer<br/>(apply policy through a ledger)"]
-    C --> H["Telemetry Platform<br/>(lag delay failures and checkpoints)"]
-    F --> H
-    G --> H
-
-    class A source; class B,C,D platform; class E,F,G output; class H observe
+```text
+Kafka
+  ↓
+stream processor
+  ↓
+model API
+  ↓
+PostgreSQL
+  ↓
+email system
 ```
 
-Flink is a strong fit for low-latency event-time pipelines with large keyed state, complex windows, and coordinated checkpoints. Spark Structured Streaming fits teams already operating a lakehouse and expressing incremental work through DataFrames and SQL; its default micro-batch engine is often suitable for second-to-minute freshness. Apache Beam provides a portable programming model for event time, windows, triggers, and lateness across supported runners.
+Perhaps the stream processor has exactly-once managed state. That does **not** automatically mean:
 
-Managed transports replace Kafka for teams that prefer cloud operations:
-
-- **Amazon Kinesis Data Streams** divides records into shards and uses partition keys and sequence numbers. The Kinesis Client Library coordinates shard processors and stores consumer metadata in DynamoDB.
-- **Google Cloud Pub/Sub** presents topics and subscriptions as its primary abstractions. Ordering keys provide order for related messages, and at-least-once delivery remains the default.
-- **Azure Event Hubs** provides partitioned streams, consumer groups, and checkpointing. Event processor clients coordinate ownership through a checkpoint store.
-
-These products cover the transport layer. The surrounding pipeline still needs a schema policy and a scoring engine. Immutable model identity explains the output. Replay-safe sinks protect recovery, while monitoring and operating procedures turn failures into controlled actions.
-
-Small workloads may use a simpler consumer service. A stateless classifier processing a few hundred events per minute may need Kafka or a managed topic, a schema-aware consumer, an idempotent database write, and ordinary Kubernetes or serverless compute. Adding Flink solely for a one-event transformation creates operational cost without meaningful state or time benefits.
-
-Choose the stack from the required freshness and event volume first. State size and ordering scope determine the processing model. The replay window and delivery boundary determine retention and sink guarantees. The team's existing platform also matters because streaming incidents frequently involve state recovery, partition skew, checkpoints, and sink coordination. Model code forms only one part of that operating burden.
-
-## Monitor Streaming Results And Test Recovery
-<!-- section-summary: Streaming monitoring connects event freshness to transport progress, processor health, model behaviour, and durable outputs. -->
-
-The user-facing promise is usually freshness: the prediction must reach its destination within a defined time after the source event. Monitoring starts from that promise and works backward through the path.
-
-Four groups of signals provide the evidence:
-
-```mermaid
-flowchart TD
-    A["Freshness Promise<br/>(prediction arrives before its deadline)"] --> B["Transport Progress<br/>(input rate lag and retention)"]
-    B --> C["Processor Health<br/>(throughput state and checkpoints)"]
-    C --> D["Model And Features<br/>(valid inputs and scoring behaviour)"]
-    D --> E["Output Delivery<br/>(durable result and controlled action)"]
-    E --> F["Product Evidence<br/>(downstream system used the prediction)"]
-
-    class A promise; class B,C,D,E stage; class F evidence
+```text
+email sent exactly once
 ```
 
-### Monitor Transport Progress
+The real system guarantee is constrained by every boundary. A useful mental equation is:
 
-Track input rate, consumed rate, record lag, oldest-unprocessed-event age, partition skew, rebalances, and retention headroom. Retention headroom compares the age of the backlog with the time before old records expire. A consumer falling twelve hours behind on a topic with six-hour retention faces data loss even if capacity is recovering.
+$$
+G_{end-to-end}
+=
+\text{composition of source, processor, model call, sink, side-effect guarantees}
+$$
 
-### Monitor Processor And State Health
+If the final sink cannot participate in transactions, you may need idempotency keys or deduplication. Flink's current documentation makes this explicit: exactly-once managed state alone does not imply exactly-once external effects; end-to-end guarantees require compatible source and sink behavior. ([Apache Nightlies][3])
 
-Track per-stage throughput, processing latency, backpressure, checkpoint duration and failure, restart count, state size, watermark delay, and late-event volume. A growing checkpoint duration can signal state growth or storage trouble before the job begins failing.
+## How Do Replay, Model Versions, Revisions, Monitoring, and Recovery Work Together?
+<!-- section-summary: Designed replay needs model identity, revision semantics, time-aware monitoring, and interruption tests so recovery does not create contradictory predictions. -->
 
-### Monitor Model And Feature Health
+Once the topology exists, replay, model changes, revisions, and recovery need an explicit design and time-aware monitoring.
 
-Track inference latency, model-load failures, feature validation failures, missing values, fallback use, score distribution, and prediction volume by immutable model version. These signals identify a model path that is healthy operationally but producing unusual outputs.
+Imagine you discover a feature bug:
 
-### Monitor Output And Product Health
+```text
+country_count_1h
+```
 
-Track durable output count, duplicate-conflict count, sink latency, outbox backlog, quarantine volume, and end-to-end event-to-prediction delay. Product metrics should confirm that the downstream decision or alert actually consumed the prediction.
+was incorrectly computed. You want to rewind three days of events and regenerate predictions. That's one of the great powers of an event log:
 
-A useful alert combines symptoms with an action. Rising record lag alone may describe a short burst. Rising oldest-event age, sustained backpressure, and replicas at their safe limit indicate a capacity or dependency incident. A sudden quarantine spike immediately after a producer deployment points toward a schema or domain-contract failure. Stable transport metrics with falling output volume point toward scoring or sink failure.
+```text
+historical stream
+       ↓
+fixed feature logic
+       ↓
+model
+       ↓
+corrected predictions
+```
 
-Recovery should be exercised before an incident. A production readiness test can stop one worker during active traffic, confirm partition reassignment, verify checkpoint restoration, and prove that duplicate deliveries do not create duplicate outputs. A second test can publish an incompatible event, confirm quarantine, and verify that healthy partitions continue. A replay drill can reprocess a bounded window into an isolated destination and compare source count, output count, duplicate conflicts, and prediction distribution.
+But replay can also overwhelm live infrastructure. Suppose normal traffic is:
 
-The final evidence packet should answer five questions:
+$$
+20,000\text{ events/s}
+$$
 
-1. Did every intended source event reach a terminal state: scored, quarantined, or explicitly excluded?
-2. Did each prediction use the intended model, feature, schema, and policy versions?
-3. Did predictions arrive inside the product freshness objective?
-4. Did retries and replay avoid duplicate product effects?
-5. Can the team reproduce and reconcile uncertain records from durable evidence?
+and replay runs at:
 
-## The Main Idea
-<!-- section-summary: Streaming inference is a recoverable event-processing system whose output happens to include a model prediction. -->
+$$
+200,000\text{ events/s}.
+$$
 
-Streaming inference continuously turns domain events into versioned predictions. A durable log retains the work. A stable key supplies ordering and parallelism. An evolvable schema protects the producer-consumer contract, and explicit event time keeps delayed arrival from changing feature meaning. A bounded freshness promise defines the result that operations must protect.
+If both call the same inference service:
 
-Stateless models can use a simple consumer. Stateful features add windows and keyed state. Checkpoints restore that state after failure, and a late-data policy decides how long old windows remain open. At-least-once delivery is a practical baseline because progress follows durable output. Idempotent sinks and effect ledgers absorb the duplicates that recovery can produce. Exactly-once claims remain limited to the source, engine, and sink that participate in one supported protocol.
+```text
+live traffic ────┐
+                 ├──► model service
+replay traffic ──┘
+```
 
-Kafka or a managed event service carries the records. Flink, Spark Structured Streaming, Beam, or a focused consumer performs the work. Model and policy versions explain each result. Lag, event delay, checkpoints, quarantine, and replay evidence prove that the system continues to meet its promise.
+the backfill may destroy live latency. So production designs often separate priorities, quotas or capacity for:
+
+```text
+live processing
+```
+
+and:
+
+```text
+historical replay
+```
+
+Replay isn't merely a disaster-recovery feature. It is a normal operating mode of a well-designed streaming system. Suppose an event originally passed through:
+
+$$
+M_7
+$$
+
+but the current deployed model is:
+
+$$
+M_{12}.
+$$
+
+If you replay the event, should you use:
+
+$$
+M_7
+$$
+
+or:
+
+$$
+M_{12}
+$$
+
+There are two completely different intents. For **recovery**, you normally want the same logical result:
+
+$$
+event + M_7 + feature\_logic_5
+$$
+
+For **backtesting/recomputation**, you may intentionally want:
+
+$$
+event + M_{12} + feature\_logic_9.
+$$
+
+Therefore a reproducible prediction should carry lineage such as:
+
+```text
+prediction_id
+source_event_id
+event_time
+processing_time
+model_version
+feature_version
+schema_version
+```
+
+Without that information, replay can silently change what your historical prediction stream means. Suppose fraud risk at 10:05 was:
+
+$$
+0.42
+$$
+
+based on known activity. Then a delayed transaction from 10:03 arrives. Correct event-time state now yields:
+
+$$
+0.79.
+$$
+
+Should the pipeline emit:
+
+```text
+prediction = 0.79
+```
+
+as another unrelated record Better semantics may be:
+
+```text
+prediction_id:   customer42:10:05
+revision:        2
+score:           0.79
+supersedes:      revision 1
+```
+
+The downstream system now understands that the prediction was corrected. This is particularly important for analytical outputs. For irreversible operational decisions, revision may be impossible:
+
+```text
+payment already approved
+```
+
+In those cases the system must explicitly decide how much late data it can tolerate before acting. Streaming semantics ultimately come from the product's ability—or inability—to revise decisions. A streaming cluster can have:
+
+```text
+CPU = 40%
+memory = 60%
+all processes healthy
+```
+
+and still be producing bad operational outcomes. You also need to know whether the pipeline is keeping pace with reality. A compact set of questions is more useful than merely "is the service up?":
+
+1. **How far behind the head of the stream are consumers?**
+2. **How far behind wall-clock time is processed event time?**
+3. **Are watermarks progressing normally?**
+4. **Is backpressure increasing anywhere?**
+5. **Are checkpoint duration/failure rates changing?**
+6. **How large is maintained state and how fast is it growing?**
+7. **What fraction of events are late, duplicated, rejected or sent to recovery paths?**
+8. **What are inference latency, error rate and throughput?**
+9. **Did prediction distributions change unexpectedly?**
+10. **Can we restore a checkpoint and replay without producing unsafe effects?**
+
+The first half tells you whether the **streaming system** is healthy. The second half tells you whether the **model-serving system** is healthy. You need both. A system isn't truly replay-safe because an architecture diagram says so. Test failures such as:
+
+```text
+worker dies after state update
+worker dies after output write
+inference call times out
+checkpoint storage becomes unavailable
+events arrive out of order
+events arrive hours late
+duplicate events arrive
+schema changes during deployment
+a partition becomes extremely hot
+sink becomes unavailable
+```
+
+Then verify the important invariant:
+
+$$
+\boxed{\text{recovery produces the intended logical state and effects}}
+$$
+
+The point isn't merely that processing resumes. It is that it resumes **correctly**.
+
+## How Does the Complete Streaming System Differ from an Online Request API?
+<!-- section-summary: Streaming continuously advances state and event history, whereas an online API usually treats each request as an immediate interaction. -->
+
+The complete example highlights why a stream's state and history create different correctness obligations from synchronous online serving.
+
+Online inference commonly has this relationship:
+
+```text
+request
+   ↓
+model
+   ↓
+response
+```
+
+The request itself usually contains most of the immediate context. Streaming inference often has:
+
+```text
+                   ┌──────── accumulated state
+                   │
+event ─────────────┼────► features ─► model ─► prediction event
+                   │
+                   └──────── event-time history
+```
+
+So correctness depends on:
+
+$$
+\text{model correctness}
+$$
+
+plus:
+
+$$
+\text{state correctness}
+$$
+
+plus:
+
+$$
+\text{temporal correctness}
+$$
+
+plus:
+
+$$
+\text{replay correctness}.
+$$
+
+This is why a model with excellent offline metrics can still produce incorrect streaming behavior when its event-time or state semantics are wrong. Consider real-time account takeover detection. Events arrive:
+
+```text
+LoginSucceeded
+DeviceObserved
+PasswordChanged
+PaymentAttempted
+LocationObserved
+```
+
+Each event carries:
+
+```text
+event_id
+account_id
+event_time
+schema_version
+payload
+```
+
+The stream is partitioned by:
+
+$$
+account\_id
+$$
+
+so the processor can maintain per-account state:
+
+$$
+S_a=
+\{
+login\_count_{10m},
+devices_{24h},
+locations_{1h},
+password\_changed_{1h},
+...
+\}
+$$
+
+A `PaymentAttempted` event arrives:
+
+```text
+event
+  ↓
+update event-time state
+  ↓
+construct features
+  ↓
+fraud model v14
+  ↓
+prediction_id = fraud:v14:payment_827
+  ↓
+RiskScored event
+```
+
+If the processor crashes, it restores a checkpoint and replays events. `payment_827` may be evaluated again, but the same prediction identity allows safe deduplication. If an event arrives late, the watermark policy determines whether it updates state, produces a correction, or goes to a late-event path. If incoming rate exceeds processing capacity:
+
+$$
+\lambda>\mu
+$$
+
+consumer lag grows and the fraud decision becomes stale even though model execution remains fast. That single example contains nearly every major streaming concept:
+
+$$
+\boxed{
+\text{events}
++
+\text{time}
++
+\text{state}
++
+\text{identity}
++
+\text{replay}
++
+\text{capacity}
+}
+$$
+
+The model is only one component. The cleanest way to reason about streaming inference is:
+
+```text
+THE WORLD CHANGES
+       ↓
+record that change as an event
+       ↓
+preserve event identity + event time
+       ↓
+append it to replayable history
+       ↓
+update keyed state
+       ↓
+derive time-correct features
+       ↓
+run the model
+       ↓
+produce an identifiable prediction
+       ↓
+make downstream effects replay-safe
+```
+
+Then failures become:
+
+```text
+restore state
+    +
+return to known stream position
+    +
+replay
+```
+
+and scale becomes:
+
+$$
+\boxed{\text{incoming rate }\lambda
+\quad\text{vs}\quad
+\text{processing capacity }\mu}
+$$
+
+while temporal correctness becomes:
+
+$$
+\boxed{\text{event time}+\text{watermarks}+\text{late-event policy}}
+$$
+
+and delivery correctness becomes:
+
+$$
+\boxed{
+\text{replayable source}
++
+\text{checkpointed state}
++
+\text{idempotent/transactional outputs}
+}
+$$
+
+The most important insight is this:
+
+**Streaming inference is not primarily “running a model continuously.” It is maintaining a recoverable, time-aware state of the world and producing model decisions as that world changes.**
+
+Once that is understood, offsets, state stores, checkpoints, schemas, watermarks, idempotency, lag, backpressure, and exactly-once semantics stop looking like unrelated distributed-systems features. **They are all mechanisms for preserving the meaning of a prediction while an endless, imperfect stream of reality moves through a fallible distributed system.**
 
 ![Seven-stage streaming inference system carries event identity and time through a durable topic, stateful processor, immutable scoring package, prediction topic, idempotent sink, and effect-ledger action consumer](/content-assets/articles/article-mlops-model-serving-streaming-inference-explained/streaming-system-summary.png)
 
 *Freshness, lag, schema failures, quarantine, checkpoint health, and replay conflicts prove whether the replayable system around the model is still meeting its product promise.*
 
+## Check Your Answers
+
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[What Makes Streaming Inference a History of Timed Events?]{kind="recap"}
+A stream is an ordered or partially ordered history of facts with event time, processing time, identity, and evolving meaning.
+:::
+
+:::expand[How Do Partitioning and State Shape Streaming Features?]{kind="recap"}
+Stateful features accumulate history, and partitioning determines which worker owns each key's state and how it can recover.
+:::
+
+:::expand[How Do Stable Event Identities and Delivery Guarantees Handle Replay?]{kind="recap"}
+Stable identities make replay and side effects deduplicatable, while delivery guarantees describe outcomes rather than claiming code literally runs once.
+:::
+
+:::expand[How Do Schemas, Feature Versions, Watermarks, and Late Events Preserve Meaning?]{kind="recap"}
+Versioned schemas and feature semantics keep old events interpretable, while watermarks choose how long to wait for out-of-order data.
+:::
+
+:::expand[How Do Lag and Backpressure Reveal a Capacity Failure?]{kind="recap"}
+Consumer lag measures how far computation trails the event history, and backpressure protects downstream systems when work arrives faster than it can finish.
+:::
+
+:::expand[Where Should Model Execution Fit in a Streaming Stack?]{kind="recap"}
+A production stack separates ingestion, stateful feature work, inference, result publication, and action, then evaluates guarantees across the full chain.
+:::
+
+:::expand[How Do Replay, Model Versions, Revisions, Monitoring, and Recovery Work Together?]{kind="recap"}
+Designed replay needs model identity, revision semantics, time-aware monitoring, and interruption tests so recovery does not create contradictory predictions.
+:::
+
+:::expand[How Does the Complete Streaming System Differ from an Online Request API?]{kind="recap"}
+Streaming continuously advances state and event history, whereas an online API usually treats each request as an immediate interaction.
+:::
+
 ## References
 
-- [Apache Kafka: Getting Started](https://kafka.apache.org/getting-started/)
-- [Apache Kafka: Design](https://kafka.apache.org/design/)
-- [Confluent Schema Registry: Schema Evolution and Compatibility](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html)
-- [Apache Flink: Generating Watermarks](https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/event-time/generating_watermarks/)
-- [Apache Flink: Checkpointing](https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/fault-tolerance/checkpointing/)
-- [Apache Flink: Kafka Connector](https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/kafka/)
-- [Apache Spark: Structured Streaming Programming Guide](https://spark.apache.org/docs/latest/streaming/index.html)
-- [Apache Beam: Programming Guide](https://beam.apache.org/documentation/programming-guide/)
-- [Amazon Kinesis Data Streams: Terminology and Concepts](https://docs.aws.amazon.com/streams/latest/dev/key-concepts.html)
-- [Google Cloud Pub/Sub: Subscription Overview](https://cloud.google.com/pubsub/docs/subscription-overview)
-- [Google Cloud Pub/Sub: Exactly-Once Delivery](https://cloud.google.com/pubsub/docs/exactly-once-delivery)
-- [Azure Event Hubs: Features and Terminology](https://learn.microsoft.com/azure/event-hubs/event-hubs-features)
-- [Azure Event Hubs: Partition Load Balancing and Checkpointing](https://learn.microsoft.com/azure/event-hubs/event-processor-balance-partition-load)
+[1]: https://kafka.apache.org/40/design/design/ "Design | Apache Kafka"
+[2]: https://nightlies.apache.org/flink/flink-docs-stable/docs/learn-flink/overview/ "Overview | Apache Flink"
+[3]: https://nightlies.apache.org/flink/flink-docs-stable/docs/learn-flink/fault_tolerance/ "Fault Tolerance | Apache Flink"
+[4]: https://nightlies.apache.org/flink/flink-docs-stable/api/java/org/apache/flink/streaming/api/CheckpointingMode.html "CheckpointingMode (Flink : 2.3-SNAPSHOT API)"
+[5]: https://nightlies.apache.org/flink/flink-docs-master/api/java/org/apache/flink/api/common/eventtime/Watermark.html "Watermark (Flink : 2.4-SNAPSHOT API)"
+[6]: https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/debugging/debugging_event_time/ "Debugging Windows  Event Time | Apache Flink"

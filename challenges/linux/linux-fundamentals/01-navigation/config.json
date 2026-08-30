@@ -1,24 +1,25 @@
 {
-  "cwd": "/home/dev",
-  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "cwd": "/home/dev/projects/api",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin" },
   "fs": {
-    "/home/dev/notes.txt": { "type": "file", "content": "remember to ship\n" },
-    "/home/dev/todo.md": { "type": "file", "content": "- [ ] master pwd\n- [ ] master ls\n- [ ] master cd\n" },
-    "/home/dev/projects": { "type": "dir" },
-    "/home/dev/projects/hello.sh": { "type": "file", "content": "#!/bin/sh\necho hello\n" },
-    "/home/dev/.bashrc": { "type": "file", "content": "export PS1='$ '\n" },
-    "/home/dev/.config": { "type": "dir" },
-    "/etc": { "type": "dir" },
-    "/etc/hostname": { "type": "file", "content": "devpolaris\n" },
-    "/etc/hosts": { "type": "file", "content": "127.0.0.1 localhost\n" },
-    "/etc/os-release": { "type": "file", "content": "NAME=DevPolaris\n" }
+    "/home/dev/projects/api": { "type": "dir" },
+    "/home/dev/projects/api/.env.example": { "type": "file", "content": "APP_ENV=development\n" },
+    "/home/dev/projects/api/config": { "type": "dir" },
+    "/home/dev/projects/api/config/app.conf": { "type": "file", "content": "port=8080\n" },
+    "/home/dev/projects/api/deployment.md": { "type": "file", "content": "Deploy from a clean working tree.\n" },
+    "/home/dev/downloads": { "type": "dir" },
+    "/home/dev/downloads/release-notes.txt": { "type": "file", "content": "Release 2026.08 is ready.\n" }
   },
   "grader": {
     "strategy": "contains",
     "source": "all-stdout",
     "loose": true,
-    "expected": [".bashrc", ".config", "notes.txt", "todo.md", "projects"],
+    "expected": ["/home/dev/projects/api", ".env.example", "deployment.md", "/home/dev/downloads"],
     "requireCommands": ["pwd", "ls", "cd"],
-    "requireCwd": "/home/dev"
+    "requireCommandPatterns": [
+      "^cd\\s+\\.\\./\\.\\./downloads/?$",
+      "^cd\\s+/home/dev/projects/api/config/?$"
+    ],
+    "requireCwd": "/home/dev/projects/api/config"
   }
 }

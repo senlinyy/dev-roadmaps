@@ -1,0 +1,38 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev", "PATH": "/usr/local/bin:/usr/bin:/bin" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["packages"],
+  "packages": {
+    "manager": "apt",
+    "indexFresh": true,
+    "repositories": [
+      { "id": "noble-security", "name": "Ubuntu Security", "family": "apt", "url": "http://security.ubuntu.com/ubuntu noble-security", "enabled": true, "trusted": true }
+    ],
+    "packages": [
+      {
+        "name": "openssl",
+        "architecture": "amd64",
+        "installedVersion": "3.0.13-0ubuntu3.4",
+        "candidateVersion": "3.0.13-0ubuntu3.5",
+        "repository": "noble-security",
+        "summary": "TLS toolkit",
+        "restartServices": ["nginx.service", "ssh.service"]
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "package-state",
+    "expectedPackages": {
+      "installed": { "openssl": "3.0.13-0ubuntu3.5" },
+      "pendingRestarts": ["nginx.service", "ssh.service"]
+    },
+    "requireCommands": ["apt", "needrestart"],
+    "requireCommandPatterns": [
+      "^apt\\s+list\\s+--upgradable$",
+      "^sudo\\s+apt\\s+upgrade\\s+openssl$",
+      "^needrestart$"
+    ],
+    "minCommandCount": 3
+  }
+}

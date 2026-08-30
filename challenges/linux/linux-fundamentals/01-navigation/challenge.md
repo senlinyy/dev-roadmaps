@@ -1,16 +1,18 @@
 ---
-title: "Navigate Your Way"
-sectionSlug: move-with-cd-and-path-names
+title: "Find Your Bearings"
+sectionSlug: how-do-pwd-ls-and-cd-resolve-paths
 order: 1
+revision: 2
 ---
 
-Three commands form the backbone of moving around Linux: `pwd`, `ls`, and `cd`. Time to use all three.
+You have opened a shell inside an unfamiliar application checkout. Confirm the starting point, inspect what is present, and prove that you can choose between relative and absolute paths without losing your place.
 
-You start in `/home/dev`. Your job:
+You start in `/home/dev/projects/api`. Your job:
 
-1. **Confirm where you are** with `pwd`.
-2. **Look around** - list everything in your home directory **including hidden files**.
-3. **Visit `/etc`** to see system configuration.
-4. **Return to `/home/dev`** with `cd` (no argument or with `~` both work).
+1. **Confirm the working directory** before moving anywhere.
+2. **List every entry**, including hidden application files.
+3. **Reach `/home/dev/downloads` with a relative path** from the current checkout.
+4. **Confirm the new location** before moving again.
+5. **Finish in `/home/dev/projects/api/config` using an absolute path**.
 
-The grader requires you to use `pwd`, `ls`, and `cd` at least once each, and to finish back in `/home/dev` with the hidden-file listing as your last `ls` output.
+The grader checks the navigation evidence, the two path styles, and your final working directory.

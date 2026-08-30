@@ -1,0 +1,26 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/opt/orders-api/releases/20260824": { "type": "dir" },
+    "/opt/orders-api/releases/20260824/version.txt": { "type": "file", "content": "20260824\n" },
+    "/opt/orders-api/releases/20260830": { "type": "dir" },
+    "/opt/orders-api/releases/20260830/version.txt": { "type": "file", "content": "20260830\n" },
+    "/opt/orders-api/current": { "type": "symlink", "target": "/opt/orders-api/releases/20260824" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/opt/orders-api/current": {
+        "type": "symlink",
+        "linkTargetEquals": "/opt/orders-api/releases/20260830"
+      }
+    },
+    "requireCommands": ["readlink", "ln"],
+    "requireCommandPatterns": [
+      "^readlink\\s+/opt/orders-api/current$",
+      "^readlink\\s+-f\\s+/opt/orders-api/current$"
+    ]
+  }
+}

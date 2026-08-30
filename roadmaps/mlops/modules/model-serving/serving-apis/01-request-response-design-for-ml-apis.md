@@ -12,418 +12,1920 @@ aliases:
 
 ## Table of Contents
 
-1. [What An ML API Must Communicate](#what-an-ml-api-must-communicate)
-2. [Define The Product Decision Before Designing JSON](#define-the-product-decision-before-designing-json)
-3. [Explain The Prediction Meaning In The Response](#explain-the-prediction-meaning-in-the-response)
-4. [Choose A Single Request, Small Batch, Or Asynchronous Job](#choose-a-single-request-small-batch-or-asynchronous-job)
-5. [Design The Payload For Privacy, Logging, And Security](#design-the-payload-for-privacy-logging-and-security)
-6. [The Main Idea](#the-main-idea)
-7. [References](#references)
+1. [How Should an ML API Represent the Product Decision and Model Inputs?](#how-should-an-ml-api-represent-the-product-decision-and-model-inputs)
+2. [What Must the Response Explain about Prediction, Decision, and Provenance?](#what-must-the-response-explain-about-prediction-decision-and-provenance)
+3. [How Do Request Granularity, Asynchronous Jobs, and Idempotency Change the Contract?](#how-do-request-granularity-asynchronous-jobs-and-idempotency-change-the-contract)
+4. [How Do Governance, Size, Cost, Timeouts, and Errors Bound Safe Requests?](#how-do-governance-size-cost-timeouts-and-errors-bound-safe-requests)
+5. [How Do API Versions, Model Selection, Routing, and Determinism Evolve Safely?](#how-do-api-versions-model-selection-routing-and-determinism-evolve-safely)
+6. [How Do Streaming and Observability Preserve Meaning without Exposing Raw Inputs?](#how-do-streaming-and-observability-preserve-meaning-without-exposing-raw-inputs)
+7. [How Do Fraud, Document, and Ranking APIs Require Different Shapes?](#how-do-fraud-document-and-ranking-apis-require-different-shapes)
+8. [What Checklist Produces a Stable ML Request and Response Contract?](#what-checklist-produces-a-stable-ml-request-and-response-contract)
+9. [Check Your Answers](#check-your-answers)
 
-## What An ML API Must Communicate
-<!-- section-summary: An ML API surrounds a model call with defined product meaning, timing, identities, outputs, errors, and operational evidence. -->
+A model expects 128 floating-point values, but a fraud-review application thinks in transactions, customers, event times, and decisions. Exposing the training tensor would force every caller to reproduce feature engineering and make model changes break the product contract.
 
-A product service may ask for a risk decision, while the prediction service needs exact inputs and the caller needs to know how to interpret uncertainty or failure. An **ML API contract** is the agreement between those two services. It defines the requested decision, the facts the caller supplies, the meaning of the result, and the behaviour expected from both sides.
+An **ML API** translates a product request into validated model input and returns a prediction or decision with clear meaning, identity, timing, and error semantics. Its contract also governs request size, sensitive data, compute cost, retries, versions, and observability.
 
-That description reaches beyond JSON types. A number can satisfy a schema and still carry the wrong meaning. Consider a response with `"score": 0.82`. One caller may read it as an 82 percent probability of fraud. The model may actually return the probability of a legitimate transaction. The JSON is valid, the HTTP status is successful, and the product decision is reversed.
+These questions follow that boundary from the product decision to concrete fraud, document, and ranking API designs:
 
-Units create the same risk. A request field called `amount` accepts `1200` as a valid integer. One client may mean twelve dollars in cents; another may mean twelve hundred dollars. A stable contract names the unit, such as `amount_minor`, and pairs it with `currency`.
+1. **How Should an ML API Represent the Product Decision and Model Inputs?**
+2. **What Must the Response Explain about Prediction, Decision, and Provenance?**
+3. **How Do Request Granularity, Asynchronous Jobs, and Idempotency Change the Contract?**
+4. **How Do Governance, Size, Cost, Timeouts, and Errors Bound Safe Requests?**
+5. **How Do API Versions, Model Selection, Routing, and Determinism Evolve Safely?**
+6. **How Do Streaming and Observability Preserve Meaning without Exposing Raw Inputs?**
+7. **How Do Fraud, Document, and Ranking APIs Require Different Shapes?**
+8. **What Checklist Produces a Stable ML Request and Response Contract?**
 
-An ML API therefore needs several connected layers. Product semantics define the decision, units, and deadline. Identifiers connect a request to traces, releases, and eventual outcomes. The request schema then validates the facts supplied by the caller.
+## How Should an ML API Represent the Product Decision and Model Inputs?
+<!-- section-summary: An ML API starts from the product decision and accepts domain-level inputs, identity, event time, missing-data semantics, and validation rules rather than exposing training tensors by accident. -->
 
-Inside the service, a feature contract governs derived model inputs. The response explains prediction meaning, uncertainty, abstention, and fallback. Version fields identify each changing layer, while error and compatibility policies tell consumers how to react as the service evolves.
+The public contract should describe the decision the caller understands, not the internal tensors the model happened to train on.
+
+An ML API is a **contract between a product decision and a prediction system**, rather than merely a way to send tensors over HTTP. The product knows why it needs a prediction. The model-serving system knows how to produce one. The API has to preserve the meaning between those two worlds. A useful model is:
+
+$$
+\boxed{
+\text{decision context}
+\rightarrow
+\text{prediction request}
+\rightarrow
+\text{model inference}
+\rightarrow
+\text{prediction meaning}
+\rightarrow
+\text{product decision}
+}
+$$
+
+If the API merely says:
+
+```json
+{
+  "features": [0.17, 3.2, 91, 0]
+}
+```
+
+and returns:
+
+```json
+{
+  "score": 0.83
+}
+```
+
+then technically data moved successfully. But almost everything important is unclear. What does `0.83` mean? Which model produced it? Which entity was scored? How fresh were the features? Can the caller retry? Is `0.83` a probability? What threshold should be used? Can the service log the request? What happens if one feature is missing? That is why good ML API design starts with **semantics**, not JSON. Suppose you're designing a fraud API. A weak starting point is:
+
+"We need an endpoint that returns the model output."
+
+A better starting point is:
+
+"During payment authorization, the payment service needs information about whether this transaction is likely fraudulent."
+
+Now we know the API participates in:
+
+```text
+payment attempted
+      ↓
+collect transaction context
+      ↓
+fraud prediction
+      ↓
+payment decision
+```
+
+The product decision tells us what the API must support.
+
+For example:
+
+$$
+D=\text{maximum time available for fraud scoring}
+$$
+
+Perhaps:
+
+$$
+D=100\text{ ms}
+$$
+
+Now synchronous request/response may make sense. But suppose instead the task is:
+
+"Analyze a 500-page insurance claim and classify it."
+
+The decision may tolerate:
+
+$$
+D=10\text{ minutes}
+$$
+
+Now a synchronous HTTP call may be the wrong interface entirely. So API shape follows from:
+
+$$
+\boxed{
+\text{decision}
++
+\text{deadline}
++
+\text{input size}
++
+\text{output semantics}
+}
+$$
+
+not from a generic `/predict` template. At minimum, the contract must make four things understandable:
+
+$$
+\boxed{
+\text{what is being predicted}
+}
+$$
+
+$$
+\boxed{
+\text{what information the prediction uses}
+}
+$$
+
+$$
+\boxed{
+\text{what the returned value means}
+}
+$$
+
+$$
+\boxed{
+\text{how the caller should behave operationally}
+}
+$$
+
+These correspond roughly to:
+
+```text
+Request semantics
+Response semantics
+Timing semantics
+Failure/retry semantics
+```
+
+A model API that gets only the first two right can still be dangerous in production. Suppose a churn model was trained on:
+
+$$
+x=
+[
+tenure\_days,
+purchase\_count,
+support\_tickets,
+days\_since\_login
+]
+$$
+
+The easiest serving API might be:
+
+```json
+{
+  "features": [431, 8, 2, 17]
+}
+```
+
+This creates a brittle contract. The caller must know:
+
+```text
+position 0 = tenure_days
+position 1 = purchase_count
+position 2 = support_tickets
+position 3 = days_since_login
+```
+
+If the model changes feature order:
+
+```text
+v1:
+[a, b, c, d]
+
+v2:
+[a, c, b, d]
+```
+
+the request can remain syntactically valid while becoming semantically wrong. A better contract exposes named concepts:
+
+```json
+{
+  "customer": {
+    "tenure_days": 431,
+    "purchase_count_30d": 8,
+    "support_tickets_90d": 2,
+    "days_since_last_login": 17
+  }
+}
+```
+
+Now meaning is explicit. The larger principle is:
+
+> **API contracts should expose stable product concepts, not accidental model internals.**
+
+Model implementations should be easier to change than API consumers. Suppose the model needs:
+
+$$
+purchase\_count_{30d}
+$$
+
+Should every caller compute that? Usually not if the serving system already owns feature computation. Instead of:
+
+```json
+{
+  "purchase_count_30d": 8
+}
+```
+
+the request may simply contain:
+
+```json
+{
+  "customer_id": "cust_123"
+}
+```
+
+and the serving path does:
+
+```text
+customer_id
+    ↓
+feature service
+    ↓
+purchase_count_30d
+days_since_login
+support_history
+...
+    ↓
+model
+```
+
+Why is this attractive? Because feature semantics remain centralized. Otherwise:
+
+```text
+Service A computes 30-day purchases one way
+Service B computes it another way
+Service C forgets refunds
+```
+
+and all three call the same model. The API boundary should therefore deliberately decide:
+
+**Who owns feature computation?**
+
+There are two valid designs.
+
+### Caller supplies features
+
+Useful when the caller already owns the relevant context.
+
+```text
+request context
+      ↓
+model service
+```
+
+### Model-serving system resolves features
+
+Useful when features belong to shared ML infrastructure.
+
+```text
+entity/event identity
+      ↓
+feature system
+      ↓
+model
+```
+
+Neither is universally superior. But the ownership must be explicit. Suppose you score a transaction. The request might contain:
+
+```json
+{
+  "transaction_id": "tx_8291",
+  "customer_id": "cust_42",
+  "amount": 389.50,
+  "currency": "GBP"
+}
+```
+
+These fields do different jobs. `transaction_id` tells us:
+
+$$
+\text{which logical event is being scored}
+$$
+
+while `amount` is part of:
+
+$$
+\text{the model input}
+$$
+
+That distinction matters for:
+
+```text
+deduplication
+tracing
+auditing
+retries
+joining predictions to business events
+```
+
+A good request often contains a stable logical identity even if the model itself never consumes that identity. Suppose you ask:
+
+"What is this customer's fraud risk?"
+
+Risk **when** If features depend on recent history, prediction meaning depends on time. A request might therefore include:
+
+```json
+{
+  "transaction_id": "tx_8291",
+  "occurred_at": "2026-08-30T10:04:17Z",
+  "customer_id": "cust_42",
+  "amount": 389.50
+}
+```
+
+Then a feature such as:
+
+$$
+transactions_{10m}
+$$
+
+can mean:
+
+$$
+\text{transactions during the 10 minutes before } occurred\_at
+$$
+
+rather than vaguely:
+
+"whatever happened recently when the server processed the call."
+
+For systems sensitive to event time, this distinction is essential. Suppose a model expects:
+
+```text
+customer_age
+account_age
+device_reputation
+```
+
+What does this mean?
+
+```json
+{
+  "device_reputation": null
+}
+```
+
+Possibilities include:
+
+```text
+unknown
+not applicable
+not collected
+temporarily unavailable
+intentionally withheld
+```
+
+Those aren't necessarily equivalent. Likewise, omission:
+
+```json
+{}
+```
+
+may mean something different from:
+
+```json
+{
+  "device_reputation": null
+}
+```
+
+A contract should distinguish these cases where product behavior depends on them. Otherwise upstream implementation details silently become model behavior. Consider:
+
+```json
+{
+  "amount": -999999,
+  "currency": "BANANA"
+}
+```
+
+The model might technically accept numeric/textual representations. That doesn't mean it should. The request path should usually establish invariants before inference:
+
+$$
+x\in X_{valid}
+$$
+
+For example:
+
+```text
+amount >= 0
+currency ∈ supported currencies
+timestamp valid
+required IDs present
+string sizes bounded
+```
+
+Then:
+
+```text
+request
+   ↓
+schema validation
+   ↓
+semantic validation
+   ↓
+feature construction
+   ↓
+model
+```
+
+This makes failures understandable. A bad request should usually not become:
+
+"model prediction = 0.13"
+
+It should become:
+
+"request invalid."
+
+## What Must the Response Explain about Prediction, Decision, and Provenance?
+<!-- section-summary: Responses define score or label meaning, separate prediction from policy when needed, and include prediction and release identities that support traceability. -->
+
+Once inputs have product meaning, the response must explain what the prediction means and which model and request produced it.
+
+Suppose the model returns:
+
+$$
+0.87
+$$
+
+That number is useless without semantics. It might mean:
+
+```text
+87% probability of fraud
+87th percentile risk
+raw sigmoid score
+ranking score
+confidence in predicted class
+normalized anomaly score
+```
+
+These are completely different. So instead of:
+
+```json
+{
+  "score": 0.87
+}
+```
+
+prefer something whose meaning is explicit:
+
+```json
+{
+  "fraud_probability": 0.87
+}
+```
+
+if it truly is a calibrated probability. Or:
+
+```json
+{
+  "risk_score": 0.87,
+  "score_scale": "0_to_1_higher_is_riskier"
+}
+```
+
+if it is merely a score. The naming must reflect what can honestly be claimed.
+
+**Do not call something a probability unless its semantics justify interpreting it as one.**
+
+Suppose a fraud model returns:
+
+$$
+p=0.87
+$$
+
+Should the API also return:
+
+```json
+{
+  "decision": "decline"
+}
+```
+
+Maybe. But realize these are different functions. Prediction:
+
+$$
+p=P(fraud\mid x)
+$$
+
+Decision:
+
+$$
+a=g(p,\text{business rules},\text{costs},\text{policy})
+$$
+
+For example:
+
+```text
+fraud probability
+      +
+transaction amount
+      +
+merchant type
+      +
+regulatory policy
+      ↓
+approve / review / decline
+```
+
+Thresholds may change without retraining. So a clean architecture often separates:
+
+```text
+ML prediction
+```
+
+from:
+
+```text
+business decision
+```
+
+unless the serving product explicitly owns both. This prevents model APIs from accidentally becoming repositories for unrelated business policy. There is a counterpoint. Suppose the consumers should not understand thresholds, score calibration, or model versions. Then exposing:
+
+```json
+{
+  "fraud_probability": 0.83417291
+}
+```
+
+may leak implementation details. A higher-level decision service might deliberately expose:
+
+```json
+{
+  "recommendation": "manual_review"
+}
+```
+
+The distinction is therefore:
+
+### Prediction API
+
+Exposes model semantics.
+
+```text
+input → model score
+```
+
+### Decision API
+
+Exposes product action semantics.
+
+```text
+input → model + policy → recommendation
+```
+
+Both are valid. The mistake is not deciding which one you are building. Suppose a prediction unexpectedly changes between Monday and Tuesday. You may need to know whether it came from:
+
+$$
+M_{17}
+$$
+
+or:
+
+$$
+M_{18}
+$$
+
+A response might include:
+
+```json
+{
+  "fraud_probability": 0.87,
+  "model_version": "fraud-v18"
+}
+```
+
+Possibly also:
+
+```json
+{
+  "prediction_id": "pred_7c921..."
+}
+```
+
+This can help with:
+
+```text
+debugging
+auditing
+offline evaluation
+A/B testing
+incident investigation
+joining feedback to predictions
+```
+
+But don't dump every internal implementation detail into every public API. You need a boundary between:
+
+```text
+caller-visible contract
+```
+
+and:
+
+```text
+internal trace metadata
+```
+
+For many systems, `prediction_id` is public while detailed lineage lives internally. Suppose request:
+
+```text
+transaction_id = tx_123
+```
+
+causes prediction:
+
+```text
+prediction_id = pred_789
+```
+
+Later the transaction turns out to be fraudulent. Your learning system can record:
+
+```text
+prediction_id = pred_789
+label = fraud
+```
+
+Now you can connect:
+
+```text
+request
+   ↓
+prediction
+   ↓
+business outcome
+   ↓
+training/evaluation data
+```
+
+Without stable prediction identities, model feedback pipelines become much harder. So a response might include:
+
+```json
+{
+  "prediction_id": "pred_789",
+  "fraud_probability": 0.87
+}
+```
+
+even if the caller does nothing with the ID immediately.
 
 ![A concrete risk-decision request passes through feature lookup, model scoring, and policy before returning an action plus separate model, policy, and release identities.](/content-assets/articles/article-mlops-model-serving-request-response-design-for-ml-apis/prediction-api-decision-contract.png)
 
 *The caller sends stable product facts; the service owns derived features and turns the model score into a policy decision whose exact release remains visible in the response.*
 
-```mermaid
-flowchart TD
-    A["Product Request<br/>(decision and caller facts)"] --> B["API Contract<br/>(meaning identity and validation)"]
-    B --> C["Feature Construction<br/>(governed model inputs)"]
-    C --> D["Model And Policy<br/>(score translated into an action)"]
-    D --> E["Decision Response<br/>(result uncertainty and evidence)"]
-    E --> F["Outcome Join<br/>(later evidence for quality)"]
+## How Do Request Granularity, Asynchronous Jobs, and Idempotency Change the Contract?
+<!-- section-summary: Single, bounded batch, and asynchronous requests create different waiting and state contracts, while idempotency makes retries predictable and side effects limited. -->
 
-    class A input
-    class B,C,D,E,F process
+The interaction pattern then determines whether callers wait for one item, submit a bounded batch, or track a durable asynchronous job.
+
+There are three broad request shapes:
+
+$$
+\boxed{\text{single prediction}}
+$$
+
+$$
+\boxed{\text{small synchronous batch}}
+$$
+
+$$
+\boxed{\text{asynchronous job}}
+$$
+
+These solve different problems. The basic synchronous pattern is:
+
+```text
+caller
+  ↓
+one logical prediction
+  ↓
+response
 ```
 
-A web framework can enforce this agreement after the team defines it. FastAPI and Pydantic v2 can validate request bodies, filter response fields, and generate OpenAPI documentation. Product and model owners still decide whether `0.82` means fraud, safety, relevance, or repayment.
+Example:
 
-## Define The Product Decision Before Designing JSON
-<!-- section-summary: A contract starts with the actor, decision, prediction target, units, timing, and cost of mistakes so field names and outputs represent the real product action. -->
-
-The contract discussion starts with a sentence about the product. It should name the caller, the decision, and the latest time at which an answer can still affect that decision. This sentence gives every field a reason to exist.
-
-For a payment risk API, the sentence could say: “The authorization service requests a risk decision for one transaction before its dependency deadline. The result selects approve, review, or decline under the active policy.” The API now has a concrete unit: one transaction at one decision time.
-
-For a support triage API, the caller may request a priority class for one case after a new message arrives. The result places the case into `standard`, `urgent`, or `specialist_review`. A generic `score` field would force every consumer to reproduce threshold logic. Returning the decision class plus the underlying score keeps product behavior consistent.
-
-For a demand forecast API, the prediction target needs a horizon and unit. `expected_units` means little by itself. `expected_units_next_7_days` states the quantity and period. The request also needs the location, product identity, forecast origin time, and data cutoff that define the forecast.
-
-Product semantics answer details that types alone miss. A timestamp needs a timezone and an event meaning; `transaction_occurred_at` differs from `request_received_at`. Money needs a currency and representation. Categories need controlled definitions. Probabilities need a positive class and calibration meaning. Missing data needs a policy because an absent field, an unknown value, and zero may produce different model behavior.
-
-These details belong in the API description, schema field metadata, and consumer documentation. A model card can explain training behavior, though callers need the production meaning at the endpoint boundary.
-
-```mermaid
-flowchart TD
-    A["Decision Actor<br/>(service or person using result)"] --> B["Decision Unit<br/>(transaction case item or interval)"]
-    B --> C["Prediction Target<br/>(label score quantity or ranking)"]
-    C --> D["Units And Time<br/>(currency horizon timezone and cutoff)"]
-    D --> E["Decision Policy<br/>(threshold abstention and action)"]
-    E --> F["API Fields<br/>(names that preserve meaning)"]
-
-    class A input
-    class B,C,D,E,F process
+```json
+{
+  "transaction_id": "tx_8291",
+  "amount": 389.50
+}
 ```
 
-### Give Each Identifier One Purpose
-<!-- section-summary: Request IDs, trace context, idempotency keys, entity IDs, event IDs, and model identities solve separate correlation and safety problems. -->
+This works well when one product decision is waiting for one result. Advantages:
 
-Production APIs carry several identifiers because one identifier rarely serves every purpose safely. Giving each identity one job prevents accidental coupling.
-
-A **request ID** identifies one API invocation in product logs. The caller can create it and the service returns it. Support teams use this value to locate the request and response record.
-
-A **trace ID** identifies a distributed trace across services. W3C Trace Context propagates this identity through the `traceparent` header, and OpenTelemetry instrumentation turns service operations into related spans. A retry may create a new request attempt inside the same broader workflow, so request and trace identities should remain separate fields.
-
-An **idempotency key** identifies a logical operation whose side effects must occur once. Repeating a pure prediction may simply calculate another score. Repeating a payment decision, notification, or async job creation can duplicate real actions. The service stores the key with a request fingerprint and returns the earlier result for an identical replay. Reusing the key with a different payload should return a conflict.
-
-An **entity ID** identifies the subject of prediction, such as a transaction, case, or product. An **event ID** identifies the business event that triggered the decision. These values later connect predictions to outcomes. Access controls and retention rules may require pseudonymous references in operational stores.
-
-Model evidence has its own identities. A model name and immutable model version identify the artifact. A release ID identifies the deployed combination of model, code, configuration, and traffic policy. A decision-policy version identifies thresholds and business rules applied after scoring.
-
-```mermaid
-flowchart TD
-    A["Caller Workflow<br/>(business operation)"] --> B["Trace ID<br/>(distributed path)"]
-    A --> C["Request ID<br/>(one API attempt)"]
-    A --> D["Idempotency Key<br/>(one logical side effect)"]
-    A --> E["Entity Or Event ID<br/>(subject and outcome join)"]
-    C --> F["Prediction Record<br/>(model release schema and policy)"]
-    B --> F
-    D --> F
-    E --> F
-
-    class A input
-    class B,C,D,E,F process
+```text
+simple semantics
+simple retry behavior
+simple latency budgeting
+easy attribution
 ```
 
-Trace identifiers should stay out of business idempotency logic. Sampling can remove a trace from the observability backend, while the idempotency record must remain durable for its promised window.
+It is often the best default for interactive inference. Suppose a ranking service needs scores for 50 candidate products. Calling the model 50 times creates:
 
-### Keep The API Schema And Feature Definitions Separate
-<!-- section-summary: The request schema describes stable product facts supplied by a caller, while the feature contract governs derived values produced inside the ML system. -->
+$$
+50\times L_{network}
+$$
 
-A request payload should expose product facts that the caller owns. A feature vector contains model inputs produced by transformations, joins, encoders, and freshness rules. Treating these as the same contract makes every client depend on the internal shape of the current model.
+and significant per-request overhead.
 
-Suppose an account-risk model uses `transactions_30d`, `amount_zscore`, `merchant_risk_7d`, and an encoded device category. Asking the payment service to calculate those values spreads feature logic into product code. Training and serving can drift, a model update can force a client release, and the API may expose sensitive aggregates to callers that never needed them.
+Instead:
 
-A stable request can carry the current transaction facts and a governed account reference. The prediction service retrieves approved history, calculates derived features through the shared feature pipeline, checks freshness, and records the feature-set version. A new model can add an internal feature while the product request remains stable.
-
-```python
-from datetime import datetime
-from typing import Annotated, Literal
-from uuid import UUID
-
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class RiskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    request_id: UUID
-    transaction_id: str = Field(min_length=8, max_length=80)
-    account_ref: str = Field(min_length=8, max_length=120)
-    amount_minor: Annotated[int, Field(strict=True, ge=0)]
-    currency: Literal["GBP", "EUR", "USD"]
-    merchant_category: str = Field(min_length=2, max_length=12)
-    transaction_occurred_at: datetime
-    schema_version: Literal["risk-request-v3"]
+```json
+{
+  "items": [
+    {"item_id": "A", "...": "..."},
+    {"item_id": "B", "...": "..."},
+    {"item_id": "C", "...": "..."}
+  ]
+}
 ```
 
-This focused Pydantic v2 model rejects undeclared fields, constrains identifiers, names the currency representation, and pins the request schema. It deliberately omits rolling aggregates and encoded columns. Those fields belong to a feature contract with their own type, source, transformation, freshness, default, and availability rules.
+The system returns:
 
-The API can accept product facts or a reference to a versioned feature row if the caller and feature platform share governance. In both designs, the response should record `feature_set_version` and a freshness result. Raw feature vectors are poor default API payloads because they expose internal order, names, and transformations as a public dependency.
-
-## Explain The Prediction Meaning In The Response
-<!-- section-summary: A prediction response should state the product decision, score semantics, uncertainty, abstention, fallback route, and model evidence needed by consumers. -->
-
-The response should answer the product question before it reports model internals. A consumer needs to know what action is permitted and how to handle uncertainty.
-
-For payment risk, the product response may contain `decision`, `risk_probability`, `reason_codes`, and `review_required`. The schema defines `risk_probability` as the calibrated probability of a fraudulent outcome over the label window. This phrase establishes the positive class and time horizon. A bare `score` would leave both ambiguous.
-
-**Confidence** also needs a definition. A class probability, calibration bucket, prediction interval, ensemble disagreement measure, and data-quality flag describe different forms of uncertainty. One generic `confidence` number encourages consumers to invent meanings. Give each supported measure a specific name and documented range.
-
-**Abstention** is a valid model-system outcome. The service may decline to make an automated decision after out-of-distribution input, missing critical evidence, or high uncertainty. An abstention can return HTTP success because the request was valid and the decision policy completed. The response then identifies `review` as the action and records an abstention reason.
-
-**Fallback** records a different execution path. A timeout may use a rules engine or a recent cached score. The response should expose the route through a controlled field such as `decision_source: "model" | "rules" | "cache"`. This allows product analytics and incident response to measure degraded behavior.
-
-```python
-class ModelEvidence(BaseModel):
-    model_name: str
-    model_version: str
-    release_id: str
-    feature_set_version: str
-    policy_version: str
-
-
-class RiskResponse(BaseModel):
-    request_id: UUID
-    decision: Literal["approve", "review", "decline"]
-    risk_probability: Annotated[float, Field(ge=0.0, le=1.0)]
-    decision_source: Literal["model", "rules", "cache"]
-    abstention_reason: str | None = None
-    reason_codes: list[str] = Field(max_length=5)
-    evidence: ModelEvidence
+```json
+{
+  "predictions": [
+    {"item_id": "A", "score": 0.71},
+    {"item_id": "B", "score": 0.19},
+    {"item_id": "C", "score": 0.84}
+  ]
+}
 ```
 
-Reason codes should come from a small reviewed vocabulary and represent decision evidence the product is allowed to expose. Arbitrary exception text, raw prompts, unrestricted feature values, and internal paths should stay out of the response.
+This can reduce overhead and enable efficient accelerator batching. But now new questions arise. What if one item is invalid? Does the entire request fail? Or return partial results
 
-```mermaid
-flowchart TD
-    A["Model Output<br/>(score logits labels or interval)"] --> B["Calibration<br/>(documented uncertainty meaning)"]
-    B --> C["Decision Policy<br/>(thresholds and abstention)"]
-    C --> D["Fallback Policy<br/>(model rules cache or review)"]
-    D --> E["Product Response<br/>(action and controlled evidence)"]
-
-    class A input
-    class B,C,D,E process
+```json
+{
+  "predictions": [
+    {"item_id": "A", "score": 0.71},
+    {"item_id": "B", "error": "invalid_feature"},
+    {"item_id": "C", "score": 0.84}
+  ]
+}
 ```
 
-### Version The API, Model, And Policy Separately
-<!-- section-summary: API, schema, feature, model, policy, and release versions change for different reasons and should remain independently traceable. -->
+The contract must decide. Why not allow:
 
-Several independently changing parts can alter a production prediction even though the endpoint and request stay the same. Retraining can replace the model weights. A policy update can move the approval threshold. A service release can change preprocessing or timeout behavior. A single `version` value gives an incident responder too little evidence to identify which change affected the decision.
-
-The practical solution is to record a separate identity for each layer that teams build, approve, or release independently. These identities travel with the decision record, so an engineer can compare affected requests against the exact API, feature logic, model, policy, and deployment that handled them.
-
-The **API version** covers transport-level and product-semantic compatibility. A new path such as `/v2/risk-decisions` is appropriate after a breaking change to request meaning, response meaning, or interaction style.
-
-The **request and response schema version** identifies the accepted document shape. A compatible optional field may stay inside the same API version, provided consumers tolerate unknown response fields. A new required request field or renamed field usually needs a migration.
-
-The **feature-set version** identifies transformations and governed data inputs. The product request can remain unchanged while the internal feature set evolves.
-
-The **model version** identifies immutable trained weights and packaging. Retraining under the same contract changes this version without forcing client changes.
-
-The **policy version** identifies thresholds, routing rules, abstention criteria, and allowed fallbacks. A threshold change can alter product actions even if model scores stay identical.
-
-The **release ID** identifies the deployed bundle. It connects the model, service image, feature set, policy, and environment configuration used for a traffic segment.
-
-```mermaid
-flowchart TD
-    A["API Version<br/>(product and transport compatibility)"] --> G["Decision Evidence<br/>(exact production interpretation)"]
-    B["Schema Version<br/>(request and response shape)"] --> G
-    C["Feature Version<br/>(derived input contract)"] --> G
-    D["Model Version<br/>(immutable trained artifact)"] --> G
-    E["Policy Version<br/>(thresholds routes and abstention)"] --> G
-    F["Release ID<br/>(deployed bundle and traffic state)"] --> G
-
-    class A,B,C,D,E,F input
-    class G process
+```text
+10 million examples
 ```
 
-Separate identities answer real incident questions. A quality regression may come from new weights. A sudden decline-rate increase may come from a policy threshold. A validation spike may come from a schema migration. A latency regression may come from the service image. One `version` string hides these differences.
+in one request Because synchronous request handling assumes:
 
-## Choose A Single Request, Small Batch, Or Asynchronous Job
-<!-- section-summary: API interaction shape should match one immediate decision, a small bounded group, or a durable job whose processing outlives the request. -->
+$$
+T_{completion}\lesssim \text{reasonable request deadline}
+$$
 
-The **interaction shape** defines how much prediction work belongs to one call and how long the caller remains connected. A payment authorization needs one immediate decision inside a short deadline. Reranking twenty search candidates can fit in a small bounded request. Scoring several million customer records needs a durable job that continues after the HTTP connection closes.
+Large batches increase:
 
-These workloads lead to three common API shapes. Each shape needs its own request limits, response format, timeout behavior, and failure rules.
+```text
+memory pressure
+request size
+timeout risk
+retry cost
+head-of-line blocking
+```
 
-A **single synchronous call** asks for one decision and returns it inside the request deadline. It fits checkout, routing, ranking, and other immediate product actions. The request ID identifies one attempt, and the caller owns a timeout plus fallback.
+Imagine processing 99,999 items successfully and then losing the connection. Retrying the entire request can be expensive. So synchronous batch APIs should normally enforce explicit limits:
 
-A **bounded batch call** sends a small list of independent items under one HTTP request. Candidate ranking or a compact replay tool may benefit from this shape. The contract states a maximum item count and payload size. It also defines whether responses preserve input order and how item IDs map results back to requests.
+$$
+N\le N_{max}
+$$
 
-Batch error behavior needs one declared rule. All-or-nothing validation rejects the whole document after any invalid item. Per-item results return a controlled success or error object for every item. The choice follows consumer needs, and the endpoint should avoid mixing both rules unpredictably.
+and:
 
-A **durable asynchronous job** fits large payloads or long computation. The initial call returns `202 Accepted` with a job resource and status URL. The caller polls, receives a callback, or reads a result event. The contract defines job states, idempotent creation, retention, cancellation, completion deadline, and terminal errors.
+$$
+payload\_size\le S_{max}
+$$
+
+Beyond that point, use an asynchronous job. Suppose a request requires minutes. Don't make the client hold an HTTP connection for minutes merely because the model was exposed through HTTP.
+
+Instead:
+
+```text
+submit work
+    ↓
+receive job identity
+    ↓
+processing happens independently
+    ↓
+retrieve result later
+```
+
+Conceptually:
+
+```json
+POST /prediction-jobs
+```
+
+returns:
+
+```json
+{
+  "job_id": "job_9281",
+  "status": "queued"
+}
+```
+
+Then later:
+
+```text
+GET /prediction-jobs/job_9281
+```
+
+might return:
+
+```json
+{
+  "job_id": "job_9281",
+  "status": "completed",
+  "result": { "...": "..." }
+}
+```
+
+Now the API contract must define a state machine. Possible states:
+
+```text
+QUEUED
+  ↓
+RUNNING
+  ↓
+SUCCEEDED
+```
+
+or:
+
+```text
+RUNNING
+  ↓
+FAILED
+```
+
+perhaps also:
+
+```text
+CANCEL_REQUESTED
+CANCELLED
+EXPIRED
+```
+
+Once work outlives an individual request, the API must answer:
+
+```text
+Can the caller cancel
+How long are results retained
+Can the same job be submitted twice
+Can failed jobs be retried
+What does progress mean
+```
+
+This is not a minor extension of synchronous prediction. It is a job-management API. Suppose the client submits:
+
+```text
+POST /prediction-jobs
+```
+
+The server creates job:
+
+```text
+job_123
+```
+
+but the network connection breaks before the response reaches the client. The client does not know whether the request succeeded. It retries. Without protection:
+
+```text
+first attempt → job_123
+retry         → job_124
+```
+
+Now you perform the expensive inference twice. An idempotency key solves this:
+
+```text
+Idempotency-Key: claim-analysis-82919
+```
+
+Then:
+
+$$
+same\ logical\ request
+\rightarrow
+same\ logical\ job
+$$
+
+Retries become safe. The same principle can be useful in synchronous inference where side effects or expensive deduplication matter.
+
+## How Do Governance, Size, Cost, Timeouts, and Errors Bound Safe Requests?
+<!-- section-summary: The request is a governance and resource boundary with explicit sensitive-data handling, size and cost limits, timeouts, status meanings, and per-item batch errors. -->
+
+Those requests consume data and compute, so privacy, size, timeouts, cost, and error semantics must be part of the boundary.
+
+Suppose:
+
+```text
+POST /predict
+```
+
+both computes fraud probability **and freezes the account**. Now retry semantics become dangerous. Did the first call freeze the account before the response was lost? Could retry freeze it again Prediction services are generally easier to operate if:
+
+$$
+\boxed{\text{same input can safely be evaluated repeatedly}}
+$$
+
+That is, prediction should behave as close as possible to a pure function:
+
+$$
+y=f(x)
+$$
+
+Then a separate decision/action system handles:
+
+```text
+freeze account
+send notification
+charge payment
+```
+
+Sometimes combined endpoints are justified, but they require much more careful idempotency design. Suppose an underwriting model technically needs:
+
+```text
+income
+employment history
+debt
+```
+
+A developer sends the entire customer record:
+
+```json
+{
+  "...hundreds of fields...": "..."
+}
+```
+
+because it is easier. That creates several problems:
+
+```text
+more sensitive data crossing services
+larger logs
+larger attack surface
+unclear model dependencies
+harder auditing
+```
+
+A better principle is:
+
+$$
+\boxed{\text{send the minimum information required by the inference contract}}
+$$
+
+This is data minimization. The request schema becomes an explicit record of what the model-serving system is allowed and expected to consume. API payloads may appear in:
+
+```text
+application logs
+gateway logs
+traces
+error reports
+debug tooling
+dead-letter systems
+analytics systems
+```
+
+So whenever adding a field, ask:
+
+**What happens if infrastructure logs this value?**
+
+For example, raw free-form text might contain personal information. Images may contain faces or documents. Audio may contain conversations. Authentication tokens should generally not belong in model payloads at all. A useful classification is:
+
+```text
+safe to log
+safe only in restricted logs
+must be redacted
+must never be logged
+```
+
+Then observability can be designed accordingly. Suppose the model needs a customer's profile. Option A:
+
+```json
+{
+  "customer_name": "...",
+  "home_address": "...",
+  "purchase_history": [...]
+}
+```
+
+Option B:
+
+```json
+{
+  "customer_id": "cust_8291"
+}
+```
+
+and the serving layer retrieves only approved features. Option B can reduce data movement and centralize access control. But it introduces:
+
+$$
+L_{feature\ lookup}
+$$
+
+and another dependency. So this is a latency/privacy/ownership trade-off. Again, first principles help:
+
+> **Move only the information that needs to cross the API boundary.**
+
+Suppose an image inference endpoint accepts arbitrary payload sizes. An attacker sends:
+
+$$
+5\text{ GB}
+$$
+
+per request. Even if inference never starts, parsing/storage can exhaust resources. So input design needs hard limits:
+
+```text
+maximum request bytes
+maximum image resolution
+maximum text length
+maximum batch size
+maximum sequence length
+maximum number of nested objects
+```
+
+For generative systems, token limits are particularly important because work can scale roughly with input and output size. An API should bound:
+
+$$
+\text{maximum work one request can demand}
+$$
+
+not merely validate syntax. Not all requests are equal. Suppose an LLM API accepts:
+
+```text
+100-token prompt
+```
+
+or:
+
+```text
+100,000-token prompt
+```
+
+and can generate:
+
+```text
+20 tokens
+```
+
+or:
+
+```text
+10,000 tokens
+```
+
+Then:
+
+$$
+1\ request \neq 1\ unit\ of\ work
+$$
+
+This affects:
+
+```text
+rate limiting
+quotas
+timeouts
+billing
+scheduling
+fairness
+capacity planning
+```
+
+Request design should expose or constrain variables controlling work. A general principle is:
+
+$$
+\boxed{\text{make computational demand bounded and predictable enough to operate}}
+$$
+
+Suppose a page must render within:
+
+$$
+500\text{ ms}
+$$
+
+The prediction service should probably not have a 30-second timeout. If the caller needs:
+
+$$
+100\text{ ms}
+$$
+
+for fallback logic, then perhaps:
+
+$$
+D_{ML}=400\text{ ms}
+$$
+
+at most.
+
+Conceptually:
+
+```text
+overall product deadline
+          ↓
+reserve fallback time
+          ↓
+ML deadline
+```
+
+The API should therefore participate in deadline propagation when appropriate. If the prediction is no longer useful after 300 ms, continuing to compute it for 8 seconds wastes capacity. These aren't the same. Suppose the caller stops waiting after 100 ms. The model might actually complete at 110 ms. From the caller's perspective:
+
+```text
+prediction unavailable before deadline
+```
+
+From the serving system's perspective:
+
+```text
+inference succeeded
+```
+
+This distinction matters operationally. You may track:
+
+$$
+\text{model errors}
+$$
+
+separately from:
+
+$$
+\text{deadline misses}
+$$
+
+because their remedies are different. Avoid reducing every failure to:
+
+```text
+500 Internal Server Error
+```
+
+There are conceptually different categories.
+
+### Caller errors
+
+```text
+invalid field
+unsupported format
+payload too large
+unsupported model capability
+```
+
+### Temporary serving outages
+
+```text
+service overloaded
+dependency unavailable
+timeout
+```
+
+### Permanent prediction impossibility
+
+```text
+unsupported language
+corrupt media
+required feature absent
+```
+
+The caller needs to know:
+
+$$
+\text{should I retry?}
+$$
+
+A good error contract makes that inferable. For example, a transient overloaded service and permanently invalid image should not look identical. Suppose five examples are submitted:
+
+```text
+A B C D E
+```
+
+and C is malformed. There are two broad contracts.
+
+### Atomic
+
+```text
+C invalid
+   ↓
+whole request fails
+```
+
+Good when the batch itself represents one indivisible logical operation.
+
+### Partial
+
+```text
+A success
+B success
+C invalid
+D success
+E success
+```
+
+Good for independent predictions. Neither is universally correct. But callers must not discover the behavior accidentally.
+
+## How Do API Versions, Model Selection, Routing, and Determinism Evolve Safely?
+<!-- section-summary: Contract versions represent semantic API changes independently from model versions, and routing or model selection should not leak experimental internals into public promises. -->
+
+As the service changes, API meaning, model identity, routing, and determinism need separate version and compatibility decisions.
+
+This is critical. Suppose the model changes:
+
+```text
+fraud_model_v17
+→ fraud_model_v18
+```
+
+If request and response meaning stay unchanged, consumers should not necessarily care. So ideally:
+
+$$
+\text{API version}
+\neq
+\text{model version}
+$$
+
+The API might remain:
+
+```text
+FraudPrediction API v2
+```
+
+while internally:
+
+```text
+model v17
+model v18
+model v19
+```
+
+come and go. This separation lets model teams improve implementations without forcing every client to redeploy. Suppose response changes from:
+
+```json
+{
+  "risk_score": 0.8
+}
+```
+
+to:
+
+```json
+{
+  "fraud_probability": 0.8
+}
+```
+
+If the old score was arbitrary and the new one is calibrated probability, this isn't just a rename. The semantics changed. That may justify a new API contract. Likewise, if:
+
+```text
+0 = risky
+1 = safe
+```
+
+becomes:
+
+```text
+0 = safe
+1 = risky
+```
+
+the API has changed catastrophically even though the JSON type is still a number. Semantic compatibility matters more than structural compatibility. Suppose response v1 is:
+
+```json
+{
+  "prediction_id": "p1",
+  "fraud_probability": 0.81
+}
+```
+
+Later you want to add:
+
+```json
+{
+  "model_version": "v18"
+}
+```
+
+If clients tolerate unknown fields, this can often be additive. But changing:
+
+```text
+fraud_probability
+```
+
+to represent something else is not additive. A stable API evolves more easily when:
+
+```text
+new optional fields can appear
+old fields keep their meaning
+enumerations have clear unknown behavior
+```
+
+This is ordinary API design, but ML systems make semantic drift particularly easy. Should callers specify:
+
+```json
+{
+  "model": "fraud_v18"
+}
+```
+
+Usually, product callers should not care about deployment versions. The service should own:
+
+```text
+traffic → approved production model
+```
+
+Otherwise every client becomes coupled to model lifecycle. There are cases where model selection is part of the product—for example, APIs intentionally exposing multiple model capabilities. But for internal ML services, a cleaner contract is often:
+
+```text
+caller requests capability
+service chooses implementation
+```
+
+For example:
+
+```text
+"predict fraud risk"
+```
+
+rather than:
+
+```text
+"invoke artifact fraud_model_2026_08_17_final_v3"
+```
+
+Suppose you want:
+
+```text
+90% → model v17
+10% → model v18
+```
+
+for evaluation. You don't need callers to implement this. The serving layer can route based on:
+
+```text
+prediction_id
+customer_id hash
+experiment assignment
+```
+
+while preserving one API contract. This separation allows controlled rollouts without changing product integration. For many classifiers:
+
+$$
+f(x)=y
+$$
+
+is effectively deterministic. But generative systems may intentionally be stochastic:
+
+$$
+Y\sim P(\cdot\mid x)
+$$
+
+The API should define controls such as:
+
+```text
+temperature
+top_p
+seed
+maximum output length
+```
+
+only where callers genuinely need them. Exposing every low-level inference knob can make the API impossible to evolve. A higher-level product API may instead say:
+
+```text
+mode = precise
+```
+
+or:
+
+```text
+mode = creative
+```
+
+and let the serving implementation choose low-level parameters. Again:
+
+**Expose stable intent whenever possible, not unstable implementation details.**
 
 ![Single-call, bounded-batch, and asynchronous ML API shapes compared by work size, deadline, identity, and error behavior.](/content-assets/articles/article-mlops-model-serving-request-response-design-for-ml-apis/api-interaction-shapes.png)
 
 *The interaction shape follows the amount of work that can safely finish inside the caller's deadline: one immediate decision, a bounded item set, or a durable job with its own lifecycle.*
 
-```mermaid
-flowchart TD
-    A["Prediction Work<br/>(payload count and duration)"] --> B{"Interaction Boundary<br/>(connection and work size)"}
-    B --> C["Single Call<br/>(one immediate decision)"]
-    B --> D["Bounded Batch<br/>(small independent item set)"]
-    B --> E["Async Job<br/>(durable long-running work)"]
-    C --> F["Immediate Response<br/>(decision or fallback)"]
-    D --> G["Ordered Results<br/>(item identities and error rule)"]
-    E --> H["Job Resource<br/>(status result and terminal state)"]
+## How Do Streaming and Observability Preserve Meaning without Exposing Raw Inputs?
+<!-- section-summary: Streaming remains part of the response contract, while correlation and prediction metadata provide observability without logging raw sensitive inputs. -->
 
-    class A input
-    class B gate
-    class C,D,E,F,G,H process
+Streaming alters how the response arrives but does not remove the need for stable meaning and privacy-aware correlation.
+
+Suppose an LLM requires ten seconds to produce a full response. A conventional API does:
+
+```text
+request
+   ↓
+10 seconds
+   ↓
+complete response
 ```
 
-An array with fifty thousand items is an offline data job disguised as an API call. A governed batch pipeline offers stronger snapshot, partition, replay, and publication controls for that scale.
+But generation happens incrementally:
 
-### Define Stable Validation And Error Categories
-<!-- section-summary: Validation protects syntax, schema, product rules, and model preconditions, while a stable error taxonomy tells callers whether repair, retry, fallback, or escalation is appropriate. -->
+$$
+token_1,token_2,\ldots
+$$
 
-Validation protects the model boundary from inputs that are syntactically valid yet unsafe to interpret. For example, a request may contain valid JSON and a valid integer for `amount_minor`, while the currency is missing or the event timestamp lies outside the supported feature window. Passing that request to the model would create a plausible prediction with unreliable meaning.
+So the API can expose:
 
-Production services check the request in layers. Each layer returns a stable error category that leads the caller toward one action: repair the payload, change the client, retry within a limit, use a fallback, or escalate the service failure.
-
-Transport validation checks content type, body size, authentication, and parseable JSON. Schema validation checks required fields, types, enums, ranges, and unknown properties. Product validation checks relationships such as an end time after a start time or a currency allowed for the account region. Model precondition checks verify feature availability, supported categories, and evidence freshness.
-
-Pydantic v2 can enforce types and field constraints, while FastAPI turns these models into request validation and OpenAPI schemas. The service still needs explicit validators for cross-field product rules. Coercion deserves care: accepting the string `"1200"` as an integer can hide a client regression. Strict fields make the boundary reject that change early.
-
-A stable error envelope separates machine-readable behavior from human-readable text:
-
-```python
-class FieldViolation(BaseModel):
-    field: str
-    code: str
-
-
-class ApiError(BaseModel):
-    error_code: str
-    message: str
-    request_id: UUID | None = None
-    retryable: bool
-    violations: list[FieldViolation] = Field(default_factory=list)
+```text
+request
+   ↓
+first token
+   ↓
+more tokens
+   ↓
+completion
 ```
 
-The HTTP status and `error_code` serve different purposes. HTTP groups transport behavior. The domain code identifies a stable reason such as `UNSUPPORTED_SCHEMA`, `FEATURES_STALE`, `PAYLOAD_TOO_LARGE`, or `MODEL_UNAVAILABLE`.
+This reduces **time to first useful output**, even though total inference time may be unchanged. The response contract now needs concepts such as:
 
-A practical mapping uses `422` for schema or product validation failures, `409` for an idempotency-key conflict, `413` for payload limits, and `429` for caller rate limits. Service unavailability can use `503`; a missed upstream deadline can use `504` if the service acts as a gateway. The API documentation should state the mapping and retry policy.
-
-`retryable` is a bounded hint under the contract. A caller still applies exponential backoff, jitter, attempt limits, and its remaining product deadline. Validation failures require payload or client repair. A valid abstention belongs in the success response because the policy reached a controlled outcome.
-
-### Migrate Clients Without Breaking Existing Requests
-<!-- section-summary: Compatibility depends on consumer behavior, so schema changes need impact review, dual support, usage telemetry, deprecation communication, and a tested cutoff. -->
-
-Compatibility describes the effect of an API change on real consumers. Suppose the service adds `manual_review` to a decision enum. The response remains valid JSON, yet a mobile client with an exhaustive switch may crash because it only handles `approve` and `decline`. Field-level syntax provides too little information about this consumer behavior.
-
-A safe migration therefore combines schema review with tests from the clients that decode and act on the response. The team keeps both contract versions available during the transition, measures which consumers still use the old version, and retires it through a controlled cutoff.
-
-Adding an optional request field is often compatible because old clients can omit it. Adding an optional response field is safe only for clients that ignore unknown fields. A mobile client with strict decoding may fail after any unrecognized property.
-
-Adding an enum value can break an exhaustive switch even though the field type remains a string. Tightening a numeric range can reject payloads accepted yesterday. Changing a default can alter decisions for clients that omit the field. Renaming a reason code can break dashboards and support workflows.
-
-A migration begins by publishing the new schema and examples. The service can accept old and new request versions through separate models or an explicit adapter. Telemetry counts calls by consumer and schema version, giving owners a concrete migration list. Responses can include deprecation headers or a controlled warning field if the organisation has a standard for them.
-
-During the transition, contract tests run against both versions. The team verifies that the adapter preserves units, missing-value policy, and output meaning. The cutoff happens only after required consumers move or receive an approved exception. Retired schemas should fail with a stable `UNSUPPORTED_SCHEMA` response that points to migration guidance.
-
-```mermaid
-flowchart TD
-    A["Contract Change<br/>(field enum default or meaning)"] --> B["Consumer Impact<br/>(real decoder and behavior tests)"]
-    B --> C["Dual Support<br/>(old schema and new schema)"]
-    C --> D["Usage Telemetry<br/>(consumer migration progress)"]
-    D --> E{"Cutoff Gate<br/>(required consumers moved)"}
-    E -->|No| C
-    E -->|Yes| F["Retire Old Schema<br/>(stable migration error)"]
-
-    class A input
-    class B,C,D,F process
-    class E gate
+```text
+partial output
+completion
+stream error
+cancellation
+usage metadata
 ```
 
-## Design The Payload For Privacy, Logging, And Security
-<!-- section-summary: A production contract minimizes sensitive input, authenticates and authorizes callers, limits abuse, and records safe evidence through allowlisted logs and traces. -->
+Streaming output therefore changes the protocol semantics, not the underlying product prediction alone. Suppose inference looks like:
 
-Every request field creates a data-handling obligation. The serving team should ask why the field is needed, who can send it, who can read it later, how long it is retained, and how deletion works.
-
-Authentication identifies the caller. Authorization checks whether that caller may use this model, decision type, region, or data class. Transport encryption protects data in transit. Network policy can restrict endpoint reachability. Payload-size limits, timeouts, concurrency limits, and rate limits protect service capacity.
-
-The request schema acts as an allowlist. `extra="forbid"` prevents undeclared JSON fields from silently entering application objects. It is one control among several; gateway and application authorization still decide who may call the endpoint.
-
-Operational logs should record safe, bounded evidence. Request ID, route, caller service, schema version, release ID, latency, outcome class, fallback route, and error code usually provide high value. Raw feature vectors, direct personal identifiers, document bodies, prompts, credentials, and unrestricted exception text usually belong outside general logs.
-
-Sensitive source material may need a restricted evidence store with separate access and retention. The prediction record can hold an approved reference or pseudonymous join key. This keeps incident investigation possible without copying the original payload into every log sink.
-
-OpenTelemetry can propagate traces across the caller, gateway, feature service, and model service. Use low-cardinality span names such as `POST /risk-decisions`; placing entity IDs in span names creates expensive, sensitive cardinality. The standard HTTP attributes cover protocol behavior, and approved ML-specific attributes can record model or release identity under a controlled convention.
-
-```mermaid
-flowchart TD
-    A["Caller Identity<br/>(authenticated service)"] --> B["Authorization<br/>(model action and data scope)"]
-    B --> C["Schema Allowlist<br/>(bounded approved fields)"]
-    C --> D["Prediction Path<br/>(feature model and policy)"]
-    D --> E["Safe Telemetry<br/>(IDs versions latency and outcome class)"]
-    D --> F["Restricted Evidence<br/>(governed source reference)"]
-
-    class A input
-    class B,C,D,E,F process
+```text
+API gateway
+    ↓
+feature service
+    ↓
+model server
+    ↓
+database
 ```
 
-### Use OpenAPI And Contract Tests To Detect Breaking Changes
-<!-- section-summary: Generated schemas document the boundary, while provider and consumer tests prove real clients can send, decode, and act on every supported response. -->
+To debug it, propagate an identity:
 
-OpenAPI describes paths, operations, request bodies, responses, authentication, and reusable schemas. JSON Schema describes the structure and constraints of JSON instances. FastAPI generates these artifacts from Pydantic request and response models, giving teams a machine-readable contract and interactive documentation.
-
-Generated documentation records the machine-readable boundary. The spec can identify a field as a number and attach its description. Concrete examples and consumer tests then demonstrate that callers interpret it as a fraud probability over the documented label window.
-
-Provider contract tests exercise the service boundary. They cover a valid request, every documented error class, boundary values, unknown fields, missing values, enum behavior, idempotency replays, and response filtering. Bounded-batch tests verify maximum size, ordering, item identity, and partial-failure policy.
-
-Consumer-driven tests use expectations captured from real clients. A checkout service may assert that `decision` contains the three supported actions and that unknown reason codes remain display-safe. A mobile client may prove it tolerates optional response fields. These tests run against the proposed OpenAPI artifact or a deployed test endpoint before release.
-
-The OpenAPI document should live as a versioned build artifact. A schema-diff gate can flag removed fields, new required fields, narrowed ranges, changed response codes, and new enum values. A human review then evaluates meaning because automated diff tools only compare document shape and declared constraints.
-
-```python
-def test_amount_minor_rejects_string(client):
-    payload = valid_risk_request()
-    payload["amount_minor"] = "1200"
-
-    response = client.post("/v1/risk-decisions", json=payload)
-
-    assert response.status_code == 422
-    assert response.json()["error_code"] == "REQUEST_VALIDATION_FAILED"
+```text
+request_id
 ```
 
-This focused test protects one contract choice: money arrives as a strict integer in minor units. Similar tests should focus on semantic relationships and response meaning. Framework-level unit tests cover the underlying validation machinery separately.
+Then logs can say:
 
-### Verify The API Contract During Releases And Incidents
-<!-- section-summary: Rollout and incident checks follow contract evidence from the caller through schema, feature, model, policy, response, and eventual product outcome. -->
-
-A contract release needs evidence from the real consumer path. Unit tests can pass while an older client sends a deprecated enum, a gateway drops `traceparent`, or a response decoder ignores the new abstention field.
-
-Start rollout with shadow traffic or a small consumer segment. Compare request acceptance, error codes, latency, response distribution, fallback rate, and product actions by schema and release ID. Keep the prior contract adapter and release route available for rollback.
-
-Suppose approval rate changes sharply after a release while HTTP success remains near 100 percent. The investigation first verifies evidence integrity: request IDs join to responses, traces cover the expected path, release identity is present, and policy versions match the traffic route. This prevents a logging gap from being mistaken for model behavior.
-
-The next pass compares schema versions, caller services, feature-set freshness, model versions, policy decisions, abstentions, and fallback routes. A new caller may be sending currency in major units. A policy rollout may have changed thresholds. A model route may be healthy technically while returning a reversed class mapping.
-
-Recovery follows the faulty layer. Route traffic back after a release problem. Re-enable the old schema adapter after a client migration problem. Restore the earlier policy after a threshold problem. Repair trace or decision logging after an evidence problem, then treat uncertain impact separately from confirmed model failure.
-
-```mermaid
-flowchart TD
-    A["Product Symptom<br/>(wrong action errors or latency)"] --> B["Evidence Integrity<br/>(request trace release and policy joins)"]
-    B --> C["Contract Segments<br/>(caller schema and invocation shape)"]
-    C --> D["ML Segments<br/>(features model abstention and fallback)"]
-    D --> E{"Faulty Layer<br/>(contract release policy or evidence)"}
-    E --> F["Targeted Recovery<br/>(adapter rollback route or repair)"]
-    F --> G["Consumer Verification<br/>(decision behavior returns to target)"]
-
-    class A input
-    class B,C,D,F,G process
-    class E gate
+```text
+request abc
+gateway: 4ms
+features: 12ms
+model queue: 7ms
+inference: 28ms
+postprocess: 2ms
 ```
 
-## The Main Idea
-<!-- section-summary: A strong ML API preserves product meaning across caller facts, features, model releases, policy decisions, failures, migrations, and operational evidence. -->
+without logging:
 
-An ML API is a stable decision contract around a changing model system. It names the decision unit and timing, gives each identity one job, separates caller facts from derived features, and returns an action with documented uncertainty and evidence.
+```text
+full customer record
+```
 
-Independent version fields explain changes to the API, schemas, features, model, policy, and deployed release. Single, bounded-batch, and asynchronous contracts match different work sizes. Validation, errors, privacy controls, OpenAPI artifacts, consumer tests, and incident joins keep the contract safe through real product change.
+A well-designed API makes correlation easy while minimizing sensitive payload capture. For each logical prediction, you may internally want:
 
-A well-designed contract lets a caller act on a result without learning the model's internal feature order or threshold implementation. It also gives operators enough evidence to distinguish a client migration problem, a feature problem, a model change, a policy change, and a service release. That separation is the foundation of a durable production boundary.
+$$
+(
+prediction\_id,
+model\_version,
+event\_time,
+latency,
+features\_version,
+output
+)
+$$
+
+Then later:
+
+$$
+prediction\_id
+\rightarrow
+observed\ outcome
+$$
+
+allows calculation of production metrics.
+
+For example:
+
+```text
+prediction p123:
+fraud probability = 0.82
+
+30 days later:
+confirmed fraud = true
+```
+
+This lets you analyze calibration, precision/recall and drift. So prediction IDs are not merely tracing conveniences. They connect serving to the learning loop.
+
+## How Do Fraud, Document, and Ranking APIs Require Different Shapes?
+<!-- section-summary: Fraud, document, and ranking examples show that a useful API mirrors the product interaction and decision rather than forcing every task into one generic schema. -->
+
+Concrete APIs for fraud, documents, and ranking demonstrate why request shapes should follow the product task.
+
+Let's derive one from the product contract.
+
+### Product meaning
+
+The payment system needs:
+
+"Estimated fraud risk for this payment attempt."
+
+### Deadline
+
+$$
+D=100\text{ ms}
+$$
+
+So use synchronous serving.
+
+### Logical identity
+
+The transaction already has:
+
+```text
+transaction_id
+```
+
+Use it for correlation/idempotency.
+
+### Inputs
+
+The payment service owns immediate transaction context:
+
+```text
+amount
+currency
+merchant
+device
+```
+
+Historical features belong to the ML platform and are resolved by customer ID. So request:
+
+```json
+{
+  "transaction_id": "tx_82917",
+  "occurred_at": "2026-08-30T10:04:17Z",
+  "customer_id": "cust_42",
+  "amount": 389.50,
+  "currency": "GBP",
+  "merchant_id": "merchant_17",
+  "device_id": "device_93"
+}
+```
+
+### Serving path
+
+```text
+request
+   ↓
+validate
+   ↓
+retrieve historical features
+   ↓
+combine with transaction context
+   ↓
+fraud model
+   ↓
+prediction
+```
+
+### Response
+
+```json
+{
+  "prediction_id": "fraudpred_8129",
+  "fraud_probability": 0.87
+}
+```
+
+Perhaps model version is logged internally instead of exposed publicly.
+
+### Decision
+
+The payment system applies:
+
+```text
+probability
+   +
+business thresholds
+   +
+payment amount
+   ↓
+approve / review / decline
+```
+
+The prediction API stays distinct from payment policy. That is a semantically clean interface. Suppose the product needs:
+
+"Extract structured information from a 300-page legal document."
+
+Processing takes minutes. A synchronous endpoint like:
+
+```text
+POST /predict
+```
+
+that holds the connection open would be awkward.
+
+Instead:
+
+```text
+document uploaded
+       ↓
+create analysis job
+       ↓
+job queued
+       ↓
+model processing
+       ↓
+result stored
+```
+
+Request:
+
+```json
+{
+  "document_id": "doc_9182",
+  "analysis_type": "contract_extraction"
+}
+```
+
+Response:
+
+```json
+{
+  "job_id": "job_8127",
+  "status": "queued"
+}
+```
+
+Later:
+
+```json
+{
+  "job_id": "job_8127",
+  "status": "completed",
+  "result": {
+    "...": "..."
+  }
+}
+```
+
+Same high-level concept—ML inference. Completely different API, because the product deadline and work size differ. Suppose the caller already generated 100 candidates. The product asks:
+
+"Rank these candidates for this user and current context."
+
+That maps naturally to:
+
+```json
+{
+  "request_id": "search_1829",
+  "user_id": "user_42",
+  "query": "running shoes",
+  "candidates": [
+    {"item_id": "item_1"},
+    {"item_id": "item_2"},
+    {"item_id": "item_3"}
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "request_id": "search_1829",
+  "ranked_items": [
+    {"item_id": "item_3", "score": 0.82},
+    {"item_id": "item_1", "score": 0.71},
+    {"item_id": "item_2", "score": 0.34}
+  ]
+}
+```
+
+Notice that the API speaks the language of the product:
+
+```text
+query
+candidate
+rank
+```
+
+not:
+
+```text
+tensor_1
+tensor_2
+embedding_17
+```
+
+That's generally a sign of a healthier abstraction. You can think of API design in layers:
+
+```text
+1. PRODUCT SEMANTICS
+   What decision is being supported
+
+          ↓
+
+2. PREDICTION SEMANTICS
+   What exactly does the model output mean
+
+          ↓
+
+3. EXECUTION SEMANTICS
+   Sync, batch, async, streaming
+
+          ↓
+
+4. DATA CONTRACT
+   What information crosses the boundary
+
+          ↓
+
+5. FAILURE SEMANTICS
+   Validation, timeout, retry, idempotency
+
+          ↓
+
+6. EVOLUTION
+   How can models and schemas change safely
+```
+
+Starting from the bottom often creates brittle APIs. Starting from the top makes technical choices much easier. A useful rule is to distinguish **product-level concepts** from **implementation-level details**. Usually stable enough to expose:
+
+```text
+customer_id
+transaction_id
+language
+candidate item
+fraud probability
+predicted category
+prediction_id
+```
+
+Often better kept internal unless there is a real consumer need:
+
+```text
+tensor names
+layer names
+feature vector positions
+GPU batch size
+model filename
+deployment replica
+operator versions
+internal threshold
+feature-store table name
+```
+
+If changing an internal model architecture forces dozens of upstream clients to change, the API abstraction is probably too low-level.
+
+## What Checklist Produces a Stable ML Request and Response Contract?
+<!-- section-summary: The final checklist fixes decision, inputs, timing, validation, output meaning, identity, errors, cost, privacy, versioning, and observability before implementation. -->
+
+The checklist assembles these decisions into one contract that callers and servers can evolve deliberately.
+
+For a new ML API, ask in this order:
+
+1. **What real decision is waiting for this output?**
+2. **What does the prediction mathematically and operationally mean?**
+3. **When must the answer exist?**
+4. **Should this be synchronous, small-batch, streaming, or asynchronous?**
+5. **What is the logical identity of the prediction request?**
+6. **What information actually needs to cross the API boundary?**
+7. **Who owns feature construction?**
+8. **What does missing or stale input mean?**
+9. **How large or computationally expensive may one request become?**
+10. **What should the caller do on validation failure, timeout, overload, or dependency failure?**
+11. **Are retries safe?**
+12. **What prediction metadata is needed for debugging and feedback?**
+13. **Can the model implementation change without changing the product contract?**
+14. **Can observability work without logging sensitive inputs?**
+
+If these questions have good answers, the JSON is usually the easy part. The naive model of an ML API is:
+
+```text
+JSON
+ ↓
+model
+ ↓
+JSON
+```
+
+The useful model is:
+
+```text
+PRODUCT DECISION
+       ↓
+what information is known
+       ↓
+how quickly is the answer needed
+       ↓
+what does the prediction mean
+       ↓
+what data must cross the boundary
+       ↓
+what happens on retries/failures
+       ↓
+how will the contract evolve
+       ↓
+API
+```
+
+The central principle is:
+
+$$
+\boxed{
+\text{Design the API around the stable meaning of the prediction,
+not around the temporary shape of the current model.}
+}
+$$
+
+From that principle, the rest follows:
+
+```text
+stable product concepts
+        ↓
+named semantic fields
+
+one waiting decision
+        ↓
+single synchronous request
+
+several closely related predictions
+        ↓
+small bounded batch
+
+long-running computation
+        ↓
+asynchronous job
+
+retries possible
+        ↓
+stable identity + idempotency
+
+sensitive information
+        ↓
+minimal payload + controlled logging
+
+model changes frequently
+        ↓
+separate API contract from model version
+
+prediction used later for learning
+        ↓
+prediction identity + lineage
+```
+
+The best ML API is therefore not the one that exposes the model most directly. It is the one that allows **models, infrastructure, features, and deployment strategies to change while the product continues to understand exactly what it asked for and exactly what the answer means.**
 
 ![Five-part ML API contract lifecycle covering product definition, separate version identities, boundary protection, contract proof, and controlled migration.](/content-assets/articles/article-mlops-model-serving-request-response-design-for-ml-apis/durable-api-contract-summary.png)
 
 *A durable contract keeps product meaning stable while schemas, features, models, policies, and releases evolve through tested migrations with a retained fallback.*
 
-## References
+## Check Your Answers
 
-- [FastAPI: Request bodies](https://fastapi.tiangolo.com/tutorial/body/)
-- [FastAPI: Response models](https://fastapi.tiangolo.com/tutorial/response-model/)
-- [FastAPI: Handling errors](https://fastapi.tiangolo.com/tutorial/handling-errors/)
-- [Pydantic: Models](https://pydantic.dev/docs/validation/latest/concepts/models/)
-- [Pydantic: Strict mode](https://pydantic.dev/docs/validation/latest/concepts/strict_mode/)
-- [Pydantic: JSON Schema](https://pydantic.dev/docs/json_schema/latest/concepts/json_schema/)
-- [OpenAPI Specification](https://spec.openapis.org/oas/)
-- [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12)
-- [W3C Trace Context](https://www.w3.org/TR/trace-context/)
-- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/)
-- [OpenTelemetry: HTTP span semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/)
+Use these answers to revisit the reasoning behind each section.
+
+:::expand[How Should an ML API Represent the Product Decision and Model Inputs?]{kind="recap"}
+An ML API starts from the product decision and accepts domain-level inputs, identity, event time, missing-data semantics, and validation rules rather than exposing training tensors by accident.
+:::
+
+:::expand[What Must the Response Explain about Prediction, Decision, and Provenance?]{kind="recap"}
+Responses define score or label meaning, separate prediction from policy when needed, and include prediction and release identities that support traceability.
+:::
+
+:::expand[How Do Request Granularity, Asynchronous Jobs, and Idempotency Change the Contract?]{kind="recap"}
+Single, bounded batch, and asynchronous requests create different waiting and state contracts, while idempotency makes retries predictable and side effects limited.
+:::
+
+:::expand[How Do Governance, Size, Cost, Timeouts, and Errors Bound Safe Requests?]{kind="recap"}
+The request is a governance and resource boundary with explicit sensitive-data handling, size and cost limits, timeouts, status meanings, and per-item batch errors.
+:::
+
+:::expand[How Do API Versions, Model Selection, Routing, and Determinism Evolve Safely?]{kind="recap"}
+Contract versions represent semantic API changes independently from model versions, and routing or model selection should not leak experimental internals into public promises.
+:::
+
+:::expand[How Do Streaming and Observability Preserve Meaning without Exposing Raw Inputs?]{kind="recap"}
+Streaming remains part of the response contract, while correlation and prediction metadata provide observability without logging raw sensitive inputs.
+:::
+
+:::expand[How Do Fraud, Document, and Ranking APIs Require Different Shapes?]{kind="recap"}
+Fraud, document, and ranking examples show that a useful API mirrors the product interaction and decision rather than forcing every task into one generic schema.
+:::
+
+:::expand[What Checklist Produces a Stable ML Request and Response Contract?]{kind="recap"}
+The final checklist fixes decision, inputs, timing, validation, output meaning, identity, errors, cost, privacy, versioning, and observability before implementation.
+:::
