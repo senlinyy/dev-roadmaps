@@ -1,1 +1,0 @@
-Use `cat /proc/loadavg` to see the load numbers. To count CPU cores, try `grep -c processor /proc/cpuinfo`, which counts matching lines instead of printing them. The first number in `/proc/uptime` is total seconds since boot.

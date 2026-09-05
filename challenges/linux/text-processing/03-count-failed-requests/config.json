@@ -1,0 +1,61 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/var/log/orders/access.log": {
+      "type": "file",
+      "content": "14:00:00 192.0.2.10 GET /health 200 401\n14:00:01 192.0.2.11 GET /docs/401 200 920\n14:00:02 192.0.2.12 POST /login 401 180\n14:00:03 192.0.2.10 GET /orders 200 500\n14:00:04 192.0.2.13 POST /login 401 180\n14:00:05 192.0.2.14 GET /items 404 190\n14:00:06 192.0.2.12 GET /account 401 180\n14:00:07 192.0.2.11 GET /products 200 940\n14:00:08 192.0.2.13 GET /account 401 180\n14:00:09 192.0.2.10 GET /checkout 503 180\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "head",
+      "wc"
+    ],
+    "expectedResults": [
+      {
+        "label": "raw log sample",
+        "commands": [
+          "head"
+        ],
+        "stdoutEquals": "14:00:00 192.0.2.10 GET /health 200 401\n14:00:01 192.0.2.11 GET /docs/401 200 920\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "only unauthorized request records",
+        "commands": [],
+        "stdoutEquals": "14:00:02 192.0.2.12 POST /login 401 180\n14:00:04 192.0.2.13 POST /login 401 180\n14:00:06 192.0.2.12 GET /account 401 180\n14:00:08 192.0.2.13 GET /account 401 180\n",
+        "stderrEquals": "",
+        "exitCode": 0,
+        "commandsAnyOf": [
+          "grep",
+          "awk"
+        ]
+      },
+      {
+        "label": "unauthorized request count",
+        "commands": [
+          "wc"
+        ],
+        "stdoutEquals": "4\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/var/log/orders/access.log": {
+        "type": "file",
+        "contentEquals": "14:00:00 192.0.2.10 GET /health 200 401\n14:00:01 192.0.2.11 GET /docs/401 200 920\n14:00:02 192.0.2.12 POST /login 401 180\n14:00:03 192.0.2.10 GET /orders 200 500\n14:00:04 192.0.2.13 POST /login 401 180\n14:00:05 192.0.2.14 GET /items 404 190\n14:00:06 192.0.2.12 GET /account 401 180\n14:00:07 192.0.2.11 GET /products 200 940\n14:00:08 192.0.2.13 GET /account 401 180\n14:00:09 192.0.2.10 GET /checkout 503 180\n"
+      }
+    }
+  }
+}

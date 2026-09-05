@@ -1,0 +1,99 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/nginx": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/etc/nginx/nginx.conf": {
+      "type": "file",
+      "content": "worker_processes auto;\nevents {\n    worker_connections 1024;\n}\nhttp {\n    server {\n        listen 80;\n        server_name orders.internal;\n        location / {\n            proxy_pass http://127.0.0.1:3000;\n        }\n    }\n}\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "nginx"
+  ],
+  "nginx": {
+    "configPath": "/etc/nginx/nginx.conf",
+    "activeContent": "worker_processes auto;\nevents {\n    worker_connections 1024;\n}\nhttp {\n    server {\n        listen 80;\n        server_name orders.internal;\n        location / {\n            proxy_pass http://127.0.0.1:3000;\n        }\n    }\n}\n"
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "nginx",
+      "systemctl"
+    ],
+    "expectedNginx": {
+      "reloadedCurrentFile": true,
+      "verifiedCurrentFile": true
+    },
+    "expectedFs": {
+      "/etc/nginx/nginx.conf": {
+        "contentEquals": "worker_processes auto;\nevents {\n    worker_connections 1024;\n}\nhttp {\n    server {\n        listen 80;\n        server_name orders.internal;\n        location / {\n            proxy_pass http://127.0.0.1:4000;\n        }\n    }\n}\n"
+      },
+      "/etc/nginx/nginx.conf.bak": {
+        "contentEquals": "worker_processes auto;\nevents {\n    worker_connections 1024;\n}\nhttp {\n    server {\n        listen 80;\n        server_name orders.internal;\n        location / {\n            proxy_pass http://127.0.0.1:3000;\n        }\n    }\n}\n"
+      }
+    }
+  },
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev"
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "deploy",
+        "uid": 2001,
+        "primaryGroup": "app"
+      }
+    ],
+    "umask": 18
+  }
+}

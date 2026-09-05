@@ -1,0 +1,37 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/dev": { "type": "dir", "mode": 488, "owner": "dev", "group": "dev" },
+    "/usr": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/usr/local": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/usr/local/bin": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/usr/local/bin/legacy-helper": { "type": "file", "content": "simulated helper binary\n", "mode": 2541, "owner": "root", "group": "root" },
+    "/usr/local/bin/report": { "type": "file", "content": "simulated report binary\n", "mode": 493, "owner": "root", "group": "root" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "dev", "uid": 1000, "primaryGroup": "dev", "gid": 1000 }
+    ],
+    "sessionGroups": ["dev"],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["find", "stat", "chmod"],
+    "requireCommandPatterns": ["find\\s+/usr/local/bin\\s+.*-perm\\s+-4000"],
+    "minCommandCount": 4,
+    "expectedFs": {
+      "/usr/local/bin/legacy-helper": { "type": "file", "modeEquals": 493, "ownerEquals": "root", "groupEquals": "root" }
+    },
+    "expectedPermissions": {
+      "access": [
+        { "user": "dev", "path": "/usr/local/bin/legacy-helper", "operation": "execute", "allowed": true }
+      ]
+    }
+  }
+}

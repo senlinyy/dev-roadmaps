@@ -1,0 +1,321 @@
+{
+  "language": "yaml",
+  "activeFile": "pipeline.yaml",
+  "files": [
+    {
+      "filename": "pipeline.yaml",
+      "initialValue": "version: 2\njobs:\n  validate:\n    needs: []\n    steps:\n      -\n        access:\n          environment: \"production\"\n          policy: \"identity.yaml\"\n      -\n        checkout:\n          ref: \"candidate\"\n      -\n        setup:\n          runtime: \"24\"\n      -\n        install:\n          mode: \"locked\"\n      -\n        check:\n          name: \"unit\"\n    pool: \"release\"\n  build:\n    needs:\n      - \"validate\"\n    steps:\n      -\n        checkout:\n          ref: \"candidate\"\n      -\n        setup:\n          runtime: \"24\"\n      -\n        install:\n          mode: \"locked\"\n      -\n        check:\n          name: \"lint\"\n      -\n        check:\n          name: \"unit\"\n      -\n        build:\n          artifact: \"app\"\n      -\n        upload:\n          artifact: \"app\"\n  release:\n    needs:\n      - \"build\"\n    steps:\n      -\n        download:\n          artifact: \"app\"\n      -\n        access:\n          environment: \"production\"\n          policy: \"identity.yaml\"\n      -\n        deploy:\n          artifact: \"app\"\n          environment: \"production\"\n    pool: \"release\"\n"
+    },
+    {
+      "filename": "identity.yaml",
+      "initialValue": "origins:\n  - \"*\"\nrepositories:\n  - \"*\"\nbranches:\n  - \"*\"\nenvironments:\n  - \"*\"\npermissions:\n  - \"*\"\nsecrets:\n  - \"secret://production-deploy\"\n  - \"secret://database-admin\"\ntrustedPool: false\nextensions:\n  - \"*\"\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "readOnly": true,
+      "initialValue": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    },\n    \"identity\": {\n      \"origin\": \"mainline\",\n      \"repository\": \"checkout-service\",\n      \"branch\": \"main\",\n      \"environment\": \"production\",\n      \"requested\": [],\n      \"required\": [\n        \"deploy:checkout\"\n      ],\n      \"extension\": \"publisher@a1b2c3\"\n    },\n    \"environments\": {\n      \"production\": {\n        \"config\": {},\n        \"secretRefs\": [],\n        \"readyAfter\": 3,\n        \"healthy\": true,\n        \"replicas\": 4,\n        \"schema\": \"v1\",\n        \"previous\": \"previous\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"mainline\",\n      \"title\": \"Authorized release\",\n      \"description\": \"The intended release must retain only its required authority.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"fork\",\n      \"title\": \"Forked source\",\n      \"description\": \"An untrusted fork requests deployment and database modification.\",\n      \"workshop\": {\n        \"identity\": {\n          \"origin\": \"fork\",\n          \"repository\": \"checkout-service\",\n          \"branch\": \"main\",\n          \"environment\": \"production\",\n          \"requested\": [\n            \"deploy:checkout\",\n            \"database:delete\"\n          ],\n          \"required\": [\n            \"deploy:checkout\"\n          ],\n          \"extension\": \"publisher@a1b2c3\"\n        }\n      }\n    },\n    {\n      \"id\": \"other-repo\",\n      \"title\": \"Unrelated repository\",\n      \"description\": \"Another repository presents a mainline-looking identity.\",\n      \"workshop\": {\n        \"identity\": {\n          \"origin\": \"mainline\",\n          \"repository\": \"unrelated\",\n          \"branch\": \"main\",\n          \"environment\": \"production\",\n          \"requested\": [\n            \"deploy:checkout\"\n          ],\n          \"required\": [\n            \"deploy:checkout\"\n          ],\n          \"extension\": \"publisher@a1b2c3\"\n        }\n      }\n    },\n    {\n      \"id\": \"feature-branch\",\n      \"title\": \"Wrong branch\",\n      \"description\": \"A feature branch requests production authority.\",\n      \"workshop\": {\n        \"identity\": {\n          \"origin\": \"mainline\",\n          \"repository\": \"checkout-service\",\n          \"branch\": \"feature/checkout\",\n          \"environment\": \"production\",\n          \"requested\": [\n            \"deploy:checkout\"\n          ],\n          \"required\": [\n            \"deploy:checkout\"\n          ],\n          \"extension\": \"publisher@a1b2c3\"\n        }\n      }\n    }\n  ]\n}\n"
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "pipeline.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "workshop": {
+      "candidate": "candidate-43",
+      "head": "head-42",
+      "now": 1000,
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "Lint passed."
+        },
+        "unit": {
+          "passed": true,
+          "message": "Checkout unit tests passed."
+        },
+        "types": {
+          "passed": true,
+          "message": "Type contract passed."
+        },
+        "integration": {
+          "passed": true,
+          "message": "Checkout API/database integration passed.",
+          "runtime": "24",
+          "service": "postgres"
+        }
+      },
+      "pools": {
+        "public": {
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "trusted": false,
+          "network": []
+        },
+        "release": {
+          "os": [
+            "linux"
+          ],
+          "trusted": true,
+          "network": [
+            "production"
+          ]
+        },
+        "linux-only": {
+          "os": [
+            "linux"
+          ],
+          "trusted": false,
+          "network": []
+        }
+      },
+      "services": {
+        "postgres": {
+          "image": "postgres-17",
+          "readyAfter": 3,
+          "healthy": true
+        },
+        "app": {
+          "image": "checkout-test",
+          "readyAfter": 2,
+          "healthy": true
+        }
+      },
+      "identity": {
+        "origin": "mainline",
+        "repository": "checkout-service",
+        "branch": "main",
+        "environment": "production",
+        "requested": [],
+        "required": [
+          "deploy:checkout"
+        ],
+        "extension": "publisher@a1b2c3"
+      },
+      "environments": {
+        "production": {
+          "config": {},
+          "secretRefs": [],
+          "readyAfter": 3,
+          "healthy": true,
+          "replicas": 4,
+          "schema": "v1",
+          "previous": "previous"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "mainline",
+        "title": "Authorized release",
+        "description": "The intended release must retain only its required authority.",
+        "workshop": {}
+      },
+      {
+        "id": "fork",
+        "title": "Forked source",
+        "description": "An untrusted fork requests deployment and database modification.",
+        "workshop": {
+          "identity": {
+            "origin": "fork",
+            "repository": "checkout-service",
+            "branch": "main",
+            "environment": "production",
+            "requested": [
+              "deploy:checkout",
+              "database:delete"
+            ],
+            "required": [
+              "deploy:checkout"
+            ],
+            "extension": "publisher@a1b2c3"
+          }
+        }
+      },
+      {
+        "id": "other-repo",
+        "title": "Unrelated repository",
+        "description": "Another repository presents a mainline-looking identity.",
+        "workshop": {
+          "identity": {
+            "origin": "mainline",
+            "repository": "unrelated",
+            "branch": "main",
+            "environment": "production",
+            "requested": [
+              "deploy:checkout"
+            ],
+            "required": [
+              "deploy:checkout"
+            ],
+            "extension": "publisher@a1b2c3"
+          }
+        }
+      },
+      {
+        "id": "feature-branch",
+        "title": "Wrong branch",
+        "description": "A feature branch requests production authority.",
+        "workshop": {
+          "identity": {
+            "origin": "mainline",
+            "repository": "checkout-service",
+            "branch": "feature/checkout",
+            "environment": "production",
+            "requested": [
+              "deploy:checkout"
+            ],
+            "required": [
+              "deploy:checkout"
+            ],
+            "extension": "publisher@a1b2c3"
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    },\n    \"identity\": {\n      \"origin\": \"mainline\",\n      \"repository\": \"checkout-service\",\n      \"branch\": \"main\",\n      \"environment\": \"production\",\n      \"requested\": [],\n      \"required\": [\n        \"deploy:checkout\"\n      ],\n      \"extension\": \"publisher@a1b2c3\"\n    },\n    \"environments\": {\n      \"production\": {\n        \"config\": {},\n        \"secretRefs\": [],\n        \"readyAfter\": 3,\n        \"healthy\": true,\n        \"replicas\": 4,\n        \"schema\": \"v1\",\n        \"previous\": \"previous\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"mainline\",\n      \"title\": \"Authorized release\",\n      \"description\": \"The intended release must retain only its required authority.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"fork\",\n      \"title\": \"Forked source\",\n      \"description\": \"An untrusted fork requests deployment and database modification.\",\n      \"workshop\": {\n        \"identity\": {\n          \"origin\": \"fork\",\n          \"repository\": \"checkout-service\",\n          \"branch\": \"main\",\n          \"environment\": \"production\",\n          \"requested\": [\n            \"deploy:checkout\",\n            \"database:delete\"\n          ],\n          \"required\": [\n            \"deploy:checkout\"\n          ],\n          \"extension\": \"publisher@a1b2c3\"\n        }\n      }\n    },\n    {\n      \"id\": \"other-repo\",\n      \"title\": \"Unrelated repository\",\n      \"description\": \"Another repository presents a mainline-looking identity.\",\n      \"workshop\": {\n        \"identity\": {\n          \"origin\": \"mainline\",\n          \"repository\": \"unrelated\",\n          \"branch\": \"main\",\n          \"environment\": \"production\",\n          \"requested\": [\n            \"deploy:checkout\"\n          ],\n          \"required\": [\n            \"deploy:checkout\"\n          ],\n          \"extension\": \"publisher@a1b2c3\"\n        }\n      }\n    },\n    {\n      \"id\": \"feature-branch\",\n      \"title\": \"Wrong branch\",\n      \"description\": \"A feature branch requests production authority.\",\n      \"workshop\": {\n        \"identity\": {\n          \"origin\": \"mainline\",\n          \"repository\": \"checkout-service\",\n          \"branch\": \"feature/checkout\",\n          \"environment\": \"production\",\n          \"requested\": [\n            \"deploy:checkout\"\n          ],\n          \"required\": [\n            \"deploy:checkout\"\n          ],\n          \"extension\": \"publisher@a1b2c3\"\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "mainline",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "access",
+              "subject": "production",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "deploy",
+              "subject": "app",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "permissions": [
+              "deploy:checkout"
+            ],
+            "secrets": [
+              "secret://production-deploy"
+            ],
+            "grantCount": 1,
+            "validationTrusted": false,
+            "validationPersistent": false,
+            "validationPrivileged": false
+          },
+          "absent": []
+        }
+      },
+      {
+        "id": "fork",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "access",
+              "subject": "production",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ]
+        }
+      },
+      {
+        "id": "other-repo",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "access",
+              "subject": "production",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ]
+        }
+      },
+      {
+        "id": "feature-branch",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "access",
+              "subject": "production",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

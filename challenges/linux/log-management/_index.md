@@ -1,6 +1,6 @@
 ---
 title: "Log Management"
-description: "Trace service, web, journal, severity, and rotation evidence across realistic Linux log artifacts."
+description: "Investigate incident windows and request paths, repair rotation, verify fresh writes, restore normal logging, and diagnose forwarding gaps."
 articleId: article-devops-foundation-linux-system-admin-log-management
 difficulty: medium
 order: 10

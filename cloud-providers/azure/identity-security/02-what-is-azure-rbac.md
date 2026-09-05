@@ -1,7 +1,7 @@
 ---
 title: "What Is Azure RBAC?"
-description: "Understand how Azure RBAC grants access through principals, role definitions, scopes, role assignments, evaluation, and evidence."
-overview: "Microsoft Entra ID proves who the caller is, and Azure RBAC decides what that caller can do to Azure resources. This article follows the Orders team through principals, object IDs, role definitions, actions, scopes, role assignments, least privilege, and the evidence teams use during access reviews."
+description: "Understand how Azure role assignments connect principals, permission definitions, and scopes, including inheritance, data access, conditions, denies, and evidence-led troubleshooting."
+overview: "Signing in identifies a caller; it does not grant every Azure operation. Follow role assignments from their directory principal and permission fields to their scope and evaluation, then use the complete model to design narrow access and explain common authorization failures."
 tags: ["azure", "rbac", "authorization", "roles", "scopes"]
 order: 2
 id: article-cloud-providers-azure-identity-security-what-is-azure-rbac
@@ -27,15 +27,11 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-In the previous article, we talked about **Microsoft Entra ID** as the place where Azure learns who a person, app, or workload is. That identity step matters, but production access needs one more question. After Azure knows the caller, Azure has to decide what that caller can actually do. That decision is where **Azure role-based access control**, usually called **Azure RBAC**, comes in.
+Alice signs in successfully and asks Azure to delete `vm-prod-01`. Azure knows who she is, but that does not answer whether she should be allowed to delete this VM. The operation, its target, and Alice's assigned permissions still need to be checked.
 
-Azure RBAC is Azure's authorization system for Azure resources. In beginner-friendly words, it is the system that connects a known caller to a permission bundle at a specific Azure boundary. A support engineer can inspect a resource group, a deployment pipeline can update one web app, and a running API can write files to one storage account because Azure RBAC has records that say those exact jobs are allowed.
+Azure RBAC makes that permission decision through a small set of connected objects. A principal identifies the caller, a role describes permitted operations, and a scope states where those permissions apply. Understanding that combination explains both ordinary access assignments and confusing cases such as a Reader who can still modify resources.
 
-We can read almost every Azure RBAC problem through four pieces: **principal**, **role**, **scope**, and **action**. The principal is who or what asks for access. The role is the permission bundle. The scope is where that role applies. The action is the operation Azure receives, such as reading a resource, updating an app setting, creating a role assignment, or writing a blob.
-
-Read every authorization decision as one principal requesting one action against one scoped resource, with inherited assignments contributing to the effective result.
-
-Keep these questions in view as you work through the lesson:
+We will build that model and then use it to review and investigate access:
 
 1. **Why Does Azure RBAC Exist?**
 2. **Who Can Receive an Azure Role?**
@@ -47,392 +43,440 @@ Keep these questions in view as you work through the lesson:
 8. **How Does the Complete RBAC Model Fit Together?**
 
 ## Why Does Azure RBAC Exist?
-<!-- section-summary: Azure RBAC is Azure's authorization system for deciding which authenticated principal can perform which action at which Azure scope. -->
+<!-- section-summary: Azure RBAC groups operations into reusable roles and grants them to established principals at a defined resource scope. -->
 
-![Azure RBAC four fact decision map showing principal, role, scope, and action meeting at an access check](/content-assets/articles/article-cloud-providers-azure-identity-security-what-is-azure-rbac/rbac-decision-four-facts.png)
+**Azure role-based access control**, or Azure RBAC, is Azure's primary authorization system for Azure resources. It is built on Azure Resource Manager and controls who has access, what they may do, and where they may do it. [Microsoft's RBAC overview](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview) describes these three dimensions.
 
-*A good Azure RBAC review names the principal, role, scope, and action instead of asking for broad Azure access.*
+The central relationship is a **role assignment**: a security principal plus a role definition plus a scope. A principal answers who receives access. A role definition answers which operations are permitted. Scope answers which resources those permissions cover.
 
-Let's follow one Orders production system through the whole article. Maya is an engineer who investigates incidents. `spn-orders-deploy-prod` is the deployment identity that ships the app. `mi-orders-api-prod` is the managed identity used by the running API. These callers all belong to the same story, but they need different access because their jobs are different. The deployment identity gives us a useful first example because a denied deployment usually names the caller, action, and target resource right in the error.
+For example, Alice plus Virtual Machine Contributor plus `rg-payments-prod` grants the VM-management operations included in that role within the specified resource-group scope. Each component contributes information the other two cannot supply. Alice's identity does not describe the action set, and the role name does not identify the target estate.
 
-```yaml
-error: AuthorizationFailed
-caller: spn-orders-deploy-prod
-action: Microsoft.Web/sites/config/write
-scope: /subscriptions/sub-prod-001/resourceGroups/rg-orders-prod/providers/Microsoft.Web/sites/app-orders-prod
-```
+### Authentication establishes the caller
 
-That error already gives us most of the access question. The caller is `spn-orders-deploy-prod`. The target action is `Microsoft.Web/sites/config/write`. The target scope is the production App Service resource. The missing piece is a role assignment that gives that caller a role containing the write action at that resource scope or at a parent scope.
+Authentication and authorization are separate decisions. Alice completing MFA establishes stronger evidence that she is the person signing in. It does not establish that she should be able to delete a production database or modify every resource in a subscription.
 
-So the first useful habit is simple: **turn vague access requests into concrete RBAC facts**. "The pipeline needs Azure access" is too broad to review. "The deployment service principal needs permission to write App Service configuration for `app-orders-prod`" gives the team something they can check, approve, automate, and later remove.
+Entra authenticates the caller and issues an access token. Azure Resource Manager receives the token with the resource request and evaluates whether the established principal may perform this operation at this target. A correct identity is a prerequisite for permission evaluation, not a substitute for it.
+
+Conditional Access remains a separate part of the sign-in context. It can require MFA, a compliant device, or an acceptable risk level before access proceeds. RBAC then checks the Azure resource operation. Passing a sign-in policy does not create a resource permission assignment.
+
+### Roles make repeated access manageable
+
+Imagine 500 engineers and 10,000 resources without roles. Individual rules would have to specify Alice's read and start access to VM1, read access to VM2 and VM3, storage visibility, and many other operations. Bob and Carol would require their own sets of similar rules.
+
+People usually perform jobs: database administrator, network operator, security reader, VM operator, storage-data reader, or application developer. Those jobs require recognizable bundles of operations. A role captures a reusable bundle rather than forcing every assignment to repeat each individual permission.
+
+Virtual Machine Contributor, for example, groups appropriate VM read, write, VM operations, and related management permissions. Assigning it uses that defined bundle instead of listing a fresh collection of actions for every operator. The definition still needs to be understood; the role's friendly title is a summary of its actual permissions.
+
+This is the meaning of role-based access: permission sets are represented by roles and assigned to identities. The remaining question is which kind of identity receives the assignment, because Azure operations are performed by software as well as by people.
 
 ## Who Can Receive an Azure Role?
-<!-- section-summary: A principal is the exact user, group, service principal, managed identity, or workload identity that receives an Azure role assignment. -->
+<!-- section-summary: Users, groups, service principals, and managed identities can receive roles; stable directory identifiers establish which principal actually receives access. -->
 
-A **principal** is the identity that receives access in Azure RBAC. It can be a user, a security group, a service principal, a managed identity, or a workload identity. Microsoft Entra ID creates and manages these identities, and Azure RBAC uses them as the who side of the authorization decision.
+A **security principal** is an identity to which an authorization system can attach permission. Azure RBAC supports users, groups, service principals, and managed identities. These are primarily represented in Microsoft Entra ID, which provides their directory and authentication context.
 
-For the Orders team, Maya is a **user principal** because she is a person. `grp-orders-engineers` is a **group principal** because it represents a team. `spn-orders-deploy-prod` is a **service principal** because it represents software used by the deployment pipeline. `mi-orders-api-prod` is a **managed identity** because it represents an Azure-hosted workload whose credential lifecycle Azure manages.
+The integration is close but the responsibilities differ. Entra defines and authenticates identities such as Alice, Payments-Developers, an Orders API service principal, or the API's managed identity. Azure RBAC associates those principals with Azure resource permissions.
 
-| Principal type | Plain-English meaning | Orders example |
-|---|---|---|
-| **User** | One human account in the tenant | `maya@devpolaris.com` |
-| **Group** | A collection of identities managed together | `grp-orders-engineers` |
-| **Service principal** | A tenant-local software identity | `spn-orders-deploy-prod` |
-| **Managed identity** | An Azure-managed workload identity | `mi-orders-api-prod` |
-| **Workload identity** | An external workload that exchanges trusted proof for Azure access | GitHub Actions deploying Orders |
+### Assign a person directly or use a group
 
-Groups are usually the cleanest way to give humans shared access. The platform team can assign Reader to `grp-orders-engineers` at the Orders resource group, then update group membership when engineers join or leave. That gives access review one team object to inspect instead of twenty separate user assignments that all try to describe the same job.
+Alice has a user object in Entra. An assignment of Alice plus Reader plus Subscription A grants the resource-reading operations included in Reader at that subscription scope. It is a straightforward direct user assignment.
 
-Software access usually deserves its own principal. A deployment job gets cleaner evidence with its own service principal, because the audit trail then points at the pipeline instead of making the deployment look like a human action. A running API gets safer access with a managed identity or service principal instead of a shared static secret that five people can copy. A named service principal or managed identity gives the workload its own caller name, owners, assignments, and logs.
+If 40 developers require the same access, repeating direct assignments for Alice, Bob, Carol, and every other developer becomes harder to maintain. A Payments-Developers group can receive Reader at the Payments subscription, and the people who need that role join the group.
 
-This is where production reviews become much clearer. If an activity log says `spn-orders-deploy-prod` changed an App Service setting, the reviewer follows the deployment identity, its owners, its credential or federation setup, and its Azure RBAC assignments. Maya might have approved the pull request, but the service principal made the Azure request. Once the caller is clear, the next step is understanding where Azure stores that caller and how sign-in connects to RBAC.
+Applicable access is transitive through supported group membership: a user's effective access includes a relevant role assigned to a group to which the user belongs. Adding Alice when she joins Payments and removing her when she leaves changes her relationship to the group assignment without editing equivalent Azure assignments across many resources.
 
-### Microsoft Entra
-<!-- section-summary: Microsoft Entra ID authenticates callers and stores the identity records that Azure RBAC uses for resource access decisions. -->
+[Microsoft's RBAC best practices](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices) favor role assignment to groups over repeated direct assignments where that collective model fits. Group membership becomes an important part of the access evidence, because the user's permissions may not appear as a direct assignment on the resource.
 
-**Microsoft Entra ID** is Microsoft's cloud identity system. It stores users, groups, service principals, managed identities, devices, application objects, and many sign-in policy records. When a caller signs in or a workload asks for a token, Microsoft Entra ID handles the authentication side first.
+### Give software an explicit principal
 
-**Authentication** means proving the caller's identity. **Authorization** means deciding what that known caller can do. The split matters because a successful sign-in only proves the identity side. Maya can sign in to the Azure portal, pass MFA, and still see an access error if Azure RBAC has no role assignment for her at the production scope.
+An Orders API reading invoices from Storage is a software caller. A service principal can represent that application's tenant-local security identity. Combining it with Storage Blob Data Reader at `invoice-storage` grants access to that explicit principal instead of relying on a shared human account or password.
 
-The same split applies to software. `mi-orders-api-prod` can get a token for its managed identity through Microsoft Entra ID. That token proves the workload identity. Storage still checks Azure RBAC before accepting a blob write, and Key Vault still checks Azure RBAC before returning a secret value.
+A supported App Service called `orders-api` can use managed identity to avoid application-managed credentials. That identity is also represented by a security principal, and RBAC can assign it the same kind of role-and-scope relationship. Managed identity changes how the workload authenticates; it does not create a different interpretation of the role's permissions.
 
-![Identity and authorization flow from caller through Microsoft Entra ID to Azure RBAC and the Azure resource](/content-assets/articles/article-cloud-providers-azure-identity-security-what-is-azure-rbac/identity-rbac-boundary.png)
+This unifying model lets RBAC evaluate Alice, a developer group, an application service principal, and a managed identity as principals. The system is authorizing identities, rather than treating permissions as a feature reserved for human users.
 
-*Microsoft Entra ID proves the caller and issues a token, while Azure RBAC checks whether that caller has a matching assignment for the resource action.*
+### Use object IDs rather than display names as evidence
 
-This explains a common support ticket. Someone says, "I can log in, but Azure blocks the app update." The login side worked. The authorization side still needs a principal, a role, and a scope that match the requested Azure action.
+The portal may display Alice Smith, but several directory objects can share that display name. Names can change too: an application might be renamed from `orders-api` to `orders-service`. Permission relationships need a more stable target than that text.
 
-Microsoft Entra ID and Azure RBAC meet at the principal record. The friendly name helps humans talk, but automation and review need the exact identifier for that record. That identifier is the object ID.
+Entra directory objects have unique **object IDs**. Alice's display name can be Alice Smith while her object ID is a value such as `54b6b4a7-....`. Azure role assignments identify the principal through its relevant identifier, not merely through a label that operators recognize.
 
-### Object IDs
-<!-- section-summary: Object IDs identify the exact Microsoft Entra principal that receives access, which keeps names and app IDs from pointing at the wrong caller. -->
+For applications, distinguish the application/client ID from the object or principal ID. The client ID identifies application/client configuration. The principal ID identifies a particular directory security principal. RBAC needs the latter relationship: which actual directory object receives the permission?
 
-An **object ID** is the unique identifier for one Microsoft Entra object inside one tenant. Users, groups, service principals, and managed identities all have object IDs. Azure RBAC role assignments store the principal ID, and that principal ID is the object ID of the identity receiving access.
+These identifiers make access reviews precise. Seeing the expected display name in an interface is a useful starting point, but a role assigned to a different object with a similar name does not authorize the caller making this request. Confirm the tenant and principal ID before concluding that the right identity has access.
 
-Display names are helpful during conversation, but they can confuse automation. A tenant can have two users named Alex Chen. A managed identity and a service principal can use similar names. A deleted identity can leave an old role assignment where Azure can no longer resolve the display name. A script that assigns access by name can also hit the wrong object if the name changes or appears more than once. The Orders deployment identity shows why reviewers look past the friendly name and compare the stable IDs.
-
-| Field | What it means | Example |
-|---|---|---|
-| **Display name** | Human-friendly label | `spn-orders-deploy-prod` |
-| **Application or client ID** | App registration identifier used by code and token flows | `0f4c7a29-2222-5555-bbbb-23456789abcd` |
-| **Object ID / principal ID** | Exact tenant object that receives Azure RBAC access | `9b7e2a10-3333-6666-cccc-3456789abcde` |
-
-The role assignment cares about the object ID. The client ID may appear in token configuration, app code, and workload federation setup. The display name may appear in dashboards and conversations. The object ID is the stable field reviewers use when they need to prove that a specific principal received a specific role assignment. A clean access request for the Orders deployment identity can include all the friendly context, but it should still carry the principal ID.
-
-```json
-{
-  "principalName": "spn-orders-deploy-prod",
-  "principalType": "ServicePrincipal",
-  "principalId": "9b7e2a10-3333-6666-cccc-3456789abcde",
-  "requestedAction": "Microsoft.Web/sites/config/write",
-  "targetScope": "/subscriptions/sub-prod-001/resourceGroups/rg-orders-prod/providers/Microsoft.Web/sites/app-orders-prod"
-}
-```
-
-Now the reviewer knows the exact caller, so the next question is permission-shaped: which role contains the action the caller needs? That takes us from identity records into role definitions.
+The principal now answers who. To understand what that principal receives, inspect the role definition rather than relying only on its title.
 
 ## What Do Role Definitions Allow?
-<!-- section-summary: A role definition is the reusable permission bundle that lists allowed Azure management actions and, for supported services, data actions. -->
+<!-- section-summary: Role definitions contain management and supported data operations; exclusions subtract from one role's grants, while separate assignments can add permissions. -->
 
-A **role definition** is a reusable bundle of permissions. People usually shorten that phrase to **role**. Azure provides many built-in roles, and organizations can create custom roles when a production job needs a permission shape that built-in roles grant too broadly or too narrowly.
+A **role definition** is a reusable permission bundle. Azure provides built-in definitions and supports custom ones where needed. The definition describes allowed and excluded operations through `Actions`, `NotActions`, `DataActions`, and `NotDataActions`. [The role-definition documentation](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-definitions) explains these fields.
 
-Some built-in roles are broad. **Reader** can view Azure resources. **Contributor** can create and change many Azure resources, while access management stays separate. **Owner** includes broad resource control and permission to manage access. **Role Based Access Control Administrator** and **User Access Administrator** focus on assigning access to Azure resources.
+A role definition is distinct from a role assignment. Reader can exist as a defined permission set without anyone receiving it. Alice can exist as a principal, and `rg-production` can exist as a scope, without any permission connecting them. Creating Alice plus Reader plus `rg-production` establishes the actual assignment.
 
-Other roles match service jobs more directly. **Website Contributor** fits many App Service operations. **Storage Blob Data Reader** and **Storage Blob Data Contributor** control blob data access. **Key Vault Secrets User** allows reading secret values from a vault that uses Azure RBAC for authorization. These service-specific roles usually make a cleaner production request than a broad subscription role.
+The same definition can be reused in Alice plus Reader plus Resource Group A, Bob plus Reader plus Subscription B, and App X plus Reader plus Resource Y. Reusing the bundle does not force the assignments to share a principal or scope.
 
-| Job | Role idea | Scope idea |
-|---|---|---|
-| Inspect resources during an incident | Reader | `rg-orders-prod` |
-| Update one web app's configuration | Website Contributor or custom app settings role | `app-orders-prod` |
-| Write monthly export blobs | Storage Blob Data Contributor | `stordersprodexports` storage account or container |
-| Read secret values at runtime | Key Vault Secrets User | `kv-orders-prod` |
-| Manage role assignments for a platform team | Role Based Access Control Administrator | production management group or subscription |
+### Built-in roles illustrate different kinds of power
 
-When a request names a role, the reviewer should inspect what that role actually contains. This read-only command asks Azure for the action list behind a built-in role.
+| Role | Broad purpose |
+|---|---|
+| Reader | View Azure resources |
+| Contributor | Manage resources without general RBAC assignment administration |
+| Owner | Manage resources and Azure RBAC access |
+| Role Based Access Control Administrator | Manage Azure RBAC access |
 
-```bash
-az role definition list \
-  --name "Website Contributor" \
-  --query "[0].{roleName:roleName, actions:permissions[0].actions, dataActions:permissions[0].dataActions}"
+Managing a VM and managing who may manage that VM are different powers. Contributor lets an operator broadly administer resources at the assignment scope, but it does not inherently let that operator make Bob an Owner. Azure separates resource administration from access administration so ordinary infrastructure work does not automatically include the power to change the permission system.
+
+Creating a VM, modifying a network, and configuring an application are examples of resource work. Assigning Reader, Contributor, or Owner is access-administration work. [Microsoft's comparison of Azure and directory roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/rbac-and-directory-admin-roles) describes the relevant built-in role capabilities.
+
+### Actions describe control-plane operations
+
+The **control plane** manages the Azure resource object itself. Examples include creating or resizing a VM, changing storage configuration, deleting a resource group, and reading Key Vault configuration. These operations use ARM or related management interfaces.
+
+The `Actions` field includes allowed management operations, and `NotActions` subtracts selected operations from that role's grant. An operation such as `Microsoft.Compute/virtualMachines/read` uses the provider/type/action structure introduced in the resources article.
+
+Read the components as a management service, a resource kind, and an action on that kind. Other provider operations can represent write, delete, or specific actions. These precise operations, rather than just the portal's “Virtual machine” label, are the authorization primitives used in role definitions.
+
+### DataActions describe supported service-data operations
+
+Reading a storage account's configuration and reading the blobs stored inside it are different requests. The first asks about the managed resource. The second asks to access the data exposed by its service.
+
+`DataActions` includes supported data-plane operations, while `NotDataActions` excludes operations from that role's data grant. A provider operation shaped like `Microsoft.Storage/.../blobs/read` concerns actual blob data. The abbreviated path illustrates the operation family; an implementation must use the complete operation defined by the provider.
+
+This explains a common misunderstanding of Reader. Reader at storage-account scope can allow inspection of the resource's existence, region, configuration, and properties without granting Entra-based access to `secret.txt`, `invoice.pdf`, or `customer-record.json` inside it. Storage Blob Data Reader addresses the different job of reading blob contents.
+
+The distinction appears throughout Azure: configuring and resizing are management tasks, while reading blobs, sending queue messages, querying secrets, and accessing service data are data tasks. Not every service uses Azure RBAC for every data-plane operation, so the target's supported authorization model still matters.
+
+### NotActions subtracts from one role, not every role
+
+Consider a simplified custom permission definition:
+
+```text
+Actions:
+  *
+NotActions:
+  Microsoft.Authorization/roleAssignments/write
 ```
 
-The output should show management actions for web resources and an empty data-action list. That tells the reviewer this role can help with App Service configuration work, while a blob or Key Vault data request needs a different role.
+The exclusion removes role-assignment write from this role's allowed management operations. It does not create a global denial forbidding the principal from obtaining that permission elsewhere.
 
-```json
-{
-  "roleName": "Website Contributor",
-  "actions": [
-    "Microsoft.Web/*",
-    "Microsoft.Insights/alertRules/*",
-    "Microsoft.Authorization/*/read",
-    "Microsoft.Resources/deployments/*"
-  ],
-  "dataActions": []
-}
-```
+Conceptually, this role's management grant is `Actions - NotActions`, and its data grant is `DataActions - NotDataActions`. If Role A grants everything except operation X and Role B explicitly grants X, the principal can still receive X through Role B. The exception belongs to the first role's permission definition.
 
-A custom role helps when the built-in role grants more than the job needs. The Orders deployment pipeline might need to read the App Service, read configuration, and write configuration, while delete operations, networking changes, and access-management actions stay outside the deployment job. A custom role can list the narrow App Service actions the pipeline needs, and `AssignableScopes` can say where that custom role can be assigned. A simplified custom role for this deployment case can keep the action list close to the actual App Service configuration job.
+This follows Azure RBAC's additive model. Applicable role grants normally combine rather than replacing one another. Alice can hold Reader at a subscription and Virtual Machine Contributor at `rg-compute`; within that group, the applicable grants include both bundles.
 
-```json
-{
-  "roleName": "Orders App Settings Writer",
-  "description": "Read and update App Service configuration for the Orders production app.",
-  "permissions": [
-    {
-      "actions": [
-        "Microsoft.Web/sites/read",
-        "Microsoft.Web/sites/config/read",
-        "Microsoft.Web/sites/config/write"
-      ],
-      "notActions": [],
-      "dataActions": [],
-      "notDataActions": []
-    }
-  ],
-  "assignableScopes": [
-    "/subscriptions/sub-prod-001/resourceGroups/rg-orders-prod"
-  ]
-}
-```
+The same principle prevents a narrow Reader assignment from cancelling a broader Contributor assignment. If Alice is Contributor at the subscription and Reader at a child group, the inherited Contributor capabilities still apply. Adding a less-powerful role below does not subtract an existing grant above.
 
-That JSON introduces the next important split. Azure roles contain action strings, and Azure separates management-plane actions from data-plane actions for services that support data access through Azure RBAC.
-
-### Actions and Data Actions
-<!-- section-summary: Azure role definitions contain management-plane actions and, for supported services, data-plane actions that control access to service data. -->
-
-An **action** is an Azure operation. A role definition lists management-plane operations in `Actions` and data-plane operations in `DataActions`. It can also use `NotActions` and `NotDataActions` as subtraction lists inside that same role definition.
-
-The **management plane** controls Azure resource configuration through Azure Resource Manager. Creating a resource group, updating App Service configuration, resizing a database, changing a virtual network, or deleting a virtual machine all belong to this side. The Orders pipeline error used a management action: `Microsoft.Web/sites/config/write`.
-
-The **data plane** controls the data inside a service for services that integrate those operations with Azure RBAC. Reading a blob, writing a blob, reading a Key Vault secret value, or handling queue messages can belong to this side. This split explains why someone can see a storage account in the portal but still fail when they try to read the blobs inside it. The management permission opens the resource view, while the data permission controls the contents.
-
-| Permission question | Plane | Example action |
-|---|---|---|
-| Can Maya view the storage account resource? | Management plane | `Microsoft.Storage/storageAccounts/read` |
-| Can the API write blob objects into the storage account? | Data plane | `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write` |
-| Can the pipeline update App Service settings? | Management plane | `Microsoft.Web/sites/config/write` |
-| Can the API read a Key Vault secret value? | Data plane | Key Vault secret data action through an RBAC data role |
-
-`NotActions` and `NotDataActions` need careful reading. They subtract actions from the allowed actions in one role definition, usually when the role uses a wildcard. Another role assignment can still grant the same operation through a different role. For strong blocking, Azure has **deny assignments**, which Azure creates and manages for specific platform scenarios such as protected managed resources. Actions tell us what the role can do, and the next RBAC piece tells us how far that permission reaches.
-
-This leads to a rule that prevents many RBAC misunderstandings: ordinary role grants are **additive**. If Maya receives Reader from one assignment and Contributor from another applicable assignment, Azure combines the allowed operations. The narrower role does not cancel the broader one. Likewise, putting an operation in one role's `NotActions` does not create a general deny; it only removes that operation from that role's own calculated permission set. When access looks broader than expected, inspect every applicable assignment instead of stopping at the first one you recognize.
-
-Every role definition also has a stable role definition ID. Display names such as `Reader` are convenient for people, but deployment templates and audit records are clearer when they retain the exact definition ID, especially for custom roles whose names may be similar. The definition says what can be granted. It grants nothing by itself until a role assignment binds that definition to a principal and scope.
+The role definition tells us which operations an assignment can contribute. The scope tells us where that contribution reaches, and is just as important when judging actual access.
 
 ## Where Does a Role Assignment Apply?
-<!-- section-summary: Scope is the Azure boundary where a role assignment applies, and child scopes inherit assignments from parent scopes. -->
+<!-- section-summary: Scope defines the resource set covered by an assignment; inherited grants flow down the hierarchy, and assignments themselves are addressable authorization resources. -->
 
-A **scope** is the Azure boundary where a role assignment applies. Azure RBAC uses a hierarchy: **management group**, **subscription**, **resource group**, and **resource**. A role assignment at a parent scope flows down to child scopes under it.
+**Scope** is the set of Azure resources to which a role assignment applies. Reader for one VM and Reader across the entire Azure estate use a similar permission bundle with dramatically different reach.
 
-![Azure RBAC scope inheritance map from management group to subscription, resource group, and resources](/content-assets/articles/article-cloud-providers-azure-identity-security-what-is-azure-rbac/scope-inheritance-map.png)
+The four standard hierarchical scopes are management group, subscription, resource group, and resource. Lower scopes inherit applicable assignments from their ancestors. [The scope overview](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview) documents this parent-child model.
 
-*Scope chooses how far an assignment reaches; assigning at `rg-orders-prod` covers the child resources without opening the whole subscription.*
-
-This hierarchy turns least privilege into a real design choice. Reader at the production subscription lets Maya inspect every resource group in that subscription. Reader at `rg-orders-prod` limits her normal view to the Orders production resources. Reader on one App Service limits the assignment to that single resource.
-
-For the deployment pipeline, the useful scope depends on the job. If the pipeline only changes `app-orders-prod`, the App Service resource scope fits the request. If the pipeline deploys the web app, its app settings, and a few related resources together, the resource group scope may fit. Subscription scope reaches every resource group in that subscription, so a reviewer should expect a strong reason before approving it.
-
-Inheritance also explains surprising access. A user may have no assignment directly on a web app, but still have Contributor because a group received Contributor at the subscription. A useful access review checks the target resource, its parent resource group, the subscription, the management group path, and any group membership that contributes access. Now we have a principal, a role, and a scope, and Azure grants access when those pieces come together in a role assignment.
-
-### Role Assignments
-<!-- section-summary: A role assignment binds one principal to one role definition at one scope, which is the record that grants Azure access. -->
-
-A **role assignment** is the access record that binds one principal, one role definition, and one scope. The role definition describes the permission bundle. The scope describes where the permission applies. The principal describes who receives it. The assignment is the actual grant.
-
-The Orders API needs to write monthly export files to Storage. The principal is `mi-orders-api-prod`. The role is `Storage Blob Data Contributor`. The scope is the storage account used for exports. Those three facts produce one role assignment:
-
-```bash
-az role assignment create \
-  --assignee-object-id 9b7e2a10-3333-6666-cccc-3456789abcde \
-  --assignee-principal-type ServicePrincipal \
-  --role "Storage Blob Data Contributor" \
-  --scope /subscriptions/sub-prod-001/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports
+```mermaid
+flowchart TD
+  M[Management group] --> S[Subscription]
+  S --> G[Resource group]
+  G --> R[Resource]
+  class M,S,G,R neutral
 ```
 
-That command uses the object ID because the assignment should target the exact managed identity service principal. The principal type helps deployment tooling avoid lookup timing issues, especially with service principals and managed identities that may have been created recently. The assignment evidence has the same three-part shape, which makes it easy to compare the intended access request with the actual Azure record.
+Suppose Production contains `rg-orders`, with `orders-api` and `orders-db`, and `rg-payments`, with `payments-api` and `payments-db`. Alice's Reader assignment at Production reaches the applicable resources in both groups. Looking only for a direct assignment on `orders-api` would miss the parent grant explaining her access.
 
-```json
-{
-  "principalName": "mi-orders-api-prod",
-  "principalType": "ServicePrincipal",
-  "roleDefinitionName": "Storage Blob Data Contributor",
-  "scope": "/subscriptions/sub-prod-001/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
-}
-```
+A role assigned to one group does not automatically reach a sibling group, because the sibling is outside that assignment's descendants. The inheritance follows the management hierarchy, so determining the target's ancestors is part of evaluating which grants apply.
 
-This record gives one workload identity one storage data role at one storage account. If the API later needs to read secret values from Key Vault, the team creates another role assignment with a Key Vault role at the vault scope. Each access path gets its own reason, role, and boundary.
+### Narrow both the permission and its reach
 
-The same assignment should be easy to find later. Listing by principal ID and narrowing the output to the role and scope gives a small evidence record for access review.
+If the Orders API only needs invoices from `invoice-storage`, Storage Blob Data Reader at the subscription may technically allow the required request. It can also expose other matching Storage resources in that subscription to the same identity.
 
-```bash
-az role assignment list \
-  --assignee 9b7e2a10-3333-6666-cccc-3456789abcde \
-  --include-inherited \
-  --query "[].{role:roleDefinitionName, principalType:principalType, scope:scope}"
-```
+Assigning the role at `invoice-storage` instead limits the grant to that target and applicable children. If the API identity is compromised, the permission's narrower reach reduces what that identity can expose. [Microsoft's assignment guidance](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments) recommends the smallest scope that satisfies the requirement.
 
-A focused output lets the reviewer compare real assignments with the original request. The returned scope also reveals inherited access because a subscription or resource-group assignment can appear while the reviewer is checking one child resource. If the storage role appears at subscription scope, the team should ask why the API needs every storage account in the subscription instead of the Orders export account.
+Least privilege therefore has at least two dimensions: a narrow set of operations and a narrow set of resources. Selecting a read-only role is insufficient if it grants access across an unnecessarily large estate. Role and scope must be reviewed together.
 
-```json
-[
-  {
-    "role": "Storage Blob Data Contributor",
-    "principalType": "ServicePrincipal",
-    "scope": "/subscriptions/sub-prod-001/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
-  }
-]
-```
+### The assignment connects three independently identified objects
 
-Creating role assignments also requires permission. A caller needs access such as `Microsoft.Authorization/roleAssignments/write`, usually through Owner, User Access Administrator, or Role Based Access Control Administrator at the relevant scope. That power deserves extra care because someone who can grant access can change who reaches production. After the team creates assignments, Azure has to evaluate them on every request.
+The Orders API managed identity plus Storage Blob Data Reader plus `invoice-storage` is a role assignment. It permits the role's data operations against that scope and applicable children. Access is granted by creating an assignment and revoked by removing it, subject to any other applicable grants that remain.
+
+The assignment itself is also an Azure resource under `Microsoft.Authorization/roleAssignments`. Authorization configuration can therefore be created, enumerated, automated, audited, and managed through infrastructure tooling. It is configuration data, not an invisible permission state existing only inside the portal.
+
+This matters for repeatable access management. A deployment or review can inspect explicit role-assignment objects and compare their principal, role, and scope, rather than depending on a person's recollection of which portal actions were performed.
+
+### Roles and assignments have identifiers too
+
+The role definition has its own ID. “Reader” is its human-friendly name, while the unique role ID identifies the permission bundle for automation. Microsoft recommends unique role IDs in scripts because built-in role IDs remain stable even if naming changes.
+
+Four identifiers can therefore appear during an access review:
+
+| Identifier | Object or relationship it identifies |
+|---|---|
+| Principal ID | Directory principal receiving access |
+| Role definition ID | Permission bundle being assigned |
+| Scope resource ID | Resource boundary covered by the assignment |
+| Role assignment ID | Particular assignment connecting the other parts |
+
+A role assignment can be read as `principalId`, `roleDefinitionId`, and `scope`, with its own assignment identity. Distinguishing those fields avoids confusing the application's client ID with a role ID or treating a resource name as a complete scope.
+
+Once these objects are established, Azure evaluates a request by collecting the assignments that apply to the actual caller and target.
 
 ## How Does Azure Evaluate an Access Request?
-<!-- section-summary: Azure evaluates the token, deny assignments, applicable role assignments, action match, scope, and conditions before allowing a request. -->
+<!-- section-summary: Azure evaluates the caller, operation, applicable direct/group/inherited grants, deny assignments, and supported conditions to reach an authorization decision. -->
 
-Azure evaluates RBAC at request time. The caller gets a token from Microsoft Entra ID, sends a request to Azure Resource Manager or a supported data-plane service, and Azure checks the assignments that apply to the target resource. The request succeeds only when the caller has a matching grant for the action at the target scope. The flow below shows the order a troubleshooting conversation usually follows, starting with the token and ending with allow or deny.
+Suppose Alice sends a request equivalent to `POST .../virtualMachines/vm-prod-01/start`. Azure must determine whether that particular caller may perform the VM-start operation on that particular resource. The following model summarizes the evaluation for ARM and Azure-RBAC-integrated data services.
 
-![Azure RBAC request-time evaluation path showing token, action, deny assignments, role assignments, action match, conditions, and allow or deny](/content-assets/articles/article-cloud-providers-azure-identity-security-what-is-azure-rbac/rbac-evaluation-path.png)
+First, the request includes a token from Entra. Relevant token information establishes tenant and principal identity, with group information and other claims contributing to the identity context. Azure now has the caller to evaluate rather than an unverified display name.
 
-*Troubleshooting usually follows the request path: token, action, target, deny checks, matching assignments, action contents, conditions, and then allow or deny.*
+Second, the target and action are identified:
 
-Several details matter during a real incident. Group assignments can contribute access because the caller may receive roles through group membership. Parent scopes can contribute access because assignments inherit down the hierarchy. Deny assignments block matching actions even when a role assignment grants them. Role assignment conditions can narrow supported assignments, especially for some storage data scenarios.
+```text
+Operation: Microsoft.Compute/virtualMachines/start/action
+Resource: /subscriptions/PROD/resourceGroups/rg-payments/providers/Microsoft.Compute/virtualMachines/vm-prod-01
+```
 
-The default outcome is simple: no matching grant means no access. Azure first identifies the caller and requested operation, then gathers applicable assignments from the target scope and its parents, including assignments received through groups. It expands the relevant role definitions, checks whether their management or data actions cover the operation, applies supported conditions, and accounts for deny assignments. One effective allow is enough unless a matching deny blocks it. This is why troubleshooting must start from the exact target resource and walk upward through the scope hierarchy.
+The exact resource path supplies where, and the provider action supplies what. This level of precision is necessary because read, write, start, and delete requests can require different permissions on the same VM.
 
-A **role assignment condition** adds another test to a supported assignment. For example, a storage data role can be narrowed so the principal may work only with blobs whose attributes satisfy the condition. The role and scope still establish the potential grant; the condition decides whether this particular request qualifies. Conditions are useful when scope alone cannot express the boundary, but they also add evidence that an investigator must read before concluding that a role name guarantees access.
+### Gather direct, group, and inherited assignments
 
-The deployment error from the beginning now has a clear path. `spn-orders-deploy-prod` had a token. Azure received `Microsoft.Web/sites/config/write` against `app-orders-prod`. Azure checked deny assignments, then role assignments for the service principal and any relevant groups at the resource, resource group, subscription, and management group scopes. The request failed because the effective assignments lacked that write action at that target.
+Azure considers applicable assignments made directly to Alice, assignments made to groups she belongs to, and assignments at the resource or its applicable resource-group, subscription, and management-group ancestors.
 
-Role assignment changes can also take time to show up everywhere. During an incident, a new assignment may need propagation time before every provider and cache sees it. The practical response is to verify the role assignment evidence, wait briefly when propagation fits the timing, and retest the same denied action.
+For example, a management group may grant Alice Reader while a subscription grants DevTeam Virtual Machine Contributor. If Alice belongs to DevTeam, both applicable grants can contribute at the VM. Group membership and scope inheritance are therefore independent ways an assignment can become relevant to the same request.
 
-Evaluation gives us the mechanics. Least privilege gives us the review habit before we create or widen an assignment.
+The combined grant might include read from Role A, VM start and restart from Role B, and monitoring read from Role C. RBAC's additive model combines the permitted operations from applicable assignments, with each role's exclusions taken into account.
+
+The system then asks whether `Microsoft.Compute/virtualMachines/start/action` is covered. If no applicable grant permits it, authorization is denied. If a grant covers it, additional restrictions such as applicable denies and conditions still need to be considered.
+
+### Deny assignments can override grants
+
+A **deny assignment** is a separate Azure mechanism capable of blocking an action even when a role assignment allows it. If a role grants Alice deletion of X and an applicable deny assignment blocks that deletion, the deny takes precedence.
+
+This is distinct from `NotActions`. An exclusion removes an action from one role's contribution; another role can still grant it. A deny assignment can block the operation despite such a grant. Mixing those concepts would produce incorrect conclusions about the caller's effective access.
+
+Administrators generally do not create arbitrary deny assignments in the same way they create ordinary role assignments. Azure creates and manages them for specific platform mechanisms, such as protected managed resources and certain deployment-stack scenarios. [Microsoft's deny-assignment documentation](https://learn.microsoft.com/en-us/azure/role-based-access-control/deny-assignments) explains this limitation.
+
+The ordinary design model remains additive grants with carefully selected scopes. It is not an unrestricted manual allow/deny rule language for shaping every permission relationship. When an applicable platform deny exists, however, it must be included in the evaluation and the investigation.
+
+### Conditions can narrow supported role assignments
+
+Sometimes role plus scope is still broader than the requirement. Alice might need blob-read access only when a supported attribute condition matches `Project=Blue`. Azure attribute-based access control, or **ABAC**, adds conditions to supported RBAC role assignments.
+
+The conceptual relationship is Alice plus Storage Blob Data Reader plus the storage-account scope plus a condition selecting the relevant Project attribute. The condition narrows the permission contributed by that assignment; it does not independently grant a new set of permissions.
+
+This example concerns the supported resource attributes and conditions evaluated by the authorization feature. It should not be generalized into a claim that adding an arbitrary ordinary Azure tag automatically enforces access. The condition must exist on a supported assignment and use the supported attribute mechanism. [The ABAC overview](https://learn.microsoft.com/en-us/azure/role-based-access-control/conditions-overview) describes the feature's relationship to RBAC.
+
+### Read the complete decision path
+
+Conceptually, Azure establishes the principal, identifies the resource and operation, collects applicable assignments, checks for applicable deny restrictions, and determines whether the effective grants cover the operation. Where applicable assignment conditions narrow a grant, those conditions must also be satisfied for that grant to authorize the operation.
+
+```mermaid
+flowchart TD
+  R[Request identifies principal, operation, resource]
+  R --> A[Gather applicable direct, group, inherited assignments]
+  A --> D{Applicable deny blocks operation?}
+  D -->|Yes| N[Deny]
+  D -->|No| G{Applicable grant permits operation?}
+  G -->|No| N
+  G -->|Yes| C{Required conditions satisfied?}
+  C -->|No| N
+  C -->|Yes or none| Y[Allow]
+  class R,A,D,N,G,C,Y neutral
+```
+
+This is a high-level teaching model rather than an instruction to implement Azure's authorization engine. Its value is the set of questions it forces a reviewer to answer. The [RBAC overview](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview) describes the corresponding evaluation concepts.
+
+The effective default is no grant, no access. Bob can be an authenticated Contoso employee and still lack every relevant Production RBAC assignment. His successful Entra sign-in does not grant management access merely because the subscription trusts the same tenant.
 
 ## How Do You Design Least-Privilege Access?
-<!-- section-summary: Least privilege starts from the job, action, principal, and target scope, then chooses the narrowest role assignment that supports the workflow. -->
+<!-- section-summary: Choose the correct principal, minimum useful operation set, and narrowest practical scope, with special care for permission-granting roles and custom-role maintenance. -->
 
-**Least privilege** means giving the access required for the job and avoiding extra reach. In Azure RBAC, least privilege is a concrete review because every request can name a principal, an action, a role, and a scope.
+“Give the deployment pipeline access to production” is an incomplete requirement. It identifies a broad intention without specifying the actual caller, operations, or resource boundary. Starting with Owner at subscription scope would fill those gaps with broad privilege rather than a justified access design.
 
-The Orders API gives us a good example. A broad ticket might say, "Give the API Contributor on production so exports work." That request would let the API change many resources that have nothing to do with writing export files. A better version says, "Grant `mi-orders-api-prod` `Storage Blob Data Contributor` on the export storage account so it can write monthly export blobs."
+First identify who should receive access: the pipeline's service principal, an appropriate managed identity, or a human group if the task is human administration. Avoid using a person's identity for automation when a workload identity fits the actor.
 
-| Review question | Orders answer |
-|---|---|
-| **Who is the exact principal?** | `mi-orders-api-prod`, object ID confirmed |
-| **What job needs access?** | Write monthly order export blobs |
-| **Which action family supports the job?** | Storage blob data write operations |
-| **Which role fits the job?** | Storage Blob Data Contributor |
-| **Which scope contains the job?** | `stordersprodexports` storage account, or a container scope if the design uses one |
-| **Who owns approval?** | Platform owner for production data access |
+Then identify exactly what it needs to do. Reading configuration, deploying App Service, restarting an application, modifying networking, and assigning RBAC roles represent different privilege levels. Finally identify where: one app, one group, one subscription, or multiple subscriptions.
 
-Broad roles still appear in real environments, but they need a reason. Owner at subscription scope can fit emergency or platform administration procedures. Contributor at subscription scope can fit a platform pipeline that owns the whole subscription. Those same roles usually create too much reach for one application runtime, one support team, or one narrow deployment job.
+Least privilege combines the correct principal, smallest useful permission set, and smallest useful scope. [Microsoft's role-assignment steps](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-steps) recommend restrictive roles and narrow scopes that meet the job's requirements.
 
-Custom roles belong after the team understands the needed actions. Starting with a built-in role is common because Microsoft maintains those roles as services evolve. A custom role adds ownership work because the team has to review action strings, wildcard choices, assignable scopes, and future service changes.
+### Review role and scope as a pair
 
-Least privilege should also include time and review. Privileged Identity Management can make eligible human access temporary and approval-based. Periodic access reviews help teams remove old group members, retired workload identities, stale service principals, and role assignments that no longer match the job. After the team chooses access carefully, evidence keeps the system understandable.
+Reader on one resource and Owner on a management group differ along two axes. The latter permits much more powerful operations over a much broader resource estate. The risk comes from both the capability and its reach.
+
+Reviewing only the role name can miss an excessive scope, while reviewing only a small-looking resource group can miss a highly privileged assignment. The useful review unit is the role together with its scope and the principal that can exercise it.
+
+The invoice-reading application demonstrates the point. Storage Blob Data Reader is narrower than a broad administration role, yet assigning it at the entire subscription can still expose more data than reading one invoice storage target requires. Least privilege must account for both dimensions.
+
+### Treat access administration as privileged work
+
+The ability to create role assignments can let a caller grant powerful roles to itself or another identity. That makes permission-granting capability especially sensitive, even if the operator's normal task sounds administrative rather than destructive.
+
+Owner, Role Based Access Control Administrator, and User Access Administrator are privileged administrator roles that should be limited. Their authority over the permission model can have consequences beyond ordinary resource operations. Separating that work from Contributor's resource administration reduces opportunities for privilege escalation.
+
+If a deployment needs to configure an app but not grant new access, those are different requirements. A request to manage role assignments should be explicit and justified instead of silently included because it makes a setup command easier to run.
+
+### Prefer a purpose-specific built-in role
+
+For an analyst who only reads blobs, compare Owner, Contributor, Storage Blob Data Owner, Storage Blob Data Contributor, and Storage Blob Data Reader. The reader role is the closest fit when the actual requirement is only blob reading.
+
+Start with the task, identify the exact operations, find the narrow built-in role containing them, and narrow the scope before assigning it. A familiar broad role is not preferable simply because it avoids checking the required operation.
+
+Where one built-in role is insufficient, an appropriate combination may cover the need. Because grants are additive, the combination must be reviewed as a whole. Two individually reasonable assignments can jointly provide a broader result than either title suggests.
+
+### Custom roles introduce maintenance responsibilities
+
+A custom Payments Operator role might permit reading selected resources, restarting an application, and inspecting monitoring while omitting deletion, network modification, and permission assignment. Azure supports such custom definitions, but someone must understand the exact provider operations and maintain the role.
+
+Wildcards deserve particular care. A wildcard can admit newly introduced provider actions, unintentionally expanding permission as the platform evolves. [Microsoft's best practices](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices) caution against unnecessary wildcard use for this reason.
+
+A reasonable progression is a narrow built-in role, then a considered combination of suitable roles, then a carefully designed custom role if neither meets the need. Customization should solve a real permission gap while accepting the ongoing security and maintenance work it creates.
+
+The same precise requirement model is useful after deployment. When access fails—or seems unexpectedly broad—reconstruct the actual principal, operation, and scope rather than relying on what somebody believes was assigned.
 
 ## How Do You Diagnose an RBAC Failure With Evidence?
-<!-- section-summary: Azure RBAC evidence comes from Access control (IAM), role assignment lists, activity logs, denied action messages, and review records. -->
+<!-- section-summary: Verify actual principal IDs, operations, targets, inherited/group grants, conditions, and denies; common failures follow directly from the permission model. -->
 
-**Azure RBAC evidence** is the information that explains who had access, what role granted it, where it applied, and which request failed or succeeded. The Azure portal shows this through **Access control (IAM)** on management groups, subscriptions, resource groups, and resources. The Azure CLI, REST API, and infrastructure tools expose the same assignment records for automation and review. For a focused investigation, the Orders platform team can list assignments for the workload identity by object ID.
+“I should have access” states an expectation, not the evidence Azure evaluated. Start by confirming the tenant, principal type, object/principal ID, and applicable group memberships. For software, confirm the identity used by the running application, rather than a similarly named or intended identity.
 
-```bash
-az role assignment list \
-  --assignee 9b7e2a10-3333-6666-cccc-3456789abcde \
-  --all
-```
+Next identify the exact failed operation. `Microsoft.Storage/.../blobs/read`, `Microsoft.Compute/.../write`, and `Microsoft.Authorization/roleAssignments/write` concern different permission families. Then identify the exact resource ID under `/subscriptions/.../resourceGroups/.../providers/...` so the scope is unambiguous.
 
-The useful output fields are the principal, role, and scope. Those fields let the reviewer compare the role assignment record with the original access request.
+Inspect direct role assignments, group-based assignments, inherited assignments, conditions, and deny assignments that apply to this combination. Each piece contributes to explaining the result, and the absence of a direct assignment on the target is not proof that the caller lacks inherited access.
 
-```json
-[
-  {
-    "principalName": "mi-orders-api-prod",
-    "principalType": "ServicePrincipal",
-    "roleDefinitionName": "Storage Blob Data Contributor",
-    "scope": "/subscriptions/sub-prod-001/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
-  },
-  {
-    "principalName": "mi-orders-api-prod",
-    "principalType": "ServicePrincipal",
-    "roleDefinitionName": "Key Vault Secrets User",
-    "scope": "/subscriptions/sub-prod-001/resourceGroups/rg-orders-prod/providers/Microsoft.KeyVault/vaults/kv-orders-prod"
-  }
-]
-```
+### Understand Access control (IAM) as a management view
 
-Denied request messages are also evidence. A useful `AuthorizationFailed` message names the caller, the action, and the target scope. That turns "the deployment is blocked" into "this service principal lacks a role containing `Microsoft.Web/sites/config/write` at the App Service scope or a parent scope."
+The Azure portal exposes **Access control (IAM)** at management-group, subscription, resource-group, and resource scopes. In this context, it is a management surface for viewing and changing RBAC role assignments, not a separate unexplained authorization engine.
 
-Activity logs add change history. They can show who created or removed a role assignment, who changed a resource, and when the operation happened. Sign-in logs help with the identity side for users and service principals. Approval records and access review decisions explain why a powerful assignment existed in the first place.
+The view helps answer who has which roles here. Its scope context matters: inspecting one resource's assignments should be part of an investigation that also considers relevant ancestors and group membership. Portal labels are convenient entry points to the underlying assignment objects.
 
-Good evidence gives the team one plain sentence: **this principal has this role at this scope for this reason**. That sentence helps incident responders during a failure, auditors during a review, and future maintainers who inherit the system months later. With that evidence in hand, we can bring the whole story back together.
+### Read the target's permissions upward
 
-Two common examples test whether the model is really clear. First, Maya says, "I am Reader on this VM, but I can still modify it." Reader did not become a write role. The likely explanation is another additive assignment—perhaps Contributor through a group at the subscription. The investigation lists Maya's direct and group-derived assignments at the VM, resource group, subscription, and management-group path until it finds the write grant.
+For `vm-prod-01`, inspect its own assignments and those inherited from its resource group, subscription, and management group. If someone unexpectedly has access, an ancestor grant may explain it. If someone unexpectedly lacks access, check the exact principal, action, scope, and data/control-plane distinction before assuming that a familiar role should suffice.
 
-Second, a deployment identity has Contributor on the resource group but cannot grant a new role. Contributor can change many resources, yet it intentionally excludes permission to write role assignments. Granting access requires a role such as Owner, User Access Administrator, or Role Based Access Control Administrator at an applicable scope. The failed request proves that resource administration and access administration are separate privileges.
+This upward review follows the same inheritance model as the authorization engine. It avoids treating a narrow local view as a complete picture of effective access across all relevant levels.
 
-The portal's **Access control (IAM)** page is a view over these records, not a different permission system. Start at the denied target and inspect applicable assignments upward. Compare object IDs rather than names, inspect the exact role definition and action, check conditions and deny assignments, and then repeat the same request after any propagation window. That sequence replaces permission guessing with a testable explanation.
+### Example: the API can inspect Storage but cannot read a blob
+
+The Orders API receives `403 AuthorizationPermissionMismatch` while reading a blob. Confirm the managed identity `orders-api-prod` and its principal ID, represented as `abc...` in the example. The required action is reading blob contents, and the target is the `invoicesprod` storage account.
+
+The existing assignment is Reader at `invoicesprod`. That explains the mismatch: Reader grants resource/control-plane visibility, not necessarily blob-data reads under Entra-based data authorization. The application likely needs an appropriate data role such as Storage Blob Data Reader at a suitably narrow scope.
+
+The diagnosis follows the four observations rather than the wording “Reader sounds right.” The caller is correct, the resource is correct, but the granted permission family does not match the operation. A broad Contributor or Owner assignment would obscure that specific issue instead of expressing the application's read requirement.
+
+### Example: Reader can still restart a VM
+
+Alice sees a Reader assignment on `rg-app` and asks why she can restart a VM in that group. An upward inspection finds Contributor assigned at the subscription.
+
+Both grants apply. Reader at the group does not remove inherited Contributor operations. Adding another Reader assignment would not change the additive result. If the broader access is no longer required, the relevant correction is to remove or narrow the broader grant through the authorized access-management process.
+
+This example shows why a role title in one scope cannot be treated as a complete statement of a user's access. Effective permissions depend on all applicable grants, including those outside the currently displayed assignment list.
+
+### Example: Contributor cannot assign Bob Reader
+
+Alice has Contributor and tries to assign Bob Reader. The role-assignment operation is denied because broad resource administration does not inherently include general RBAC assignment administration.
+
+Owner and specialized access-administration roles carry those capabilities. The failed action belongs to the permission-management boundary, not to ordinary VM, storage, or application configuration. Understanding that boundary explains the result without treating it as an arbitrary Azure limitation.
+
+The right investigation therefore asks whether Alice was intended to administer access at all. If she was not, the denial may reflect the desired design. A failed request does not automatically imply that a new role should be granted.
 
 ## How Does the Complete RBAC Model Fit Together?
-<!-- section-summary: A secure Azure RBAC design connects Microsoft Entra identities, precise roles, narrow scopes, request-time evaluation, and reviewable evidence. -->
+<!-- section-summary: Role assignments connect directory principals to permission definitions and resource scopes; effective access depends on all applicable grants and supported restrictions. -->
 
-Azure RBAC starts after identity. Microsoft Entra ID stores the callers and issues tokens. Azure RBAC connects those callers to roles at scopes. Azure evaluates each request by checking the caller, the action, the target resource, deny assignments, applicable role assignments, role contents, and conditions.
+The full object model begins with Entra directory principals. Users and groups have object IDs, and service principals or managed identities have the relevant principal object IDs. A role assignment references the principal, a role definition, and a resource scope.
 
-The Orders team now has a production access shape that a beginner can read. Maya uses her user identity and receives human investigation access through `grp-orders-engineers`. The deployment pipeline uses `spn-orders-deploy-prod` and receives the App Service configuration actions it needs at the app or resource group scope. The runtime API uses `mi-orders-api-prod` and receives storage and Key Vault data roles at the resources it actually touches.
+The definition contains `Actions`, `NotActions`, `DataActions`, and `NotDataActions`. The scope sits within the management-group, subscription, resource-group, and resource hierarchy. Evaluation compares all applicable assignments with the exact requested operation and the restrictions relevant to that target.
 
-![Orders RBAC access map connecting Microsoft Entra principals to Azure RBAC roles and narrow resource scopes](/content-assets/articles/article-cloud-providers-azure-identity-security-what-is-azure-rbac/orders-rbac-summary.png)
+```mermaid
+flowchart LR
+  P[Entra principal ID] --> A[Role assignment]
+  R[Role definition and permission fields] --> A
+  S[Scope resource ID] --> A
+  A --> E[Evaluate operation and applicable restrictions]
+  E --> D[Allow or deny]
+  class P,A,R,S,E,D neutral
+```
 
-*The Orders access map keeps each caller tied to a job-shaped role and the narrow resource scope that job needs.*
+This model explains why assigning “permission to a username” is imprecise language. The actual configuration connects a directory principal, a defined operation set, and a particular resource boundary. Its identifiers make that relationship explicit and automatable.
 
-The access review habit is the main thing to keep. The caller has a principal ID. The requested operation has an action string. The target has a scope. The role definition contains the permission. The role assignment joins the principal, role, and scope. The evidence shows what Azure allowed, denied, created, or removed.
+### Keep adjacent authorization systems separate
 
-That is why Azure RBAC sits right after Microsoft Entra ID in this roadmap. Entra gives Azure a trusted caller. RBAC gives that caller bounded access to Azure resources.
+Entra roles and Azure RBAC roles govern different things. Creating users, resetting passwords, managing enterprise applications, and changing directory settings belong to directory authorization. Reading VMs, creating storage accounts, managing VNets, and assigning Azure resource roles belong to Azure authorization.
 
-### What's Next
+Global Administrator is an Entra directory role; Virtual Machine Contributor is an Azure RBAC role. Do not infer one set of permissions simply from holding a role in the other system. Their shared use of the word role does not make their protected objects the same.
 
-The next article can move from authorization records into workload access. That is where managed identities help Azure-hosted applications call Azure services without storing long-lived client secrets.
+Application authorization creates another boundary. Alice calling `POST /orders/123/refund` may need to belong to RefundManagers, the order may need to be less than 30 days old, and the refund may need to be below £10,000. These are application business rules, not a generic permission to administer the Azure resource hosting the API.
 
----
+Conditional Access can decide whether authentication proceeds under current conditions. Azure RBAC can decide whether the established principal may operate on an Azure resource. The Orders API can decide whether that business user may refund this order. One identity can participate in all three decisions without those systems becoming one universal role set.
+
+### Summarize each term by its responsibility
+
+| Concept | Responsibility |
+|---|---|
+| Microsoft Entra ID | Establish and represent identity |
+| Azure RBAC | Authorize principals against Azure resources and supported data operations |
+| Principal | Identity receiving access |
+| Object/principal ID | Stable directory identifier of that principal |
+| Role definition | Reusable permission bundle |
+| Role assignment | Connection among principal, role, and scope |
+| Actions | Control-plane operations contributed by a role |
+| DataActions | Supported data-plane operations contributed by a role |
+| NotActions / NotDataActions | Exclusions from that role's own contribution |
+| Scope | Resource set covered by an assignment |
+| Deny assignment | Applicable Azure-managed restriction capable of overriding grants |
+| Condition | Additional filter on supported role assignments |
+
+The short request model is principal, operation, resource, applicable assignments, and relevant denies or conditions, followed by allow or deny. It provides a repeatable explanation for both a successful operation and a refusal.
+
+### Use the model as a design and review tool
+
+For a proposed grant, state the principal ID, required operation set, and smallest practical resource scope before selecting an assignment. For an unexpected result, reconstruct those same details from the actual request and the current configuration.
+
+This is especially valuable when several relationships overlap. A developer may have a direct assignment, a group assignment, and an inherited assignment. An application may use an identity different from the one originally intended. A role may expose configuration without exposing data. Each apparent exception follows from one of the same explicit relationships.
+
+For example, review Alice's intended read-only access by tracing every applicable assignment rather than starting with the most recently added Reader role. Record which assignment identifies Alice directly, which reaches her through a group, and which applies through the subscription. Then compare their operation sets at the VM. This separates the question of whether Reader was assigned correctly from the question of whether the complete access result is read-only. Both can have different answers without any inconsistency in Azure's evaluation.
+
+Apply the same discipline to a software caller. Its principal ID establishes who received the grant, the role fields establish whether blob data or resource configuration is covered, and the scope ID establishes which storage target is included. A missing piece should lead to a specific correction in that relationship. It should not automatically lead to a more powerful role, a larger scope, or a newly created identity. The smaller, evidence-backed explanation is also easier to review later because every permission continues to describe an understandable job.
+
+The final design rule is precise: select the correct principal, give it the smallest permission set that performs the job, and apply that set at the narrowest practical scope. Then evaluate the complete collection of applicable grants rather than assuming one new assignment defines the caller's entire access.
 
 ## Check Your Answers
 
 :::expand[Why Does Azure RBAC Exist?]{kind="recap"}
-Azure RBAC is Azure's authorization system for deciding which authenticated principal can perform which action at which Azure scope.
+RBAC turns repeated operation permissions into reusable role definitions and assigns them to established principals at scopes. Authentication and Conditional Access supply identity and sign-in conditions; they do not automatically grant the requested Azure action.
 :::
 
 :::expand[Who Can Receive an Azure Role?]{kind="recap"}
-A principal is the exact user, group, service principal, managed identity, or workload identity that receives an Azure role assignment. Microsoft Entra ID authenticates callers and stores the identity records that Azure RBAC uses for resource access decisions. Object IDs identify the exact Microsoft Entra principal that receives access, which keeps names and app IDs from pointing at the wrong caller.
+Users, groups, service principals, and managed identities can receive assignments. Group membership can contribute effective access. Confirm the tenant and object/principal ID rather than relying on a display name or confusing it with the application's client ID.
 :::
 
 :::expand[What Do Role Definitions Allow?]{kind="recap"}
-A role definition is the reusable permission bundle that lists allowed Azure management actions and, for supported services, data actions. Azure role definitions contain management-plane actions and, for supported services, data-plane actions that control access to service data.
+Definitions list management Actions and supported DataActions, with exclusions from each role's grant. Reader's resource visibility differs from blob-data reading. Grants combine, so NotActions is not a global deny and a narrower Reader assignment cannot cancel inherited Contributor.
 :::
 
 :::expand[Where Does a Role Assignment Apply?]{kind="recap"}
-Scope is the Azure boundary where a role assignment applies, and child scopes inherit assignments from parent scopes. A role assignment binds one principal to one role definition at one scope, which is the record that grants Azure access.
+Scope determines the covered resource set, with applicable grants inherited from management group through subscription and group to resource. Assignments are Azure authorization resources connecting principal, role definition, and scope IDs. Narrow both operations and reach.
 :::
 
 :::expand[How Does Azure Evaluate an Access Request?]{kind="recap"}
-Azure evaluates the token, deny assignments, applicable role assignments, action match, scope, and conditions before allowing a request.
+Identify caller, target, and operation; gather applicable direct, group, and inherited grants; and evaluate effective permissions with applicable denies and supported conditions. A directory account without a relevant grant has no corresponding Azure resource access.
 :::
 
 :::expand[How Do You Design Least-Privilege Access?]{kind="recap"}
-Least privilege starts from the job, action, principal, and target scope, then chooses the narrowest role assignment that supports the workflow.
+Specify the actual actor, required actions, and narrowest useful scope. Limit permission-granting roles. Prefer narrow built-in roles or justified combinations before custom definitions, and review custom-role wildcards and maintenance responsibilities carefully.
 :::
 
 :::expand[How Do You Diagnose an RBAC Failure With Evidence?]{kind="recap"}
-Azure RBAC evidence comes from Access control (IAM), role assignment lists, activity logs, denied action messages, and review records.
+Inspect actual principal IDs, operations, resource IDs, group membership, ancestor assignments, conditions, and denies. Check management versus data access. A denial may be correct, while unexpectedly broad access often comes from an inherited grant.
 :::
 
 :::expand[How Does the Complete RBAC Model Fit Together?]{kind="recap"}
-A secure Azure RBAC design connects Microsoft Entra identities, precise roles, narrow scopes, request-time evaluation, and reviewable evidence.
+Assignments connect directory identities, permission definitions, and resource boundaries. Evaluate all applicable relationships for the exact action. Keep directory roles, Azure roles, Conditional Access, and application business authorization separate even when they involve the same caller.
 :::
 
 ## References
 
-- [What is Azure role-based access control?](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview)
-- [Understand Azure role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments)
-- [Understand Azure role definitions](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-definitions)
-- [Understand scope for Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview)
-- [Assign Azure roles using Azure CLI](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-cli)
-- [List Azure deny assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/deny-assignments-portal)
-- [Best practices for Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices)
-- [Azure custom roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/custom-roles)
-- [Troubleshoot Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/troubleshooting)
+- [Azure RBAC overview](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview)
+- [Azure RBAC best practices](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices)
+- [Understand role definitions](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-definitions)
+- [Azure roles and directory roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/rbac-and-directory-admin-roles)
+- [Azure RBAC scopes](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview)
+- [Understand role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments)
+- [Azure deny assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/deny-assignments)
+- [Attribute-based access control conditions](https://learn.microsoft.com/en-us/azure/role-based-access-control/conditions-overview)
+- [Steps to assign an Azure role](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-steps)

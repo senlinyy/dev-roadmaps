@@ -1,0 +1,31 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/dev": { "type": "dir", "mode": 504, "owner": "dev", "group": "dev" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "dev", "uid": 1000, "primaryGroup": "dev", "gid": 1000 }
+    ],
+    "sessionGroups": ["dev"],
+    "umask": 2
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["umask", "touch", "mkdir", "stat"],
+    "requireCommandPatterns": ["^umask\\s+027$"],
+    "minCommandCount": 5,
+    "expectedFs": {
+      "/home/dev/report.txt": { "type": "file", "modeEquals": 416, "ownerEquals": "dev", "groupEquals": "dev" },
+      "/home/dev/reports": { "type": "dir", "modeEquals": 488, "ownerEquals": "dev", "groupEquals": "dev" }
+    },
+    "expectedPermissions": {
+      "umask": 23
+    }
+  }
+}

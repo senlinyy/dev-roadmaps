@@ -1,0 +1,30 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/release notes": { "type": "dir" },
+    "/home/dev/release notes/status.txt": { "type": "file", "content": "approved for production\n" },
+    "/home/dev/show-status.sh": { "type": "file", "mode": 493, "content": "#!/usr/bin/env bash\ntarget=$1\ncat $target\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": ["vim", "./show-status.sh"],
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/show-status.sh",
+        "invocation": "direct",
+        "args": ["/home/dev/release notes/status.txt"],
+        "exitCode": 0,
+        "stdoutContains": ["approved for production"]
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/show-status.sh": {
+        "type": "file",
+        "contentMatches": "cat\\s+\"\\$target\"",
+        "contentExcludes": "cat $target"
+      }
+    }
+  }
+}

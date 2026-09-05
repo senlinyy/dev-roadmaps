@@ -1,8 +1,8 @@
 ---
 title: "IP Addressing & Subnets"
-description: "Pick the smallest free CIDR from IPAM capacity data, reject a public VPC proposal, verify a four-subnet plan against allocation records, and catch an overlapping CIDR before it breaks peering."
+description: "Inspect IPv4 and IPv6 scope, predict local and routed delivery, prove longest-prefix selection, diagnose a missing gateway, and verify return-path routing."
 articleId: article-devops-foundation-networking-ip-subnets
 difficulty: medium
 order: 13
-tags: [cidr, subnet, vpc, rfc1918, grep, planning, networking]
+tags: [cidr, subnet, routing, ipv4, ipv6, troubleshooting, networking]
 ---

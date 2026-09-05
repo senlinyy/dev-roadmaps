@@ -1,7 +1,7 @@
 ---
 title: "Disks and File Shares"
-description: "Choose Managed Disks, Azure Files, Blob Storage, or temporary runtime storage by looking at the operating-system contract the workload expects."
-overview: "This article follows a legacy orders worker through Azure Managed Disks, Azure Files, temporary storage, disk performance, host caching, shared disks, file protocols, snapshots, and migration planning."
+description: "Choose Azure storage by its block or file interface, durability requirements, sharing model, performance limits, and recovery behavior."
+overview: "Start with what the application expects from storage, then compare Managed Disks, temporary storage, shared disks, and Azure Files without treating every place that stores bytes as interchangeable."
 tags: ["azure", "managed-disks", "azure-files", "vm", "file-shares"]
 order: 5
 id: article-cloud-providers-azure-storage-databases-disks-file-shares
@@ -21,17 +21,12 @@ aliases:
 7. [What Evidence Supports Snapshots and Migration?](#what-evidence-supports-snapshots-and-migration)
 8. [How Does the Complete Storage Choice Fit Together?](#how-does-the-complete-storage-choice-fit-together)
 9. [Check Your Answers](#check-your-answers)
-10. [References](#references)
 
-Azure has several storage services because applications ask for data in different ways. A receipt PDF may only need an object name and a download link. An order ledger may need relational tables and transactions. A retry token may need one NoSQL item with TTL. A legacy worker may need a path like `/var/lib/orders` or `\\legacy\templates` because the software calls normal filesystem functions.
+A database and a shared document folder both store files, but they can ask very different things of storage. A database may need a transaction log write to reach durable storage before it reports a successful payment. Ten machines using a shared folder need a file service that coordinates their access to names, directories, and locks.
 
-That last group is the world of **Managed Disks** and **Azure Files**. A **Managed Disk** is Azure-managed block storage attached to a virtual machine. The VM operating system sees it as a disk, formats it, mounts it, and reads or writes blocks. **Azure Files** is a managed file share service. It gives clients a mounted folder through file sharing protocols such as SMB or NFS.
+The useful starting question is therefore what the application expects to read and write, who must share that data, and which failures the data must survive. Managed Disks, temporary storage, shared disks, and Azure Files provide different answers to those questions.
 
-Let's keep one concrete production story through the article. The Orders team runs a newer `orders-api` that stores receipt PDFs in Blob Storage, order facts in Azure SQL Database, and idempotency records in Cosmos DB. They also still have a legacy invoice worker named `vm-devpolaris-orders-legacy-01`. That worker has a managed data disk named `disk-orders-legacy-data-01`, and during migration it still reads templates from an Azure Files share named `legacy-orders-share` in storage account `stdevpolarisordersprod`.
-
-The choice begins with the access contract: one attached block device, shared files, or temporary local storage.
-
-Keep these questions in view as you work through the lesson:
+We will build those distinctions from blocks and files, then examine performance, access, and recovery:
 
 1. **When Do Disks and File Shares Fit?**
 2. **What Storage Contract Does the Workload Need?**
@@ -43,313 +38,361 @@ Keep these questions in view as you work through the lesson:
 8. **How Does the Complete Storage Choice Fit Together?**
 
 ## When Do Disks and File Shares Fit?
-<!-- section-summary: Managed Disks and Azure Files solve operating-system storage needs, while Blob Storage and databases solve different data shapes. -->
+<!-- section-summary: Block storage gives a machine numbered storage locations, while a file service owns a filesystem and exposes file operations to clients. -->
 
-Production migrations often contain this mix of old assumptions and new platform choices. One part of the system is modern and service-oriented. Another part expects a VM disk and a shared folder. The useful habit is to name the storage contract before choosing a service.
+A computer's CPU uses RAM for fast working memory. RAM normally loses its contents when power disappears, so applications need another place for information that must survive. Persistent storage supplies that place, but the interface presented to the application can differ substantially.
+
+A traditional disk behaves like a numbered array of locations: block 0, block 1, block 2, and so on, perhaps through block 10,000,000. A **block** is a unit of storage that can be addressed and read or written. These locations do not inherently have useful names such as `customer.db` or `photo.jpg`.
+
+The operating system builds a **filesystem** over those blocks. It manages files, directories, names, permissions, timestamps, locks, and the allocation of storage to them. Paths such as `/data/customer.db`, `/logs/app.log`, and `/images/photo.jpg` belong to that filesystem view rather than to the raw numbered-block interface.
+
+This is the central distinction between block storage and file storage. A block device supplies locations that the machine organizes. A file service already owns the filesystem and accepts file-level operations from its clients.
+
+### Compare the three access models
+
+With block storage, a Linux VM might see `/dev/sdc`, format it with a filesystem, and mount it for data under `/var/lib/database`. The operating system generally controls the filesystem placed on the disk. Azure Managed Disks supply this persistent VM-oriented block-storage model.
+
+With a file share, VM A, VM B, and VM C connect through a network file protocol such as SMB or NFS. The service on the other end owns the filesystem and mediates file access. Azure Files supplies this managed network-file-share model.
+
+Object storage provides a third interface: named objects accessed through an object API. It is useful to recognize that alternative, but the focus here is the first two contracts. An application that needs a block device or a shared filesystem has requirements beyond simply finding somewhere that can retain a byte payload.
+
+```mermaid
+flowchart TD
+    app["Application storage requirements"] --> block["Block interface"]
+    app --> file["Network file interface"]
+    app --> object["Object interface"]
+    block --> disk["Managed Disk: VM owns filesystem"]
+    file --> share["Azure Files: service owns filesystem"]
+    object --> objects["Named objects through an API"]
+    class app workload
+    class block,file,object control
+    class disk,share,objects storage
+```
+
+### Ask where coordination belongs
+
+The interface determines who coordinates access. For an ordinary managed disk, the VM's operating system manages filesystem allocation and locking. For a shared block disk, cluster-aware software must coordinate participating machines. For Azure Files, the file service participates in the namespace, file operations, and locking semantics used by clients.
+
+These arrangements solve different problems. A managed disk is appropriate when a VM needs persistent block storage. A file share fits clients that need ordinary shared file access. A shared disk is a specialized choice for software designed to coordinate over the same block device.
+
+The distinction becomes especially important for databases because their visible tables ultimately rely on lower-level writes, ordering, and recovery rules. Choosing storage only because it can contain a file skips the properties that make those writes correct.
 
 ## What Storage Contract Does the Workload Need?
-<!-- section-summary: The storage contract is the way code expects to access data, and it usually decides the first Azure service to review. -->
+<!-- section-summary: Database storage must meet supported ordering, flushing, latency, concurrency, and failure guarantees, rather than merely holding enough bytes. -->
 
-A **storage contract** is the way the workload expects to read and write data. Application code may call a storage API, send SQL queries, look up one document by key, mount a shared folder, or write to a local disk path. The contract matters because a service can be excellent for one access shape and awkward for another.
+A database presents tables, indexes, and transactions, but the engine works through database pages and transaction-log records stored in files. Those files sit in a filesystem that eventually reads and writes blocks. Each layer depends on guarantees made by the next one.
 
-The new invoice path is simple. The API generates a PDF, uploads it to Blob Storage, stores the blob name in Azure SQL Database, and gives the customer a controlled download path. Blob Storage fits because the PDF is object-shaped data. The app wants durable bytes by name, metadata, lifecycle rules, and secure download access.
+For example, a customer transfers £100. The database creates a transaction-log record, writes it, asks storage to make it durable, and only then reports that the commit succeeded. The request to make the write durable is a **flush**: the database is asking the storage path to honor its durability guarantee rather than leaving the only copy in volatile working memory.
 
-The legacy worker has a different contract. It was written years ago and expects a local folder for working data plus a shared folder for templates. Rewriting the app to use Blob Storage may be the long-term goal, but today's release still needs mounted paths. That is where Managed Disks and Azure Files enter the conversation.
+If some cache reports completion while the required data exists only in volatile memory, a crash could erase a transaction the application was already told had committed. The storage configuration has then violated the assumption on which the database reports success.
 
-Here is the first review table:
+This explains why database storage choices involve write latency, write ordering, flush semantics, random I/O, durability, concurrency, and failure behavior. Capacity is necessary, but a disk large enough to contain the files can still provide the wrong performance or recovery behavior.
 
-| Workload need | First Azure service to review | Reason |
-| --- | --- | --- |
-| Customer receipt PDF | Blob Storage | The app stores and retrieves durable bytes by object name |
-| Order ledger | Azure SQL Database | The data needs tables, constraints, joins, and transactions |
-| Checkout retry token | Cosmos DB | The app reads one small item by key and expires it later |
-| VM data path at `/var/lib/orders` | Managed Disk | The operating system expects a block device attached to the VM |
-| Shared templates at `/mnt/legacy-orders` | Azure Files | More than one worker may need the same mounted folder |
-| Build cache or image conversion scratch space | Temporary runtime storage | The data can disappear after the job retries |
+### Follow a crash through the layers
 
-![Infographic showing six storage contracts mapped to Azure services: object by name to Blob Storage, tables and joins to Azure SQL, one item by key to Cosmos DB, VM disk path to Managed Disk, shared folder to Azure Files, and retryable scratch to temporary storage](/content-assets/articles/article-cloud-providers-azure-storage-databases-disks-file-shares/storage-contract-chooser.png)
+At time `t1`, a data page might contain an old value while the transaction log contains the record describing a new value. If the machine crashes at `t2`, the database may replay the durable log to recover the intended state.
 
-*Use the storage contract first: the way code asks for data usually points to the first Azure service worth reviewing.*
+That recovery depends on which writes actually reached durable storage and in which order. A low-level caching or storage choice can therefore affect database recovery, which in turn affects whether the business transaction survives. These are connected guarantees, not independent settings that can be selected solely for a benchmark improvement.
 
-This table is the bridge for the rest of the article. First we will talk about the VM data disk, because the old worker needs one durable disk attached to one VM. Then we will talk about temporary storage, because many incidents come from confusing scratch space with durable storage. After that, performance and caching show up because a disk can be attached and still be too slow or configured unsafely. Finally, Azure Files handles the shared-folder part of the migration.
+Different database files can also create different I/O patterns. Data files often receive random reads and writes. Transaction logs often receive append-oriented writes. Temporary database work can have yet another pattern and a different requirement for persistence. Each should be evaluated according to the database engine's supported configuration.
+
+### Compare an attached filesystem with a remote one
+
+An attached block-storage path passes from the database through the filesystem to the block device. A network share adds a filesystem client, SMB or NFS, a network path, and a remote filesystem service. Those additional layers can change latency, locking, caching, failure, and durability behavior.
+
+This does not mean a database can never use a file share. Some database and application architectures explicitly support that arrangement. The correct requirement is that the storage semantics and performance be supported by the particular engine for the workload involved.
+
+The same caution applies to the argument that every database consists of files, so every network filesystem should work. The meaningful questions concern operations, latency, concurrency, locks, flush guarantees, failure handling, and explicit database support. Storing the bytes is only part of that contract.
+
+### Describe the required behavior before selecting a service
+
+For each data location, ask whether the application needs arbitrary block reads and writes, normal file and directory operations, or shared access from several machines. Ask whether the data must survive a compute-host failure, how quickly a write must be durable, and which ordering and locking guarantees are required.
+
+These questions distinguish a database data disk from a reconstructable cache and from a shared reports directory. They also explain why one application can use several storage products without those products being competing substitutes. Different parts of the system ask for different interfaces and guarantees.
 
 ## How Do Managed and Temporary Disks Work?
-<!-- section-summary: Managed Disks are Azure-managed block volumes for VMs, and they fit workloads that expect an attached disk device. -->
+<!-- section-summary: Managed Disks provide block-storage resources independent of a specific compute host, while host-local temporary storage is suitable only for disposable or reconstructable data. -->
 
-A **Managed Disk** is block-level storage managed by Azure and used with Azure Virtual Machines. Think about a Linux VM with a disk mounted at `/var/lib/orders`. The operating system owns the filesystem. The application opens files, writes logs, syncs data, and expects the path to behave like a normal disk path.
+An **Azure Managed Disk** provides a VM with a block-storage interface backed by Azure-managed infrastructure. Linux might expose attached devices as `/dev/sda`, `/dev/sdb`, and `/dev/sdc`; Windows presents attached volumes through its disk and drive mechanisms, such as `C:`, `D:`, and `E:`. These are examples of operating-system views, not a universal mapping of Azure disk roles to particular letters or names.
 
-In our migration, `disk-orders-legacy-data-01` is a 128 GiB Premium managed disk attached to `vm-devpolaris-orders-legacy-01`. The old invoice worker writes local state there while the team moves generated invoice files to Blob Storage. The disk exists as an Azure resource, and the VM sees it as an attached data disk.
+The operating system can format supported disks with filesystems such as NTFS, ReFS, ext4, or XFS and then expose ordinary files to applications. The VM perceives a disk and generally remains responsible for the filesystem placed on it.
 
-The important word is **attached**. A normal data disk belongs to a VM at runtime. It is a good fit for a single VM's application state, database files for a self-managed database, vendor software that demands a local data path, or a boot/data volume. It is a poor shortcut for a shared folder across ordinary workers because several machines writing the same block filesystem need special coordination.
+The word **managed** refers to the infrastructure supplying the disk resource. Azure handles the physical storage work underneath, replacing tasks such as buying an SSD, installing it, configuring storage hardware and RAID, monitoring devices, and replacing failed hardware.
 
-Azure manages the storage service behind the disk. The team chooses disk type, size, region, redundancy option where supported, encryption settings, and attachment. Microsoft currently describes five managed disk types: **Ultra Disk**, **Premium SSD v2**, **Premium SSD**, **Standard SSD**, and **Standard HDD**. The names describe performance and cost shape rather than maturity. A small legacy worker may be fine on Premium SSD. A very busy database VM may need Premium SSD v2 or Ultra Disk review.
+You create a disk with the required properties, attach it to the VM, and use it. You still own the filesystem layout, database configuration, backups, capacity planning, and application-level recovery. Azure managing the block-storage infrastructure does not mean it automatically manages the meaning or recoverability of every file stored there.
 
-This is the kind of evidence an engineer might collect during a migration review:
+### Separate OS, data, logs, and scratch work
 
-```bash
-az disk show \
-  --name disk-orders-legacy-data-01 \
-  --resource-group rg-devpolaris-data-prod \
-  --query "{name:name,size:diskSizeGB,sku:sku.name,attachedTo:managedBy,encryption:encryption.type}" \
-  --output table
-```
+A database VM can use an OS disk for Windows or Linux and database software, data disks for database files, log disks for transaction logs, and temporary storage for disposable processing. This separates different roles instead of treating every byte written by the VM as equivalent.
 
-That output answers practical questions. Which disk exists? How large is it? Which SKU pays for its performance envelope? Which VM owns it right now? What encryption setting protects it? These are boring questions in the best way. They turn "there is a disk somewhere" into a resource the team can operate.
+Data-file random I/O and log-file append I/O can stress storage differently. Keeping their roles explicit makes performance and recovery discussions easier, although the exact layout must still follow the database's supported design rather than an assumption that more disks always improve it.
 
-The review output should be boring and specific:
+The same application architecture can include a shared file location used by its application servers. That share has a multi-client filesystem role, while the database VM's managed disks provide persistent block devices. The products complement each other because the responsibilities differ.
 
-| Name | Size | SKU | Attached to | Encryption |
-| --- | --- | --- | --- | --- |
-| `disk-orders-legacy-data-01` | `128` | `Premium_LRS` | VM resource ID for `vm-devpolaris-orders-legacy-01` | Platform-managed or approved customer-managed setting |
+### Treat host-local storage as disposable
 
-### Temporary Runtime Storage
-<!-- section-summary: Temporary runtime storage is scratch space for retryable work, so durable application data needs another home. -->
+A disk-like device is not automatically durable across changes to the compute host. Azure VMs may expose temporary or local runtime storage associated with the host. If the VM moves or the underlying host changes, that data can disappear.
 
-**Temporary storage** is local scratch space that can disappear when a VM, container, app instance, or host changes. On Azure VMs, some sizes include local temporary disks, sometimes called resource disks. Microsoft documents these temporary disks as separate from Managed Disks and outside the persistent storage path. On app platforms and containers, local paths such as `/tmp` or an instance filesystem usually have the same warning sign: useful for scratch work, risky for durable customer data.
+Managed persistent storage is logically independent of the specific compute host. A VM on Host A can move to Host B while its durable disk remains a separate storage resource. Host-local scratch storage has a different promise because it is tied to the current runtime location.
 
+A useful test is whether the data can be rebuilt after loss. Temporary files, caches, scratch processing, download staging, reconstructable intermediate results, and suitable temporary database workloads can fit disposable storage. The only copy of a customer database, a financial transaction log, or master business records does not fit that requirement.
 
-Imagine the invoice worker writes generated files to `/tmp/invoices`. It works during a quiet test. Then the worker restarts, another replica serves the next request, or the host gets replaced. Support looks for the invoice and finds an empty folder. Increasing memory or disk size only makes the temporary folder larger. It still has the wrong durability contract.
+If VM relocation must not lose the data, host-local temporary storage should not be its authoritative copy. **Authoritative** means the copy treated as the source of truth, rather than a cache that can be reconstructed from a durable source.
 
-Scratch space has good uses. Image conversion can write intermediate frames to local temporary storage because the job can retry from the original upload in Blob Storage. A build can unpack dependencies there because the pipeline can run again. A database may use a temp path for temporary query work when the engine supports that design. The key question is the consequence of loss.
+### Understand why temporary storage exists
 
-For generated invoices, the durable path should usually be Blob Storage plus metadata in the database. The worker can create the PDF, upload it to Blob Storage, write the blob name to Azure SQL Database, and then delete any local temporary copy. That pattern survives restarts because the durable copy lives outside the runtime instance.
+Durability requires work. A persistent write can involve replication, persistence, consistency handling, and protection against failures. A temporary local device may provide a shorter path from the VM to nearby storage because it does not offer the same survival guarantees.
 
-Here is the review table I like for temporary storage:
+That can make disposable storage useful for performance or cost reasons. The trade-off is between a short local path with acceptable loss and a persistent service with the required protection. It is a deliberate choice of guarantee, not a reason to assume temporary storage is inherently unusable.
 
-| Data written locally | Loss consequence | Better durable home |
-| --- | --- | --- |
-| PDF invoice before upload finishes | Job retries from order data | Blob Storage after generation succeeds |
-| Customer's only invoice copy | Customer or support loses data | Blob Storage with database metadata |
-| Image conversion scratch file | Worker repeats conversion | Temporary runtime storage |
-| Legacy app configuration | VM fails to start correctly | Managed Disk, image configuration, or deployment-managed config |
-| Shared report template | Several workers need same file | Azure Files during migration, then Blob Storage or packaged config if possible |
-
-Temporary storage is useful because it is close to the runtime and fast for scratch work. Durable storage is useful because it survives beyond one runtime instance. Mixing those two ideas is how teams end up with files that vanish right after the demo.
+A design should make the consequence of loss explicit. If a cache disappears, the system may rebuild it. If the authoritative transaction log disappears, there may be no valid reconstruction path. The acceptable behavior after failure determines which role belongs on which storage.
 
 ## How Do Performance, Caching, and Shared Disks Change Behavior?
-<!-- section-summary: Disk performance comes from both the disk and the VM size, so a faster disk alone may leave the workload capped. -->
+<!-- section-summary: Measure operations, bytes, latency, and queueing across disk and VM limits; caches affect the write contract, and shared disks need cluster-aware coordination. -->
 
-**Disk performance** means the amount of read and write work the storage path can complete. The common measurements are **IOPS**, which means input/output operations per second, **throughput**, which means bytes per second, and **latency**, which means how long each operation waits before it completes.
+Storage speed has several dimensions. **IOPS** measures input/output operations per second. **Throughput** measures bytes transferred per second. **Latency** measures the time one operation takes to complete. These measures answer different workload questions and should not be collapsed into one “fast disk” label.
 
-The disk has its own limits, and the VM size has its own limits. That combination matters. If `disk-orders-legacy-data-01` can provide more IOPS than `vm-devpolaris-orders-legacy-01` can submit, the VM remains the cap. If the VM is large but the disk tier is small, the disk remains the cap. Performance troubleshooting needs both sides of the attachment.
+For a database using 8 KB pages, 10,000 reads per second is roughly 10,000 IOPS. Many small random accesses, such as index-page lookups followed by reading a row, can make the operations-per-second limit important.
 
-The legacy worker gives us a normal production story. Month-end invoice generation starts taking 45 minutes instead of 12. The team sees high disk latency. A quick fix might be "buy a bigger disk," but the useful review asks more precise questions:
+A large sequential scan can instead depend heavily on MB/s or GB/s. Throughput is approximately IOPS multiplied by I/O size:
 
-| Question | What it tells the team |
-| --- | --- |
-| Which disk type and size are attached? | The configured disk performance envelope |
-| Which VM size runs the workload? | The VM-level IOPS and throughput ceiling |
-| What is the read/write mix? | Whether the job is random I/O, sequential export, or metadata-heavy |
-| Is queue depth rising? | Whether I/O requests wait faster than storage completes them |
-| Did the workload change? | Whether the same disk now handles more files, larger files, or new reports |
+$$
+\text{throughput} \approx \text{IOPS} \times \text{I/O size}
+$$
 
-Premium SSD v2 and Ultra Disk let teams configure capacity, IOPS, and throughput more independently than older size-tied disk choices. That flexibility helps I/O-heavy workloads, but it also adds a design responsibility. The team should size the disk from measurements instead of guesswork. Azure Monitor metrics, application logs, and job timing give better evidence than a generic "premium" label.
+Using approximate decimal units, `10,000 IOPS × 8 KB` is about `80 MB/s`, while `1,000 IOPS × 1 MB` is about `1,000 MB/s`. The second workload performs fewer operations but moves far more data. Comparing IOPS without I/O size would miss that difference.
 
-The file share side has its own performance story too. Azure Files performance depends on share type, provisioned size or provisioned performance model, protocol, client behavior, network path, caching, and workload shape. A share that works for a few templates may become a bottleneck if someone turns it into a hot report output folder for hundreds of workers.
+### Measure latency and queueing together
 
-### Host Caching
-<!-- section-summary: Host caching can improve selected disk reads, but write-sensitive data needs settings that match durability expectations. -->
+A transaction that updates an account, writes its log record, flushes the log, and commits may wait on storage latency before responding to the user. High aggregate throughput does not necessarily make that individual flush quick.
 
-**Host caching** is a caching setting on Azure VM disks. It places a cache on the VM host in front of the storage path for certain read or write patterns. Caching can reduce latency for repeated reads, but the setting has to match the data type and the application's write-safety needs.
+A road can carry many cars per hour while one journey still takes a long time. Similarly, storage can transfer many bytes per second while one database operation waits too long for completion. Throughput and latency therefore need separate measurements.
 
-For the old worker, a read-heavy catalog of reference files may benefit from ReadOnly caching. The same few files get read again and again, and the app can tolerate the normal managed disk write path for updates. That is a very different file type from a transaction log or database write-ahead log, where the application needs a strict durability path before it treats a write as committed.
+**Queue depth** describes outstanding work submitted to storage. Instead of submitting one request and waiting before submitting the next, the operating system can have requests 1 through 5 in progress together. This concurrency can use the storage system more fully.
 
-The usual choices look like this:
+However, increasing IOPS accompanied by rapidly rising latency and queueing can indicate saturation. Monitor operations, bytes, latency, queue size, and throttling together. A large operation count alone does not show that the application receives acceptable response times.
 
-| Cache setting | Plain meaning | Common fit |
-| --- | --- | --- |
-| None | Reads and writes go through without host cache | Transaction logs and write-sensitive data |
-| ReadOnly | Repeated reads may come from cache while writes stay on the storage path | Reference files, static app data, read-heavy datasets |
-| ReadWrite | Reads and writes can use host cache | Scratch workloads or carefully reviewed app patterns |
+### Check the whole path's limits
 
-The risk comes from guessing. A vendor may say "put our data on a disk" and leave out whether that data is a cache, a queue, a database file, or a log. The storage review needs to ask what the file means to the application. If losing or reordering a write corrupts the app state, the cache setting deserves a careful review.
+A fast disk can still be constrained by the VM's I/O capability or another part of the path. If the disk can provide 40,000 IOPS but the VM can process only 20,000 IOPS, the effective result is approximately at most 20,000 IOPS before considering other limits.
 
-Host caching also connects back to temporary storage. Some data is scratch data and can use local paths or aggressive caching. Some data is business data and needs durable writes, backups, and restore tests. The file path alone hides that difference, so the workload owner has to name what the file means.
+$$
+\text{usable performance} \lesssim \min(\text{disk capability},\ \text{VM capability},\ \text{other path limits})
+$$
 
-### Shared Disks
-<!-- section-summary: Shared disks are for cluster-aware applications, while normal shared folders usually belong on Azure Files. -->
+The formula is a conceptual upper-bound model. It explains why independently choosing a disk and VM from their advertised maxima does not establish the workload's achieved performance. Both resources participate in the same I/O path.
 
-A **shared disk** is a managed disk configured so more than one VM can attach to it. That sounds like the answer to every shared-folder request, but the important word is **cluster-aware**. Shared disks are designed for applications that understand shared block storage, such as failover clusters and clustered databases.
+Capacity alone is especially misleading. Two databases can each contain 2 TB while one requires about 500 IOPS and occasional analytical scans, and the other requires 30,000 IOPS for thousands of transactional users. They have the same stored size and very different workload demands.
 
+Record capacity, IOPS, I/O sizes such as 4 KB, 8 KB, 64 KB, or 1 MB, throughput, latency, read/write ratio, random versus sequential access, and burstiness. A workload that is 90% reads differs from a 50/50 mix, and a steady load differs from a sharp burst even if their average is similar.
 
-Block storage gives several machines access to raw blocks. Cluster software supplies the coordination for normal file writes, failover, ownership, and consistency. If two ordinary VMs mount and write the same filesystem at the same time without that cluster layer, they can damage the filesystem or application data.
+### Use caches with a clear understanding of writes
 
-The migration team might ask, "Can we attach `disk-orders-legacy-data-01` to every worker so they all see the same folder?" That request is a good moment to pause. If the workers only need shared templates or shared exports, Azure Files is usually the better first service to review. It provides a managed file share with file protocol semantics, access controls, snapshots, and a folder path the clients can mount.
+A **host cache** keeps data near the VM so repeated reads can avoid the full trip to managed storage. The first read may miss the cache, fetch data from the disk, and retain a nearby copy. A later cache hit can return that copy with less remote I/O and lower latency.
 
-Shared disks still matter. A Windows Server Failover Cluster, a clustered database, or another application with documented support for shared block devices may need them. In those cases, the design includes disk type support, `maxShares`, cluster software, fencing behavior, backup behavior, and a tested failover runbook. That is a specialized design rather than a general replacement for Azure Files.
+The benefit depends on reuse. A one-time sequential scan of 5 TB may gain little from a small cache. A repeatedly accessed 20 GB working set can benefit much more if useful data stays available in that cache. Cache effectiveness is a property of the workload and path, not an automatic improvement for every read pattern.
 
-Now the article can move naturally from "one VM has a disk" and "clustered block storage is special" to "several clients need a mounted folder." That mounted-folder shape is Azure Files.
+Writes require more care. If a database issues `WRITE X` followed by `FLUSH`, it expects the storage path's promised durability. A cache that reports completion before satisfying that guarantee could lose X on failure after the database believed it was safe.
+
+This is why data files, transaction logs, and temporary files may need different supported caching choices. The correct mode depends on the engine and storage architecture. A setting that improves one benchmark should not be adopted without checking the write-ordering and flush assumptions it must preserve.
+
+Database engines already have caches of their own. A read can encounter a database buffer cache in RAM, an operating-system cache, a host cache, and finally the managed disk. When discussing caching, identify which layer, which data, and which consistency or durability guarantee is involved.
+
+### Coordinate every writer to a shared disk
+
+An ordinary managed disk is commonly used by one VM, whose operating system controls its filesystem. Sharing the same writable block device with two independent filesystems creates a different problem. VM A and VM B could both believe block `1000` is free, then each allocate it to a different file. Their writes conflict and filesystem data can be corrupted.
+
+A **shared disk** permits several cluster nodes to attach to the same block-storage device. It does not provide automatic safe multi-client file sharing. Coordination has to come from cluster-aware software, a cluster filesystem, database clustering technology, or distributed locking and fencing above the disk.
+
+**Fencing** prevents a failed or isolated node from continuing to write stale data when it no longer owns the resource. The cluster needs to decide who owns the storage, who may write, what happens after a node fails, and how an excluded node is stopped from interfering.
+
+Shared disks are useful when the application architecture explicitly expects shared block storage and provides this coordination. If several ordinary machines merely need the same files, a file service is often the more appropriate interface because it owns the filesystem layer they otherwise would have to coordinate themselves.
 
 ## What Does Azure Files Provide?
-<!-- section-summary: Azure Files provides managed SMB or NFS file shares for workloads that need a shared mounted directory. -->
+<!-- section-summary: Azure Files supplies a managed remote filesystem for multiple clients, rather than making each client manage the same raw block device. -->
 
-**Azure Files** is Azure's managed file share service. A file share gives clients a folder-like path through standard protocols. Windows workloads often use **SMB**, which means Server Message Block. Linux and Unix-style workloads may use **NFS**, which means Network File System. Microsoft documents Azure Files support for both SMB and NFS, with protocol choice depending on the workload and share type.
+Suppose ten machines need access to `\\company\reports` or `/mnt/shared`. They usually need operations such as opening a file, reading 64 KB, writing bytes, renaming a file, deleting a directory, or acquiring a lock. They are not asking to read block `918273` or overwrite block `284611` directly.
 
+**Azure Files** provides managed network file shares. Azure operates the file-service infrastructure, and clients mount or connect to the share. The service manages the remote filesystem through which clients access names such as `report.xlsx`, `data.csv`, and an `images` directory.
 
-The legacy orders migration uses a share named `legacy-orders-share` in storage account `stdevpolarisordersprod`. The share has a quota, an enabled protocol, a performance tier, and snapshots. Those details matter because a shared folder is more than a string in an app config file. It is a storage resource with capacity, access, performance, and recovery behavior.
+This model fits shared application files, user home directories, shared configuration and content, document repositories, and lift-and-shift applications that expect a file server. A **lift-and-shift** migration moves an existing application with limited redesign, so preserving a familiar file-share interface may be important. Some supported application or database architectures also use network shares, subject to their specific storage requirements.
 
-Here is the kind of evidence an engineer may collect:
+### Compare ownership and access directly
 
-```bash
-az storage share-rm show \
-  --name legacy-orders-share \
-  --storage-account stdevpolarisordersprod \
-  --resource-group rg-devpolaris-storage-prod \
-  --query "{name:name,quota:shareQuota,protocol:enabledProtocols,tier:accessTier,snapshotCount:length(snapshots)}" \
-  --output table
-```
+| Question | Managed Disk | Azure Files |
+| --- | --- | --- |
+| Exposed interface | Block device | Remote filesystem |
+| Typical consumer | Attached VM | Multiple network clients |
+| Filesystem owner | Usually the VM operating system | Azure file service |
+| Access operations | Disk I/O under the local filesystem | Network file operations |
+| Protocol or interface | Block-storage interface | SMB or NFS |
+| Ordinary multi-client sharing | Requires a specialized shared-disk architecture | Supplied through the file-service model |
+| Useful comparison | Virtual hard drive | Managed file server |
 
-A useful result names the share and its operating contract:
+A managed disk lets the VM build and use a filesystem over its blocks. Azure Files lets the VM access a filesystem already owned by the remote service. Both can ultimately store files, but the location of filesystem ownership and coordination differs.
 
-| Name | Quota | Protocol | Tier | Snapshot count |
-| --- | --- | --- | --- | --- |
-| `legacy-orders-share` | `128` | `SMB` | `TransactionOptimized` | At least one recent snapshot before a risky migration |
+### Keep shared files and shared blocks separate
 
-Azure Files is a good migration tool when old software needs a shared folder while the team moves to a cleaner object-storage design. The worker can keep reading templates from `/mnt/legacy-orders` during the two-month migration, while new generated invoices already go to Blob Storage. That lets the team reduce risk without pretending the legacy app became cloud-native overnight.
+Consider twenty web servers that need `/shared/images`. Attaching the same raw writable disk to all twenty would make them responsible for agreeing on filesystem metadata, locks, and write ownership. Without appropriate cluster coordination, that is unsafe.
 
-![Infographic showing a legacy VM with an attached managed disk, an Azure Files share for shared templates, Blob Storage for new durable PDF invoices, and a reminder that temporary storage is retryable scratch only](/content-assets/articles/article-cloud-providers-azure-storage-databases-disks-file-shares/legacy-storage-migration-map.png)
+Using a file service gives those clients SMB or NFS access to an existing shared namespace. The service participates in coordinating file operations rather than presenting the same raw block device to unrelated operating systems.
 
-*A migration can keep the old disk and shared folder alive while the durable file path moves toward Blob Storage.*
+Conversely, an application cluster that expects the same block device on several nodes may require a shared-disk architecture. Replacing that interface with an ordinary share merely because both can store bytes can change the application's supported semantics. The sharing requirement must specify the layer: shared files or shared blocks.
 
-Azure Files can also be a long-term fit. Team shares, lift-and-shift app folders, shared configuration, and some application data paths can all belong there. The decision depends on protocol support, performance needs, identity model, network path, backup requirements, and how many clients use the share at once.
+### Expect additional network boundaries
 
-The warning sign is using Azure Files as a quiet dumping ground. If the application can ask Blob Storage for `receipts/2026/06/order-74291.pdf`, Blob Storage usually gives a cleaner service contract. If the application needs a mounted folder because the software literally calls filesystem APIs, Azure Files earns its place.
+A network filesystem introduces more steps than an attached block path: the application calls the operating system, the file-protocol client sends the operation through the network stack, and the request crosses the network to the file service and its storage.
+
+Those steps are useful because they provide shared access, but they add places where latency, limits, caching, failures, and permissions can affect the result. More layers do not inherently make the service unsuitable. They explain which behavior must be measured and configured for the workload using it.
+
+The existence of the share therefore does not prove that a client can mount it. Mounting means making the remote filesystem available through a local path or drive. That operation still needs a compatible protocol, a working network path, and the required access permissions.
 
 ## How Do Protocols, Identity, and Network Paths Protect File Access?
-<!-- section-summary: A file share design includes the protocol, who can mount it, and which network path clients use. -->
+<!-- section-summary: Remote file access needs a supported protocol, correct DNS and routing, permitted traffic, accepted identity, share access, and file-level permissions. -->
 
-A **file protocol** defines how clients talk to a file share. SMB carries Windows-style file sharing behavior, permissions, locking, and integration with Active Directory style identities. NFS is common for Linux and Unix-style systems and has its own permission and mount behavior. Azure Files supports both protocol families, but one individual Azure file share is created for the protocol shape it uses.
+A network filesystem requires the client and service to agree on a protocol. **SMB**, Server Message Block, has a strong historical association with Windows environments. **NFS**, Network File System, has a strong historical association with Unix and Linux. Both have evolved, and the actual choice depends on supported workload and platform requirements rather than that historical shorthand alone.
 
-Protocol choice should follow the clients. A Windows service using NTFS-style access controls and domain identities usually points toward SMB. A Linux workload with NFS tooling and private network access may point toward NFS. A mixed estate may need separate shares or a migration plan that names which clients use which protocol.
+A protocol defines what an operation means and how the client and server exchange it. Conceptually, a client could open `/shared/orders.csv`, receive handle `42`, and then ask to read from offset `0` with length `65536`. The handle identifies the opened file in that exchange, and the service returns the requested bytes.
 
-Identity is the next layer. **Identity** means who or what is allowed to mount the share and read or write files. The fastest test mount often uses a **storage account key**, which is a secret key for the storage account. That key is powerful because it can grant broad access across the account, so it should be treated like a high-value secret rather than pasted into every script.
+```text
+Client: OPEN /shared/orders.csv
+Server: OK, handle=42
+Client: READ handle=42 offset=0 length=65536
+Server: file data
+```
 
-Production file shares usually need a narrower identity plan. **Data-plane permissions** are permissions for the data itself: listing directories, reading files, writing files, or deleting files. They are different from control-plane permissions such as creating the storage account or changing its network settings. For example, the legacy invoice worker may need permission to read templates from `legacy-orders-share`, while the migration engineer may need a separate role to create snapshots or change the share quota.
+This is an illustrative operation exchange rather than a command to execute. It shows why the remote filesystem involves protocol semantics and a network path for file access instead of only a local disk read.
 
-SMB shares can integrate with directory-style identity. **Active Directory Domain Services** is the traditional Windows directory many companies use for users, groups, and file permissions. **Microsoft Entra Kerberos** is an Azure identity option that can help SMB clients use Entra-based authentication in supported scenarios. The beginner point is simple: the mount should use an identity model the clients understand, and the permission should match the job. A template reader, a template publisher, and a storage administrator need separate access instead of one shared broad secret.
+### Check reachability before identity
 
-Network path matters too. A **private endpoint** gives the storage account a private IP address inside a virtual network, so approved clients can reach the share over a private path. **DNS** is the naming system that turns a storage account name into an IP address. If DNS still sends the client to the public endpoint, the private endpoint design will feel broken even when the private endpoint exists. **Routing** is the network path packets follow from the VM or client to that private address. For `vm-devpolaris-orders-legacy-01`, the release review should confirm the VM resolves the storage account name correctly and reaches it through the intended private network path.
+The client needs DNS resolution, a route, firewall and network-policy permission, and working protocol connectivity. It also needs an accepted identity and sufficient authorization. These dependencies are related but independent.
 
-The storage account boundary owns important settings such as public access posture, private endpoints, firewall rules, encryption, and share configuration. A file share design therefore needs both sides: the application mount path and the Azure resource boundary that controls access to that path.
+A VM with perfect credentials but no route to the service cannot reach the point at which those credentials are evaluated. A VM with a working route can reach the service and still be rejected because its identity or permissions are wrong.
 
-Here is a practical release record for `legacy-orders-share`:
+A useful diagnostic order is: resolve the service name, inspect the route, check network policy, test the protocol connection, authenticate the caller, check share-level authorization, and then check file or directory permissions. Share access and permissions on an individual path are separate things to inspect when only some operations fail.
 
-| Detail | Example value | Why the reviewer cares |
-| --- | --- | --- |
-| Storage account | `stdevpolarisordersprod` | Names the account boundary and network settings |
-| Share name | `legacy-orders-share` | Names the exact mounted folder resource |
-| Protocol | `SMB` | Tells the team which clients and auth patterns apply |
-| Quota | `128` GiB | Sets an early capacity guardrail |
-| Access tier | `TransactionOptimized` | Gives the cost and workload shape |
-| Consumers | `vm-devpolaris-orders-legacy-01` and migration workers | Shows who still depends on the share |
-| Exit plan | Stop writes after invoice Blob path rollout | Prevents the temporary migration path from becoming permanent |
+The broader path also involves encryption, protocol versions, and network latency. These factors explain why a problem described as “storage does not work” might arise at the name-resolution layer, a protocol compatibility boundary, or a file-permission check rather than in the storage capacity underneath.
 
-This table connects operations to application behavior. A share without consumers, permissions, network path, and exit plan is just another place for unowned files to collect.
+### Understand public and private access paths
+
+A storage service can be reached through different network arrangements. A private-endpoint-style design represents the service through an address associated with the private network, allowing a VM in the VNet to reach that interface and then the managed service behind it.
+
+This can be desirable when access should not depend on a publicly exposed service path. It also makes correct DNS, subnet configuration, routes, and network policies essential. The client must resolve the intended destination and have a permitted path to it.
+
+A private address does not replace authentication or file authorization. The route determines whether the client can contact the service; the identity and permission layers determine what it can do after reaching it. Confirm each part of the path rather than treating “private” as proof of every security property.
+
+This layered model is also useful during migration. Copying files to a share may succeed from one administrative machine while the application runtime lacks the correct DNS view, route, credentials, or file permissions. Validation must run from the intended consumer and exercise the operations it actually needs.
 
 ## What Evidence Supports Snapshots and Migration?
-<!-- section-summary: Snapshots and backup evidence make a legacy disk or share safer to carry through one more release. -->
+<!-- section-summary: Snapshots preserve point-in-time storage state, while recovery and migration require separate filesystem, database, application, and performance validation. -->
 
-A **snapshot** is a point-in-time copy of a storage resource. Managed disks support snapshots. Azure Files supports share snapshots for SMB and NFS file shares. Snapshots help when an app deployment, script, or operator mistake damages files and the team needs an earlier copy.
+A **snapshot** captures storage at a particular time while the live disk continues to change. Imagine three blocks, A, B, and C. At T1 they contain A, B, and C. At T2, B changes to B-prime. At T3, C changes to C-prime. At T4, B changes again to B-double-prime.
 
-For `legacy-orders-share`, a snapshot before the migration release gives the team a recovery point for templates and shared files. If the new worker overwrites `invoice-template-v3.docx`, the team can inspect the snapshot and restore the older file. Microsoft documents Azure Files share snapshots as read-only point-in-time copies, and Azure Backup can schedule and retain snapshots for Azure file shares.
+A snapshot at T3 preserves the state A, B-prime, C-prime even while the current disk later contains A, B-double-prime, C-prime. This point-in-time state can support recovery, cloning, migration, testing, and forensic or reference copies.
 
-Azure Files also has **file share soft delete**, which protects against deleting the whole share. That setting is useful if someone removes `legacy-orders-share` during cleanup and the team needs to undelete the share during the retention window. It should not replace snapshots or Azure Backup for file-level recovery, because the share-level soft delete story is different from restoring one overwritten template file.
+The snapshot establishes what storage contained at that moment. It does not automatically establish a clean application-level state, because the application may have been partway through a coordinated update when the snapshot was taken.
 
-For `disk-orders-legacy-data-01`, a disk snapshot before a risky VM change can help create a recovery disk. The team still has to respect application consistency. A disk snapshot of a running app may capture a crash-consistent state. Some workloads need the app to flush writes, stop briefly, or use an application-aware backup path before the snapshot is a useful recovery point.
+### Distinguish storage capture from application consistency
 
-That distinction exposes the deeper failure contract. A storage snapshot can preserve the blocks that existed at one instant, but it does not automatically understand the application operations represented by those blocks. A database may have dirty cache pages, log records, and data files that must agree. A file-processing service may have one renamed output file and a separate job record that has not committed yet. Recovery succeeds only when the workload can interpret the captured state and return to a valid operation.
+At snapshot time, database memory might contain an updated page X, the disk might still contain the old page, and the transaction log might represent an intermediate stage of the operation. The snapshot can accurately capture the disk while the application's logical operation is incomplete.
 
-Before taking a risky snapshot, ask where coordination lives. The operating system can flush filesystem buffers. A database can perform its own backup or quiesce writes. Cluster software can coordinate shared-disk ownership. Azure Backup can use application-aware mechanisms for supported workloads. The correct path depends on whether the required promise is crash consistency, filesystem consistency, or application consistency.
+A **crash-consistent** snapshot resembles the state of storage after a sudden power loss. An **application-consistent** backup coordinates with the application to produce an internally consistent recovery point. Database engines can recover from certain crash-consistent states, but the supported recovery requirements depend on the engine and architecture.
 
-This is also why "the files copied" is weak migration evidence. Stronger evidence proves that file counts and hashes match where useful, permissions and ownership survived, the target application opens the data, concurrent writers behave correctly, performance stays inside limits, and a rollback copy remains available. Storage migration is complete when the workload works from the recovered or moved state, not when a progress bar reaches 100 percent.
+This distinction is why a snapshot should not be described as proof that every database can immediately start with every expected transaction intact. It supplies storage-state evidence. Application recovery and consistency checks supply the next layer of proof.
 
-The migration evidence should name both sides:
+### Prepare evidence before migrating
 
-| Resource | Evidence to collect | Reason |
-| --- | --- | --- |
-| Managed disk | Disk name, size, SKU, attachment target, encryption, latest snapshot or backup status | Shows the VM data path has an owner and recovery signal |
-| Azure Files share | Share name, storage account, quota, protocol, tier, snapshot or backup evidence | Shows the shared folder can survive one more release |
-| Blob Storage destination | Container, prefix, lifecycle, access path, metadata owner | Shows the future durable file path is ready |
-| Application release | Which workers still write to the share and when they stop | Prevents old and new paths from fighting |
+Before a database-server migration, identify the source storage, measure capacity and performance, ensure an appropriate backup or snapshot exists, and test the recovery procedure. This establishes both the baseline the target must reproduce and the fallback needed if migration fails.
 
-This is where the next article starts to come into view. Disks and file shares answer the operating-system storage contract. Backups and retention answer how old copies survive and how the team restores them. Both questions belong in the same production review, but they are separate concepts.
+After creating the target, check that files are present, the filesystem is healthy, the database starts and validates, important row or data checks pass, and performance is acceptable. A successful migration preserves the application's required behavior, not just the apparent amount of stored data.
+
+For example, a 2 TB source database and 2 TB of target files do not prove equivalence. The target could have missing transactions, corrupted blocks, inconsistent application state, wrong permissions or ownership, unsupported filesystem behavior, or degraded performance.
+
+A layered validation makes those gaps visible:
+
+| Layer | Useful evidence |
+| --- | --- |
+| Storage | Capacity, checksums, and available recovery copies |
+| Filesystem | Successful mount, ownership and permissions, integrity |
+| Database | Recovery completes and consistency checks pass |
+| Application | Required queries, transactions, and functional tests work |
+| Performance | Acceptable latency, IOPS, and throughput under the intended workload |
+
+Checksums compare the copied bytes; they do not establish that the copied state was logically valid before the copy. Likewise, database consistency does not alone establish that the application runtime has the correct permissions or acceptable latency. Each observation supports the particular layer being tested.
+
+The highest abstraction that matters to the business determines the final acceptance check. If the system needs a successful transaction, merely mounting the filesystem is insufficient. If the application depends on specific shared-file locking behavior, a completed copy does not show that concurrent clients work correctly.
+
+### Keep historical recovery separate from redundancy
+
+Durable and replicated storage can faithfully preserve a mistaken deletion. If document versions 1, 2, and 3 are followed by an accidentally destroyed version 4, replication can spread that unwanted state. A historical recovery copy preserves a usable earlier state such as version 3.
+
+Redundancy therefore protects against supported infrastructure failures, while snapshots and backups can preserve history needed after unwanted state changes. These protections complement one another. One should not be claimed to provide the other's recovery behavior merely because both involve copies of data.
 
 ## How Does the Complete Storage Choice Fit Together?
-<!-- section-summary: The right Azure storage choice follows the workload's access path, durability need, sharing need, and recovery signal. -->
+<!-- section-summary: Choose the interface and coordination model first, size the full performance path, then verify persistence, availability, durability, and recoverability against specific failures. -->
 
-The Orders migration now has a clean story. The main application stores durable receipt PDFs in Blob Storage and business facts in Azure SQL Database. Cosmos DB keeps short-lived key-based operational records. The legacy VM still uses `disk-orders-legacy-data-01` because that worker expects a local data disk. The migration keeps `legacy-orders-share` because several workers still need a mounted template folder for a short period.
+Consider users reaching application servers that rely on a database VM. The VM can have an OS Managed Disk containing its operating system and database software, data Managed Disks holding database files, log Managed Disks holding transaction logs, and temporary storage for reconstructable work.
 
-Managed Disks fit the VM-bound block storage path. Temporary runtime storage fits scratch work that can be recreated. Disk performance review checks both the disk and the VM size. Host caching follows the file type and write-safety need. Shared disks belong to cluster-aware designs. Azure Files fits shared mounted folders through SMB or NFS. Snapshots and backup evidence make the remaining legacy path safer while the team moves files toward better long-term homes.
+Separately, application servers A, B, and C can share common files through Azure Files. That gives the application a shared network filesystem without asking the database VM's block device to serve as an uncoordinated multi-client share.
 
-The useful beginner habit is to ask four plain questions before choosing a service:
+A cluster has another possible branch: nodes A, B, and C can attach to a shared Managed Disk if the application and cluster software provide the required ownership, locking, and fencing. This branch should only be selected when those coordination requirements are satisfied.
 
-| Question | What it decides |
-| --- | --- |
-| How does the code access the data? | Object API, SQL query, document lookup, disk path, or mounted share |
-| What happens if the runtime disappears? | Temporary scratch path or durable external storage |
-| How many machines need the same data at once? | One attached disk, a shared file service, or a different app design |
-| What recovery evidence exists? | Snapshot, backup policy, Blob protection, database restore, or migration rollback |
+### Choose the interface before the product size
 
-When those answers are clear, the team can choose the service by contract instead of guessing. A disk is for a VM disk contract. A file share is for a shared folder contract. Blob Storage is for object-shaped bytes. Databases are for records and queries. Temporary storage is for work the system can safely redo.
+Start by asking whether several machines need ordinary file-level access. If so, consider a file share such as Azure Files. If a VM instead needs persistent block storage, Managed Disk supplies that interface. If the data is disposable and can be recreated after host loss, temporary storage may fit.
 
-Four words are worth keeping separate: **persistent** means data survives the normal lifetime of a runtime; **durable** describes the infrastructure failure promise; **shared** means more than one client can reach the data; and **consistent** describes whether readers and writers observe a valid state. One storage option can provide some of these properties without automatically providing all four.
+Then ask separately whether multiple cluster nodes need the same block device. If they do, verify that the application is cluster-aware. Without that support, exposing shared blocks does not provide safe sharing and the design needs to be reconsidered.
 
-Performance follows from the same architecture. A managed disk takes a block path through one VM and is bounded by both disk and VM limits. Azure Files adds a network file-service hop and file-protocol behavior so several clients can share names and directories. Neither path is universally faster; the workload's I/O size, concurrency, caching, latency target, and coordination model decide which limit matters.
+After the interface is selected, characterize performance. The capacity requirement is only one dimension. Include operation rate, I/O size, throughput, latency, read/write mix, access pattern, bursts, and the combined disk and VM limits. Measure cache behavior under realistic reuse patterns instead of assuming any cache improves every workload.
 
-![Infographic summary board with four review questions for Azure storage decisions: how code accesses data, what survives a restart, how many machines share it, and what recovery evidence exists, surrounded by Managed Disk, Azure Files, Blob Storage, Database, and Temporary storage outcomes](/content-assets/articles/article-cloud-providers-azure-storage-databases-disks-file-shares/storage-review-board.png)
+### Define which failures the design survives
 
-*The final review is simple: choose by contract, then verify the recovery evidence before the migration depends on it.*
+For each storage location, ask what happens when the VM reboots, the host fails, the VM is redeployed, a storage path becomes unavailable, a region or site fails, data is deleted, or corruption occurs. These events test different guarantees.
 
-### What's Next
+**Persistence** asks whether data survives the lifetime or placement of the compute instance. **Availability** asks whether it remains accessible when components fail. **Durability** concerns the likelihood that already-acknowledged data is permanently lost. **Recoverability** asks whether an earlier or valid state can be restored after deletion, corruption, or disaster.
 
-Next we look at Backups and Retention, where the storage question changes from "where should this data live?" to "which previous copy exists, how long does it stay available, and how would the team restore it during a real incident?"
+A service can provide persistent and durable storage while having poor recoverability because no useful backup history exists. It can also retain valid backups without meeting an application's availability requirement or recovery-time needs. Keep those claims distinct during design and validation.
 
----
+A durable disk does not by itself supply backup history. A backup does not automatically provide high availability. High availability does not automatically cover every disaster-recovery requirement. A storage snapshot does not automatically provide application consistency. The relevant protections must be selected and tested for the failures the workload needs to survive.
+
+### Keep the responsibilities explicit
+
+The complete design can be read through three sets of requirements. **Storage semantics** determine blocks versus files, filesystem ownership, and coordination. **Performance requirements** determine operation rate, bytes per second, response time, queueing, and caching behavior. **Failure requirements** determine persistence, acknowledged-write durability, availability, history, and recovery consistency.
+
+Managed Disk, Azure Files, temporary storage, and shared disks fit into this model according to the guarantees they supply. The application should not have to rely on an unstated assumption that all disk-like devices persist, all filesystems have the same locking behavior, or all snapshots are valid database backups.
+
+For every selected path, explain who owns the filesystem, who coordinates shared access, when a write is considered durable, and what happens after failure. Then validate those answers at the filesystem, database, and application layers that depend on them. That is the basis for a storage choice that supports the workload rather than merely holding its files.
 
 ## Check Your Answers
 
 :::expand[When Do Disks and File Shares Fit?]{kind="recap"}
-Managed Disks and Azure Files solve operating-system storage needs, while Blob Storage and databases solve different data shapes.
+A disk supplies blocks that a machine organizes into a filesystem. A file share supplies an existing remote filesystem through file operations. Managed Disks fit persistent VM block access, Azure Files fits shared files, and shared disks require coordinated cluster access to the same blocks.
 :::
 
 :::expand[What Storage Contract Does the Workload Need?]{kind="recap"}
-The storage contract is the way code expects to access data, and it usually decides the first Azure service to review.
+Identify operations, sharing, locking, ordering, flushing, durability, latency, and supported failure behavior. A database's commit and recovery logic depend on these guarantees. Capacity and the ability to contain files alone do not establish a supported database storage path.
 :::
 
 :::expand[How Do Managed and Temporary Disks Work?]{kind="recap"}
-Managed Disks are Azure-managed block volumes for VMs, and they fit workloads that expect an attached disk device. Temporary runtime storage is scratch space for retryable work, so durable application data needs another home.
+Managed Disks provide Azure-managed block infrastructure while the VM still manages its filesystem and application data. Temporary storage can be tied to the runtime host and lost on relocation. Use it for disposable or reconstructable work, never as the only authoritative copy of important data.
 :::
 
 :::expand[How Do Performance, Caching, and Shared Disks Change Behavior?]{kind="recap"}
-Disk performance comes from both the disk and the VM size, so a faster disk alone may leave the workload capped. Host caching can improve selected disk reads, but write-sensitive data needs settings that match durability expectations. Shared disks are for cluster-aware applications, while normal shared folders usually belong on Azure Files.
+Measure IOPS, throughput, latency, queueing, and disk/VM limits together. Read caches can shorten repeated reads, but write caching must preserve durability and flush semantics. Shared disks need cluster-aware ownership, locks, and fencing rather than independent filesystems writing the same blocks.
 :::
 
 :::expand[What Does Azure Files Provide?]{kind="recap"}
-Azure Files provides managed SMB or NFS file shares for workloads that need a shared mounted directory.
+Azure Files operates a remote filesystem for network clients. It supports shared application files and other file-server workloads through SMB or NFS. The service owns filesystem coordination, which differs from exposing one raw block device to several machines.
 :::
 
 :::expand[How Do Protocols, Identity, and Network Paths Protect File Access?]{kind="recap"}
-A file share design includes the protocol, who can mount it, and which network path clients use.
+Clients need compatible file-protocol behavior, DNS, routes, permitted traffic, encryption where required, and protocol connectivity. Authentication, share authorization, and file/directory permissions are separate checks. A private path does not replace caller permissions.
 :::
 
 :::expand[What Evidence Supports Snapshots and Migration?]{kind="recap"}
-Snapshots and backup evidence make a legacy disk or share safer to carry through one more release.
+Snapshots preserve point-in-time storage states, but application consistency requires appropriate coordination or validated recovery. Migration evidence should cover copied storage, filesystem access, database checks, application operations, and performance. Equal file sizes or successful copying are insufficient by themselves.
 :::
 
 :::expand[How Does the Complete Storage Choice Fit Together?]{kind="recap"}
-The right Azure storage choice follows the workload's access path, durability need, sharing need, and recovery signal.
+Select the block, shared-file, disposable, or cluster-shared interface first. Size the entire I/O path for the measured workload. Then verify persistence, availability, durability, and recoverability against concrete failures, including the application's consistency and recovery requirements.
 :::
-
-## References
-
-- [Introduction to Azure managed disks](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview) - Managed disk concepts, durability, disk types, and VM usage.
-- [Azure managed disk types](https://learn.microsoft.com/en-us/azure/virtual-machines/disks-types) - Ultra Disk, Premium SSD v2, Premium SSD, Standard SSD, and Standard HDD choices.
-- [Virtual machine and disk performance](https://learn.microsoft.com/en-us/azure/virtual-machines/disks-performance) - VM limits, disk limits, IOPS, throughput, and bottleneck diagnosis.
-- [Format and mount temporary disks on Azure Linux VMs](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/disks-format-mount-temp-disks-linux) - Temporary disk behavior and persistence warnings.
-- [Share an Azure managed disk across VMs](https://learn.microsoft.com/en-us/azure/virtual-machines/disks-shared) - Shared disk use cases, `maxShares`, and billing behavior.
-- [SMB file shares in Azure Files](https://learn.microsoft.com/en-us/azure/storage/files/files-smb-protocol) - SMB scenarios, features, security, and protocol guidance.
-- [NFS file shares in Azure Files](https://learn.microsoft.com/en-us/azure/storage/files/files-nfs-protocol) - NFS support and Linux-oriented file share guidance.
-- [Plan for an Azure Files deployment](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-planning) - Azure Files planning, soft delete, backup, and share snapshots.
-- [Prevent accidental deletion of Azure file shares](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-prevent-file-share-deletion) - File share soft delete behavior and retention planning.
-- [Use Azure Files share snapshots](https://learn.microsoft.com/en-us/azure/storage/files/storage-snapshots-files) - SMB and NFS share snapshot behavior and recovery uses.
-- [Understand Azure Files performance](https://learn.microsoft.com/en-us/azure/storage/files/understand-performance) - File share performance factors and workload tuning guidance.

@@ -1,0 +1,53 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/workers.conf": {
+      "type": "file",
+      "content": "# orders workers\nobsolete=yes\nbackend=development\nmirror=development\nworkers=2\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "vim",
+      "cat"
+    ],
+    "expectedFs": {
+      "/home/dev/workers.conf": {
+        "type": "file",
+        "contentEquals": "# orders workers\nbackend=production\nmirror=production\nworkers=2\n"
+      }
+    },
+    "expectedVim": [
+      {
+        "label": "Make Precise Changes",
+        "path": "/home/dev/workers.conf",
+        "actions": [
+          "delete",
+          "change",
+          "repeat",
+          "write"
+        ],
+        "savedContentEquals": "# orders workers\nbackend=production\nmirror=production\nworkers=2\n",
+        "edited": true
+      }
+    ],
+    "expectedResults": [
+      {
+        "label": "saved file inspection",
+        "commands": [
+          "cat"
+        ],
+        "stdoutEquals": "# orders workers\nbackend=production\nmirror=production\nworkers=2\n",
+        "exitCode": 0
+      }
+    ]
+  }
+}

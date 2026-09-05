@@ -1,0 +1,185 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "adm"
+        ]
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "www-data",
+        "uid": 33,
+        "primaryGroup": "www-data"
+      }
+    ],
+    "umask": 18
+  },
+  "system": {
+    "services": [],
+    "manager": {
+      "units": [
+        {
+          "name": "app.service"
+        }
+      ],
+      "epoch": "2026-09-01T10:30:00Z",
+      "journal": [
+        {
+          "unit": "app.service",
+          "at": -87000,
+          "boot": -1,
+          "priority": 3,
+          "message": "Main process exited, status=9/KILL",
+          "pid": 1842
+        },
+        {
+          "unit": "kernel",
+          "at": -87000,
+          "boot": -1,
+          "priority": 3,
+          "message": "Out of memory: Killed process 1842 (node)",
+          "kernel": true
+        },
+        {
+          "unit": "session-4.scope",
+          "at": -740,
+          "boot": 0,
+          "priority": 5,
+          "message": "deploy : COMMAND=/usr/bin/systemctl restart app.service",
+          "comm": "sudo",
+          "pid": 1710
+        },
+        {
+          "unit": "app.service",
+          "at": -690,
+          "boot": 0,
+          "priority": 3,
+          "message": "Main process exited, code=killed, status=9/KILL",
+          "pid": 1842
+        },
+        {
+          "unit": "kernel",
+          "at": -690,
+          "boot": 0,
+          "priority": 3,
+          "message": "Out of memory: Killed process 1842 (node)",
+          "kernel": true
+        },
+        {
+          "unit": "app.service",
+          "at": -685,
+          "boot": 0,
+          "priority": 6,
+          "message": "Started app.service with PID 2101"
+        },
+        {
+          "unit": "app.service",
+          "at": -684,
+          "boot": 0,
+          "priority": 6,
+          "message": "request_id=req_recovered listening on 127.0.0.1:3000",
+          "pid": 2101
+        },
+        {
+          "unit": "app.service",
+          "at": -700,
+          "boot": 0,
+          "priority": 6,
+          "message": "sudo is configured for deploy user",
+          "comm": "app"
+        }
+      ]
+    },
+    "logging": {}
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "journalctl"
+    ],
+    "expectedLogging": {
+      "readOnly": true,
+      "queries": [
+        {
+          "label": "Current-boot application lifecycle",
+          "unit": "app.service",
+          "boot": 0,
+          "since": -780,
+          "until": -660,
+          "contains": [
+            "status=9/KILL",
+            "PID 2101"
+          ]
+        },
+        {
+          "label": "Same-window kernel evidence",
+          "kernel": true,
+          "boot": 0,
+          "since": -780,
+          "until": -660,
+          "contains": [
+            "Killed process 1842"
+          ]
+        },
+        {
+          "label": "Operator metadata, not a text match",
+          "boot": 0,
+          "since": -780,
+          "until": -660,
+          "fields": {
+            "_COMM": [
+              "sudo"
+            ]
+          },
+          "contains": [
+            "COMMAND=/usr/bin/systemctl restart"
+          ]
+        },
+        {
+          "label": "Replacement process records",
+          "unit": "app.service",
+          "boot": 0,
+          "fields": {
+            "_PID": [
+              "2101"
+            ]
+          },
+          "contains": [
+            "req_recovered"
+          ]
+        }
+      ]
+    }
+  }
+}

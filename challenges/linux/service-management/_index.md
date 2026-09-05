@@ -1,8 +1,8 @@
 ---
 title: "Service Management"
-description: "Read unit files to understand service configuration, check service status, explore dependency ordering, and diagnose a failed service. Each step targets a specific section of the Service Management article."
+description: "Operate service lifecycle and boot enablement, define process context, apply local overrides, reload safely, repair failures, verify limits, and schedule maintenance."
 articleId: article-devops-foundation-linux-system-admin-service-management
 difficulty: medium
 order: 7
-tags: [systemd, systemctl, unit-file, service, dependencies, troubleshooting]
+tags: [systemd, systemctl, unit-files, journal, services, timers]
 ---

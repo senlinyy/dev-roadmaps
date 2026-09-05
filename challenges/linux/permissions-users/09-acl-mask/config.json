@@ -1,0 +1,46 @@
+{
+  "cwd": "/home/alice",
+  "env": { "USER": "alice", "HOME": "/home/alice" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/alice": { "type": "dir", "mode": 488, "owner": "alice", "group": "alice" },
+    "/srv": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/srv/finance": { "type": "dir", "mode": 493, "owner": "root", "group": "finance" },
+    "/srv/finance/report.csv": {
+      "type": "file",
+      "content": "quarter,revenue\nQ3,420000\n",
+      "mode": 416,
+      "owner": "root",
+      "group": "finance",
+      "acl": [
+        { "kind": "user", "name": "alice", "permissions": 6 },
+        { "kind": "mask", "permissions": 4 }
+      ]
+    }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "alice",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "alice", "uid": 1001, "primaryGroup": "alice", "gid": 1001 }
+    ],
+    "sessionGroups": ["alice"],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["ls", "getfacl", "test"],
+    "minCommandCount": 4,
+    "expectedFs": {
+      "/srv/finance/report.csv": { "type": "file", "modeEquals": 416, "ownerEquals": "root", "groupEquals": "finance" }
+    },
+    "expectedPermissions": {
+      "access": [
+        { "user": "alice", "path": "/srv/finance/report.csv", "operation": "read", "allowed": true },
+        { "user": "alice", "path": "/srv/finance/report.csv", "operation": "write", "allowed": false }
+      ],
+      "diagnostics": ["denied:alice:write:/srv/finance/report.csv"]
+    }
+  }
+}

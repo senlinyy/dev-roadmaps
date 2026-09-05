@@ -1,0 +1,36 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/dev": { "type": "dir", "mode": 488, "owner": "dev", "group": "dev" },
+    "/srv": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/srv/web": { "type": "dir", "mode": 488, "owner": "root", "group": "web" },
+    "/srv/web/config.env": { "type": "file", "content": "APP_ENV=production\n", "mode": 416, "owner": "root", "group": "web" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "dev", "uid": 1000, "primaryGroup": "dev", "gid": 1000, "supplementaryGroups": ["web"] }
+    ],
+    "sessionGroups": ["dev", "web"],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["id", "ls", "stat"],
+    "minCommandCount": 3,
+    "expectedFs": {
+      "/srv/web/config.env": { "type": "file", "modeEquals": 416, "ownerEquals": "root", "groupEquals": "web" }
+    },
+    "expectedPermissions": {
+      "currentUser": "dev",
+      "sessionGroups": ["dev", "web"],
+      "access": [
+        { "user": "dev", "path": "/srv/web/config.env", "operation": "read", "allowed": true }
+      ]
+    }
+  }
+}

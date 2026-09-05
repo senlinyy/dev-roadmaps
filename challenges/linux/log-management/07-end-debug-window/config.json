@@ -1,0 +1,169 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/etc/systemd/system/app.service": {
+      "type": "file",
+      "content": "[Unit]\nDescription=Application API\n[Service]\nType=simple\nUser=app\nEnvironment=LOG_LEVEL=debug NODE_ENV=production\nExecStart=/usr/bin/app\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    },
+    "/usr/bin/app": {
+      "type": "file",
+      "content": "authored application workload\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "adm"
+        ]
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "www-data",
+        "uid": 33,
+        "primaryGroup": "www-data"
+      }
+    ],
+    "umask": 18
+  },
+  "system": {
+    "services": [],
+    "manager": {
+      "units": [
+        {
+          "name": "app.service",
+          "state": "active",
+          "workload": {
+            "command": "/usr/bin/app",
+            "requiredEnv": {
+              "NODE_ENV": "production"
+            }
+          }
+        }
+      ],
+      "epoch": "2026-09-01T10:30:00Z",
+      "journal": [
+        {
+          "unit": "app.service",
+          "at": -30,
+          "boot": 0,
+          "priority": 7,
+          "message": "debug payload serialization"
+        }
+      ]
+    },
+    "logging": {
+      "emitters": [
+        {
+          "unit": "app.service",
+          "records": [
+            {
+              "priority": 7,
+              "message": "debug payload serialization"
+            },
+            {
+              "priority": 6,
+              "message": "request_id=req_probe path=/health status=200"
+            },
+            {
+              "priority": 4,
+              "message": "request_id=req_probe dependency retry warning"
+            },
+            {
+              "priority": 3,
+              "message": "request_id=req_probe synthetic dependency error"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "systemctl",
+      "journalctl"
+    ],
+    "expectedLogging": {
+      "minClock": 5,
+      "queries": [
+        {
+          "label": "Fresh post-change records",
+          "unit": "app.service",
+          "since": 0,
+          "origin": "workload",
+          "currentProcess": true,
+          "contains": [
+            "status=200",
+            "dependency retry warning",
+            "synthetic dependency error"
+          ],
+          "excludes": [
+            "debug payload"
+          ]
+        }
+      ]
+    },
+    "expectedUnits": [
+      {
+        "name": "app.service",
+        "label": "Normal logging level",
+        "state": "active",
+        "currentDefinition": true,
+        "currentProcess": true,
+        "stableSeconds": 5,
+        "verified": ["journal"],
+        "before": [
+          "show"
+        ],
+        "process": {
+          "env": {
+            "LOG_LEVEL": "info",
+            "NODE_ENV": "production"
+          }
+        }
+      }
+    ],
+    "expectedFs": {
+      "/usr/bin/app": {
+        "contentEquals": "authored application workload\n"
+      },
+      "/etc/systemd/system/app.service.bak": {
+        "contentEquals": "[Unit]\nDescription=Application API\n[Service]\nType=simple\nUser=app\nEnvironment=LOG_LEVEL=debug NODE_ENV=production\nExecStart=/usr/bin/app\n"
+      }
+    }
+  }
+}

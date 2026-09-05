@@ -28,7 +28,7 @@ const ROADMAP_ACCENT_ORDER = [
   COLORS.lavender,
 ];
 
-const ARTICLE_EXPANDABLE_KINDS = new Set(['design', 'pattern', 'pitfall', 'history', 'example', 'recap']);
+const ARTICLE_EXPANDABLE_KINDS = new Set(['note', 'design', 'pattern', 'pitfall', 'history', 'example', 'recap']);
 const ARTICLE_EXPANDABLE_START_RE = /^:::expand(?:\[([^\]]+)\])?(?:\{([^}]*)\})?\s*$/;
 const ARTICLE_EXPANDABLE_END_RE = /^:::\s*$/;
 
@@ -1081,7 +1081,7 @@ function loadGroup(categoryId: string, groupId: string): ChallengeGroupFull | nu
     if (step.kind === 'quiz' && step.sectionSlug) {
       throw new Error(`Quiz step ${categoryId}/${groupId}/${step.id} must not define sectionSlug.`);
     }
-    if (step.kind !== 'quiz' && !practiceOnly && !step.sectionSlug) {
+    if (step.kind !== 'quiz' && !practiceOnly && (parsed.data.articleId || parsed.data.articleSlug) && !step.sectionSlug) {
       throw new Error(`Article-linked step ${categoryId}/${groupId}/${step.id} requires sectionSlug.`);
     }
   }

@@ -1,0 +1,24 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/tools": { "type": "dir" },
+    "/home/dev/tools/release-status": { "type": "file", "mode": 493, "content": "#!/usr/bin/env bash\nprintf \"release ready\\n\"\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["/home/dev/tools/release-status", "release ready"],
+    "requireCommands": ["export", "command", "release-status"],
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/tools/release-status",
+        "invocation": "path",
+        "args": [],
+        "exitCode": 0,
+        "stdoutContains": ["release ready"]
+      }
+    ]
+  }
+}

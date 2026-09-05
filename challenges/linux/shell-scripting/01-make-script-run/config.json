@@ -1,0 +1,29 @@
+{
+  "cwd": "/home/dev/release",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/release": { "type": "dir" },
+    "/home/dev/release/release-check.sh": { "type": "file", "mode": 420, "content": "printf \"release check passed\\n\"\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": ["vim", "chmod", "./release-check.sh"],
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/release/release-check.sh",
+        "invocation": "direct",
+        "args": [],
+        "exitCode": 0,
+        "stdoutContains": ["release check passed"]
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/release/release-check.sh": {
+        "type": "file",
+        "modeEquals": 493,
+        "contentMatches": "^#!\\s*(?:/usr/bin/env\\s+)?(?:/bin/)?(?:ba)?sh\\b"
+      }
+    }
+  }
+}

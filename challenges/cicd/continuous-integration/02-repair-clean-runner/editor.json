@@ -1,0 +1,125 @@
+{
+  "language": "yaml",
+  "activeFile": "pipeline.yaml",
+  "files": [
+    {
+      "filename": "pipeline.yaml",
+      "initialValue": "# Local setup evidence: .ci/developer-install.json.\nversion: 1\njobs:\n  test:\n    steps:\n      - checkout: true\n      - run: npm install\n      - run: npm test\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".ci/developer-install.json",
+      "readOnly": true,
+      "initialValue": "{\n  \"machine\": \"developer-laptop\",\n  \"projectTools\": [\n    \"eslint@9.0.0\",\n    \"vite@6.0.0\"\n  ],\n  \"globalTools\": [\n    \"vitest@3.0.0\"\n  ],\n  \"lastLocalCommand\": \"npm test\",\n  \"result\": \"passed\"\n}\n"
+    }
+  ],
+  "pipeline": {
+    "version": 1,
+    "filename": "pipeline.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint fixture passed: no lint errors."
+      },
+      "test": {
+        "passed": true,
+        "message": "Test fixture passed: checkout totals match expected results."
+      },
+      "build": {
+        "passed": true,
+        "message": "Build fixture passed: packaged the checkout application."
+      }
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "title": "Healthy change",
+        "description": "All authored checks pass. Complete the full required workflow."
+      },
+      {
+        "id": "lint-failure",
+        "title": "Lint failure",
+        "description": "An authored lint violation must block packaging.",
+        "checks": {
+          "lint": {
+            "passed": false,
+            "message": "src/app.js: unused variable in checkoutTotal (authored lint fixture)."
+          }
+        }
+      },
+      {
+        "id": "test-failure",
+        "title": "Unit-test failure",
+        "description": "An authored checkout-total test fails. Packaging must not proceed.",
+        "checks": {
+          "test": {
+            "passed": false,
+            "message": "checkoutTotal: expected 12, received 10 (authored unit-test fixture)."
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "checks": [
+      "lint",
+      "test",
+      "build"
+    ],
+    "lockedInstalls": true,
+    "buildAfterChecks": [
+      "lint",
+      "test"
+    ],
+    "cases": [
+      {
+        "id": "healthy"
+      },
+      {
+        "id": "lint-failure",
+        "failure": "lint",
+        "forbid": [
+          "build",
+          "upload",
+          "verify",
+          "deploy"
+        ]
+      },
+      {
+        "id": "test-failure",
+        "failure": "test",
+        "forbid": [
+          "build",
+          "upload",
+          "verify",
+          "deploy"
+        ]
+      }
+    ],
+    "preservedFiles": {
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".ci/developer-install.json": "{\n  \"machine\": \"developer-laptop\",\n  \"projectTools\": [\n    \"eslint@9.0.0\",\n    \"vite@6.0.0\"\n  ],\n  \"globalTools\": [\n    \"vitest@3.0.0\"\n  ],\n  \"lastLocalCommand\": \"npm test\",\n  \"result\": \"passed\"\n}\n"
+    },
+    "expectedDependencies": {
+      "eslint": "9.0.0",
+      "vitest": "3.0.0",
+      "vite": "6.0.0"
+    }
+  }
+}

@@ -1,0 +1,277 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "buffered-write",
+      "type": "single",
+      "scenario": "An export reports a successful write, but the host loses power before its dirty pages reach storage. The application needs an explicit durability boundary before reporting completion. Which change addresses that requirement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Wait until the file appears in the directory listing before acknowledging completion."
+        },
+        {
+          "id": "b",
+          "text": "Use the application's appropriate sync and commit procedure, including fsync where required."
+        },
+        {
+          "id": "c",
+          "text": "Enable filesystem journaling and treat each successful write as an application commit."
+        },
+        {
+          "id": "d",
+          "text": "Run the export a second time so its data is present in the page cache."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "A successful buffered write can mean acceptance into kernel memory. The application's sync and commit procedure establishes the required durability boundary. A visible filename and warm cache do not establish durability, and filesystem journaling does not replace application transaction semantics."
+    },
+    {
+      "id": "sparse-accounting",
+      "type": "single",
+      "scenario": "A VM image has a logical length of 80 GiB, while its allocated-block usage is 6 GiB. No deleted-open files exist and both measurements refer to the same mounted filesystem. What best explains this difference?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The file has sparse regions that do not yet consume allocated blocks."
+        },
+        {
+          "id": "b",
+          "text": "The filesystem has reserved 74 GiB exclusively for the root account."
+        },
+        {
+          "id": "c",
+          "text": "The image's missing blocks are held by a process after the file was deleted."
+        },
+        {
+          "id": "d",
+          "text": "The image is on another mount that the allocated-block measurement skipped."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Sparse regions can make apparent length exceed allocated storage. Root reserves affect filesystem availability rather than this file's logical-versus-allocated size. The scenario excludes deleted-open files and a mount mismatch."
+    },
+    {
+      "id": "mount-hidden-data",
+      "type": "single",
+      "scenario": "Application data was written under `/var/lib/app` before its data disk mounted. After the mount, those files disappear from that path, but root usage stays high. What is the safest next investigation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Delete files from the newly mounted data disk until root usage falls."
+        },
+        {
+          "id": "b",
+          "text": "Change ownership recursively on the mounted directory to expose the earlier files."
+        },
+        {
+          "id": "c",
+          "text": "Plan controlled maintenance to inspect the underlying root-directory contents without disrupting the active mount."
+        },
+        {
+          "id": "d",
+          "text": "Grow the data filesystem because the old files must have been copied into it."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Mounting can hide existing directory contents without moving or deleting them. A controlled inspection of the underlying filesystem addresses the root usage. Cleaning or growing the new mount changes a different filesystem, and ownership does not reveal hidden contents."
+    },
+    {
+      "id": "inode-branch",
+      "type": "single",
+      "scenario": "Uploads fail on an ext4 filesystem with 18 GiB free, but inode usage is at 100%. A cache creates one tiny expired file per request. Which recovery best matches the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Remove a single large archive on another mounted volume."
+        },
+        {
+          "id": "b",
+          "text": "Increase the application's memory limit to hold more upload metadata."
+        },
+        {
+          "id": "c",
+          "text": "Reduce log verbosity and wait for existing cache entries to become reusable."
+        },
+        {
+          "id": "d",
+          "text": "Use the cache owner's supported expiry cleanup and verify inode headroom."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The limiting resource is filesystem object capacity. Application-aware expired-cache cleanup frees inodes on the affected filesystem. A different volume's archive cannot help, more application memory does not create filesystem inodes, and lower future log volume does not remove the current cache population."
+    },
+    {
+      "id": "deleted-open",
+      "type": "single",
+      "scenario": "An operator deletes a 12 GiB log. Reachable directory usage drops, filesystem usage does not, and lsof identifies the owning process with a link count of zero. Which response is best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Delete the service's current log as well, then repeat df."
+        },
+        {
+          "id": "b",
+          "text": "Use the service's documented log-reopen mechanism, or an approved targeted restart, then recheck open references and capacity."
+        },
+        {
+          "id": "c",
+          "text": "Remount the data volume so directory traversal includes the deleted log again."
+        },
+        {
+          "id": "d",
+          "text": "Change the deleted file's permissions through its previous pathname."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The open reference retains the unlinked file's allocation. Closing or reopening it through the owning service addresses the cause. More deletion can create more retained references; remounting is unnecessarily disruptive; the former pathname no longer identifies the unlinked object."
+    },
+    {
+      "id": "io-baseline",
+      "type": "multiple",
+      "scenario": "During the same incident window, an NVMe device transfers large sequential requests with stable 1 ms latency, while a different data device has low throughput, 60 ms write latency, and a growing queue. Which two review comments are justified?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Low throughput can coexist with serious latency problems; investigate the second device and its workload."
+        },
+        {
+          "id": "b",
+          "text": "The NVMe device should be stopped first because it transfers the most bytes."
+        },
+        {
+          "id": "c",
+          "text": "Correlate device samples with the application's mount and process I/O over matching intervals."
+        },
+        {
+          "id": "d",
+          "text": "A device below 100% utilization can be removed from the investigation."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Latency and queueing can reveal a constrained storage path even with low byte throughput. Matching the affected path and process to the interval avoids blaming healthy bulk work. Byte throughput alone does not identify harm, and utilization is not a universal performance ceiling for parallel devices."
+    },
+    {
+      "id": "process-counters",
+      "type": "single",
+      "scenario": "A process's wchar counter grows by 40 MiB in five seconds, but write_bytes remains unchanged. Device write throughput also stays flat. What does this prove?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The process has sent 40 MiB to durable media, but device statistics are delayed."
+        },
+        {
+          "id": "b",
+          "text": "The process is responsible for 40 MiB of physical writes on the busiest disk."
+        },
+        {
+          "id": "c",
+          "text": "The process has issued write-like calls, but these counters do not establish corresponding storage writes during this window."
+        },
+        {
+          "id": "d",
+          "text": "The filesystem must be corrupt because the two counters should match."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "wchar accounts for write-like calls, while write_bytes is storage-layer accounting. Buffering, pipes, and other paths can separate them. Neither durable completion nor attribution to the busiest disk follows from wchar alone, and disagreement is not itself corruption."
+    },
+    {
+      "id": "lvm-growth",
+      "type": "single",
+      "scenario": "The cloud disk and partition are larger, but an LVM-backed application filesystem remains at its old size. The physical volume has not been resized and the volume group reports no new free extents. After verifying backups and topology, which sequence fits this layout?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Extend the filesystem first, then ask LVM to discover its new blocks."
+        },
+        {
+          "id": "b",
+          "text": "Create another filesystem on the existing physical volume to expose the unused space."
+        },
+        {
+          "id": "c",
+          "text": "Run XFS growth directly against the cloud disk and bypass the logical volume."
+        },
+        {
+          "id": "d",
+          "text": "Resize the physical volume, extend the intended logical volume, then grow its filesystem or use a supported combined extension."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "New partition capacity must become available to LVM before the logical volume and filesystem can use it. Filesystem growth alone cannot cross the smaller logical-volume boundary. Formatting the existing PV destroys its structures, and the mounted filesystem is on the LV rather than the raw cloud disk."
+    },
+    {
+      "id": "integrity-vs-capacity",
+      "type": "single",
+      "scenario": "The application reports read-only filesystem errors. Byte and inode capacity are healthy; the kernel journal contains device resets and metadata I/O errors. What should the incident owner prioritize?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Preserve error evidence and follow the storage/filesystem recovery procedure before attempting to restore writes."
+        },
+        {
+          "id": "b",
+          "text": "Increase application directory permissions and retry the operation."
+        },
+        {
+          "id": "c",
+          "text": "Delete old logs to make additional metadata space."
+        },
+        {
+          "id": "d",
+          "text": "Force a read-write remount immediately because healthy capacity proves the device is usable."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to storage integrity or health, not fullness or Unix mode permissions. Preserve the failure evidence and use the appropriate recovery procedure. Extra cleanup and permission changes do not repair device errors, and forcing writes before evaluating integrity can compound damage."
+    },
+    {
+      "id": "verification-backups",
+      "type": "multiple",
+      "scenario": "An approved cleanup restored free bytes, and a later resize increased the data filesystem total. The team wants to close the incident and rely on a snapshot stored on the same platform. Which two follow-up requirements are strongest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat the filesystem's new size as sufficient evidence that application writes are healthy."
+        },
+        {
+          "id": "b",
+          "text": "Verify the affected service and write path, retained data, and any remaining deleted-open references."
+        },
+        {
+          "id": "c",
+          "text": "Record what changed and verify a usable recovery copy with understood failure-domain limitations."
+        },
+        {
+          "id": "d",
+          "text": "Remove the capacity alert because the larger filesystem resolves the long-term growth risk."
+        }
+      ],
+      "correct": [
+        "b",
+        "c"
+      ],
+      "explanation": "Capacity changes need application-level verification and an accountable record of what was removed or resized. Recovery copies must be usable and their failure domains understood; a same-platform snapshot is not automatically an independent backup. A larger total does not prove a healthy write path, and retention or growth forecasting is still needed."
+    }
+  ]
+}

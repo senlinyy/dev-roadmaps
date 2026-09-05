@@ -1,1 +1,0 @@
-Read the snapshot with `cat`. Look for the device with the highest `%util` value. An `await` above 10ms on an SSD or above 20ms on spinning disk usually indicates pressure. Use `grep` to filter for the problem device.

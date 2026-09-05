@@ -1,0 +1,54 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/app.env": {
+      "type": "file",
+      "content": "# Production candidate: keep the development example below\nenvironment=development\nfallback_environment=development\nbanner=development documentation\nbackend=http://api.internal:8080\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "sed",
+      "cat"
+    ],
+    "expectedResults": [
+      {
+        "label": "complete targeted preview",
+        "commands": [
+          "sed"
+        ],
+        "stdoutEquals": "# Production candidate: keep the development example below\nenvironment=production\nfallback_environment=development\nbanner=development documentation\nbackend=http://api.internal:8080\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "updated configuration verification",
+        "commands": [
+          "cat"
+        ],
+        "stdoutEquals": "# Production candidate: keep the development example below\nenvironment=production\nfallback_environment=development\nbanner=development documentation\nbackend=http://api.internal:8080\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/app.env": {
+        "type": "file",
+        "contentEquals": "# Production candidate: keep the development example below\nenvironment=production\nfallback_environment=development\nbanner=development documentation\nbackend=http://api.internal:8080\n"
+      },
+      "/home/dev/app.env.bak": {
+        "type": "file",
+        "contentEquals": "# Production candidate: keep the development example below\nenvironment=development\nfallback_environment=development\nbanner=development documentation\nbackend=http://api.internal:8080\n"
+      }
+    }
+  }
+}

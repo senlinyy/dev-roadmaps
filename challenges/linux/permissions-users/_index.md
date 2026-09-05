@@ -1,8 +1,8 @@
 ---
 title: "Permissions & Users"
-description: "Read permission strings, change file modes with chmod, understand octal notation, and manage ownership. Each step targets a section of the Permissions & Users article."
+description: "Trace Linux access decisions, repair ownership and traversal, design shared directories, reason about ACLs and special bits, and grant narrow sudo access."
 articleId: article-devops-foundation-linux-linux-basics-permissions-users
-difficulty: easy
+difficulty: medium
 order: 4
-tags: [chmod, chown, permissions, octal, find, ls, ownership]
+tags: [permissions, ownership, groups, umask, acl, sudo, setgid, sticky]
 ---

@@ -1,7 +1,7 @@
 ---
 title: "Runtime Configuration and Safe Rollouts"
-description: "Manage Azure app settings, Key Vault references, managed identity, slots, revisions, traffic splitting, and config rollback as one release workflow."
-overview: "A safe Azure rollout needs more than a candidate artifact. This article explains how runtime configuration and controlled traffic movement work together so a team can test a version, expose it gradually, and recover when a setting or candidate behaves badly."
+description: "Connect environment settings, secret references, feature flags, slots, revisions, and traffic controls into a reversible Azure rollout."
+overview: "The same artifact can behave differently after a setting or secret changes. Learn how Azure applies those changes to running processes, how to test the complete candidate, and how to increase exposure only after useful evidence."
 tags: ["configuration", "secrets", "slots", "revisions", "traffic-splitting"]
 order: 2
 id: article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration
@@ -29,15 +29,12 @@ aliases:
 7. [How Do Slots and Traffic Splitting Support Rollouts?](#how-do-slots-and-traffic-splitting-support-rollouts)
 8. [How Do You Roll Back Code?](#how-do-you-roll-back-code)
 9. [Check Your Answers](#check-your-answers)
-10. [References](#references)
 
-The previous article named the release pieces: artifact, runtime, infrastructure, configuration, identity, traffic, health, rollback, and release record. This article zooms into the two pieces that create many production surprises in Azure: **runtime configuration** and **safe rollout controls**.
+You deploy `checkout-api:v18` and leave the image unchanged for a week. During that week, someone changes the payment endpoint, a secret rotates, and a feature flag enables a new checkout path. The code package is still v18, but customers are no longer using the same running system.
 
-We will keep using `devpolaris-orders-api`, the checkout API from the first article. The team has a candidate container image with a new receipt retry feature. The image runs successfully in Azure Container Apps, but the feature depends on runtime values: the feature flag, the storage account target, the Application Insights connection string, and the managed identity permissions for storage and Key Vault.
+This is why configuration and rollout belong together. Settings decide which dependencies an application uses and which behavior it selects. Rollout controls decide who experiences that behavior while the team checks whether it works. Both can change production without another build, and both need a known way back if the result is wrong.
 
-Runtime configuration and safe rollout form two connected halves of the same change system. First, we talk about **app settings**, **connection values**, **Key Vault references**, **Container Apps secrets**, and **config rollback**. Then we talk about **candidate versions**, **App Service slots**, **Container Apps revisions**, **traffic splitting**, and **rollback shape**. In real releases, those halves meet because a rollout only stays safe when the candidate and its runtime values move together.
-
-Keep these questions in view as you work through the lesson:
+We will follow the values from their definition into the running process, then use that complete runtime state to answer these questions:
 
 1. **What Must a Safe Runtime Change Control?**
 2. **How Do App Settings and Connection Values Work?**
@@ -49,731 +46,532 @@ Keep these questions in view as you work through the lesson:
 8. **How Do You Roll Back Code?**
 
 ## What Must a Safe Runtime Change Control?
-<!-- section-summary: Runtime settings and rollout controls belong in the same release conversation because both decide what users experience. -->
+<!-- section-summary: The artifact, settings, secrets, identity, and infrastructure jointly determine runtime behavior, so each must be considered part of a production change. -->
 
-### Runtime Configuration
-<!-- section-summary: Runtime configuration is the environment-specific state that the application reads after Azure starts it. -->
+An artifact contains the application you built. A running application also depends on the values and resources supplied around that artifact. `DATABASE_URL`, `PAYMENT_PROVIDER`, `CACHE_ENABLED`, `FEATURE_NEW_CHECKOUT`, and `LOG_LEVEL` can change its destination, decisions, or observable behavior even when the executable stays identical.
 
-**Runtime configuration** is the set of values your application receives from the hosting platform while it runs. These values usually include environment variables, app settings, connection strings, feature flags, service endpoints, secret references, telemetry connection strings, and sometimes platform settings such as scale or probes.
+The complete runtime therefore combines the artifact, configuration, secrets, identity, and infrastructure. The artifact tells the process what it can do. Configuration selects environment-specific behavior. Secrets and identity enable protected access. Infrastructure provides the execution and connection paths through which the process does its work.
 
-The important idea is that runtime configuration changes behavior while the team reuses the same artifact. The same container image can run in staging with a staging database and in production with a production database. The same App Service package can run with a feature flag off in production and on in a staging slot. The code stays the same, while the runtime values decide which outside systems the code reaches.
+This distinction is practical, not merely terminology. If `checkout-api:v18` points to the wrong database, reproducing the same image does not reproduce a working production system. If it has the right endpoint but the wrong identity, the connection may reach the correct service and still be rejected. A release needs to account for these inputs together.
 
-For `devpolaris-orders-api`, the candidate image contains the receipt retry code. These runtime values decide what the code actually does, so the release owner should read them with the same care as the image digest:
+### Separate application behavior from environment choices
 
-```yaml
-CHECKOUT_RECEIPT_RETRY_ENABLED: "true"
-ORDERS_DB_SERVER: sqldevpolarisprod.database.windows.net
-RECEIPTS_STORAGE_ACCOUNT: stdevpolarisprodreceipts
-APPLICATIONINSIGHTS_CONNECTION_STRING: "@Microsoft.KeyVault(SecretUri=https://kv-devpolaris-prod.vault.azure.net/secrets/appinsights-orders)"
+Imagine the connection code contains a production hostname directly:
+
+```python
+connect("production-db.database.windows.net")
 ```
 
-Each value carries release risk. If `CHECKOUT_RECEIPT_RETRY_ENABLED` turns on the new branch too early, the team may send every checkout request through code that only saw staging traffic. If `RECEIPTS_STORAGE_ACCOUNT` points to a staging account, receipt uploads can succeed technically while production receipts land in the wrong place. If the Application Insights connection string fails to resolve, the team loses the telemetry needed during the watch window.
+To run it in development, you would change that line:
 
-This is why runtime configuration deserves the same review as the image digest. A release record that names the candidate image but leaves settings vague gives the team only half the production story. The artifact tells us which code runs. Configuration tells us what that code connects to and which branches it takes. The most common Azure place for these values is app settings.
+```python
+connect("development-db.database.windows.net")
+```
 
-![Runtime configuration layers showing one artifact controlled by app settings, secrets, identity, feature flags, and startup checks](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/runtime-configuration-layers.png)
+Staging would need another source change:
 
-*The same artifact can behave differently when Azure gives it different settings, secrets, identity, feature flags, and startup checks.*
+```python
+connect("staging-db.database.windows.net")
+```
+
+The problem is not the connection operation. It is that selecting an environment now requires editing the program. A configuration lookup separates the two responsibilities:
+
+```python
+connect(environment["DATABASE_HOST"])
+```
+
+Here the code describes **how to connect**, while the supplied value identifies **where to connect**. The same behavior can be exercised in several environments without compiling a different application for each one. Configuration selects the runtime destination instead of embedding that destination in the program.
+
+### Build once and change the environment values
+
+Suppose `checkout-api:v18` is the artifact used in development, staging, and production. Its environment can differ in explicit ways:
+
+| Environment | Database host | Payment mode |
+| --- | --- | --- |
+| Development | `db-dev` | `fake` |
+| Staging | `db-stage` | `sandbox` |
+| Production | `db-prod` | `live` |
+
+This lets the artifact tested in staging be the artifact released in production. Environment-specific values still need verification, but there is no additional uncertainty from building a different binary for the final environment.
+
+The distinction also gives a clearer failure investigation. If the identical artifact worked with staging values and fails with production values, the differences in configuration, access, and infrastructure become concrete things to inspect. That is much more useful than comparing three separately built packages while also trying to find the setting that changed.
+
+### Configuration changes are releases too
+
+Suppose yesterday's runtime used v18 with `PAYMENT_API=https://payments-v1`. Today the endpoint changes to `https://payments-v2`. No new code was deployed, but requests now go to a different payment API. The operational effect can be as significant as replacing v18 with v19 while keeping the old configuration.
+
+For this reason, identify runtime versions with both an artifact version and a configuration version. The pair `v18 + old configuration` is different from `v18 + new configuration`. Secret rotation, feature state, and access changes can introduce further differences even when those two labels appear unchanged.
+
+A safe rollout controls how these changes reach users. Its **blast radius** is the portion of the system or user population that can be affected by a bad change. The aim is to learn whether the complete candidate works while that exposure is still limited, then increase exposure only when the evidence supports it.
 
 ## How Do App Settings and Connection Values Work?
-<!-- section-summary: App settings are Azure-managed environment values, and changing them can restart or reshape runtime behavior. -->
+<!-- section-summary: App Service supplies app settings as environment variables, restarts applications when they change, and needs configuration history to make changes reproducible. -->
 
-**App settings** are name-value pairs that Azure exposes to the running application as environment variables. App Service, Azure Functions, and Container Apps all have configuration surfaces that eventually become values the process can read at runtime. The exact portal page and deployment command differ by runtime, but the application usually reads the values through normal language APIs such as `process.env` in Node.js or `Environment.GetEnvironmentVariable` in .NET.
+Azure App Service **app settings** are name-value pairs supplied to application code as environment variables. For Linux applications and custom containers, App Service injects them into the container environment. The application reads ordinary process values; it does not need to know how an operator entered them in Azure.
 
-For a beginner, app settings are the cloud version of local `.env` values with extra production behavior around encryption, deployment slots, restarts, revisions, and platform ownership. The app code might read `CHECKOUT_RECEIPT_RETRY_ENABLED`, while Azure stores the production value. When the team changes that value, the same build can take a different path.
+For example, the application may expect `PAYMENT_API_URL`, `MAX_RETRIES`, and `NEW_CHECKOUT_ENABLED`. Production supplies these values:
 
-Here is a small Node.js example from the orders API. The same deployed code changes behavior based on the values Azure injects at runtime:
-
-```js
-const retryEnabled = process.env.CHECKOUT_RECEIPT_RETRY_ENABLED === "true";
-const receiptsAccount = process.env.RECEIPTS_STORAGE_ACCOUNT;
-
-export async function uploadReceipt(orderId, receiptBody) {
-  if (retryEnabled) {
-    return uploadReceiptWithRetry(receiptsAccount, orderId, receiptBody);
-  }
-
-  return uploadReceiptOnce(receiptsAccount, orderId, receiptBody);
-}
+```text
+PAYMENT_API_URL=https://payments.internal
+MAX_RETRIES=5
+NEW_CHECKOUT_ENABLED=false
 ```
 
-This code looks simple, but the production behavior depends on values outside the code. A release review should name the old value, the new value, and the expected user effect. The team should keep secret values out of the record and still record targets and intent so people can reason during rollout.
+Python code can read the payment destination through its normal environment interface:
 
-```yaml
-settings_review:
-  CHECKOUT_RECEIPT_RETRY_ENABLED:
-    old: "false"
-    new: "true"
-    expected_effect: checkout receipt upload uses retry branch
-  RECEIPTS_STORAGE_ACCOUNT:
-    old_target: stdevpolarisprodreceipts
-    new_target: stdevpolarisprodreceipts
-    expected_effect: production receipts stay in production storage
-  ORDERS_DB_SERVER:
-    old_target: sqldevpolarisprod.database.windows.net
-    new_target: sqldevpolarisprod.database.windows.net
-    expected_effect: checkout writes remain on production SQL
+```python
+os.environ["PAYMENT_API_URL"]
 ```
 
-Connection strings are the same kind of release concern. App Service has a separate connection strings area because many frameworks understand those names and formats. In production review, the point stays practical: connection values can move a runtime to a different database, queue, cache, or telemetry resource while the code stays unchanged.
+The name is the contract between the application and its hosting configuration. The value is the environment-specific choice. This is the same separation as the database example, now implemented through App Service's runtime setting mechanism.
 
-App Service app setting changes restart the app. Azure does this so the running process receives the new environment. Container Apps also needs running containers to observe new values through a new revision, restart, or other runtime update path depending on whether the change is revision-scoped or application-scoped. Because settings can restart workloads, a config-only release still deserves a watch window.
+### Understand effective values and restarts
 
-Some settings hold harmless values such as feature flags and public endpoints. Secrets need a different treatment because a leak can turn a routine config review into a security incident.
-
-### How To Change App Settings
-<!-- section-summary: Changing runtime settings starts with reading the current value, setting the new value, and confirming the runtime received it. -->
-
-The practical workflow for app settings has three parts: read the current value, apply the intended change, then verify the app is running with the new value. For App Service, the release owner can read the current production value and then set the feature flag. App Service recycles the app after app setting updates, so the watch window should expect a restart.
-
-```bash
-az webapp config appsettings list \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --query "[?name=='CHECKOUT_RECEIPT_RETRY_ENABLED']" \
-  --output table
-
-az webapp config appsettings set \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --settings CHECKOUT_RECEIPT_RETRY_ENABLED=true
-```
-
-The read-back check should show the new value without exposing unrelated settings:
-
-```console
-Name                            Slot Setting    Value
-------------------------------  --------------  -----
-CHECKOUT_RECEIPT_RETRY_ENABLED  False           true
-```
-
-If the app uses a staging slot, the release owner usually changes and tests the setting on the staging slot first. That gives the team a real host name where the candidate can be tested before production receives traffic.
-
-```bash
-az webapp config appsettings set \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --slot staging \
-  --settings CHECKOUT_RECEIPT_RETRY_ENABLED=true
-```
-
-For Container Apps, environment variable changes live in the app template and can create a new revision. The release owner should give the revision a suffix so it can be named in traffic rules and telemetry.
-
-```bash
-az containerapp update \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --revision-suffix v31-config \
-  --set-env-vars CHECKOUT_RECEIPT_RETRY_ENABLED=true
-
-az containerapp revision list \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --query "[].{name:name,active:active,trafficWeight:trafficWeight}" \
-  --output table
-```
-
-The revision list should show the new `v31-config` revision before traffic moves:
-
-```console
-Name                         Active    TrafficWeight
----------------------------  --------  -------------
-ca-orders-api-prod--v30      True      100
-ca-orders-api-prod--v31-config True    0
-```
-
-This is the missing "how" for app settings. The release owner reads the current value, changes the setting in the right runtime or slot, and checks which revision or slot now contains the value. The next step is secret handling, because some runtime values should point to Key Vault rather than carry the secret directly.
-
-## How Do Feature Flags and Key Vault References Reduce Risk?
-<!-- section-summary: Feature flags are runtime controls that let a team release code separately from enabling behavior for users. -->
-
-A feature flag is a runtime decision point. The code contains both paths, and the flag decides which path runs for a request, tenant, cohort, region, or environment. Teams use this pattern heavily with Azure because it lets them deploy a candidate artifact while keeping risky behavior off, then enable the behavior gradually after the runtime is healthy.
-
-Azure App Configuration is one Azure-native place to store feature flags, and many teams use a broader flag platform such as LaunchDarkly, Unleash, ConfigCat, or a homegrown service. **OpenFeature** is the industry-standard API layer that can sit between application code and the flag provider, so the application code asks for a flag value without being tightly coupled to one vendor. The important release habit is the same across providers: the flag key, default value, rollout rule, owner, and rollback action should be visible before production traffic moves.
-
-
-Here is how the orders API can read a flag through OpenFeature. The provider setup happens during application startup, and the request handler asks for the flag with a safe default. If the flag provider is unavailable, the default keeps receipt retry off rather than surprising production traffic.
-
-```js
-import { OpenFeature } from "@openfeature/server-sdk";
-
-const featureClient = OpenFeature.getClient();
-
-export async function shouldRetryReceiptUpload(user) {
-  return featureClient.getBooleanValue("checkout.receiptRetry", false, {
-    userId: user.id,
-    tenant: user.tenant,
-    environment: "production"
-  });
-}
-```
-
-The release record should treat a flag change as a production change. This example names the source of truth, the default behavior, the rollout rule, the owner, and the recovery action:
-
-```yaml
-feature_flag_review:
-  key: checkout.receiptRetry
-  source_of_truth: Azure App Configuration
-  default_value: false
-  production_rule:
-    enabled_for: 10 percent canary cohort
-    excluded_tenants:
-      - enterprise-contract-tests
-  owner: platform-api-oncall
-  rollback_action: disable checkout.receiptRetry
-```
-
-If the team stores flags in Azure App Configuration, the release owner can inspect and toggle the flag with Azure CLI. The exact targeting filters depend on the application and flag design, but the rollback move is deliberately simple: disable the flag and verify the application stops taking the risky branch.
-
-```bash
-az appconfig feature show \
-  --name appcs-devpolaris-prod \
-  --feature checkout.receiptRetry \
-  --label prod \
-  --auth-mode login
-
-az appconfig feature enable \
-  --name appcs-devpolaris-prod \
-  --feature checkout.receiptRetry \
-  --label prod \
-  --auth-mode login
-
-az appconfig feature disable \
-  --name appcs-devpolaris-prod \
-  --feature checkout.receiptRetry \
-  --label prod \
-  --auth-mode login
-```
-
-The useful read-back is the feature state. When the rollback command has worked, the feature shows `enabled: false` for the production label. If the flag still shows `true`, the risky branch can still run even if traffic splitting looks healthy.
-
-```console
-Name                   Label    Enabled    Locked
----------------------  -------  ---------  --------
-checkout.receiptRetry  prod     false      false
-```
-
-Feature flags and traffic splitting solve different rollout problems. Traffic splitting controls which runtime version receives requests, while flags control which behavior runs inside that version. A strong rollout can use both: deploy `v31` with the retry code, send 10 percent of traffic to `v31`, enable `checkout.receiptRetry` only for a small cohort, then widen either traffic or flag exposure based on the watch-window evidence.
-
-### Key Vault References
-<!-- section-summary: Key Vault references let an app setting point to a secret while the runtime identity retrieves the value. -->
-
-**Azure Key Vault** stores secrets, keys, and certificates. A **Key Vault reference** is an app setting value that points to a Key Vault secret instead of storing the secret value directly in the app configuration. App Service and Azure Functions can resolve these references at runtime by using the app's managed identity. Container Apps can also reference Key Vault secrets through its secrets configuration when a managed identity has permission to read the secret.
-
-
-This is useful because secret ownership moves away from the app setting itself. The app setting can say "use this secret in Key Vault," while the actual secret value stays in the vault. People reviewing a release can see which secret the app targets while the secret value stays hidden.
-
-Here is the shape of an App Service Key Vault reference. The setting value points to Key Vault rather than carrying the Application Insights connection string directly:
-
-```yaml
-APPLICATIONINSIGHTS_CONNECTION_STRING: "@Microsoft.KeyVault(SecretUri=https://kv-devpolaris-prod.vault.azure.net/secrets/appinsights-orders)"
-```
-
-Three pieces need to line up for this to work. First, the app needs a **managed identity**. The managed identity is the Entra ID identity Azure gives to the running app. Second, Key Vault needs to allow that identity to read the secret, usually through Azure RBAC such as `Key Vault Secrets User` or through a vault access policy depending on the vault configuration. Third, the reference must point to the correct vault and secret.
-
-For the orders API, the release review can capture the secret target and identity check like this. The record gives enough detail for verification while keeping the secret value inside Key Vault:
-
-```yaml
-secret_review:
-  setting: APPLICATIONINSIGHTS_CONNECTION_STRING
-  secret_uri: https://kv-devpolaris-prod.vault.azure.net/secrets/appinsights-orders
-  runtime_identity: mi-orders-api-prod
-  expected_permission: Key Vault Secrets User
-  verification:
-    - Key Vault reference resolves
-    - telemetry appears in appi-devpolaris-prod
-```
-
-The verification lines matter because Key Vault references can fail for ordinary reasons. The managed identity may lack permission. The URI may point to the wrong vault. The secret may have a disabled version. A private endpoint or firewall setting may block the app's path to the vault. These failures can show up as startup errors, missing environment values, or broken telemetry during the release.
-
-App Service caches Key Vault reference values and refreshes them periodically. A configuration change can also cause the app to restart and fetch values again. If a release needs a specific secret version, use a versioned secret URI and write that version into the release record. If a release should always use the latest secret version, write that expectation down too, because secret rotation and app rollout become connected.
-
-![Managed identity path from running app to Key Vault secret, with no secret stored in code](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/secret-reference-path.png)
-
-*A Key Vault reference keeps the secret value outside code and app settings, while the runtime identity controls whether the app can read it.*
-
-Key Vault references help with secrets on App Service and Functions. Container Apps uses its own secret model, and that model changes how the team thinks about revisions and restarts.
-
-## How Do Container Apps Secrets Reach the Runtime?
-<!-- section-summary: Container Apps secrets are application-scoped values that containers consume through environment variables or volume mounts. -->
-
-**Azure Container Apps secrets** are sensitive values stored on the container app and exposed to containers through environment variables or secret volumes. They are application-scoped rather than revision-scoped. That means secret definitions belong to the container app as a whole, while a revision consumes them through its container template.
-
-This detail matters during rollout. A container image change creates a new revision because the container template changed. Many application-scope changes, including secret definitions, sit outside the revision template. Existing running revisions need a restart or a new revision path to pick up changed secret values. A safe release record should say which revision consumes which secret name and whether a restart or new revision will happen.
-
-For the orders API running in Container Apps, the secret setup may look like this. The app consumes secret names through environment variables, while the actual values come from Key Vault:
-
-```yaml
-container_app: ca-orders-api-prod
-secrets:
-  appinsights-connection:
-    source: Key Vault
-    secret_uri: https://kv-devpolaris-prod.vault.azure.net/secrets/appinsights-orders
-    identity: mi-orders-api-prod
-  sql-connection:
-    source: Key Vault
-    secret_uri: https://kv-devpolaris-prod.vault.azure.net/secrets/orders-sql-connection
-    identity: mi-orders-api-prod
-environment_variables:
-  APPLICATIONINSIGHTS_CONNECTION_STRING:
-    secretRef: appinsights-connection
-  ORDERS_SQL_CONNECTION:
-    secretRef: sql-connection
-```
-
-The app code still reads environment variables. The platform handles secret storage and injection. The release review should confirm that the secret names match the template, the Key Vault references resolve, and the managed identity has secret read access.
-
-Secret mistakes often look like application bugs at first. A container starts but fails to connect to Azure SQL. A telemetry connection string resolves to an old value, so errors disappear from the expected Application Insights resource. A secret name changes from `sql-connection` to `orders-sql-connection`, while the environment variable still references the old name. The application may fail only when it reaches a dependency, which makes direct smoke tests important before traffic moves.
-
-Once settings and secrets have real release risk, the team needs a rollback plan for configuration by itself. That plan should exist before the team starts changing traffic.
-
-### How To Wire Secrets Into A Runtime
-<!-- section-summary: Secret wiring is concrete after the release owner sets the secret reference, maps it into the app, and verifies the app can read it. -->
-
-For App Service, a Key Vault reference is just an app setting value with special syntax. The release owner sets the app setting to the secret URI, and the app's managed identity must have permission to read that secret.
-
-```bash
-az webapp config appsettings set \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --slot staging \
-  --settings APPLICATIONINSIGHTS_CONNECTION_STRING="@Microsoft.KeyVault(SecretUri=https://kv-devpolaris-prod.vault.azure.net/secrets/appinsights-orders)"
-```
-
-The verification step should happen before the slot swap. The team can call the staging health endpoint, check that telemetry reaches the expected Application Insights resource, and inspect startup logs if the setting fails to resolve. A Key Vault reference problem often appears as a missing environment value inside the app rather than as a clean Azure deployment failure.
-
-For Container Apps, the release owner usually creates or updates a Container Apps secret and then maps an environment variable to that secret name. The secret can store a literal value or reference Key Vault through `keyvaultref` and `identityref`.
-
-```bash
-az containerapp secret set \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --secrets appinsights-connection=keyvaultref:https://kv-devpolaris-prod.vault.azure.net/secrets/appinsights-orders,identityref:/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-devpolaris-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod
-
-az containerapp update \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --revision-suffix v31-secrets \
-  --set-env-vars APPLICATIONINSIGHTS_CONNECTION_STRING=secretref:appinsights-connection
-```
-
-The read-back check should prove that the app points at the secret name, not that the secret value is printed:
-
-```bash
-az containerapp show \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --query "properties.template.containers[0].env[?name=='APPLICATIONINSIGHTS_CONNECTION_STRING']"
-```
-
-Example output:
+An application can package defaults such as:
 
 ```json
-[
-  {
-    "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
-    "secretRef": "appinsights-connection"
-  }
-]
+{
+  "LogLevel": "Information",
+  "MaxRetries": 3
+}
 ```
 
-The long identity resource ID is ugly, but it is useful because it makes the runtime identity explicit. In a real runbook, the team usually stores that identity ID as a variable so the command is easier to read. After the update, the release owner checks the new revision, runs a smoke test, and confirms telemetry appears in the expected Application Insights component.
+Production can then supply `MaxRetries=5`. In supported stacks such as ASP.NET Core, runtime settings can override the packaged application configuration. The effective value is therefore not always the value visible in the checked-in defaults. The relevant configuration-provider behavior must be considered when determining what the process actually uses.
+
+Adding, deleting, or changing an App Service app setting triggers an application restart. The update is not simply a value silently changing inside every existing process. Azure applies the new environment through the application's lifecycle, so startup and readiness matter even for a configuration-only change.
+
+That gives configuration edits two possible effects: they change the selected behavior, and they can restart the process that provides it. A harmless-looking logging or retry update still needs an operating plan if a restart affects service availability or startup dependencies.
+
+### Apply a setting through the intended control surface
+
+In the App Service portal, app settings are under **Settings → Environment variables**. The equivalent Azure CLI operation is `az webapp config appsettings set`. For the checkout application in resource group `shop-prod`, this command keeps the new checkout behavior disabled:
+
+```bash
+az webapp config appsettings set \
+  --resource-group shop-prod \
+  --name checkout-api \
+  --settings NEW_CHECKOUT_ENABLED="false"
+```
+
+This command is an example of a production mutation, not a read-only inspection. The value changes the named app's configuration, and the app-setting update can restart that application. Its successful completion confirms the configuration operation, while runtime checks must still establish that the process started with the intended behavior.
+
+The portal and CLI are useful control surfaces, but manual edits should not be the only configuration-management system. A definition kept in Git, reviewed, and applied through a pipeline gives the team a reproducible history. It also makes environment differences explicit rather than leaving them scattered across remembered portal actions.
+
+### Record what changed and why
+
+Suppose `MAX_RETRIES` changes from 3 to 100 just before production fails. The incident investigation needs to know who made the change, when it happened, why it was intended, what the old value was, what else changed at the same time, and how to restore those values.
+
+Version control, code review, deployment history, environment separation, automated validation, and rollback procedures support those answers. They are configuration practices for the same reason that they are code practices: an uncontrolled change can alter production behavior.
+
+A record can associate `checkout:v18` with `production-config@commit-72ac` and explicitly list `MAX_RETRIES: 3 → 5` and `FEATURE_X: false → true`. That record identifies a reconstructable runtime state. A note saying only “updated settings” does not tell the next operator what the process received.
+
+Ordinary configuration history should not become a second secret store. Record the identity of a secret or its reference where needed, while keeping confidential values under the access controls intended for secrets. The next section separates those responsibilities.
+
+## How Do Feature Flags and Key Vault References Reduce Risk?
+<!-- section-summary: Secret references separate confidential values from app settings, while feature flags separate deploying code from exposing its behavior. -->
+
+Not every configuration value needs the same protection. `MAX_RETRIES=5` is an ordinary operational setting. `DATABASE_PASSWORD=SuperSecretPassword` represents a credential and is sensitive even if it enters the application through the same environment-variable mechanism. Feature switches, endpoint names, and retry counts differ from passwords, API keys, and connection credentials in confidentiality and lifecycle requirements.
+
+Before storing a credential, ask whether the application needs one. Azure Storage access, for example, can use a connection string containing an account name and secret key, or it can use managed identity and Azure authorization. The latter avoids a long-lived credential for the application to keep.
+
+A useful preference order is managed identity or token-based access first, a secret managed in a secret manager when a credential is unavoidable, and a raw secret directly in application configuration only after those better-separated options have been considered. App Service supports secretless connectivity and Key Vault references for these reasons.
+
+### Let a setting point to a secret
+
+If the payment provider requires an API key, putting `PAYMENT_API_KEY=abcdef123456` directly into app settings stores the credential as the setting value. A **Key Vault reference** stores a pointer instead. App Service resolves that pointer using an identity authorized to access the vault.
+
+The application still reads `PAYMENT_API_KEY`. It does not need custom Key Vault retrieval code for this reference pattern. The hosting platform supplies the resolved value through the setting the application already expects.
+
+A reference has this shape:
+
+```text
+@Microsoft.KeyVault(SecretUri=https://myvault.vault.azure.net/secrets/payment-key)
+```
+
+The same reference is the value assigned to the `PAYMENT_API_KEY` app setting. The URI identifies the vault and secret; the runtime identity supplies the authority to read it. A correct pointer without permission is not sufficient, and a valid identity does not correct a pointer to the wrong secret.
+
+```mermaid
+flowchart LR
+    S[App setting contains a reference] --> V[Key Vault secret]
+    I[Authorized runtime identity] --> V
+    V --> R[App Service resolves the value]
+    R --> P[Process reads PAYMENT_API_KEY]
+```
+
+This extra level of reference separates application configuration from secret lifecycle. The app can continue reading the same variable while the credential is managed and rotated in the vault. Source code no longer needs to change just because a password or API key changes.
+
+### Choose pinned or current secret versions deliberately
+
+Suppose `payment-key` has version 1 containing `AAA`, version 2 containing `BBB`, and version 3 containing `CCC`. A reference to `payment-key/version-2` selects `BBB`. An unversioned reference to `payment-key` follows the current secret version.
+
+A pinned version provides more deterministic control: rotation requires an explicit reference change. An unversioned reference reduces configuration work during rotation, but the effective runtime secret can change without another artifact deployment. Neither behavior should be an accidental discovery during an incident.
+
+App Service caches resolved Key Vault references. For an unversioned reference, its periodic refresh can take up to 24 hours. A configuration change and application restart trigger an immediate refetch, and Azure also provides a refresh operation. Credential-rotation planning therefore needs both the vault version and the consuming application's refresh behavior.
+
+A changed secret is another runtime change. The application may still be v18, but its ability to authenticate against a dependency now depends on the newly resolved value. This is why secret references and version expectations belong in the release record, even though the confidential values themselves do not.
+
+### Deploy a feature before enabling it
+
+A **feature flag** controls which behavior the application selects. In this example, v18 contains both checkout paths:
+
+```python
+if feature_enabled("NewCheckout"):
+    use_new_checkout()
+else:
+    use_old_checkout()
+```
+
+With `NewCheckout=false`, deploying v18 does not expose the new checkout behavior. Later, changing the flag to `true` enables it without a code deployment at that moment. This separates **code deployment** from **feature release**.
+
+The sequence can be: deploy dormant code, verify that the runtime works, and then enable the feature separately. Azure App Configuration provides centralized configuration and feature management, including simple switches, percentage rollout, and audience targeting. A team can therefore test runtime changes separately from the customer-facing behavior change contained inside them.
+
+Targeting need not be one global Boolean for everyone. Employees and beta customers can receive the feature first, followed by 5% of the wider population while everyone else remains on the old path. Conceptually, the decision checks whether the user is internal or falls within the configured rollout group before selecting the new branch.
+
+If checkout failures rise after activation, setting `NewCheckout=false` can restore the old behavior while keeping v18 deployed, provided the old path still exists and works. This is a **feature rollback**, often described as a kill switch. It avoids rebuilding and redeploying the application just to stop using the problematic branch.
+
+### Remove flags after their job is finished
+
+Flags also create complexity. Three independent Boolean flags already permit eight combinations; ten permit 1,024. Flags named FeatureA, FeatureB, FeatureC, and so on can leave an increasing number of possible program states to understand and test.
+
+A temporary rollout flag therefore needs a lifecycle: create it, roll out the behavior, reach 100%, observe the result, remove the old branch, and delete the flag. Leaving old switches and dormant code indefinitely makes later behavior harder to explain. The same control that reduces rollout risk can create long-term maintenance risk if it has no retirement plan.
+
+## How Do Container Apps Secrets Reach the Runtime?
+<!-- section-summary: Container Apps revisions define environment-variable consumers, while application-scoped secrets and their refresh behavior determine which values those consumers receive. -->
+
+A container image makes the separation between package and environment especially visible. The image can remain `checkout:v18` while its definition supplies `DATABASE_HOST=db-prod` and a secret reference for `PAYMENT_API_KEY`. The process combines those inputs at runtime rather than storing every environment's values in the image.
+
+In Azure Container Apps, environment variables are part of revision-scoped configuration. Updating them creates a new revision. A revision therefore records more than an image choice: its template includes the environment and secret references used to construct its containers.
+
+### Separate the secret name from the variable name
+
+Define a Container Apps secret named `payment-key`, then expose it to the application as:
+
+```text
+PAYMENT_API_KEY=secretref:payment-key
+```
+
+`payment-key` is the Container Apps secret name. `PAYMENT_API_KEY` is the name the application reads. The `secretref:` relationship connects them. The container does not need to know how Azure obtained the value behind that secret name.
+
+The secret can itself reference Key Vault, with managed identity providing the access. This produces three separate responsibilities: application code chooses which environment variable to read, Container Apps maps that variable to a secret, and Key Vault manages the actual confidential value. Key Vault-backed references are the recommended production pattern over placing literal secret values directly in the Container App definition.
+
+```mermaid
+flowchart LR
+    K[Key Vault secret value] --> S[Container Apps secret: payment-key]
+    S --> E[Revision environment mapping]
+    E --> P[Process variable: PAYMENT_API_KEY]
+    I[Managed identity with vault access] --> K
+```
+
+The direction of value delivery in this diagram is the reverse of the lookup path. The container reads its environment, the environment mapping names a Container Apps secret, and that secret may resolve through a Key Vault reference. Both views describe the same chain of responsibility.
+
+### Updating the secret is not always updating the process
+
+Container Apps secrets are **application-scoped**, not revision-scoped. Editing a secret does not itself create a new revision. Existing revisions also do not automatically consume a changed direct secret value merely because the secret object was edited. Restarting the existing revision or deploying a new revision makes the changed value effective for its consumers.
+
+This differs from editing an environment-variable definition, which changes the revision template. One operation changes a shared secret object; the other creates a new description of the containers to run. They should not be treated as equivalent deployment events.
+
+The distinction is especially important during verification. A successful control-plane update proves that Azure accepted the new secret configuration. It does not, by itself, prove that an already-running process now holds the new value. The release needs the appropriate lifecycle step and evidence from the application that it can use the dependency.
+
+### Key Vault-backed rotation has its own timing
+
+For an unversioned Key Vault URI, Container Apps follows the latest secret version. It checks for a newer version and retrieves it within roughly 30 minutes. Active revisions consuming that secret through environment variables are restarted to pick up the new value.
+
+Compare that with App Service's Key Vault reference behavior: resolved values can remain cached until the periodic refresh, up to roughly 24 hours, with explicit refresh or configuration-triggered restart available. The products share the idea of a secret reference, but not an identical refresh schedule or runtime lifecycle.
+
+| Secret change | Revision or process implication |
+| --- | --- |
+| App Service app setting changes | The application restarts |
+| App Service unversioned Key Vault reference rotates | Periodic refresh can take up to 24 hours; restart/configuration change or refresh can refetch |
+| Container Apps environment-variable definition changes | A new revision is created |
+| Container Apps direct secret value changes | No revision is created; existing consumers need restart or a new revision |
+| Container Apps unversioned Key Vault-backed secret rotates | Retrieval within roughly 30 minutes, with affected active environment-variable consumers restarted |
+
+These timings and lifecycle differences belong in the rotation plan. A new credential must be usable by the dependency and by the processes that consume it. Observing only the vault's latest version does not establish that every runtime has completed the transition.
 
 ## How Do You Roll Back Configuration?
-<!-- section-summary: Config rollback restores known-good runtime values when a setting or secret reference causes production trouble. -->
+<!-- section-summary: Configuration rollback restores an identified previous set of values and then verifies that the hosting platform has applied them to the running application. -->
 
-**Config rollback** means returning runtime values to a known-good state. It can involve a feature flag, app setting, connection string, Key Vault reference, secret version, scale value, or traffic setting. It often happens faster than rebuilding an artifact because the team can restore a value directly in the runtime configuration.
+A code rollback is not always the right response to a broken release. Suppose v18 worked yesterday with `MAX_RETRIES=3`, `PAYMENT_API=/v1`, and `FEATURE_X=false`. Today those values change to 50, `/v2`, and `true`, while the artifact remains v18. Returning to v17 may not fix the settings that caused the failure.
 
-For the orders API, imagine `CHECKOUT_RECEIPT_RETRY_ENABLED` moves from `"false"` to `"true"` at the same time revision `v31` gets 10 percent traffic. Checkout failures rise, and Application Insights shows errors in the retry branch. The first safe recovery might restore the flag to `"false"` and keep traffic at 10 percent long enough to confirm that the failure came from the branch. If the candidate still misbehaves, the team can move traffic back to `v30`.
+Instead, restore the known-good configuration. Call yesterday's state revision 41 and today's revision 42:
 
-A good config rollback plan names the previous values before the change. The record below separates values that actually changed from values that stayed stable:
+| Setting | Configuration 41 | Configuration 42 |
+| --- | --- | --- |
+| `MAX_RETRIES` | `3` | `50` |
+| `PAYMENT_API` | `/v1` | `/v2` |
+| `FEATURE_X` | `false` | `true` |
 
-```yaml
-config_rollback:
-  CHECKOUT_RECEIPT_RETRY_ENABLED:
-    current_candidate_value: "true"
-    previous_stable_value: "false"
-    restore_action: set value back to "false"
-  APPLICATIONINSIGHTS_CONNECTION_STRING:
-    current_target: appinsights-orders secret latest version
-    previous_target: appinsights-orders secret version 8f20b
-    restore_action: point reference back to version 8f20b if telemetry stops
-  ORDERS_DB_SERVER:
-    current_target: sqldevpolarisprod.database.windows.net
-    previous_target: sqldevpolarisprod.database.windows.net
-    restore_action: no config rollback expected
-```
+A rollback from configuration 42 to 41 restores an identified group of values. It does not depend on someone remembering which of several independent portal fields looked different yesterday. The artifact can remain v18 if the evidence indicates that the configuration, rather than the code package, caused the failure.
 
-This plan separates values that changed from values that stayed stable. During an incident, that helps people avoid broad, nervous changes. If the database target stayed stable, the team can spend energy on the retry flag, storage path, identity access, and candidate revision instead of touching the database setting.
+### Preserve the previous state before changing it
 
-Configuration rollback also needs runtime awareness. In App Service, restoring an app setting can restart the app. In Container Apps, a setting inside the revision template may create a new revision, while an application-scope secret change may require restart or a new consuming revision for running containers. In both cases, the team should expect a short period where old and new runtime behavior can overlap.
+Configuration repositories, infrastructure as code, Azure App Configuration snapshots or versioning strategies, and deployment history all help make old states recoverable. The essential property is that the previous values are known and can be reapplied through the appropriate control surface.
 
-After settings have a rollback path, the team can name the actual candidate version that will receive traffic. That candidate name bridges configuration review and rollout control.
+This includes relationships, not just literal values. If a setting points to a secret version or a dependency endpoint, the record needs that target. Restoring a variable name without restoring the intended target is not a complete recovery. The confidential secret value can remain protected while its version or reference is recorded.
 
-### How To Restore Config
-<!-- section-summary: Restoring config means putting the previous value back in the same runtime surface and checking that the app actually uses it. -->
+A release owner should therefore be able to answer two separate questions: which configuration should be restored, and what must happen for the application to consume it? The first is a history problem. The second is a hosting and lifecycle problem.
 
-For App Service, feature flag rollback is a direct app setting update. The release owner restores the previous value and then watches the app restart and serve requests again.
+### Account for restart and revision behavior
 
-```bash
-az webapp config appsettings set \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --settings CHECKOUT_RECEIPT_RETRY_ENABLED=false
+In App Service, restoring app settings restarts the application just as applying the bad setting did. The practical sequence is configuration update, process restart, startup, health validation, and continued traffic. It is not necessarily an instantaneous variable flip with no service impact.
 
-az webapp config appsettings list \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --query "[?name=='CHECKOUT_RECEIPT_RETRY_ENABLED']" \
-  --output table
-```
+In Container Apps, an environment-variable change belongs to revision-scoped state, while a direct secret update belongs to application-scoped state and may require restarting consumers. A recovery plan that ignores this distinction can leave the control plane showing the desired value while the old process still uses its previous environment.
 
-For Container Apps, restoring a revision-scoped environment variable usually means creating another revision from the current template with the previous value. The release owner should name that revision and keep traffic controlled while the team verifies it.
+That is why the end of a rollback is not the successful settings operation. Verify that the correct runtime is using the restored values and that the dependency call or user flow works again. Avoid printing confidential values merely to establish that a reference was restored; the useful evidence is the intended target and successful behavior.
 
-```bash
-az containerapp update \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --revision-suffix v31-flag-off \
-  --set-env-vars CHECKOUT_RECEIPT_RETRY_ENABLED=false
+### Choose the smallest recovery that addresses the failure
 
-az containerapp revision list \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --query "[].{name:name,active:active,trafficWeight:trafficWeight}" \
-  --output table
-```
+A feature-only problem may be resolved by disabling the flag. A bad secret rotation may require returning from secret version 7 to version 6 or restoring the prior reference. A wrong dependency endpoint may require configuration 42 to return to 41. None automatically requires a new application binary.
 
-Secret rollback follows the same idea. If the new Key Vault secret version breaks telemetry, the release owner points the setting or Container Apps secret back to the previous known-good versioned URI. The record should name the previous secret version before the release starts, because nobody wants to search Key Vault history while checkout is failing.
+These recovery controls have different boundaries. Disabling a feature selects a code path that already exists. Restoring a secret changes access credentials. Restoring configuration changes the values around the artifact. The correct choice follows the evidence about what changed and what failed.
+
+The same preparation supports rollout: once configuration and its recovery path are explicit, the team can construct a candidate whose complete runtime state is worth testing. A candidate image alone is not enough.
 
 ## What Is a Candidate Version?
-<!-- section-summary: A candidate version is the specific runtime version being evaluated before or during production exposure. -->
+<!-- section-summary: A candidate is the proposed runtime state, including its artifact, production-compatible settings, secrets, identity, and feature state, prepared for validation before broad exposure. -->
 
-A **candidate version** is the specific version the team wants to evaluate for production exposure. It includes the artifact and the runtime state that runs it. In App Service, the candidate may be the staging slot that holds the new package and slot settings. In Container Apps, the candidate may be a revision with a particular image digest, environment variables, scale rules, and probes.
+Production currently runs v17, and the team wants to introduce v18. The **candidate** is not just the new image. It combines artifact v18 with production-compatible configuration, correct identity, correct secrets, and the intended feature state. These inputs need to exist together somewhere the team can inspect before ordinary users depend on them.
 
-The word "candidate" is useful because it reminds the team that deployment and exposure can happen in stages. The candidate can exist, start, pass direct checks, and still receive zero production traffic. That gives the team room to inspect it before users depend on it.
+An App Service staging slot or a Container Apps revision provides that place. The candidate can be deployed, start, and pass direct checks while receiving no production traffic. This separates proving that the runtime can operate from deciding how many users should use it.
 
-For Container Apps, a candidate record should name the revision. The revision gives the team a specific runtime object to test and watch:
+### Validate the risks that a build cannot settle
 
-```yaml
-candidate:
-  platform: Azure Container Apps
-  app: ca-orders-api-prod
-  revision: orders-api--v31
-  image: acrdevpolaris.azurecr.io/orders-api@sha256:8a7b2f42c49d
-  traffic: 0
-  direct_checks:
-    - startup probe passed
-    - readiness probe passed
-    - direct revision smoke test passed
-```
+Before exposure, check startup, readiness, Key Vault access, database access, other dependency access, and smoke tests. A smoke test here means a small direct exercise of the important application behavior, not merely confirmation that an Azure resource exists.
 
-For App Service, the candidate record should name the slot. The slot gives the team a live host name for validation before production exposure:
+These checks address uncertainties such as whether the process will start, whether configuration is valid, whether identity permits the required call, and whether the database accepts requests. They also establish an initial view of latency and application behavior before the wider range of production traffic reaches the candidate.
 
-```yaml
-candidate:
-  platform: Azure App Service
-  app: app-orders-api-prod
-  candidate_slot: staging
-  production_slot: production
-  package: orders-api-v31.zip
-  direct_checks:
-    - staging slot responds on its host name
-    - checkout smoke test passes against staging slot
-    - Key Vault references resolve in staging slot
-```
+A candidate that cannot use its dependency should not receive traffic just because the container image is available. Similarly, a healthy process with the wrong feature state is not the candidate the team intended to test. Validation needs to name both the version and the surrounding runtime inputs.
 
-Direct checks should match the release risk. A receipt retry release needs a smoke test that exercises checkout and receipt upload. A telemetry settings release needs proof that requests and exceptions reach the expected Application Insights resource. A Key Vault reference change needs proof that the app can read the secret using its managed identity.
+### Readiness is an intermediate proof
 
-Once the candidate is named, App Service gives a common rollout tool: deployment slots. Slots are the App Service version of preparing a candidate beside production before the final traffic move.
+The progression is from a process existing, to starting, to being ready, to receiving requests, to behaving correctly for users. Each stage establishes more than the one before it, but none should be mistaken for all later stages.
+
+Container Apps single-revision mode keeps traffic on the existing revision until the new revision is ready. That includes successful provisioning, appropriate replica scale-up, and passing startup and readiness probes. A revision whose containers cannot start should not be treated as ready for production simply because its resource record exists.
+
+Even passing readiness does not prove that customers can complete checkout. A candidate can show normal CPU and memory, healthy readiness, and healthy HTTP 200 availability while successful payments drop by 40%. Infrastructure can be working while the release is harming its intended business operation.
+
+### Observe several layers of health
+
+Platform evidence includes whether containers are running and their CPU and memory behavior. Application evidence includes 5xx rates, latency, and exceptions. Dependency evidence includes database and downstream API failures. Business evidence includes payment success, order completion, and login success.
+
+These layers answer different questions. Normal CPU does not contradict a failed payment call. A successful basic HTTP response does not contradict a broken order flow that the check never exercised. The closer a signal is to the user's intended result, the more directly it describes the outcome the release is supposed to protect.
+
+A useful risk model is the probability that a change is bad multiplied by its impact if it is bad. Before observing production behavior, that probability is uncertain, so start with a small affected population. Healthy evidence can justify increasing exposure; an arbitrary passage through percentages cannot.
+
+For example, 5%, 25%, 50%, and 100% are useful rollout stages only if the team observes latency, errors, dependency behavior, and business results between them and makes a decision. Moving immediately through all four numbers merely reaches full exposure in several commands. The safety comes from the observation and decision between those commands.
 
 ## How Do Slots and Traffic Splitting Support Rollouts?
-<!-- section-summary: App Service slots let a team run a candidate beside production and swap traffic after direct validation. -->
+<!-- section-summary: Slots and revisions keep candidate runtimes separate, while swap preparation and traffic weights let teams validate them and increase exposure in stages. -->
 
-**App Service deployment slots** are live apps attached to the same App Service app. A common setup has a production slot and a staging slot. Each slot has its own host name, so the team can deploy the candidate to staging, warm it up, run tests against the staging URL, and then swap it with production.
+An App Service application such as `checkout-app` can have production running v17 and staging running v18. Both slots are live applications with their own hostnames. Staging normally begins with no production traffic, so the team can check startup, authentication, dependencies, `/health`, checkout behavior, and metrics directly.
 
-Slots are powerful because they separate candidate preparation from production exposure. The orders API can run `v31` in the staging slot while production still serves `v30`. The team can verify startup, Key Vault references, database connectivity, and smoke tests through the staging host name. When the team swaps, Azure exchanges the slot content and configuration according to the swap rules.
+The key advantage is that preparing the candidate does not require replacing the currently serving application first. Production remains available while the proposed runtime is assembled and tested beside it.
 
-Slot settings need attention. Some settings should move with the app during a swap. Other settings should stay attached to the slot. Azure calls those **slot settings** or **deployment slot settings**. For example, `ORDERS_DB_SERVER` might stay slot-specific so the staging slot keeps pointing at staging data during tests, while production keeps pointing at production data. A setting that accidentally swaps into production can cause a very real outage.
+### Decide which settings stay with a slot
 
-Here is a slot review. It records the package, database target, sticky settings, and checks that must pass before swap:
+Suppose production uses `DATABASE=db-prod` and staging uses `DATABASE=db-stage`. A swap should not accidentally leave production connected to the staging database. App Service supports slot-specific, or **sticky**, app settings and connection strings that remain associated with the slot rather than swapping with the application.
 
-```yaml
-app_service_slots:
-  app: app-orders-api-prod
-  production_slot:
-    package: orders-api-v30.zip
-    ORDERS_DB_SERVER: sqldevpolarisprod.database.windows.net
-  staging_slot:
-    package: orders-api-v31.zip
-    ORDERS_DB_SERVER: sqldevpolarisprod.database.windows.net
-    CHECKOUT_RECEIPT_RETRY_ENABLED: "true"
-  sticky_settings:
-    - APPLICATIONINSIGHTS_CONNECTION_STRING
-    - ORDERS_DB_SERVER
-  pre_swap_checks:
-    - staging host responds
-    - Key Vault references resolve
-    - checkout smoke test passes
+Application code should move with the release. A release-version value may move with it. The production database destination should remain production, and the staging database destination should remain staging. Reviewing these categories is necessary before a swap, because configuration is part of the runtime being moved into service.
+
+A slot swap is more careful than exchanging two names. App Service applies the target slot's slot-specific settings to the source instances, restarts them where necessary, and waits for initialization and warmup. Only after preparation succeeds does it switch routing to the warmed source. If preparation fails, production remains on the existing target.
+
+```mermaid
+flowchart LR
+    S[Staging candidate v18] --> C[Apply production-specific settings]
+    C --> W[Restart and warm source instances]
+    W --> V[Validate prepared candidate]
+    V --> R[Switch routing]
+    R --> P[v18 serves production]
 ```
 
-The production database target in this example stays production because the team wants a production-like final validation before swap. Another team may keep staging pointed at a staging database until the final moment. The key is that the release record says which choice the team made and why. Hidden assumptions around slot settings cause painful swaps.
+This procedure tests the candidate closer to its eventual production configuration before changing the public serving path. It reduces the risk of discovering a startup or configuration problem only after replacing the current production content.
 
-Swaps also give a rollback shape. If production hurts after the swap, the team can swap back to the previous slot state, assuming the old version and compatible configuration remain available. The next article will talk about the verification and decision side of that move.
+### Use preview when validation needs a separate decision
 
-Container Apps uses revisions and traffic weights rather than slots, so the safe rollout shape looks different there. The team still prepares a candidate first, then controls exposure through traffic percentages.
+A **swap with preview** separates preparation from cutover. In the first phase, the production-slot configuration is applied to the staging candidate. The team can then validate that prepared state before completing the traffic swap. The multi-phase operation can be started, completed, or cancelled through the portal and Azure CLI.
 
-### How To Use Slots For A Release
-<!-- section-summary: A slot release has a concrete sequence: deploy to staging, set staging config, test staging, swap, and keep the old slot ready. -->
+Preview is useful because success in staging with staging values does not automatically prove success with production values. It provides a point at which the candidate more closely resembles its destination while the team still controls whether the final traffic change happens.
 
-An App Service slot release is a step-by-step workflow. The team deploys the candidate to staging, sets or checks staging configuration, runs a smoke test against the staging host, swaps staging into production, then keeps the previous production state available for rollback.
+Slots also preserve a direct recovery shape. Before a swap, production holds v17 and staging v18. Afterward, production holds v18 and staging v17. Swapping the same slots back can restore the previous production application, assuming that the surrounding system remains compatible with it.
 
-```bash
-az webapp deployment slot list \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --query "[].{name:name,host:defaultHostName,state:state}" \
-  --output table
+### Route a small population to another slot
 
-az webapp config appsettings set \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --slot staging \
-  --settings CHECKOUT_RECEIPT_RETRY_ENABLED=true
+A full swap moves the candidate from no production exposure to the production serving path. App Service can also route a configured percentage of production traffic to another slot: for example, 95% to v17 and 5% to staging v18.
 
-curl -fsS https://app-orders-api-prod-staging.azurewebsites.net/healthz
-```
+Slot routing assigns clients and uses a routing cookie to keep a routed client pinned for a period. It is not necessarily a new random choice between versions for every request. That behavior matters when interpreting the population exposed during a test.
 
-After staging passes the health check and smoke test, the release owner swaps staging into production. The `--slot staging --target-slot production` command means "move the staging slot into the production target."
+A staged allocation can move from v17/v18 at 100/0 to 95/5, then 75/25, 50/50, and 0/100. The observations between those steps determine whether the next increase is appropriate. Percentages are an exposure control, not an independent guarantee of safe behavior.
 
-```bash
-az webapp deployment slot swap \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --slot staging \
-  --target-slot production
-```
+### Use Container Apps revisions as explicit candidates
 
-After the swap, verify the production host and the rollback slot instead of assuming the command finished the release:
+Container Apps represents deployment versions as revisions, such as `checkout--000017` and `checkout--000018`. In multiple-revision mode, both can remain active, with traffic allocated between them. A release can start at 100/0, move to 95/5, then 50/50, and eventually 0/100 after the required checks.
 
-```bash
-curl -fsS https://app-orders-api-prod.azurewebsites.net/healthz
+Revision-scope changes create a new revision. These include container images, container configuration, environment variables in the revision template, and scaling configuration. Changing image v18 to v19 or `LOG_LEVEL` from `Information` to `Debug` therefore identifies a distinct candidate state.
 
-az webapp deployment slot list \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --query "[].{name:name,host:defaultHostName,state:state}" \
-  --output table
-```
+Application-scope changes are different. Secret values, revision mode, ingress configuration, traffic rules, and revision labels can affect the Container App without creating another revision. Before applying an update, establish whether it changes one candidate's template or shared application-level state across revisions.
 
-Healthy output shows the production health endpoint returning success and the staging slot still present as the swap-back target.
+This distinction affects rollback as well as rollout. Keeping an old revision does not automatically restore an application-wide value changed after that revision was created. The release record needs both the revision identity and any shared state on which it depends.
 
-The old production version now sits on the other side of the swap. That is why the release owner should avoid deleting or overwriting the staging slot immediately after the swap. Keeping it available gives the team a direct swap-back path during the watch window.
-
-### Traffic Splitting
-<!-- section-summary: Traffic splitting exposes a candidate to a controlled percentage of users before full promotion. -->
-
-**Traffic splitting** means sending only part of production traffic to a candidate. Azure Container Apps supports traffic splitting across active revisions when the app uses multiple revision mode. App Service can route a percentage of traffic to slots. The release idea stays the same: the team controls exposure while it watches health evidence.
-
-For Container Apps, a rollout might start with the stable revision at 100 percent and the candidate at 0 percent. That first state lets the team test the candidate directly before users reach it:
-
-```yaml
-traffic_step_0:
-  orders-api--v30: 100
-  orders-api--v31: 0
-```
-
-After direct checks pass, the team sends a small percentage to the candidate. This first exposure is where the watch window starts:
-
-```yaml
-traffic_step_1:
-  orders-api--v30: 90
-  orders-api--v31: 10
-watch_window: 20 minutes
-```
-
-If the candidate stays healthy, the team can continue. Each increase should have its own watch window rather than one big jump to full traffic:
-
-```yaml
-traffic_step_2:
-  orders-api--v30: 50
-  orders-api--v31: 50
-watch_window: 30 minutes
-```
-
-The important part is the decision rule attached to each step. A traffic percentage with no watch window turns into a slow version of "hope." A traffic percentage with signals gives the team a clear checkpoint: request failures, p95 latency, Azure SQL dependency failures, receipt upload failures, exceptions, and customer support signals.
-
-Traffic splitting has a real production tradeoff. A 10 percent canary reduces blast radius, but it also means some users see the candidate while others see the stable version. If the release changes API responses, database writes, cache keys, or message formats, the team must confirm old and new versions can run side by side. For the orders API, `v30` and `v31` both need to understand the same order records and receipt storage layout while traffic is split.
-
-Many Azure teams run this same idea through Kubernetes tooling on AKS. Helm or Kustomize often packages the manifests, while Argo Rollouts, Flagger, ingress controllers, or a service mesh can drive canary and blue-green behavior. App Service slots and Container Apps revision weights remain useful in the same family of controls. The release principle is portable: prepare a candidate, expose it gradually, watch agreed signals, and keep the recovery move ready in the platform that actually routes traffic.
-
-
-![Traffic split showing a stable revision at 90 percent, a candidate revision at 10 percent, a watch window, and a rollback path](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/traffic-split-rollback-path.png)
-
-*A safe rollout keeps the stable path visible while the candidate receives limited traffic and the team watches agreed signals.*
-
-Traffic splitting gives the team control over exposure. The rollback shape tells the team how to recover from each exposure level.
-
-### How To Move Container Apps Traffic
-<!-- section-summary: Container Apps traffic movement uses revision weights, and the release owner should show the split before and after each change. -->
-
-For Container Apps, traffic movement is a command against revision weights. The release owner first shows the current split, then changes the weights, then shows the split again. That before-and-after check prevents a lot of confusion during a release.
-
-```bash
-az containerapp ingress traffic show \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --output table
-
-az containerapp ingress traffic set \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --revision-weight orders-api--v30=90 orders-api--v31=10
-
-az containerapp ingress traffic show \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --output table
-```
-
-Promotion is the same command with different weights. If the 10 percent watch window stays healthy, the team can move to 50 percent. If that stays healthy, the team can move to 100 percent. Each step should create a release record entry with time, weights, owner, and the evidence that allowed the next move.
+For a 90/10 allocation, set the revision weights as follows:
 
 ```bash
 az containerapp ingress traffic set \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --revision-weight orders-api--v30=50 orders-api--v31=50
-
-az containerapp ingress traffic set \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --revision-weight orders-api--v31=100
+  --name checkout \
+  --resource-group shop-prod \
+  --revision-weight \
+    checkout--000017=90 \
+    checkout--000018=10
 ```
 
-The verification command is the same read-only traffic check used before the change:
+The weights must sum to 100%. Here incoming requests are allocated 90% to revision 17 and 10% to revision 18. This is a canary release: the candidate receives limited real traffic while the previous version handles the majority.
 
-```bash
-az containerapp ingress traffic show \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --output table
-```
-
-At the 50 percent step, the output should still show both revisions:
-
-```console
-RevisionName      Weight
-----------------  ------
-orders-api--v30   50
-orders-api--v31   50
-```
-
-Rollback uses the same tool. That is why traffic splitting is such a useful release control: the same command that exposes the candidate gradually can also move users back to the stable revision quickly.
+Again, the command changes routing; it does not decide whether the candidate is good. Observe the agreed signals before another increase. If readiness fails, do not move traffic. If canary metrics degrade, move candidate exposure back to zero rather than treating progression to 100% as an unavoidable pipeline destination.
 
 ## How Do You Roll Back Code?
-<!-- section-summary: Rollback shape names the exact recovery action for the runtime and configuration that changed. -->
+<!-- section-summary: Return traffic to a preserved, compatible runtime when code is faulty, but use configuration, secret, or feature recovery when those layers caused the failure. -->
 
-**Rollback shape** means the concrete move that returns users to a stable path. It depends on what changed. A bad candidate image, a bad app setting, and a bad Key Vault reference can all hurt users, but they may need different first actions.
+If v18 is the faulty application version, returning to v17 can restore service. Depending on the hosting model, that may mean moving traffic from v18 at 100% to 0% and v17 from 0% to 100%, or swapping App Service slots back. The recovery should use the runtime that actually owns the serving path.
 
-For App Service, rollback might mean swapping slots back. If `v31` moved into production through a slot swap and `v30` still lives in the previous slot, the team can swap back and restore the earlier production content. If the failure came from a sticky production setting, a swap alone may leave the bad setting in place, so the rollback plan must include the setting restore.
+Keeping the old state available makes that response faster. If the team deploys v18 and immediately deletes v17, rollback requires finding the previous artifact, redeploying it, supplying its configuration, starting it, warming it, and verifying it. If v17 remains active beside the candidate, routing can return to a runtime that is already present.
 
-For Container Apps, rollback often means traffic movement. If `orders-api--v31` starts failing at 10 percent, the team can set `orders-api--v30` to 100 percent and `orders-api--v31` to 0 percent. The candidate can remain active for inspection or receive no traffic until the team deactivates it.
+Slots, multiple revisions, immutable artifacts, and previous configuration snapshots support that preparation. Their value is not simply that they retain historical names. They retain the ingredients or running state needed for an actual recovery.
 
-For configuration, rollback means restoring the known-good value or target. The team may turn off `CHECKOUT_RECEIPT_RETRY_ENABLED`, point a Key Vault reference back to a previous secret version, or restore a previous app setting snapshot. Because config changes can restart an app or require a new revision path, the rollback plan should include the expected runtime effect.
+### Match recovery to the failed layer
 
-Here is a combined rollback shape for the orders API. It separates candidate, config, secret, and slot failures so the first recovery action matches the evidence:
+A bad binary, bad setting, bad feature, invalid secret, and bad traffic decision require different responses:
 
-```yaml
-rollback_shape:
-  bad_candidate_code:
-    action: move 100 percent traffic to orders-api--v30
-    expected_effect: new checkout requests use stable revision
-  bad_feature_flag:
-    action: set CHECKOUT_RECEIPT_RETRY_ENABLED to "false"
-    expected_effect: retry branch stops running
-  bad_secret_reference:
-    action: restore Application Insights secret reference to previous version
-    expected_effect: telemetry returns to expected resource
-  bad_slot_swap:
-    action: swap production back to previous slot state
-    expected_effect: production serves previous package and slot state
+| Failure | Likely immediate response |
+| --- | --- |
+| New binary crashes | Return traffic to the previous slot or revision |
+| Dependency configuration is wrong | Restore the previous configuration |
+| Feature logic is broken | Disable the feature flag while the old path remains usable |
+| New secret is invalid | Restore the previous secret version or reference |
+| Candidate readiness fails | Keep traffic on the existing runtime |
+| Canary metrics degrade | Return candidate traffic to 0% |
+| Slot swap introduces failure | Swap back, checking configuration compatibility |
+| Database migration breaks compatibility | Do not assume application rollback alone can restore service |
+
+For example, configuration 42 can return to 41, `FeatureX=true` can return to `false`, secret version 7 can return to version 6, or v18 exposure can fall from 50% to zero. Automatically redeploying the previous build for all of these cases can miss the thing that actually changed.
+
+### An old executable is not the whole old system
+
+Suppose v18 performs this database change:
+
+```sql
+DROP COLUMN legacy_payment_id
 ```
 
-This record gives the on-call engineer a menu based on evidence. If only the retry branch fails, the feature flag rollback may be enough. If every request on `v31` fails before reaching the branch, traffic rollback comes first. If telemetry disappears but users stay healthy, restoring the telemetry secret may solve the operational problem while traffic stays steady.
+This is a fragment illustrating the destructive schema operation, not a complete migration statement to execute. If v17 expects `legacy_payment_id`, returning traffic to v17 cannot recreate the missing column. The old executable still exists, but the old system state does not.
 
-Now we can connect runtime configuration and safe rollout controls in one release. The same orders API story shows why these topics belong together.
+Traffic rollback and system rollback are therefore different guarantees. Compatibility needs to cover application code, database schema, message formats, API contracts, configuration, secrets, and feature flags. Backward-compatible schema changes are part of safe application rollout because old and new runtimes may need to work against the same surrounding system.
 
-### Putting It All Together
-<!-- section-summary: A safe rollout keeps the candidate, settings, secret access, traffic movement, and rollback target connected. -->
+### Separate runtime rollout from feature rollout
 
-The orders API team starts with a candidate image for revision `orders-api--v31`. Before any production traffic moves, the team reviews runtime configuration. The retry flag turns on, the storage account target stays production, the Application Insights connection string comes from Key Vault, and the managed identity can read the required secrets.
+A complete release can begin by building immutable `checkout:v18`, then combining it with production-compatible configuration, Key Vault references, and managed identity in a candidate slot or revision. Validate startup, readiness, vault access, database access, other dependencies, and smoke tests before customer exposure.
 
-The team then verifies the candidate directly. In Container Apps, the candidate revision starts with zero traffic and passes startup and readiness probes. The team runs a direct smoke test against the candidate path. In App Service, the equivalent flow would deploy to a staging slot, warm the slot, verify Key Vault references, and run checkout tests against the staging host name.
+Next, allocate 95% to the old version and 5% to the candidate. Observe 5xx rates, latency, dependency failures, and business success. If the health gates pass, progress through 25%, 50%, and 100% candidate exposure with a decision between stages.
 
-Traffic moves gradually. The first step sends 10 percent to `v31` and keeps 90 percent on `v30`. The watch window focuses on the actual release risk: checkout failures, p95 checkout duration, Azure SQL dependency failures, receipt upload failures, exceptions, and telemetry health. If those signals stay near baseline, the team can move to 50 percent and then 100 percent.
+The artifact may now handle all traffic while `NewCheckout=false`. Only then start the separate feature rollout: employees first, followed by 5%, 25%, and 100% as the behavior proves safe. The runtime question is whether v18 can operate safely; the feature question is whether the new checkout behavior works for users. Separating them makes it easier to identify which change caused a regression.
 
-The rollback shape stays ready for each kind of failure. A candidate code failure sends traffic back to `v30`. A bad feature flag restores the previous setting. A bad secret reference points back to a known-good version. A bad App Service swap swaps back and restores any sticky setting that caused the problem.
+Consider the complete state progression from the example:
 
-This is the connection the article is trying to make. Runtime configuration decides what the candidate does. Rollout controls decide who experiences it. A safe Azure release names both before production users become the test plan.
+| State | Runtime and configuration | Feature state | Exposure and next evidence |
+| --- | --- | --- | --- |
+| A | v17 with `config-82` | Off | v17 handles 100% |
+| B | v17 serves; v18 with `config-83` exists as candidate | Off | Candidate at 0%; validate directly |
+| C | Both runtimes available | Off | v17 at 95%, v18 at 5%; observe |
+| D | v18 with `config-83` | Off | v18 at 100%; observe platform behavior |
+| E | Same v18 runtime | Enabled for 5% of users | Observe the new feature separately |
+| F | Same v18 runtime | Enabled for everyone | Retain evidence and recovery as needed |
 
-### What's Next
-<!-- section-summary: The final article focuses on watch windows, verification signals, rollback decisions, and runtime operations after traffic moves. -->
+At each transition, ask what changed, what evidence shows it worked, and what immediate rollback is available. Those questions keep the sequence tied to actual decisions instead of treating the table as a fixed timetable.
 
-The candidate now has settings, secret access, rollout controls, and a rollback shape. The next article starts when real traffic reaches the candidate. We will talk about watch windows, health checks, smoke tests, Application Insights, Azure Monitor alerts, rollback versus fix-forward decisions, release records, and the runtime operations that happen after the first release decision.
+### Record the effective release state
 
-We will keep the same orders API story. The next question changes from "can we expose the candidate safely?" to "what evidence tells us whether to continue, roll back, fix forward, or operate through a smaller runtime issue?"
+The release record must be detailed enough to answer what was actually running. This example retains the artifact, configuration, revisions, references, feature state, traffic history, gates, and recovery target together:
 
----
+```yaml
+release: checkout-prod-1842
+artifact:
+  image: checkout:v18
+  digest: sha256:abc123
+configuration: config-83
+runtime: Azure Container Apps
+previousRevision: checkout--017
+candidateRevision: checkout--018
+keyVault: checkout-prod-kv
+secretReferences:
+  - payment-key/latest
+  - database-password/v42
+featureFlags:
+  NewCheckout: false
+traffic:
+  - time: "18:00"
+    candidatePercent: 5
+  - time: "18:10"
+    candidatePercent: 25
+  - time: "18:25"
+    candidatePercent: 50
+  - time: "18:40"
+    candidatePercent: 100
+healthGates:
+  fiveXxRate: "< 1%"
+  p95Latency: "< 500ms"
+  paymentSuccess: "> 99%"
+rollbackTarget:
+  revision: checkout--017
+  configuration: config-82
+```
+
+The abbreviated digest and secret-reference labels illustrate the record; they are not complete production identifiers. In a real record, the artifact identity and selected secret references must resolve to the intended resources. The thresholds express this example's release decision, not universal health settings for every application.
+
+Finally, think of production as a set of related state: artifact, configuration, secrets, identity, feature state, active runtimes, and traffic allocation. Create the proposed next state, verify it, give it limited exposure, collect evidence, and increase exposure only after deciding that it is safe. Preserve the known-good state for as long as rollback remains useful.
+
+The purpose is not to make every change slow. It is to keep changes understandable and recoverable while uncertainty is high. Configuration changes deserve release discipline; secrets deserve their own protection and lifecycle; flags separate code from behavior; and progressive rollout depends on evidence between exposure steps. Design those recovery options before the first traffic move.
+
+### References
+
+- [Configure App Service app settings](https://learn.microsoft.com/en-us/azure/app-service/configure-common)
+- [Use Key Vault references in App Service](https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references)
+- [Manage Container Apps environment variables](https://learn.microsoft.com/en-us/azure/container-apps/environment-variables)
+- [Manage Container Apps secrets](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets)
+- [Azure App Configuration overview](https://learn.microsoft.com/en-us/azure/azure-app-configuration/overview)
+- [Manage App Configuration feature flags](https://learn.microsoft.com/en-us/azure/azure-app-configuration/manage-feature-flags)
+- [Understand feature management](https://learn.microsoft.com/en-us/azure/azure-app-configuration/concept-feature-management)
+- [Set up App Service staging slots](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots)
+- [Container Apps revisions](https://learn.microsoft.com/en-us/azure/container-apps/revisions)
+- [Container Apps traffic splitting](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting)
 
 ## Check Your Answers
 
 :::expand[What Must a Safe Runtime Change Control?]{kind="recap"}
-Runtime settings and rollout controls belong in the same release conversation because both decide what users experience. Runtime configuration is the environment-specific state that the application reads after Azure starts it.
+The artifact is only one input to the running system. Configuration, secrets, identity, infrastructure, and feature state determine what that code actually does. Reuse the same artifact across environments, identify configuration versions, and treat changes to these runtime inputs as production changes even without another build.
 :::
 
 :::expand[How Do App Settings and Connection Values Work?]{kind="recap"}
-App settings are Azure-managed environment values, and changing them can restart or reshape runtime behavior. Changing runtime settings starts with reading the current value, setting the new value, and confirming the runtime received it.
+App Service supplies settings as environment variables and restarts the application when settings are added, removed, or changed. Runtime values can override packaged defaults in supported stacks. Use the portal or CLI through a reviewed, reproducible configuration process, and retain the old values and change history needed for recovery.
 :::
 
 :::expand[How Do Feature Flags and Key Vault References Reduce Risk?]{kind="recap"}
-Feature flags are runtime controls that let a team release code separately from enabling behavior for users. Key Vault references let an app setting point to a secret while the runtime identity retrieves the value.
+Prefer identity-based access when it removes an unnecessary long-lived secret. Otherwise, a Key Vault reference separates the app's setting from the confidential value and its lifecycle. Versioned and unversioned references have different rotation behavior. Feature flags independently control exposure of code already deployed, support targeted rollout and disablement, and need removal after temporary rollout work is complete.
 :::
 
 :::expand[How Do Container Apps Secrets Reach the Runtime?]{kind="recap"}
-Container Apps secrets are application-scoped values that containers consume through environment variables or volume mounts. Secret wiring is concrete after the release owner sets the secret reference, maps it into the app, and verifies the app can read it.
+A revision's environment maps a variable to an application-scoped secret, which may reference Key Vault using managed identity. Environment changes create revisions; direct secret edits do not and need the appropriate consumer restart or new revision. Unversioned Key Vault-backed secrets refresh within roughly 30 minutes and restart affected active environment-variable consumers.
 :::
 
 :::expand[How Do You Roll Back Configuration?]{kind="recap"}
-Config rollback restores known-good runtime values when a setting or secret reference causes production trouble. Restoring config means putting the previous value back in the same runtime surface and checking that the app actually uses it.
+Restore an identified previous set of settings or references instead of guessing values or automatically changing the artifact. Then account for the hosting lifecycle: App Service restarts on setting changes, while Container Apps distinguishes revision-template changes from shared secret changes. Recovery is complete only after the runtime consumes the restored state and the affected behavior works.
 :::
 
 :::expand[What Is a Candidate Version?]{kind="recap"}
-A candidate version is the specific runtime version being evaluated before or during production exposure.
+The candidate is the artifact together with production-compatible configuration, secrets, identity, and feature state. Validate that complete runtime before broad exposure. Startup and readiness are useful intermediate evidence, but application, dependency, and user outcomes determine whether a release actually works. Observe and decide between each increase in exposure.
 :::
 
 :::expand[How Do Slots and Traffic Splitting Support Rollouts?]{kind="recap"}
-App Service slots let a team run a candidate beside production and swap traffic after direct validation. A slot release has a concrete sequence: deploy to staging, set staging config, test staging, swap, and keep the old slot ready. Traffic splitting exposes a candidate to a controlled percentage of users before full promotion. Container Apps traffic movement uses revision weights, and the release owner should show the split before and after each change.
+Slots and revisions keep a candidate available for direct checks while the current version serves users. Slot-specific settings, warmup, and swap preview support preparation before cutover. App Service can route clients to slots, and Container Apps can weight active revisions with a total of 100%. Shared application settings still require separate attention because preserving a revision does not preserve every surrounding value.
 :::
 
 :::expand[How Do You Roll Back Code?]{kind="recap"}
-Rollback shape names the exact recovery action for the runtime and configuration that changed. A safe rollout keeps the candidate, settings, secret access, traffic movement, and rollback target connected. The final article focuses on watch windows, verification signals, rollback decisions, and runtime operations after traffic moves.
+Return traffic to a preserved, compatible prior runtime or swap slots back when the application version is faulty. Use configuration, secret, or feature recovery when those layers failed instead. Check database and contract compatibility, separate runtime rollout from feature rollout, and record the effective state and exact recovery target before making users depend on the candidate.
 :::
-
-## References
-
-- [Configure an App Service app](https://learn.microsoft.com/en-us/azure/app-service/configure-common) - Explains app settings, connection strings, environment variable behavior, encryption, and restart behavior after app setting changes.
-- [Use Key Vault references as app settings in Azure App Service and Azure Functions](https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references) - Documents Key Vault reference syntax, managed identity use, caching, refresh behavior, and access requirements.
-- [Managed identities for Azure resources](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview) - Explains how Azure resources use managed identities to authenticate without storing credentials in code.
-- [Manage secrets in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets) - Documents Container Apps secrets, Key Vault references, managed identity access, application-scope behavior, and revision restart considerations.
-- [Update and deploy changes in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions) - Describes revisions, revision modes, revision-scope changes, application-scope changes, readiness checks, labels, and reverting to a previous revision.
-- [Traffic splitting in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting) - Documents weighted traffic splitting across active revisions in multiple revision mode.
-- [Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots) - Documents deployment slots, slot-specific settings, swap behavior, swap with preview, and swap rollback.
-- [az webapp config appsettings](https://learn.microsoft.com/en-us/cli/azure/webapp/config/appsettings) - Documents Azure CLI commands for listing and setting App Service app settings.
-- [az containerapp](https://learn.microsoft.com/en-us/cli/azure/containerapp) - Documents Azure CLI commands for updating Container Apps environment variables and revision settings.
-- [az containerapp secret](https://learn.microsoft.com/en-us/cli/azure/containerapp/secret) - Documents Azure CLI commands for creating and updating Container Apps secrets, including Key Vault references.
-- [az containerapp ingress traffic](https://learn.microsoft.com/en-us/cli/azure/containerapp/ingress/traffic) - Documents Azure CLI commands for showing and setting Container Apps traffic weights.
-- [az webapp deployment slot](https://learn.microsoft.com/en-us/cli/azure/webapp/deployment/slot) - Documents Azure CLI commands for App Service slot operations, including swaps.
-- [Azure App Configuration feature management](https://learn.microsoft.com/en-us/azure/azure-app-configuration/concept-feature-management) - Explains feature flags, feature filters, variants, and dynamic feature management concepts.
-- [Manage feature flags in Azure App Configuration](https://learn.microsoft.com/en-us/azure/azure-app-configuration/manage-feature-flags) - Shows how Azure App Configuration stores and manages feature flags outside application code.
-- [az appconfig feature](https://learn.microsoft.com/en-us/cli/azure/appconfig/feature) - Documents Azure CLI commands for showing, enabling, disabling, and setting App Configuration feature flags.
-- [OpenFeature reference introduction](https://openfeature.dev/docs/reference/intro/) - Describes the OpenFeature API, providers, hooks, evaluation context, and vendor-neutral feature flag usage.

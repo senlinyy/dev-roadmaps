@@ -1,0 +1,141 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "delivery-deployment",
+      "type": "single",
+      "scenario": "Every accepted checkout change produces a validated, deployable package. Production waits for an authorized release decision, but the deployment procedure itself is automated. Which description best matches this setup?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It is continuous deployment because creating a package is a production release."
+        },
+        {
+          "id": "b",
+          "text": "It is neither delivery nor deployment because a human decision remains."
+        },
+        {
+          "id": "c",
+          "text": "It is continuous delivery with a deliberate production approval gate."
+        },
+        {
+          "id": "d",
+          "text": "It is only continuous integration because deployment automation cannot have gates."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "A release-ready, validated package with an automated path can support continuous delivery while retaining a human production decision. That decision distinguishes it from automatically deploying every accepted change; packaging alone is not deployment. [Official reference](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)."
+    },
+    {
+      "id": "same-commit",
+      "type": "single",
+      "scenario": "Staging verified digest A from commit abc123. Production rebuilt commit abc123 and deployed digest B. The release log cites staging's result as proof that production's package passed verification. What does the evidence establish?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Only A was verified; production needs the tested artifact or independent validation of B."
+        },
+        {
+          "id": "b",
+          "text": "A and B are interchangeable because a commit identifies every build input."
+        },
+        {
+          "id": "c",
+          "text": "The later build inherits staging's verification because it ran afterward."
+        },
+        {
+          "id": "d",
+          "text": "Matching package names are sufficient even when their contents differ."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Commit identity is not byte identity. Build inputs and processes may differ, and the digest mismatch identifies different artifacts. Sequence and names do not transfer verification evidence between them. [Official reference](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)."
+    },
+    {
+      "id": "approval-limit",
+      "type": "single",
+      "scenario": "An authorized reviewer approves the release, but staging smoke verification fails against the candidate package. The team configured both approval and successful verification as requirements. What should happen?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Proceed because approval implicitly overrides technical checks."
+        },
+        {
+          "id": "b",
+          "text": "Rebuild in production and retain the approval without further verification."
+        },
+        {
+          "id": "c",
+          "text": "Treat the failed check as informational once the package was approved."
+        },
+        {
+          "id": "d",
+          "text": "Keep production blocked until the required verification succeeds for the candidate."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Approval and technical verification address different requirements. Neither automatically cancels the other. Rebuilding also changes the candidate; continuing or downgrading the check violates the stated release contract. [Official reference](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)."
+    },
+    {
+      "id": "recovery-state",
+      "type": "single",
+      "scenario": "A release removed a database field that the previous application version requires. The new version then starts returning errors. An operator proposes deploying the old binary immediately. What is the safest first decision?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Roll back the binary because version order proves database compatibility."
+        },
+        {
+          "id": "b",
+          "text": "Assess current data compatibility and choose a compatible recovery or roll-forward path."
+        },
+        {
+          "id": "c",
+          "text": "Rebuild the old binary so it automatically learns the changed database schema."
+        },
+        {
+          "id": "d",
+          "text": "Ignore the database change because the application image is immutable."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Recovery must account for persistent state already changed, not just a previous binary. Rebuilding or image immutability does not restore a removed field. The scenario requires a compatible recovery path before changing traffic or software again. [Official reference](https://sre.google/sre-book/release-engineering/)."
+    },
+    {
+      "id": "release-evidence",
+      "type": "multiple",
+      "scenario": "A candidate has low CPU usage and a passed staging check. Production serves much higher traffic and uses different external dependencies. Which two checks strengthen the decision to continue a gradual release?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Verify the deployed candidate's digest matches the package whose evidence was reviewed."
+        },
+        {
+          "id": "b",
+          "text": "Assume staging success proves production dependency behavior at all traffic levels."
+        },
+        {
+          "id": "c",
+          "text": "Compare candidate behavior with a stable baseline over a meaningful observation window."
+        },
+        {
+          "id": "d",
+          "text": "Promote as soon as the process starts, before customer requests reach it."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Artifact identity connects evidence to the candidate, while observed behavior tests its production impact. Low CPU, startup, or staging success alone cannot cover different production conditions. [Official reference](https://sre.google/workbook/canarying-releases/)."
+    }
+  ]
+}

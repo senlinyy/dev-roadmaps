@@ -1,7 +1,7 @@
 ---
 title: "Verification, Rollback, and Runtime Operations"
-description: "Use health checks, smoke tests, Application Insights, Azure Monitor alerts, release records, rollback, and runtime actions after Azure traffic moves."
-overview: "A release still needs active judgment after traffic reaches the candidate. This article explains the watch window, layered verification, rollback versus fix-forward choices, and the runtime operations that keep the service stable after the release decision."
+description: "Verify Azure releases through production evidence, compare candidates with a baseline, choose safe rollback or roll-forward, and prove recovery after every action."
+overview: "A successful deployment proves that Azure performed a change. Release verification checks whether customers can still do their work, and runtime operations keep checking after promotion, rollback, or remediation."
 tags: ["verification", "rollback", "health-checks", "application-insights", "azure-monitor"]
 order: 3
 id: article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions
@@ -25,13 +25,11 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-The previous article gave the orders API a controlled rollout path. The candidate revision has runtime settings, Key Vault access, traffic weights, and a rollback shape. This article starts at the moment real production traffic reaches that candidate and the team has to decide what happens next.
+Azure reports that checkout v18 deployed successfully. The container exists, the image downloaded, and the process started. Customers nevertheless keep seeing failed payments. Both observations can be true: the deployment system put the new version on the runtime, but that does not establish that customers can buy anything.
 
-We will keep using `devpolaris-orders-api`. The team ships receipt retry code in revision `orders-api--v31`. Traffic starts at 10 percent on the candidate and 90 percent on the stable revision `orders-api--v30`. The first direct checks passed, but production traffic has real customers, real payment timing, real storage behavior, and real dependency pressure.
+The release needs another kind of evidence. After a small amount of traffic reaches v18, compare its behavior with the working v17, check the customer operation, and decide whether to increase exposure, wait, or reverse the change. Whatever action follows needs another check of the resulting service.
 
-The verification and recovery model has four jobs. First, we define the **watch window** so the team knows who is watching which signals. Then we connect platform health, smoke tests, real traffic telemetry, and Azure Monitor alerts. After that, we compare **rollback** and **fix forward** decisions. Finally, we talk about runtime operations after the decision, such as scaling, restarting, draining traffic, restoring configuration, and writing the release record.
-
-Keep these questions in view as you work through the lesson:
+These questions follow that process through release verification and the continuing work of running production:
 
 1. **When Does a Release End?**
 2. **How Does a Watch Window Verify the New Version?**
@@ -43,623 +41,581 @@ Keep these questions in view as you work through the lesson:
 8. **What Should the Final Release Record Prove?**
 
 ## When Does a Release End?
-<!-- section-summary: The final part of the module focuses on evidence and decisions after users start reaching the candidate. -->
+<!-- section-summary: Deployment completion proves a change was performed; a release needs evidence that the resulting service works under production conditions and remains stable. -->
 
-### The Release Continues When Traffic Moves
-<!-- section-summary: Moving traffic starts the verification period where the team proves the candidate behaves well for real users. -->
+A deployment system has a bounded responsibility. It can report that a container was created, an image was downloaded, and an application process started. Those results matter, but the system may never have attempted the customer transaction whose behavior the release changes.
 
-Traffic movement is the moment the release is visible to users. In App Service, traffic might move through a slot swap or slot routing. In Container Apps, traffic might move through revision weights. In AKS, traffic might move through a rolling update, service selector, ingress route, or progressive delivery controller.
+There is a progression of increasingly useful evidence. Deployment success establishes that the change was performed. A running process establishes that code started. Readiness establishes that the runtime considers itself able to receive work. A responding endpoint, functioning dependencies, successful application behavior, successful customers, and healthy business outcomes each establish something further.
 
-The team still has active work after traffic moves because staging only approximates production conditions. Production has real customer data, real concurrency, real dependency limits, real background jobs, real caching, and real user behavior. A candidate can pass `/healthz`, pass a staging smoke test, and then fail for a production-only path because the storage account permission, database lock, request size, or feature flag value only appears under real traffic.
+The progression explains why a green pipeline and failed payments do not contradict one another. The pipeline's success concerns its assigned operation. The release decision concerns the behavior of the system that operation produced.
 
-For `devpolaris-orders-api`, the release question changes after 10 percent traffic moves to `orders-api--v31`. Before traffic, the team asked whether the candidate started and passed direct checks. After traffic, the team asks whether checkout stays healthy for customers. That includes failed requests, latency, Azure SQL dependency calls, Storage upload failures, unhandled exceptions, queue or event side effects, and customer support signals.
+The operating loop is therefore **change, expose, observe, compare with expectations, decide, and verify again**. Keeping a change and reversing it both lead back to verification. Production continues running after either decision, so neither branch removes the need to observe the result.
 
-This is the point where the release can drift into guesswork if the team has no shared plan. One person watches a dashboard. Another checks logs. Someone else asks if the rollout is done. A watch window turns that loose attention into a named period of release verification.
+### Traffic introduces evidence that staging cannot supply
+
+Initially, v17 may receive 100% of requests while v18 receives none. Moving to 95% on v17 and 5% on v18 exposes the candidate to real production work.
+
+Before that move, the team may know that v18 starts, passes synthetic tests, and reaches its dependencies. It has less evidence about thousands of actual users, production load, obscure customer cases, normal latency, dependency pressure, or the effect on persistent business state.
+
+A **candidate** is the new runtime being evaluated. The **control** is the established version used for comparison. Sending a limited share of production work to the candidate is a **canary rollout**. It lets the team learn about a change before every user depends on it.
+
+At 1% exposure, the candidate receives some useful evidence while relatively few users face its possible failures. At 100%, evidence arrives much faster, but the potential impact covers the whole traffic population. This extent of possible harm is the release's **blast radius**.
+
+Increasing traffic therefore increases both information and risk. A safe progression seeks enough evidence to justify each increase rather than expanding the affected population faster than confidence grows.
+
+### Completion needs an explicit condition
+
+Reaching 100% traffic does not have to mean the release is finished. A useful completion definition requires the candidate to receive all intended traffic, the post-release watch to finish, technical and business measurements to remain healthy, and no release-related alerts to remain active.
+
+The rollback path must also be recorded and the release record finalized. These conditions keep responsibility clear during the period when the whole production population has only recently moved to the new version.
+
+Some evidence arrives quickly, such as crashes or request failures. Other evidence needs more time, including conversion changes or delayed jobs. The next section explains how a watch window gives those signals an opportunity to appear.
 
 ## How Does a Watch Window Verify the New Version?
-<!-- section-summary: A watch window is a time-boxed period where named owners inspect named production signals after traffic moves. -->
+<!-- section-summary: A watch window gathers time, traffic, cohort, and baseline evidence sufficient for the next exposure decision rather than treating elapsed time alone as proof. -->
 
-A **watch window** is a planned period of active observation after a release step. It has an owner, a duration, a traffic level, a signal list, and a decision rule. The team uses a watch window after each meaningful exposure change, such as 10 percent traffic, 50 percent traffic, or 100 percent traffic.
+A **watch window** is a deliberate observation period after a change. It is an operating practice, not an Azure resource. The team watches the candidate, the old runtime, dependencies, and users before deciding whether to continue.
 
-The watch window should match the user path that the release can affect. For a checkout API, a green process health check helps, and checkout-specific signals prove much more about payment confirmation, Azure SQL writes, receipt upload, and telemetry. The watch window needs signals that match those risks.
+The purpose is to collect enough relevant evidence. Simply waiting for a timer to expire cannot establish that the important customer paths were exercised or that slower failures had time to develop.
 
-Here is a watch window for the orders API. It names the owner, the traffic level, the paths, the signals, and the decision rule before the candidate receives more traffic:
+### Require the conditions that reveal the risk
 
-```yaml
-watch_window:
-  release: orders-api-2026-06-12-v31
-  owner: platform-api-oncall
-  traffic_level:
-    orders-api--v30: 90
-    orders-api--v31: 10
-  duration: 20 minutes
-  primary_paths:
-    - POST /checkout
-    - GET /orders/{id}
-  signals:
-    - failed checkout request rate
-    - p95 checkout duration
-    - Azure SQL dependency failures
-    - receipt upload failures
-    - unhandled exceptions
-    - Application Insights ingestion present
-  decision:
-    continue_if: signals stay near baseline
-    rollback_if: checkout failures rise above 2 percent for 5 minutes
-    pause_if: telemetry is missing or evidence is incomplete
-```
+Suppose 10% of traffic moves at 12:00. At 12:00:05, no errors have appeared, but only 12 requests may have run. At 12:03, 8,000 requests with a normal error rate provide stronger evidence.
 
-The exact numbers depend on the service. A high-traffic checkout API might need tighter thresholds and automated alerts. A low-traffic admin tool might need synthetic checks because real users arrive slowly. A risky migration might need a longer watch window because the failure appears after background jobs or delayed events run.
+Even that larger sample may miss a bug affecting only payment provider ProviderB if that provider is mainly used during evening traffic. A high request count does not guarantee coverage of the affected user group.
 
-![Watch window board showing owner, traffic level, smoke tests, error rate, latency, and release decision](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions/watch-window-evidence.png)
+Time also exposes problems that a short test cannot reveal. A memory leak could produce this pattern:
 
-*A watch window is useful when it names the owner, traffic level, evidence, and decision instead of asking people to casually watch dashboards.*
+| Time | Memory use |
+| --- | ---: |
+| 12:00 | 30% |
+| 12:15 | 35% |
+| 12:30 | 46% |
+| 13:00 | 79% |
 
-The useful habit is the same across those services: decide what evidence matters before traffic moves. A watch window gives the release owner a clear moment to continue, pause, roll back, or fix forward. Now we can talk about the layers of evidence inside that window.
+A 30-second check would see only the beginning. The problem needs sustained operation before its trajectory is apparent.
 
-### How To Run The Watch Window
-<!-- section-summary: Running a watch window means capturing traffic state, checking health, watching targeted telemetry, and writing the decision at the end. -->
+These examples identify different requirements for a useful observation period: enough requests, sufficient elapsed time, relevant user cohorts, background-job execution, and dependency interactions. A **cohort** here is a subset of users or requests sharing a relevant characteristic, such as a payment provider or region.
 
-The hands-on watch window starts with a state capture. The release owner records the current traffic split and revision list before looking at graphs. That way, if the team later asks which version received traffic at 10:12, the release record has an answer.
+There is consequently no universal window length. Five minutes may produce substantial evidence for a busy API and almost none for a payroll service whose important job runs once per hour. A batch processor may need to complete an entire production batch before its behavior can be judged.
 
-```bash
-az containerapp ingress traffic show \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --output table
+For checkout, an example criterion could require at least 100,000 requests, five or more minutes of observation, and meaningful traffic from every major region. That explains more than an instruction to wait exactly ten minutes: it identifies both elapsed time and the work that must occur.
 
-az containerapp revision list \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --query "[].{name:name,active:active,trafficWeight:trafficWeight}" \
-  --output table
-```
+### Combine time with explicit gates
 
-The traffic table and revision table should agree. In this example, `v31` is active and serving 10 percent of traffic, so the watch window should filter telemetry by that candidate revision.
+A **rollout gate** is a condition that must be satisfied before the next exposure step. It can combine several independent requirements.
 
-```console
-RevisionName       Weight
------------------  ------
-orders-api--v30    90
-orders-api--v31    10
+For example, a gate might require all of the following:
 
-Name             Active    TrafficWeight
----------------  --------  -------------
-orders-api--v30  true      90
-orders-api--v31  true      10
-```
+- At least ten minutes of observation.
+- At least 50,000 requests.
+- An HTTP 5xx rate below 1%.
+- P95 latency below 500 ms.
+- Checkout success above 99%.
+- No Sev0 or Sev1 alert during the relevant period.
 
-Then the release owner checks the direct health path for the candidate and stable paths. In a real system, those URLs might be a Container Apps revision label URL, an App Service staging slot URL, or a production URL with telemetry tags that identify the revision. The point is to check a user-facing endpoint rather than only the Azure resource page.
+These values are an illustrative policy, not Azure defaults. Their useful feature is the combination: waiting long enough does not excuse too little traffic, and enough traffic does not excuse failed customer transactions.
 
-```bash
-curl -fsS https://orders-api.devpolaris.example/healthz
-curl -fsS https://orders-api.devpolaris.example/readyz
-```
+HTTP **5xx** responses indicate server-side failure responses. **P95** is a latency percentile: approximately 95% of measured durations fall at or below it. Severity labels identify the urgency defined by the team's incident policy. The gate needs those terms to have a shared operational meaning before the release begins.
 
-The next move is targeted telemetry. The release owner opens Application Insights Logs and keeps two saved Kusto queries ready: one for checkout requests and one for dependencies. The query should group by the revision or slot dimension that the app emits. That dimension lets the team connect failures to the candidate instead of only seeing a blended production error rate.
+Defining criteria beforehand also reduces improvisation. If an engineer reports 600 ms latency during a release, the team should not have to invent its tolerance on the spot. One possible policy defines success below 400 ms, a hold between 400 and 500 ms, and rollback above 500 ms for five minutes.
 
-```kusto
-requests
-| where timestamp > ago(20m)
-| where name == "POST /checkout"
-| summarize
-    total = count(),
-    failed = countif(success == false),
-    failureRate = todouble(countif(success == false)) / count(),
-    p95DurationMs = percentile(duration, 95)
-  by tostring(customDimensions.revision)
-| order by failureRate desc
-```
+That policy answers what to do with an observed range while still allowing the team to investigate why it changed.
 
-At the end of the watch window, the release owner writes one of four decisions in the release record: continue, pause, roll back, or fix forward. A useful record has the time, traffic split, signal snapshot, and decision. That short note is the difference between "we watched it for a while" and "we had a controlled release decision."
+### Compare against a meaningful baseline
+
+An observed P95 of 420 ms cannot be judged in isolation. If v17 normally takes 180 ms, it suggests a regression. If the established behavior is 500 ms, it suggests an improvement.
+
+A **baseline** is the expected behavior used for comparison. It can come from the previous version, historical observations, a service-level objective, a known safe threshold, a control population, or a capacity model.
+
+A **service-level objective**, or SLO, states a target for the service outcome the team intends to provide. A release gate can use such a target, but it can also look for smaller changes that would be concerning even before the wider service objective is violated.
+
+A split rollout provides a particularly useful control. With v17 at 90% and v18 at 10%, both operate during roughly the same production conditions:
+
+| Measurement | v17 | v18 |
+| --- | ---: | ---: |
+| HTTP 5xx | 0.3% | 2.8% |
+| P95 latency | 240 ms | 610 ms |
+| Checkout success | 99.7% | 96.4% |
+
+The differences are more informative than asking only whether v18 stays below a one-second latency ceiling. The established runtime shows what the service can still achieve in the same period.
+
+The comparison should support a decision, not an assumption of perfect experimental equivalence. The earlier cohort example still matters: examine the work each version actually received. Traffic volume, time, and relevant coverage make the control comparison more useful.
+
+### Keep release gates distinct from ordinary alerts
+
+An operational alert asks whether production has crossed a boundary requiring action. Release verification asks whether there is enough evidence to intentionally expose more users to this particular change.
+
+Normal alerting might permit P95 below one second, while a release gate disallows a candidate regression greater than 10% relative to control. Those rules serve different purposes and can coexist.
+
+The team can therefore combine automated boundaries with judgment for ambiguous cases. A possible stop policy triggers if 5xx exceeds 2% for five minutes, P95 exceeds 800 ms, checkout success falls below 98.5%, or a Sev1 alert fires.
+
+This reduces dependence on someone staring at CPU, error, latency, queue, and payment graphs for two hours. Humans still interpret uncertain evidence, but the important boundaries have an explicit, repeatable definition.
+
+The next question is what those measurements actually prove. Verification uses several layers because a passing result at one layer leaves other questions unanswered.
 
 ## What Layers of Evidence Should You Check?
-<!-- section-summary: Release verification combines platform health, direct checks, real traffic telemetry, alerts, and business signals. -->
+<!-- section-summary: Verification moves from Azure control-plane state through runtime, dependencies, functionality, production behavior, business results, and sustained stability. -->
 
-**Verification** means proving that the candidate works well enough for the next release step. One signal rarely tells the whole story, so good verification has layers. Each layer answers a different question about the candidate.
+A useful verification ladder contains seven layers: control-plane execution, process and runtime state, dependency behavior, functional behavior, real production telemetry, business results, and sustained stability.
 
-The first layer is **platform health**. Azure can tell you whether the runtime started, whether probes pass, whether instances or replicas look healthy, and whether the platform can route traffic. App Service Health check, Container Apps probes, replica status, revision status, and platform logs all sit in this layer.
+Each layer asks a different question. Lower layers are often straightforward to automate. Higher layers provide stronger evidence that the release serves its intended purpose.
 
-The second layer is **direct functional checks**. A smoke test sends a known request through a known path and checks the expected result. For the orders API, a smoke test might create a test checkout, verify an order row exists, verify a receipt object appears in Storage, and verify telemetry arrives in Application Insights.
+| Layer | Question to establish |
+| --- | --- |
+| Control plane | Did Azure perform the requested change? |
+| Runtime | Did the process start and complete initialization? |
+| Dependencies | Can the application use the services it needs? |
+| Functionality | Can important basic operations succeed? |
+| Production telemetry | How does the candidate behave under actual traffic? |
+| Business outcome | Can users complete the work that matters? |
+| Sustained stability | Does acceptable behavior persist long enough to justify confidence? |
 
-The third layer is **real traffic telemetry**. Application Insights can show requests, dependencies, exceptions, traces, availability results, and operation correlation. This layer matters because production traffic can exercise paths that direct tests missed. It also lets the team compare candidate revision behavior against stable revision behavior during a split rollout.
+This is also a useful evidence pyramid. Runtime health supports dependency and functional checks, which support production and business verification. The upper layers do not make the lower ones irrelevant; they answer questions the lower checks were never designed to answer.
 
-The fourth layer is **alerting and business signals**. Azure Monitor alerts can watch metrics or log queries and route notifications through action groups. Business signals can include checkout conversion, support tickets, payment provider errors, or receipt delivery complaints. These signals connect platform health to user impact.
+### Confirm the requested Azure change
 
-Here is a layered verification checklist for the orders API. Each row answers a different release question, which keeps the team from treating one green signal as the whole story:
+The **control plane** is the management side of Azure: the operations that create or configure resources and change their routing. Examples of control-plane evidence include a completed deployment, created revision, completed slot swap, updated traffic weights, or accepted configuration.
 
-| Layer | What it answers | Example signal |
-|---|---|---|
-| **Platform health** | Can Azure run and route to the candidate? | Container Apps revision ready, replicas available, probes passing |
-| **Smoke tests** | Can a known path work on demand? | Test checkout writes order and receipt |
-| **Real telemetry** | How does the candidate behave under users? | Failed requests, p95 latency, dependency failures, exceptions |
-| **Alerts** | Did a threshold cross during the watch window? | Azure Monitor alert for checkout failure rate |
-| **Business signals** | Are customers feeling the release? | Failed payment handoffs, support reports, missing receipts |
+Check this layer first. If the platform change failed, diagnosing the checkout algorithm is premature. The intended candidate or traffic arrangement may not exist.
 
-The layers work together. A green probe with rising checkout failures points toward application or dependency behavior. A failed probe with no user traffic points toward startup or readiness. Missing telemetry during a watch window turns the release into a blind rollout, so pausing can be the safer decision even if users look fine for the moment.
+Once the requested change is present, continue checking. An accepted traffic configuration describes the platform's state, not the success of a transaction sent through that configuration.
 
-The layers work best when the team knows what each one proves. Health checks and smoke tests usually come first because they give the team controlled evidence before real users carry the release.
+### Confirm the running process
 
-### The Industrial Observability And On-Call Stack
-<!-- section-summary: Real release verification connects Azure telemetry to open standards, SLOs, alert routing, and an incident workflow. -->
+Runtime checks establish whether the process started, its container is running, connections can be accepted, and initialization completed. A process can exist while it is still loading the state needed to serve requests.
 
-Azure Monitor and Application Insights are the Azure surfaces in this article, but a production verification stack is usually wider. Many teams instrument application code with **OpenTelemetry**, send that telemetry to Application Insights or another backend, define **service level indicators** and **service level objectives**, route alerts through an on-call system, and keep a runbook next to the dashboard. The Azure tools hold the evidence; the operating practice tells the team what to do with it.
+Azure Container Apps uses startup and readiness probes in determining whether a new revision is ready. In single-revision mode, the existing revision retains traffic until the replacement is ready. If the update fails to reach readiness, traffic stays on the old revision.
 
-For the orders API, OpenTelemetry should add stable fields that make release queries possible. The exact backend can be Application Insights, Grafana, Datadog, New Relic, Honeycomb, or another tool chosen by the company. The important release fields are provider-neutral: service name, environment, version, revision, route, dependency target, and trace id. Azure Monitor's OpenTelemetry distribution can export those traces, metrics, and logs into Application Insights, where the Kusto queries in this article can group by revision.
+That protection contains some deployment failures before cutover. It does not establish that a ready application's business logic is correct. Health checks need to be interpreted according to the questions they ask.
 
+### Test the dependencies the candidate actually needs
 
-```yaml
-telemetry_contract:
-  standard: OpenTelemetry
-  backend: Application Insights
-  required_attributes:
-    service.name: devpolaris-orders-api
-    deployment.environment: production
-    service.version: v31
-    revision: orders-api--v31
-    http.route: POST /checkout
-    cloud.region: uksouth
-  release_queries_group_by:
-    - revision
-    - http.route
-    - dependency target
-```
+A running service can rely on Azure SQL, Cosmos DB, Service Bus, Redis, Key Vault, payment APIs, identity providers, and other microservices. Its own process health does not prove it can use each required dependency.
 
-SLOs turn that telemetry into a release decision. An SLI is the measured signal, such as successful checkout requests divided by total checkout requests. An SLO is the target, such as 99.5 percent successful checkout requests over a rolling window. The watch-window threshold can be stricter than the long-term SLO because a release owner wants to catch a bad candidate quickly.
+Verify the connection and access chain: can the dependency name resolve through DNS, can a TLS connection be established, can authentication succeed, and does the managed identity have the necessary permission?
 
-```yaml
-slo_release_gate:
-  user_journey: checkout
-  sli: successful POST /checkout requests / total POST /checkout requests
-  long_term_slo: 99.5 percent success over 28 days
-  watch_window_gate:
-    rollback_if: failure rate above 2 percent for 5 minutes on candidate revision
-    pause_if: telemetry missing for candidate revision
-  alert_route:
-    azure_monitor_action_group: ag-platform-api-prod
-    incident_channel: teams-platform-api-incidents
-    pager: platform-api-oncall
-    runbook: rollback-orders-api-v31
-```
+Then verify the useful operation. Can the database execute the required queries? Can messages be consumed from the queue? Can Key Vault secrets resolve? Merely identifying a destination is weaker evidence than completing the operation needed from it.
 
-The on-call workflow is the last piece. When an alert fires, the release owner should know who is paged, where the incident conversation happens, which dashboard or workbook to open, which rollback command is approved, and who writes the decision in the release record. That sounds procedural, but it is what keeps a release from turning into several people interpreting the same graph differently while users wait.
+**Authentication** establishes the caller's identity; authorization determines what that caller may do. A managed identity can identify the application while still lacking permission for a database, queue, or secret. That distinction explains why access failures can appear after the process has started normally.
 
-This stack also keeps the article grounded in real industry practice. Azure Monitor gives the alert and query surface. OpenTelemetry keeps instrumentation portable. SLOs and error budgets come from site reliability engineering practice. PagerDuty, Opsgenie, ServiceNow, Teams, Slack, or a similar system carries the human response. A good Azure release connects all of them before traffic moves.
+To the customer, several of these failures look identical: checkout fails. The layered investigation distinguishes an absent runtime, failed name resolution, failed secure connection, denied access, and an application error without assuming that every failure has the same cause.
+
+With those foundations checked, the next layer asks whether the application can perform a useful operation from beginning to end.
 
 ## How Do Health Checks and Smoke Tests Differ?
-<!-- section-summary: Health checks prove the runtime can serve traffic, while smoke tests prove a small user path works end to end. -->
+<!-- section-summary: Liveness and readiness guide runtime actions, smoke tests exercise useful behavior, and external synthetic tests add evidence from outside the application. -->
 
-A **health check** is a lightweight endpoint or probe that tells the platform whether the app instance can receive traffic. App Service Health check pings a configured path and expects a healthy HTTP response. Container Apps supports startup, liveness, and readiness probes. Kubernetes-based runtimes use similar probe ideas through startup, liveness, and readiness checks.
+A **health check** provides a narrow report about runtime availability. A **smoke test** exercises a small amount of useful functionality. The distinction matters because an application can answer a health endpoint while failing its actual customer operation.
 
-Health checks should match the traffic decision. A shallow endpoint that only returns `200 OK` from memory proves the process is alive. A stronger readiness check can prove the app loaded configuration, can reach critical dependencies, and can serve the user path. The team should keep the endpoint fast and reliable, because a fragile health check can remove healthy instances from rotation and create extra trouble during a release.
+For example, `GET /health` may return `200 OK` while `POST /checkout` fails because a payment credential is incorrect. The first response demonstrates basic availability of that endpoint. It does not exercise the payment path.
 
-For the orders API, a useful health response might expose readiness while keeping secrets hidden. The endpoint gives the release owner dependency evidence while leaving out connection strings and customer data:
+### Separate liveness from readiness
+
+A **liveness** probe asks whether the process should continue running. A failed liveness decision can lead to a restart. A **readiness** probe asks whether the process should receive traffic; an unready process should be kept out of the traffic path.
+
+A process can be alive but unready while initializing caches. That state does not necessarily call for repeatedly restarting it. It may simply need to finish preparing before users reach it.
+
+A process can also be alive and ready while its checkout algorithm contains a business bug. The runtime's health report and the correctness of the transaction are separate claims.
+
+Startup checks address the period in which the new runtime is preparing. Together with readiness, they help the platform avoid routing to a candidate that cannot yet accept work. They remain one layer of release evidence rather than the whole release gate.
+
+These meanings should guide interpretation of failures. If v18 fails its startup probe, do not move production traffic to it. Investigate the image, missing environment variables, an invalid secret, a startup exception, or an identity failure. Finding the problem before customers are exposed is successful containment.
+
+### Exercise a short functional path
+
+A smoke test checks whether the most important basic behavior works. A small set for the checkout application could verify:
+
+| Request | Expected result |
+| --- | --- |
+| `GET /health` | HTTP 200 |
+| `GET /products` | A valid product response |
+| `POST /cart` | Cart operation succeeds |
+| `POST /checkout` | A test transaction succeeds |
+
+The name comes from the hardware-testing idea of turning a device on and stopping if it produces smoke. In software, the objective is similarly limited: identify an obviously unusable deployment before progressing further.
+
+Smoke tests are deliberately not exhaustive. Their strength is that they exercise useful work rather than only process existence. Their limitation is that a few known inputs cannot cover every production payload, customer, and timing interaction.
+
+If the health check passes but a test checkout fails, do not increase exposure. The failed check shows that the release safety mechanism found a problem while the impact could still be contained.
+
+### Add an external view with synthetic checks
+
+**Synthetic verification** uses deliberate requests generated by a test rather than by a real customer. Application Insights availability tests can periodically call an HTTP or HTTPS endpoint and measure response success and duration.
+
+The test agent acts from outside the application. This can reveal a service whose process is running but whose public endpoint is unavailable. Internal application telemetry alone may not show the experience of a client unable to reach that endpoint.
+
+External checks and application-emitted measurements consequently complement each other. One observes whether a request reaches a usable public service; the other can explain the work performed inside the application.
+
+Passing these tests justifies moving to the next evidence layer. Real traffic brings browsers, payloads, geography, authentication, concurrency, dependencies, and edge cases that controlled tests cannot fully reproduce.
+
+## What Does Real Traffic Telemetry Reveal?
+<!-- section-summary: Production verification compares candidate and control across request behavior, dependency pressure, customer outcomes, and both fast and delayed signals. -->
+
+**Telemetry** is evidence emitted while the system runs. For a release, it allows the team to compare the candidate's actual behavior with its expectations and with the established runtime.
+
+Useful production measurements include request rate, 5xx and 4xx rates, P50/P95/P99 latency, dependency failures, exception rate, CPU, memory, connection-pool saturation, queue depth, and restarts. They describe different parts of the running service, so one healthy measurement should not stand in for the rest.
+
+A **connection pool** supplies a limited set of reusable connections. Saturation means the available capacity is occupied or close to its limit. A queue's depth measures waiting work. Those state measurements help identify pressure that may grow before customers see a large error rate.
+
+Evaluate the candidate both absolutely and relative to the control. A global average can blend healthy v17 requests with unhealthy v18 requests, while a version-aware comparison reveals whether the change has introduced a different outcome.
+
+### Include slower requests
+
+An average duration of 180 ms can coexist with a P99 of 14 seconds. Most requests may be quick while a small group of customers waits a very long time.
+
+P50 describes the middle of the measured distribution; P95 examines a slower tail, and P99 examines a more extreme tail. The percentile that matters depends on the application's service objective and the experience it promises.
+
+The earlier baseline comparison applies here too. A percentile that meets a generous global threshold can still have regressed sharply compared with the control. The release decision should recognize both user tolerance and change-related degradation.
+
+### Measure successful work, not just HTTP outcomes
+
+Normal HTTP 200 rates, latency, and CPU can coexist with a 35% fall in completed orders. An endpoint might return HTTP 200 with this body:
 
 ```json
 {
-  "status": "ready",
-  "version": "v31",
-  "checks": {
-    "configurationLoaded": true,
-    "sqlReachable": true,
-    "storageReachable": true,
-    "telemetryConfigured": true
-  }
+  "success": false,
+  "reason": "payment declined"
 }
 ```
 
-This response tells the release owner that the runtime can see the dependencies it needs. It keeps connection strings, secret values, database names beyond what the team intentionally exposes, and customer data out of the response. It also gives the team a simple way to compare the candidate with the stable version.
+The transport-level result and the business result describe different outcomes. A dashboard counting only HTTP failures may miss the application reporting an unsuccessful purchase inside a technically successful response.
 
-A **smoke test** is a small test of a real user path. It runs after deployment and before or during traffic exposure. For the orders API, a smoke test can create a test order, verify the API returns a successful checkout response, confirm Azure SQL has the order row, confirm Storage has the receipt, and confirm Application Insights has a trace or request event for the operation.
+Important domain measurements can include successful checkout, successful login, completed orders, processed messages, searches returning results, uploaded documents, and executed trades. Select the ones corresponding to the service's intended work.
 
-```yaml
-smoke_test:
-  name: checkout receipt path
-  target: orders-api--v31 direct revision endpoint
-  steps:
-    - create test checkout with sandbox payment token
-    - verify API returns 201
-    - verify order row exists in Azure SQL
-    - verify receipt object exists in Storage
-    - verify request telemetry appears in Application Insights
-  cleanup:
-    - mark test order as synthetic
-    - delete synthetic receipt if policy allows
-```
+This distinction also explains why a release can fail despite healthy readiness, CPU, memory, and 5xx rates. If checkout success drops by 20%, the business function has degraded even though the technical checks remain green.
 
-Health checks and smoke tests give the team controlled evidence. Real users still matter because they bring request shapes and timing that tests may miss.
+### Connect measurements to response
 
-## What Does Real Traffic Telemetry Reveal?
-<!-- section-summary: Real traffic telemetry shows how the candidate behaves under production users, dependencies, and timing. -->
+The production observability path joins application and runtime metrics, logs, traces, and availability evidence with Azure Monitor and Application Insights. Dashboards or Workbooks help inspect the evidence, alert rules evaluate conditions, and action groups deliver notifications or invoke automation.
 
-**Real traffic telemetry** is the evidence produced by actual production requests. In Azure, Application Insights is the main place many teams inspect this for applications. It can store request telemetry, dependency calls, exceptions, traces, availability results, custom events, and operation correlation so one checkout flow can be followed across several signals.
+An **action group** supplies response destinations. Azure Monitor supports email, SMS, push, and voice notifications, as well as webhooks, Azure Functions, and Logic Apps. The on-call responder and a runbook then connect the alert to a runtime action.
 
-For a split rollout, the team needs a way to compare candidate and stable behavior. That might come from a revision name, slot name, deployment version, cloud role instance, custom dimension, or trace field. The application should include enough version context in telemetry so the release owner can separate `orders-api--v31` from `orders-api--v30`.
+A **runbook** records the procedure for investigating and responding to a known kind of condition. The full path matters: a detected condition needs a recipient, a decision, an action, and a way to check the result.
 
-A simple Kusto query can summarize checkout requests during the watch window. The query groups by revision so the team can compare candidate and stable behavior side by side:
+Normal production alerts should continue working during a release. Checkout failures, excessive latency, database saturation, and growing backlogs remain relevant regardless of whether a deployment is in progress.
 
-```kusto
-requests
-| where timestamp > ago(20m)
-| where name == "POST /checkout"
-| summarize
-    total = count(),
-    failed = countif(success == false),
-    failureRate = todouble(countif(success == false)) / count(),
-    p95DurationMs = percentile(duration, 95)
-  by bin(timestamp, 5m), tostring(customDimensions.revision)
-| order by timestamp asc
-```
+Azure Monitor alert context can include the affected resource, severity, condition, and metric details, with a common alert schema for integrations. A release can require that no new Sev0 or Sev1 alerts appear while also applying its own stricter candidate-comparison rules.
 
-This query answers a release question directly: is the candidate revision failing or slowing down compared with the stable revision? It avoids mixing every endpoint together. A release that touches checkout should watch checkout. The team can create similar queries for dependencies and exceptions.
+### Watch quick signals and delayed outcomes
 
-```kusto
-dependencies
-| where timestamp > ago(20m)
-| where operation_Name == "POST /checkout"
-| summarize
-    calls = count(),
-    failures = countif(success == false),
-    p95DurationMs = percentile(duration, 95)
-  by target, type, tostring(customDimensions.revision), bin(timestamp, 5m)
-| order by timestamp asc
-```
+Crashes, 5xx rates, latency, CPU, and dependency failures often react quickly. They are leading operational signals useful for detecting immediate danger.
 
-This dependency query helps the team see whether failures come from Azure SQL, Storage, payment provider calls, or another downstream service. If `orders-api--v31` has rising Storage failures while `v30` stays healthy, the receipt retry change is a strong suspect. If both revisions show Azure SQL failures, the release may have exposed an existing dependency problem rather than introduced a candidate-only bug.
+Conversion rate, completed orders, customer-support volume, revenue, and retention may take longer to reveal a change. These lagging business signals can still be important after a short canary gate has passed.
 
-Exceptions add another angle. They help the team see whether failures share one error type, one message, or one candidate revision:
+A release strategy therefore needs both an early decision window and continued post-release observation. It should identify what can show unsafe behavior quickly and which slower results still need attention afterward.
 
-```kusto
-exceptions
-| where timestamp > ago(20m)
-| where operation_Name == "POST /checkout"
-| summarize count() by type, outerMessage, tostring(customDimensions.revision)
-| order by count_ desc
-```
-
-Telemetry also has a failure mode: it can go missing. A missing Application Insights connection string, broken Key Vault reference, sampling misconfiguration, or network issue can make the watch window look quiet. Quiet telemetry during a release should make the team cautious because the evidence layer itself is unhealthy.
-
-![Telemetry correlation path showing a failing request connected to trace, dependency, exception, and alert evidence](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions/telemetry-correlation.png)
-
-*Release telemetry works best when one user request can connect request status, trace context, dependency calls, exceptions, and alerts.*
-
-When telemetry crosses a threshold, the team needs a recovery decision. That decision should protect users first and leave investigation for the stable period afterward.
+The collected evidence now supports a choice: continue, hold, or recover. A good decision process includes uncertainty explicitly rather than interpreting every incomplete observation as success.
 
 ## When Should You Roll Back?
-<!-- section-summary: Rollback moves users back to a known-good runtime state when the candidate creates unacceptable impact. -->
+<!-- section-summary: Rollback restores a known-good production state to reduce harm, but the changed layer, shared dependencies, and data compatibility determine whether reversal is safe. -->
 
-**Rollback** means returning users to a known-good runtime state. It is a user-protection move first. The team can investigate the candidate after users are back on a stable path.
+After a watch window, healthy evidence can justify increasing exposure. Unhealthy evidence can justify reducing it. Uncertain evidence can justify holding the current traffic level while the team investigates.
 
-For Container Apps, rollback can mean moving 100 percent of traffic back to the previous revision. If `orders-api--v31` fails during the 10 percent watch window, the team can send all traffic to `orders-api--v30`. The candidate revision can stay available for direct inspection with zero traffic.
+A **hold** preserves control while acknowledging that the evidence is not yet decisive. It is a useful state in its own right, not merely a delayed failure or a reluctant success.
 
-```yaml
-container_apps_rollback:
-  from:
-    orders-api--v30: 90
-    orders-api--v31: 10
-  to:
-    orders-api--v30: 100
-    orders-api--v31: 0
-  expected_effect: new checkout requests return to stable revision
+### Choose the response from the observed difference
+
+Several release scenarios show why a binary pass/fail decision is too narrow:
+
+| Situation | Evidence | Suitable first response |
+| --- | --- | --- |
+| Candidate does not start | v18 startup probe fails | Keep production traffic away and investigate startup inputs |
+| Functional check fails | Health returns 200 but test checkout fails | Do not increase exposure |
+| A 5% canary degrades sharply | v17 5xx is 0.2%; v18 is 8.4% | Return v18 to 0% and v17 to 100%, when safe |
+| Latency changes modestly | v17 P95 is 300 ms; v18 is 340 ms; errors and business success are unchanged | Hold at 10% and gather more evidence |
+| Business work fails | Technical measurements remain healthy but checkout success falls 20% | Treat the release as unsuccessful |
+| Both versions deteriorate | Error rates rise on v17 and v18 | Investigate shared dependencies or state as well as the release |
+
+In the sharply degraded canary, another 30 minutes of customer harm may add little useful certainty. The known-good runtime provides a way to reduce impact while diagnosis continues.
+
+When both versions worsen, possible explanations include a database outage, payment-provider outage, networking issue, Azure regional problem, traffic surge, or shared configuration change. Reverting only v18 may not address any of those causes.
+
+The comparison does not prove a root cause by itself. Candidate-only harm makes the candidate suspicious; shared harm makes a common dependency or state change suspicious. Use the difference to choose the next investigation and the safest response.
+
+### Restore the layer that changed
+
+**Rollback** means restoring a known-good production state quickly enough to reduce user harm. That state includes the artifact, configuration, secrets, identity, database state, feature state, traffic allocation, and infrastructure.
+
+This is broader than undoing a Git change or redeploying the previous ZIP. The executable can be correct while its configuration makes the service unusable.
+
+If `NEW_CHECKOUT=true` enables the failing path, changing it to `NEW_CHECKOUT=false` may be the fastest mitigation. If `DATABASE_URL` is wrong, restore the correct configuration. If the binary has a regression, returning to the previous binary or runtime may be appropriate.
+
+Common reversal shapes include:
+
+| Changed layer | Example reversal |
+| --- | --- |
+| Traffic | v17/v18 changes from 20%/80% to 100%/0% |
+| Application | v18 returns to v17 |
+| Configuration | config43 returns to config42 |
+| Feature state | `NewCheckout=true` returns to `NewCheckout=false` |
+| Secret | Credential v8 returns to credential v7 |
+| Infrastructure | A gateway, network, or scaling configuration returns to its known-good values |
+
+These examples describe different recovery actions. Diagnosis identifies which layer changed; compatibility determines whether reversing it will restore usable behavior.
+
+### Reduce harm before completing every investigation
+
+An incident creates two goals: restore service and understand the complete failure. The second should not unnecessarily delay the first.
+
+If v17 is healthy, v18 is unhealthy, and traffic can safely return to v17, the team can remove v18's production traffic without first explaining every internal defect. The old runtime already exists, so the response can change routing while preserving the candidate for isolated investigation.
+
+The qualifier *safely* matters. A previous executable is only useful if it can still operate against the current dependencies and state.
+
+### Check whether the old runtime remains compatible
+
+Suppose v18 introduced a migration containing this destructive statement:
+
+```sql
+DROP COLUMN old_payment_reference;
 ```
 
-For App Service, rollback often means swapping slots back. If the team swapped the staging slot into production and users start seeing failures, a swap back can restore the previous slot content and settings according to the slot configuration. The team still needs to check sticky settings because a slot swap may leave some values attached to the slot by design.
+This is an illustrative failure example, not a migration to execute. The previous application still expects to run:
 
+```sql
+SELECT old_payment_reference
+FROM Orders;
+```
 
-For configuration, rollback means restoring the previous setting or secret reference. If the retry feature flag causes failures, setting `CHECKOUT_RECEIPT_RETRY_ENABLED` back to `"false"` may stop the bad path. If a Key Vault reference points to a bad secret version, restoring the previous versioned URI may recover the app. The release record should show the previous values so nobody has to discover them during pressure.
+Routing traffic back to v17 now fails because the column it needs no longer exists. Retaining the old executable did not retain the old system state.
 
-Rollback has limits. If the release changed data in a way the old version fails to read, traffic rollback may need a data compatibility plan. If the release emitted duplicate receipt events, rollback may stop new damage while cleanup handles the duplicates. If the release changed a shared dependency, such as a SQL schema or storage layout, the recovery plan may include both traffic movement and data repair.
+Compatibility must therefore be considered across database schemas, message contracts, API contracts, cache formats, persistent state, secrets, and configuration. A traffic reversal cannot automatically undo changes shared by both runtimes.
 
-Rollback protects users. Fix forward can also be valid in some cases, so the team needs a decision framework.
+If a database migration is irreversible and the application defect is small, a **roll-forward** to v18.1 may be safer than returning to v17. Roll-forward supplies a corrective version rather than reversing to the previous one.
+
+The governing question is which path restores safe operation fastest under the actual conditions. Rollback should be prepared, but it should not be applied blindly when the old runtime can no longer work.
 
 ## How Do Azure Services Perform Rollback and Runtime Recovery?
-<!-- section-summary: A rollback runbook should name the exact Azure command, the expected state after the command, and the first verification check. -->
+<!-- section-summary: Slots and revisions preserve rollback options, while runtime actions require verification of traffic, dependencies, backlogs, alerts, and customer recovery. -->
 
-For Container Apps, the common rollback action is traffic movement. The release owner moves all traffic to the stable revision and then immediately shows the traffic split. The first command changes production behavior; the second command proves the platform accepted the change.
+Azure's runtime mechanisms can make a known-good version available before an incident occurs. Their value is the prepared recovery path, not simply the convenience of a command.
+
+### Swap App Service slots back
+
+An App Service deployment slot holds a separate deployment associated with the application. Before a release, production can contain v17 and staging v18. After a swap, production contains v18 and staging retains v17.
+
+If v18 behaves badly, swapping the same slots again restores the previously running version: production returns to v17 while staging contains v18. The important property is that v17 already exists; responders do not have to reconstruct it during the incident.
+
+Microsoft recommends slots for production deployment because they support validation and smoke testing before the swap and fast swap-back recovery afterward.
+
+**Swap with preview** introduces an additional verification step. The source slot can receive the target slot's relevant configuration and warm up before the final routing change. The team validates that state, then completes or cancels the swap.
+
+The sequence moves some checks before exposure: apply the relevant production runtime context, warm the candidate, verify it, and only then complete the traffic change. If verification fails, cancel rather than deliberately exposing users to the known problem.
+
+### Move Container Apps traffic to the retained revision
+
+In Container Apps multiple-revision mode, both `checkout--017` and `checkout--018` can remain active. If 017 has 20% of traffic and 018 has 80%, a rollback can assign 100% to 017 and 0% to 018.
+
+A **revision** is the retained application version and runtime configuration represented by that deployment. Keeping the established revision available means rollback can be a routing decision rather than a rebuild.
+
+This conceptual command expresses that traffic change:
 
 ```bash
 az containerapp ingress traffic set \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --revision-weight orders-api--v30=100 orders-api--v31=0
-
-az containerapp ingress traffic show \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --output table
+  --name checkout \
+  --resource-group shop-prod \
+  --revision-weight \
+  checkout--017=100 \
+  checkout--018=0
 ```
 
-Healthy rollback output shows all new traffic returning to the stable revision. The candidate can remain active for investigation, but its traffic weight should be `0`.
+This command changes traffic for the named application; use it only against the intended release and verified revision names. The configured percentages across the application URL must total 100%.
 
-```console
-RevisionName       Weight
------------------  ------
-orders-api--v30    100
-orders-api--v31    0
-```
+The expected result is that new traffic uses the known-good revision. A successful command establishes only that the requested configuration was accepted. The service checks below establish whether the recovery actually worked.
 
-If the stable revision was deactivated earlier, the runbook needs to activate it before or during rollback. That is one reason release owners should keep the previous stable revision active through the watch window.
+Container Apps defaults to **single-revision mode**. In that mode, the existing revision continues receiving traffic until the new revision provisions successfully, scales appropriately, and passes startup and readiness probes.
 
-```bash
-az containerapp revision activate \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --revision orders-api--v30
-```
+If the new revision never reaches readiness, the old version retains traffic. This platform protection addresses a failure before cutover. It does not replace application-level verification of a technically ready candidate that behaves incorrectly for customers.
 
-For App Service, the common rollback action after a slot swap is a swap back. The release owner uses the same slot swap command and then checks the production host. The team should also verify sticky settings, because a sticky production setting may remain attached to production through both swaps.
+### Treat ongoing operations as changes with consequences
 
-```bash
-az webapp deployment slot swap \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --slot staging \
-  --target-slot production
+After a release decision, production continues changing. Traffic varies, dependencies fail, credentials rotate, instances scale, certificates expire, queues accumulate, memory leaks grow, and users encounter new edge cases.
 
-curl -fsS https://app-orders-api-prod.azurewebsites.net/healthz
-```
+**Runtime operations** are the continuing work of observing that system, comparing it with expected behavior, responding when needed, and verifying the response. The question shifts from whether this release worked to whether the service continues to work.
 
-For config rollback, the release owner restores the previous value in the same place it changed. If the bad change was an App Service feature flag, restore the app setting. If the bad change was a Container Apps env var, create a new revision with the previous value and control traffic to it after it passes checks.
+Remediation can create new problems. Scaling from five application instances to 20 may increase available application capacity. It may also create four times as many database connections and overwhelm the downstream database.
 
-```bash
-az webapp config appsettings set \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --settings CHECKOUT_RECEIPT_RETRY_ENABLED=false
+The action must be evaluated across the system it affects. A larger instance count is not useful evidence of recovery if the shared dependency becomes less able to serve the workload.
 
-az containerapp update \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --revision-suffix v31-rollback-flag \
-  --set-env-vars CHECKOUT_RECEIPT_RETRY_ENABLED=false
-```
+Consider a queue containing 80,000 messages. Increasing workers from ten to 30 should lead to several checks: are all 30 actually running, is processing throughput increasing, is queue depth falling, is database load safe, did failure rate increase, and has latency recovered?
 
-The runbook should end after the team verifies traffic, health, and user-path telemetry. A finished command is one checkpoint; recovered user traffic is the goal. That is where runtime operations take over.
+The outcome of the scale operation concerns processed work and dependency health. Azure accepting the new replica count only begins that verification.
 
-### Failure Scenarios and Decisions
-<!-- section-summary: The right release decision depends on user impact, evidence quality, rollback safety, and the size of the fix. -->
+### Verify recovery after rollback
 
-A **fix forward** is a small corrective change that keeps the release moving instead of returning to the previous version. It might be a feature flag change, a config restore, a quick patch, or a scale adjustment. Fix forward is useful when the issue is understood, the fix is small, and user impact stays controlled.
+After setting v18 to 0% and v17 to 100%, confirm that traffic really reaches v17, its replicas are healthy, error rate and latency recover, checkout succeeds again, queues drain, and alerts move toward resolution.
 
-The choice between rollback and fix forward should use evidence rather than pride. A bad release can tempt a team to keep debugging because the fix feels close. Meanwhile users keep failing checkout. A clear decision rule helps the team protect users before the room gets too noisy.
+Rollback has its own watch window because it is another production change. One recovery timeline could look like this:
 
-Here are common scenarios for the orders API. The table keeps the decision tied to evidence rather than to a general feeling that the release is good or bad:
+| Time | Evidence |
+| --- | --- |
+| 14:13 | Rollback completes |
+| 14:14 | New requests are healthy |
+| 14:17 | 5xx rate recovers |
+| 14:20 | The queue starts draining |
+| 14:32 | Latency returns to baseline |
+| 14:40 | Business success recovers |
 
-| Scenario | Evidence | Likely first decision |
-|---|---|---|
-| Candidate-only checkout failures | `v31` failure rate rises, `v30` stays healthy | Move traffic back to `v30` |
-| Bad feature flag | Errors only happen when retry branch runs | Restore flag to `"false"` |
-| Missing telemetry | App responds, but Application Insights receives no release data | Pause promotion and restore telemetry config |
-| Dependency outage affecting both revisions | Azure SQL failures rise for `v30` and `v31` | Treat as dependency incident, pause release |
-| Capacity pressure from rollout | Latency rises with replicas saturated | Scale or pause traffic increase, then re-evaluate |
-| Harmless logging bug | Users unaffected, error understood, small patch ready | Fix forward can be reasonable |
+The sequence shows why the command timestamp and the recovery timestamp can differ. Users may still experience delayed work while the state created by the bad release is being cleared.
 
-The decision depends on four questions. These questions give the release owner a steady way to compare rollback and fix forward under pressure.
+Suppose the release left 50,000 failed jobs. New jobs may work after rollback while the backlog still contains those 50,000 items. Recovery can require draining queues, retrying failed messages, repairing data, clearing bad cache entries, reprocessing transactions, or scaling workers.
 
-**How many users feel it?** A 10 percent rollout with rising checkout failures already affects real customers. A broken staging-only direct check affects nobody yet, so the team can pause and keep traffic steady.
+Removing the cause and restoring the service's accumulated state are separate tasks. Observe backlog and business-state measures alongside new-request error rates.
 
-**How good is the evidence?** Clear telemetry that points to `v31` supports a traffic rollback. Missing telemetry supports a pause because the team lacks proof that the candidate is healthy.
+An alert resolving is useful but limited evidence. A stateful Azure Monitor alert can move from fired to resolved when its monitored condition recovers. If it watches 5xx above 5%, a fall to 1% may resolve it while checkout success remains only 80%.
 
-**How safe is rollback?** Traffic-only changes usually roll back cleanly. Database and data-shape changes may need compatibility checks before old code receives traffic.
+The resolution establishes recovery for that condition. It does not establish that the whole customer operation meets its requirement.
 
-**How small is the fix?** Restoring a feature flag can be smaller and faster than a full traffic rollback. Editing production code under pressure is a larger risk unless the issue is isolated and the deployment path is fast and reliable.
+### Put verification into the runbook
 
-The team should also record the decision time. Release incidents often become confusing later because people remember the same 20 minutes differently. A timestamped decision gives the post-release review a stable timeline.
+A weak queue runbook ends with “scale workers to 20.” A stronger procedure includes the conditions for that action and the checks afterward:
 
-![Decision flow showing pause, rollback, or fix forward, followed by verification and evidence recording](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions/decision-recovery-loop.png)
+1. Confirm that the queue is growing.
+2. Check the downstream database's health.
+3. Scale workers from ten to 20.
+4. Confirm that all 20 workers reach readiness.
+5. Verify that processing rate increases.
+6. Verify that queue depth starts falling.
+7. Check that dependency latency remains acceptable.
+8. Escalate if the backlog has not fallen within the expected period.
 
-*The release decision should lead to an action, a verification step, and a recorded evidence trail, not an open-ended debate during user impact.*
+This is safer automation because it contains feedback. It can reveal that the action was ineffective or that it moved pressure to another component.
 
-After the decision, runtime operations continue. The service still needs hands-on care even after the team chooses continue, pause, rollback, or fix forward.
-
-### Runtime Operations After the Decision
-<!-- section-summary: Runtime operations stabilize the service after continue, pause, rollback, or fix-forward decisions. -->
-
-**Runtime operations** are the actions the team takes on the running service after the release decision. They include scaling, restarting, draining traffic, restoring settings, checking logs, validating telemetry, clearing bad instances, and watching alerts return to normal. These actions focus on production stability rather than product feature work.
-
-If the team continues the rollout, runtime operations focus on controlled promotion. The team moves from 10 percent to 50 percent or 100 percent, starts another watch window, confirms alerts stay quiet, and checks that old revisions or slots remain available until rollback risk drops. The release record should show each traffic step and decision time.
-
-If the team pauses, runtime operations focus on holding state. The candidate stays at its current traffic level or returns to zero traffic. The owner keeps the watch window active while the team gathers missing evidence. A pause is useful when the signal is unclear: telemetry missing, low traffic volume, noisy dependency errors, or a business signal that needs confirmation.
-
-If the team rolls back, runtime operations focus on stabilization and cleanup. The owner moves traffic back, confirms new user requests hit the stable version, checks failure rate and latency return to baseline, and then inspects any partial work the candidate created. For the orders API, cleanup might involve failed checkout attempts, duplicate receipt uploads, or retry events that need reconciliation.
-
-If the team fixes forward, runtime operations focus on proving the fix changed the right thing. A config restore needs a restart or revision update to take effect in some runtimes. A scale adjustment needs replica and latency monitoring. A patch release needs a new artifact, candidate version, and watch window. Fix forward still deserves release discipline because it changes production during an incident.
-
-Here is a runtime operations board for the rollback case. It turns the decision into concrete platform actions and follow-up checks:
-
-```yaml
-runtime_operations:
-  decision: rollback
-  decision_time_utc: "2026-06-12T10:28:00Z"
-  actions:
-    - set orders-api--v30 traffic to 100 percent
-    - set orders-api--v31 traffic to 0 percent
-    - confirm POST /checkout requests land on v30
-    - watch failed checkout rate for 20 minutes
-    - inspect failed v31 operations for cleanup
-  follow_up:
-    - keep v31 active for investigation with no traffic
-    - export release telemetry links
-    - create issue for receipt retry bug
-```
-
-Runtime operations turn the decision into production stability. The last piece is recording enough of that work that the team can learn from it later.
-
-### How To Verify After The Action
-<!-- section-summary: Post-action verification proves that the recovery command actually changed user traffic and improved the user path. -->
-
-After rollback or fix forward, the release owner should verify three things: Azure state, application health, and real traffic. Azure state proves the platform accepted the action. Application health proves the app can serve basic requests. Real traffic proves customers are recovering.
-
-For Container Apps, Azure state means the traffic split shows 100 percent on the stable revision. If the bad revision still has traffic, the rollback is incomplete.
-
-```bash
-az containerapp ingress traffic show \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --output table
-```
-
-For App Service, Azure state means the production host responds and the critical settings have the expected values. The exact setting list depends on the release, but feature flags, database targets, and Key Vault references are the usual suspects.
-
-```bash
-az webapp config appsettings list \
-  --name app-orders-api-prod \
-  --resource-group rg-devpolaris-prod \
-  --query "[?name=='CHECKOUT_RECEIPT_RETRY_ENABLED' || name=='ORDERS_DB_SERVER']" \
-  --output table
-
-curl -fsS https://app-orders-api-prod.azurewebsites.net/healthz
-```
-
-The Container Apps output should still show `100` and `0` after a few minutes. The App Service output should show the recovered setting values, and the health endpoint should return the app-level checks that matter for this release.
-
-```console
-RevisionName       Weight
------------------  ------
-orders-api--v30    100
-orders-api--v31    0
-
-Name                            Value
-------------------------------  --------------------------------
-CHECKOUT_RECEIPT_RETRY_ENABLED  false
-ORDERS_DB_SERVER                sql-orders-prod.database.windows.net
-
-{"status":"ok","version":"2026.06.10","checks":{"sql":"ok","storage":"ok"}}
-```
-
-Real traffic verification goes back to Application Insights. The release owner checks the same query that triggered the rollback, then compares the period before and after the action. The goal is to see new checkout requests landing on the stable revision and failures returning near baseline.
-
-```kusto
-requests
-| where timestamp > ago(30m)
-| where name == "POST /checkout"
-| summarize
-    total = count(),
-    failed = countif(success == false),
-    failureRate = todouble(countif(success == false)) / count(),
-    p95DurationMs = percentile(duration, 95)
-  by bin(timestamp, 5m), tostring(customDimensions.revision)
-| order by timestamp asc
-```
-
-The last verification step is cleanup evidence. The team checks whether failed checkout attempts, receipt retries, or duplicate receipt objects need repair. That work may become a separate incident task, but the release record should name it before the team closes the watch window.
+The recurring operational sequence is observe, decide, act, verify, and observe again. Recording that sequence makes the eventual release outcome explainable rather than merely remembered.
 
 ## What Should the Final Release Record Prove?
-<!-- section-summary: The release record captures the candidate, traffic steps, evidence, decisions, and runtime actions. -->
+<!-- section-summary: A release record preserves the change, exposure, criteria, observations, decisions, recovery evidence, and completion state so the outcome can be explained afterward. -->
 
-A **release record** is the timeline of the production change. The first article used a release record to name the artifact, runtime, settings, traffic plan, health signals, and rollback target. After traffic moves, the record should also capture evidence, decisions, and runtime operations.
+A release record should identify the artifact, revision, configuration, and traffic arrangement, then add verification evidence, decisions, rollback actions when applicable, and the final outcome.
 
-The record can stay lightweight. It needs to answer the questions people ask during and after a release: what changed, who owned it, when traffic moved, what evidence appeared, what decision happened, what action followed, and what remains to clean up.
+The record explains why the team considered a progression safe or why it reversed course. “Pipeline green” cannot answer either question on its own.
 
-Here is a release record after the orders API rollback. It captures the traffic timeline, the evidence that triggered rollback, and the cleanup work that remains:
+### Record a successful progression
 
-```yaml
-release: orders-api-2026-06-12-v31
-owner: platform-api-oncall
-artifact:
-  image: acrdevpolaris.azurecr.io/orders-api@sha256:8a7b2f42c49d
-  commit: 7f31c9a
-runtime:
-  platform: Azure Container Apps
-  stable_revision: orders-api--v30
-  candidate_revision: orders-api--v31
-traffic_timeline:
-  - time_utc: "2026-06-12T10:00:00Z"
-    state:
-      orders-api--v30: 90
-      orders-api--v31: 10
-    decision: start 10 percent watch window
-  - time_utc: "2026-06-12T10:25:00Z"
-    evidence:
-      checkout_failure_rate_v31: 4.8 percent
-      checkout_failure_rate_v30: 0.3 percent
-      storage_dependency_failures_v31: elevated
-    decision: rollback
-  - time_utc: "2026-06-12T10:28:00Z"
-    state:
-      orders-api--v30: 100
-      orders-api--v31: 0
-    decision: rollback complete
-verification_after_action:
-  - checkout failure rate returned near baseline
-  - p95 checkout duration returned near baseline
-  - no new receipt upload failures after traffic moved back
-cleanup:
-  - inspect failed v31 checkout operations
-  - review retry branch storage handling
-  - keep v31 active with zero traffic for debugging
+Consider release `checkout-prod-2026-08-23.18`, using artifact `checkout:v18` with digest identifier `sha256:abc123`. This shortened identifier illustrates the record format; a real artifact reference must identify the actual deployed artifact.
+
+The previous runtime is `checkout--017`, and the candidate is `checkout--018`. Initial exposure is 5%, with observation starting at 18:05. The record states criteria of 5xx below 1%, P95 below 500 ms, and checkout success above 99%.
+
+| Decision point | Observed evidence | Recorded decision |
+| --- | --- | --- |
+| Initial 5% watch | 5xx 0.31%; P95 286 ms; checkout success 99.71% | Advance to 25% |
+| Second watch, 18:15–18:30 | 5xx 0.29%; P95 294 ms; checkout success 99.68% | Advance to 100% |
+| Post-release observation | A further 30-minute watch completes successfully | Mark successful; retain rollback target `checkout--017` |
+
+The traffic and timing tell a reader which exposure produced each observation. The criteria explain why those observations supported the decision.
+
+The record should retain configuration context alongside the artifact. The rollback discussion established that production state extends beyond code, so a version name alone cannot explain every change the team made or might need to reverse.
+
+### Record an unsuccessful release just as carefully
+
+A failed release can provide equally useful evidence. Suppose `checkout--018` receives 10% of traffic and reports 7.2% 5xx while the control remains at 0.3%.
+
+The decision is rollback: revision 17 receives 100%, and revision 18 receives 0%. Post-action verification then records 5xx returning to 0.4%, P95 returning to 250 ms, and checkout success returning to 99.6%.
+
+The outcome is “Rolled back,” associated with incident `INC-2841`. The record contains both the reason for reversal and evidence that the reversal improved service.
+
+That distinction matters in a review. Knowing that a rollback command ran does not show whether it reduced harm. The observed recovery values complete the decision history.
+
+### Follow a complete rollout that fails at higher exposure
+
+Now combine the mechanisms in one final checkout v18 example. Revision 17 initially handles 100% of traffic, and revision 18 handles none. The team has already checked startup, readiness, Key Vault access, database access, and a smoke checkout.
+
+The first step moves to 95% on revision 17 and 5% on revision 18. During the watch, the candidate processes 25,000 requests:
+
+| Measurement | Revision 17 | Revision 18 |
+| --- | ---: | ---: |
+| HTTP 5xx | 0.31% | 0.29% |
+| P95 latency | 280 ms | 291 ms |
+| Checkout success | 99.71% | 99.68% |
+
+These observations are healthy for this example's decision. They are a separate example from the earlier illustrative 50,000-request gate; that stricter gate would still require its stated sample before proceeding.
+
+The team then moves to 75% on revision 17 and 25% on revision 18, watches again, and finds acceptable behavior. The next step divides traffic equally.
+
+At 50% exposure, the evidence changes:
+
+| Measurement | Revision 17 | Revision 18 |
+| --- | ---: | ---: |
+| Dependency timeouts | 0.2% | 6.8% |
+| Checkout success | 99.6% | 91.1% |
+
+The old runtime remains healthy in the same production period while the candidate deteriorates. The team rolls back to 100% on revision 17 and 0% on revision 18.
+
+Another watch checks that 5xx and latency return toward baseline, checkout success recovers, and the queue backlog drains. Once that evidence supports recovery, the service is considered restored. Revision 18 can remain isolated for diagnosis.
+
+The release record states “Rolled back during 50% canary.” It does not erase the earlier healthy steps or imply that passing a small exposure guaranteed behavior at a larger one.
+
+### Connect release states to the operating loop
+
+The full release starts with a build and candidate, then pre-traffic testing. Failed pre-traffic checks abort exposure. Passing checks permit a small traffic share and a watch window.
+
+Healthy observations can justify more traffic, uncertain observations lead to a hold, and unhealthy observations lead to an appropriate recovery decision. Each change returns to verification before another decision.
+
+```mermaid
+flowchart TD
+    build["Build and candidate"] --> test["Pre-traffic verification"]
+    test -->|Fails| abort["Abort exposure"]
+    test -->|Passes| small["Small production traffic share"]
+    small --> watch["Observe and compare"]
+    watch -->|Healthy| advance["Increase exposure"]
+    watch -->|Uncertain| hold["Hold and investigate"]
+    watch -->|Unhealthy| recover["Safe rollback or roll-forward"]
+    advance --> verify["Verify resulting behavior"]
+    hold --> watch
+    recover --> verify
+    verify --> watch
+    watch -->|Full exposure and completion criteria met| complete["Finalize release and continue operating"]
+    class build,test,abort,small,watch,advance,hold,recover,verify,complete neutral
 ```
 
-This record is useful during the incident and after it. During the incident, it keeps the team aligned. After the incident, it gives the post-release review a timeline. The team can ask whether the watch window caught the problem quickly, whether rollback worked, whether telemetry had enough version context, and whether cleanup tasks were created.
+At full intended exposure, the post-release watch and explicit completion criteria still apply. After completion, ordinary operations continue the same basic discipline: observe, diagnose when necessary, act, verify, and observe again.
 
-Release records also feed better automation. If every rollback needs the same traffic command, the team can automate it. If every watch window needs the same Kusto queries, the team can save them in a workbook. If every release forgets to record previous config values, the pipeline can capture them before deployment.
+Five questions keep that discipline practical. What changed—artifact, configuration, feature, secret, infrastructure, or traffic? What should healthy behavior look like? What do checks, telemetry, real users, and business outcomes show? Should the team continue, hold, reverse, roll forward, or mitigate? Did that action work?
 
-Now let us connect the final story from traffic movement to stable production. Evidence behind each step keeps the release story clear.
+> A completed command proves that an action ran. Verify the resulting service behavior before calling the action successful.
 
-### Putting It All Together
-<!-- section-summary: Verification and runtime operations turn traffic movement into an evidence-based release decision. -->
-
-The orders API release starts its 10 percent watch window. `orders-api--v31` receives a small slice of production traffic while `orders-api--v30` serves the rest. The owner watches checkout failures, p95 duration, Azure SQL dependency calls, Storage upload failures, exceptions, and telemetry health.
-
-The first layer looks good: the candidate revision is ready, replicas are available, and probes pass. The smoke test also passes. A synthetic checkout writes an order row, uploads a receipt, and creates telemetry. At this point, the release has controlled evidence, but the watch window still needs real traffic evidence.
-
-Real traffic shows the problem. Application Insights reports that checkout failures on `v31` climb above the rollback threshold while `v30` stays near baseline. The dependency query points toward Storage failures during the new retry branch. The evidence is candidate-specific, user-impacting, and above the decision rule.
-
-The team rolls back by moving 100 percent traffic to `v30` and 0 percent to `v31`. Then runtime operations confirm new checkout requests land on the stable revision, failure rate returns near baseline, and no new receipt upload failures appear. The candidate revision stays active with no traffic so engineers can inspect logs and traces after user impact has stopped.
-
-The release record captures the traffic step, evidence, rollback decision, action time, and cleanup tasks. The module ends with that habit: Azure release work is a loop of controlled exposure, layered evidence, clear decisions, and runtime operations. Tools like slots, revisions, app settings, Key Vault references, Application Insights, and Azure Monitor matter because they help the team run that loop with less guessing and less user pain.
-
----
+The same rule applies to deployments, traffic changes, scaling, configuration restoration, and slot swaps. Release engineering and runtime operations both depend on comparing the actual outcome with the intended one and correcting the difference.
 
 ## Check Your Answers
 
 :::expand[When Does a Release End?]{kind="recap"}
-The final part of the module focuses on evidence and decisions after users start reaching the candidate. Moving traffic starts the verification period where the team proves the candidate behaves well for real users.
+Deployment success establishes that a change occurred. Completion also needs the intended exposure, a finished post-release watch, healthy technical and business outcomes, resolved release-related conditions, a recorded rollback path, and a finalized release record.
 :::
 
 :::expand[How Does a Watch Window Verify the New Version?]{kind="recap"}
-A watch window is a time-boxed period where named owners inspect named production signals after traffic moves. Running a watch window means capturing traffic state, checking health, watching targeted telemetry, and writing the decision at the end.
+It gathers enough time, traffic, cohort, and dependency evidence for a decision. Compare with a baseline or control, define gates before release, and hold when the observations do not yet justify increasing exposure.
 :::
 
 :::expand[What Layers of Evidence Should You Check?]{kind="recap"}
-Release verification combines platform health, direct checks, real traffic telemetry, alerts, and business signals. Real release verification connects Azure telemetry to open standards, SLOs, alert routing, and an incident workflow.
+Check Azure's change, the running process, dependencies, useful functionality, real traffic, business outcomes, and sustained stability. Each answers a stronger question than deployment completion alone.
 :::
 
 :::expand[How Do Health Checks and Smoke Tests Differ?]{kind="recap"}
-Health checks prove the runtime can serve traffic, while smoke tests prove a small user path works end to end.
+Liveness concerns whether a process should keep running; readiness concerns whether it should receive traffic. Smoke tests exercise basic useful behavior, while external availability tests check the endpoint from a client-like perspective.
 :::
 
 :::expand[What Does Real Traffic Telemetry Reveal?]{kind="recap"}
-Real traffic telemetry shows how the candidate behaves under production users, dependencies, and timing.
+It exposes actual load, customer cases, dependency pressure, and both technical and business outcomes. Compare candidate and control, inspect latency tails, and keep watching slower business signals after the short release gate.
 :::
 
 :::expand[When Should You Roll Back?]{kind="recap"}
-Rollback moves users back to a known-good runtime state when the candidate creates unacceptable impact.
+Choose the fastest safe path to reduce harm. Reverse the changed layer when appropriate, hold on uncertainty, and investigate shared failures. Old code may be incompatible with changed state, making roll-forward safer.
 :::
 
 :::expand[How Do Azure Services Perform Rollback and Runtime Recovery?]{kind="recap"}
-A rollback runbook should name the exact Azure command, the expected state after the command, and the first verification check. The right release decision depends on user impact, evidence quality, rollback safety, and the size of the fix. Runtime operations stabilize the service after continue, pause, rollback, or fix-forward decisions. Post-action verification proves that the recovery command actually changed user traffic and improved the user path.
+App Service slots and Container Apps revisions retain versions that can receive traffic again. Verify the result after reversal or scaling: traffic, readiness, errors, latency, dependencies, backlogs, business success, and alert conditions all matter.
 :::
 
 :::expand[What Should the Final Release Record Prove?]{kind="recap"}
-The release record captures the candidate, traffic steps, evidence, decisions, and runtime actions. Verification and runtime operations turn traffic movement into an evidence-based release decision.
+It should connect artifact and runtime state with traffic steps, criteria, observations, decisions, recovery checks, and final outcome. A successful or rolled-back release needs an evidence-based explanation, not only a pipeline result.
 :::
 
 ## References
 
-- [Monitor App Service instances using Health check](https://learn.microsoft.com/en-us/azure/app-service/monitor-instances-health-check) - Explains App Service Health check paths, expected status codes, and unhealthy instance behavior.
-- [Health probes in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/health-probes) - Documents startup, liveness, and readiness probes for Container Apps.
-- [Application Insights telemetry data model](https://learn.microsoft.com/en-us/azure/azure-monitor/app/data-model-complete) - Documents request, dependency, exception, trace, availability, and operation correlation telemetry.
-- [Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview) - Explains how Application Insights monitors application performance and failures.
-- [Overview of Azure Monitor alerts](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview) - Explains alert rules, metric alerts, log search alerts, action groups, and alert behavior.
-- [Enable OpenTelemetry in Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-enable) - Documents Azure Monitor OpenTelemetry distribution setup for collecting OpenTelemetry data into Application Insights.
-- [OpenTelemetry documentation](https://opentelemetry.io/docs/) - Explains the vendor-neutral observability APIs, SDKs, collectors, and semantic conventions used across many monitoring backends.
-- [Service Level Objectives](https://sre.google/sre-book/service-level-objectives/) - Introduces SLIs, SLOs, error budgets, and why service reliability needs explicit targets.
-- [Implementing SLOs](https://sre.google/workbook/implementing-slos/) - Explains how teams turn SLOs and error budgets into operating policy and reliability decisions.
-- [Update and deploy changes in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions) - Describes revisions, revision modes, traffic control, labels, readiness checks, and reverting to previous revisions.
-- [Traffic splitting in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting) - Documents weighted traffic splitting across active revisions.
-- [Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots) - Documents deployment slots, swap behavior, slot-specific settings, and swap rollback.
-- [az containerapp ingress traffic](https://learn.microsoft.com/en-us/cli/azure/containerapp/ingress/traffic) - Documents Azure CLI commands for showing and setting Container Apps traffic weights.
-- [az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision) - Documents Azure CLI commands for listing, activating, deactivating, and restarting Container Apps revisions.
-- [az webapp deployment slot](https://learn.microsoft.com/en-us/cli/azure/webapp/deployment/slot) - Documents Azure CLI commands for App Service slot swaps.
-- [az webapp config appsettings](https://learn.microsoft.com/en-us/cli/azure/webapp/config/appsettings) - Documents Azure CLI commands for listing and setting App Service app settings.
+- [Container Apps revisions and readiness](https://learn.microsoft.com/en-us/azure/container-apps/revisions)
+- [Application Insights availability tests](https://learn.microsoft.com/en-us/azure/azure-monitor/app/availability)
+- [Azure Monitor action groups](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups)
+- [Azure Monitor common alert schema](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-common-schema)
+- [App Service deployment best practices](https://learn.microsoft.com/en-us/azure/app-service/deploy-best-practices)
+- [App Service staging slots and swap preview](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots)
+- [Container Apps traffic splitting](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting)

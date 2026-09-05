@@ -1,0 +1,187 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/tmp": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 1023
+    },
+    "/srv": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/team": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/team/notes.txt": {
+      "type": "file",
+      "content": "release handoff\n",
+      "owner": "alice",
+      "group": "alice",
+      "mode": 384
+    }
+  },
+  "commandModules": [
+    "permissions"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "alice",
+        "uid": 1001,
+        "primaryGroup": "alice",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "bob",
+        "uid": 1002,
+        "primaryGroup": "bob",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "myapp",
+        "uid": 2000,
+        "primaryGroup": "myapp"
+      },
+      {
+        "name": "api",
+        "uid": 2001,
+        "primaryGroup": "api"
+      },
+      {
+        "name": "logwriter",
+        "uid": 2002,
+        "primaryGroup": "logwriter"
+      }
+    ],
+    "sessionGroups": [
+      "dev",
+      "team"
+    ],
+    "umask": 63
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": [
+      "id",
+      "stat",
+      "umask",
+      "touch"
+    ],
+    "expectedPermissions": {
+      "umask": 7,
+      "access": [
+        {
+          "user": "dev",
+          "path": "/srv/team/notes.txt",
+          "operation": "write",
+          "allowed": true
+        },
+        {
+          "user": "dev",
+          "path": "/srv/team/next.txt",
+          "operation": "create",
+          "allowed": true
+        },
+        {
+          "user": "alice",
+          "path": "/srv/team/notes.txt",
+          "operation": "write",
+          "allowed": true
+        },
+        {
+          "user": "alice",
+          "path": "/srv/team/next.txt",
+          "operation": "create",
+          "allowed": true
+        },
+        {
+          "user": "bob",
+          "path": "/srv/team/notes.txt",
+          "operation": "write",
+          "allowed": true
+        },
+        {
+          "user": "bob",
+          "path": "/srv/team/next.txt",
+          "operation": "create",
+          "allowed": true
+        },
+        {
+          "user": "myapp",
+          "path": "/srv/team/notes.txt",
+          "operation": "read",
+          "allowed": false
+        }
+      ]
+    },
+    "expectedFs": {
+      "/srv/team": {
+        "type": "dir",
+        "ownerEquals": "root",
+        "groupEquals": "team",
+        "modeEquals": 1528
+      },
+      "/srv/team/notes.txt": {
+        "type": "file",
+        "contentEquals": "release handoff\n",
+        "modeEquals": 432,
+        "ownerEquals": "alice",
+        "groupEquals": "team"
+      },
+      "/srv/team/review.txt": {
+        "type": "file",
+        "contentEquals": "",
+        "modeEquals": 432,
+        "ownerEquals": "dev",
+        "groupEquals": "team"
+      }
+    }
+  }
+}

@@ -1,0 +1,144 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "adm"
+        ]
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "www-data",
+        "uid": 33,
+        "primaryGroup": "www-data"
+      }
+    ],
+    "umask": 18
+  },
+  "system": {
+    "services": [],
+    "manager": {
+      "units": [
+        {
+          "name": "app.service"
+        }
+      ],
+      "epoch": "2026-09-01T10:30:00Z",
+      "journal": [
+        {
+          "unit": "app.service",
+          "at": -650,
+          "boot": 0,
+          "priority": 6,
+          "message": "request_id=req_slow phase=accepted path=/reports"
+        },
+        {
+          "unit": "app.service",
+          "at": -648,
+          "boot": 0,
+          "priority": 4,
+          "message": "request_id=req_slow queue_wait_ms=4500"
+        },
+        {
+          "unit": "app.service",
+          "at": -643,
+          "boot": 0,
+          "priority": 3,
+          "message": "request_id=req_slow dependency=reports-db timeout"
+        },
+        {
+          "unit": "app.service",
+          "at": -640,
+          "boot": 0,
+          "priority": 6,
+          "message": "request_id=req_slow retry_succeeded status=200"
+        },
+        {
+          "unit": "app.service",
+          "at": -639,
+          "boot": 0,
+          "priority": 7,
+          "message": "debug payload serialization"
+        },
+        {
+          "unit": "app.service",
+          "at": -900,
+          "boot": 0,
+          "priority": 2,
+          "message": "Earlier unrelated failure"
+        }
+      ]
+    },
+    "logging": {}
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "journalctl"
+    ],
+    "expectedLogging": {
+      "readOnly": true,
+      "queries": [
+        {
+          "label": "Warning-or-higher view",
+          "unit": "app.service",
+          "priority": 4,
+          "since": -660,
+          "until": -630,
+          "contains": [
+            "queue_wait_ms=4500",
+            "dependency=reports-db timeout"
+          ],
+          "excludes": [
+            "retry_succeeded",
+            "debug payload"
+          ]
+        },
+        {
+          "label": "Expanded informational context",
+          "unit": "app.service",
+          "priority": 6,
+          "since": -660,
+          "until": -630,
+          "contains": [
+            "phase=accepted",
+            "retry_succeeded"
+          ],
+          "excludes": [
+            "debug payload"
+          ]
+        }
+      ]
+    }
+  }
+}

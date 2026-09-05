@@ -1,0 +1,52 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/logging.conf": {
+      "type": "file",
+      "content": "log_level=info\nport=8080\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "vim",
+      "cat"
+    ],
+    "expectedFs": {
+      "/home/dev/logging.conf": {
+        "type": "file",
+        "contentEquals": "log_level=debug\nport=8080\n"
+      }
+    },
+    "expectedVim": [
+      {
+        "label": "Keep or Discard Changes",
+        "path": "/home/dev/logging.conf",
+        "actions": [
+          "write",
+          "quit-blocked",
+          "discard"
+        ],
+        "savedContentEquals": "log_level=debug\nport=8080\n",
+        "edited": true
+      }
+    ],
+    "expectedResults": [
+      {
+        "label": "saved file inspection",
+        "commands": [
+          "cat"
+        ],
+        "stdoutEquals": "log_level=debug\nport=8080\n",
+        "exitCode": 0
+      }
+    ]
+  }
+}

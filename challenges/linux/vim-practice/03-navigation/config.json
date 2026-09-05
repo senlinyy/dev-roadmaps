@@ -1,0 +1,65 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/routing.conf": {
+      "type": "file",
+      "content": "# orders API routing\nlisten 8080\nbackend api-primary.internal\ntimeout 30\nhealth /ready\n# end of config\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "vim",
+      "cat"
+    ],
+    "expectedFs": {
+      "/home/dev/routing.conf": {
+        "type": "file",
+        "contentEquals": "# orders API routing\nlisten 8080\nbackend api-primary.internal\ntimeout 30\nhealth /ready\n# end of config\n"
+      }
+    },
+    "expectedVim": [
+      {
+        "label": "Navigate Without Editing",
+        "path": "/home/dev/routing.conf",
+        "actions": [
+          "motion"
+        ],
+        "savedContentEquals": "# orders API routing\nlisten 8080\nbackend api-primary.internal\ntimeout 30\nhealth /ready\n# end of config\n",
+        "edited": false,
+        "visits": [
+          {
+            "line": 6,
+            "column": 1
+          },
+          {
+            "line": 1,
+            "column": 1
+          },
+          {
+            "line": 3,
+            "column": 9
+          }
+        ],
+        "forbidArrows": true
+      }
+    ],
+    "expectedResults": [
+      {
+        "label": "saved file inspection",
+        "commands": [
+          "cat"
+        ],
+        "stdoutEquals": "# orders API routing\nlisten 8080\nbackend api-primary.internal\ntimeout 30\nhealth /ready\n# end of config\n",
+        "exitCode": 0
+      }
+    ]
+  }
+}

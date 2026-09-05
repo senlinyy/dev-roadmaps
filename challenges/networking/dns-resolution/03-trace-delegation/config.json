@@ -1,0 +1,274 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/etc/resolv.conf": {
+      "type": "file",
+      "content": "nameserver 10.20.0.53\n",
+      "mode": 420
+    }
+  },
+  "commandModules": [
+    "linux-system",
+    "networking"
+  ],
+  "system": {
+    "services": [],
+    "processes": {
+      "entries": []
+    },
+    "network": {
+      "interfaces": [
+        {
+          "name": "lo",
+          "index": 1,
+          "mac": "00:00:00:00:00:00",
+          "mtu": 65536,
+          "up": true,
+          "carrier": true,
+          "addresses": [
+            "127.0.0.1/8"
+          ]
+        },
+        {
+          "name": "eth0",
+          "index": 2,
+          "mac": "52:54:00:20:00:10",
+          "mtu": 1500,
+          "up": true,
+          "carrier": true,
+          "addresses": [
+            "10.20.0.10/24"
+          ]
+        }
+      ],
+      "routes": [
+        {
+          "prefix": "0.0.0.0/0",
+          "via": "10.20.0.1",
+          "dev": "eth0",
+          "src": "10.20.0.10"
+        }
+      ],
+      "neighbors": [
+        {
+          "address": "10.20.0.1",
+          "dev": "eth0",
+          "mac": "52:54:00:20:00:01",
+          "state": "REACHABLE"
+        }
+      ],
+      "resolver": "10.20.0.53",
+      "dnsScenario": {
+        "servers": [
+          {
+            "address": "10.20.0.53",
+            "name": "corp-resolver.example.com",
+            "recursive": true,
+            "view": [
+              "public"
+            ]
+          },
+          {
+            "address": "1.1.1.1",
+            "name": "public-resolver.example",
+            "recursive": true,
+            "view": [
+              "public"
+            ]
+          },
+          {
+            "address": "192.0.2.53",
+            "name": "ns1.example.com",
+            "recursive": false
+          },
+          {
+            "address": "192.0.2.1",
+            "name": "a.root.example",
+            "recursive": false
+          },
+          {
+            "address": "192.0.2.2",
+            "name": "a.gtld.example",
+            "recursive": false
+          },
+          {
+            "address": "192.0.2.54",
+            "name": "ns.stage.example.com",
+            "recursive": false
+          },
+          {
+            "address": "192.0.2.99",
+            "name": "old-ns.stage.example.com",
+            "recursive": false,
+            "failures": [
+              {
+                "name": "*",
+                "status": "TIMEOUT"
+              }
+            ]
+          }
+        ],
+        "zones": [
+          {
+            "id": "public",
+            "name": "example.com",
+            "server": "192.0.2.53",
+            "negativeTtl": 60,
+            "records": [
+              {
+                "name": "example.com",
+                "type": "SOA",
+                "value": "ns1.example.com. hostmaster.example.com. 2026090401 3600 600 86400 60",
+                "ttl": 300
+              },
+              {
+                "name": "example.com",
+                "type": "NS",
+                "value": "ns1.example.com.",
+                "ttl": 300
+              },
+              {
+                "name": "ns1.example.com",
+                "type": "A",
+                "value": "192.0.2.53",
+                "ttl": 300
+              },
+              {
+                "name": "app.example.com",
+                "type": "A",
+                "value": "203.0.113.25",
+                "ttl": 300
+              },
+              {
+                "name": "app.example.com",
+                "type": "AAAA",
+                "value": "2001:db8:10::25",
+                "ttl": 300
+              },
+              {
+                "name": "www.example.com",
+                "type": "CNAME",
+                "value": "app.example.com.",
+                "ttl": 300
+              },
+              {
+                "name": "mail.example.com",
+                "type": "MX",
+                "value": "10 mx.example.com.",
+                "ttl": 300
+              },
+              {
+                "name": "new.example.com",
+                "type": "A",
+                "value": "203.0.113.25",
+                "ttl": 300
+              }
+            ]
+          },
+          {
+            "id": "stage",
+            "name": "stage.example.com",
+            "server": "192.0.2.54",
+            "negativeTtl": 60,
+            "records": [
+              {
+                "name": "stage.example.com",
+                "type": "SOA",
+                "value": "ns.stage.example.com. hostmaster.example.com. 2026090401 3600 600 86400 60",
+                "ttl": 300
+              },
+              {
+                "name": "api.stage.example.com",
+                "type": "A",
+                "value": "203.0.113.54",
+                "ttl": 300
+              }
+            ]
+          }
+        ],
+        "rootServer": "192.0.2.1",
+        "delegations": [
+          {
+            "server": "192.0.2.1",
+            "zone": "com",
+            "nameserver": "a.gtld.example",
+            "address": "192.0.2.2",
+            "ttl": 172800
+          },
+          {
+            "server": "192.0.2.2",
+            "zone": "example.com",
+            "nameserver": "ns1.example.com",
+            "address": "192.0.2.53",
+            "ttl": 172800
+          },
+          {
+            "server": "192.0.2.53",
+            "zone": "stage.example.com",
+            "nameserver": "old-ns.stage.example.com",
+            "address": "192.0.2.99",
+            "ttl": 300
+          }
+        ]
+      }
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": [],
+    "requireCommands": [
+      "dig"
+    ],
+    "expectedNetwork": {
+      "readOnly": true,
+      "observations": [
+        {
+          "kind": "dns-trace",
+          "target": "app.example.com",
+          "queryType": "A",
+          "outcome": "NOERROR",
+          "contains": [
+            "com. 172800 IN NS a.gtld.example.",
+            "IN A 203.0.113.25"
+          ],
+          "label": "Trace the healthy lookup through the hierarchy."
+        },
+        {
+          "kind": "dns-trace",
+          "target": "api.stage.example.com",
+          "queryType": "A",
+          "outcome": "TIMEOUT",
+          "resolver": "192.0.2.99",
+          "contains": [
+            "stage.example.com. 300 IN NS old-ns.stage.example.com."
+          ],
+          "label": "Trace staging to the failed delegated server."
+        },
+        {
+          "kind": "dns",
+          "target": "api.stage.example.com",
+          "queryType": "A",
+          "resolver": "192.0.2.54",
+          "full": true,
+          "outcome": "NOERROR",
+          "label": "Inspect the full A response for api.stage.example.com from 192.0.2.54.",
+          "authoritative": true,
+          "contains": [
+            "IN A 203.0.113.54"
+          ]
+        }
+      ]
+    }
+  }
+}
+

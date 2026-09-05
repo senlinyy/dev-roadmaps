@@ -1,7 +1,7 @@
 ---
 title: "Application Insights"
-description: "Use Application Insights to follow backend requests, dependencies, exceptions, traces, and correlation through an Azure application."
-overview: "Application Insights shows what your running application did during one request. This article follows one failed checkout through requests, dependencies, exceptions, traces, correlation, Application Map, sampling, and OpenTelemetry."
+description: "Follow application requests, dependencies, exceptions, and logs through instrumentation, correlation, KQL, and Application Insights investigation views."
+overview: "Healthy infrastructure does not prove that checkout works. Application Insights connects evidence about incoming requests and outgoing calls so the team can explain a real application's behavior."
 tags: ["application-insights", "requests", "dependencies", "tracing"]
 order: 3
 id: article-cloud-providers-azure-observability-azure-application-insights-backend-apis
@@ -23,13 +23,9 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-Let's set up the whole picture before we zoom into queries. In the previous observability article, the Orders team learned where logs go: Azure Monitor collects signals, Log Analytics stores queryable tables, and KQL helps the team ask questions during an incident. That gives the team a place to search evidence, but it still leaves one big question: what did the application code do during one customer request?
+CPU, memory, storage, and network measurements can look healthy while customers cannot complete checkout. Those measurements describe infrastructure. To explain the failed purchase, you need to know what the application did with the request, which services it called, and where the failure occurred.
 
-**Application Insights** is the application performance monitoring feature of **Azure Monitor**. It collects telemetry from running application code, including incoming requests, outgoing dependency calls, exceptions, traces, metrics, availability checks, and usage signals. For a backend API, that means the team can follow one checkout request from the first HTTP route to the SQL call, storage write, exception, and custom log messages that happened along the way.
-
-We will use one production story through the whole article. The `devpolaris-orders-api` service runs in Azure, sends telemetry to an Application Insights component called `appi-devpolaris-orders-prod`, and stores that telemetry in the Log Analytics workspace `law-devpolaris-prod`. A customer says checkout failed once at 09:42 UTC, and support gives the engineering team operation ID `checkout-5001`.
-
-Keep these questions in view as you work through the lesson:
+Application Insights provides that application-level view. Instrumentation records the work, correlation connects its parts, and investigation tools make it possible to follow a request from its incoming HTTP call to a slow dependency or exception.
 
 1. **What Does Application Insights Explain?**
 2. **How Do Workspace and Instrumentation Connect?**
@@ -41,516 +37,531 @@ Keep these questions in view as you work through the lesson:
 8. **How Do You Set Up and Validate OpenTelemetry?**
 
 ## What Does Application Insights Explain?
-<!-- section-summary: Application Insights is the Azure Monitor feature that records application-level telemetry from running code. -->
+<!-- section-summary: Application Insights observes logical application work, exposing outcomes, duration, dependencies, versions, and instances that resource health alone cannot explain. -->
 
-Here is the structure we will build up:
+Suppose a VM reports CPU at 32% and memory at 51%, SQL CPU is 24%, and storage latency and networking appear healthy. Customers nevertheless report failed checkouts. The resource measurements do not explain what happened inside those requests.
 
-| Concept | Plain meaning | Orders example |
-| --- | --- | --- |
-| **Application Insights component** | The Azure resource that receives telemetry from one app or app area | `appi-devpolaris-orders-prod` |
-| **Workspace** | The Log Analytics database where queryable rows live | `law-devpolaris-prod` |
-| **Instrumentation** | The code or agent path that sends telemetry | Azure Monitor OpenTelemetry Distro in the Orders API |
-| **Request** | One incoming operation handled by the app | `POST /checkout` |
-| **Dependency** | One outbound call made by the app | SQL write to `orders-db-prod` |
-| **Exception** | Error information from code | SQL timeout exception |
-| **Trace** | App log or diagnostic message | `charge approved, writing order` |
-| **Operation ID** | The shared value that ties rows from one operation together | `checkout-5001` |
+Infrastructure monitoring examines machines and services: CPU, memory, disk, network, and related capacity. Application monitoring examines work such as request validation, inventory calls, payment calls, database operations, and the exception or response returned to the user.
 
-That table is the map for the article. Application Insights helps because it connects these pieces. A single failed checkout turns into a readable story instead of a pile of separate log lines.
+For example, a Web API may call Redis, a Payment API, and SQL. CPU at 40% on the web application and 30% on SQL does not rule out a failing database operation. Application telemetry might show:
 
-### The Application Signal
-<!-- section-summary: Platform metrics show the outside of a running resource, while Application Insights records what the application did inside one operation. -->
+```text
+Request: POST /checkout
+Duration: 31.2 seconds
+Result: HTTP 500
 
-Azure already knows many things about a running resource. Container Apps, App Service, Functions, Azure SQL, and Storage can all produce platform metrics and resource logs. Those signals answer questions such as CPU usage, memory pressure, replica count, HTTP status at the platform edge, database DTU pressure, storage throttling, and resource configuration changes.
+Redis:       4 ms       success
+Payment:   180 ms       success
+SQL:     30001 ms       failure
 
-Application Insights adds the application side of the story. It answers questions such as which route ran, how long the handler took, which database call slowed down, which exception type appeared, which user or tenant felt the issue, and which log messages belonged to the same operation. That difference matters during incidents because a resource can look healthy while one important workflow fails inside the code.
+Exception: SqlTimeoutException
+```
 
-Imagine the Orders API after a release. CPU sits at 38 percent, memory looks stable, and the container has healthy replicas. At the same time, checkout fails for customers because the code calls a SQL stored procedure with a parameter that the new database migration changed. Platform metrics show a quiet host, while Application Insights shows `POST /checkout` returning `500`, a SQL dependency timing out, and an exception coming from the repository layer.
+The evidence now identifies a user operation and the dependency that consumed most of its time. That is a more useful starting point than treating the entire environment as either healthy or unhealthy.
 
-This is why teams usually combine three levels of evidence:
+**Application Insights** is Azure Monitor's application-performance-monitoring capability. It uses application-level telemetry to describe what operations occurred, how long they took, where they failed, and which dependencies participated. For supported scenarios, Microsoft's guidance uses OpenTelemetry as a standards-based instrumentation path.
 
-| Evidence level | What it answers | Example |
-| --- | --- | --- |
-| **Platform metrics** | Is the hosting resource under pressure? | Container CPU, memory, replicas, restart count |
-| **Resource logs** | What did the Azure service report? | Azure SQL audit logs, Storage firewall logs |
-| **Application telemetry** | What did the code do during one operation? | Request, dependency, exception, trace, operation ID |
+The **application signal** is the evidence about logical work. When a customer selects Place Order, useful questions include whether checkout succeeded, how long it took, which downstream calls it made, which dependency consumed time, whether an exception occurred, and which application version and instance handled the request.
 
-The previous article focused on routing logs into a workspace. Now the team needs to make sure the app actually sends meaningful telemetry into that workspace. That takes us to the resource connection and instrumentation path.
+Those questions fit into connected layers:
+
+| Layer | Question |
+| --- | --- |
+| Business | Can customers buy products? |
+| Application | Are checkout requests succeeding? |
+| Dependency | Are SQL and Payments responding? |
+| Runtime | Are threads or connections exhausted? |
+| Infrastructure | Are CPU, network, and storage healthy? |
+
+Application Insights focuses on application, dependency, and distributed-request behavior. Azure Monitor as a whole covers more of the stack. A complete explanation often moves across several of these layers.
+
+The objective is to reduce the investigation's search space. Instead of “the application is broken,” the team should be able to identify the affected operation, dependency, instance, or deployed version and examine the evidence behind that conclusion.
 
 ## How Do Workspace and Instrumentation Connect?
-<!-- section-summary: A workspace-based Application Insights component receives telemetry from instrumented code and stores queryable rows in Log Analytics. -->
+<!-- section-summary: Instrumentation produces application evidence, connection configuration directs export, and the associated Log Analytics workspace stores telemetry for Application Insights and KQL. -->
 
-A modern Application Insights setup usually has two Azure resources working together. The **Application Insights component** represents the monitored application in Azure Monitor. The **Log Analytics workspace** stores the queryable telemetry tables. Microsoft calls this a workspace-based resource because Application Insights uses the workspace as the storage and query home.
+An Application Insights resource does not automatically know every activity inside the application. The running code needs **instrumentation**: measurement around the operations whose behavior must be observed.
 
-In production, the Orders team treats the Application Insights component as part of the application contract. The app code sends telemetry to `appi-devpolaris-orders-prod`, and that component writes records into `law-devpolaris-prod`. The workspace then contains tables such as `AppRequests`, `AppDependencies`, `AppExceptions`, `AppTraces`, and `AppMetrics`.
+Consider receiving an HTTP request, querying SQL, calling a Payment API, and returning a response. Instrumentation records the beginning and end of those activities, their timing, outcome, and relevant context.
 
-The application needs a destination value so the telemetry exporter knows where to send data. In Application Insights, that value is the **connection string**. It identifies the Application Insights resource and its ingestion endpoints. The instrumentation key inside the connection string identifies the resource; it is an identifier rather than a password, but teams still pass it through app settings so environments stay clean and deployments stay repeatable.
+The result might describe a successful `POST /checkout` lasting 842 ms, with a 390 ms SQL dependency and a 201 ms Payment dependency. The measurements preserve application work that would otherwise disappear when the code finished executing.
 
-A small Bicep shape looks like this:
+Instrumentation is followed by export. A telemetry exporter sends the produced records to Azure Monitor ingestion, where Application Insights can process the application-oriented evidence.
 
-```bicep
-param subscriptionId string
-param resourceGroupName string
-param location string = resourceGroup().location
-param workspaceName string = 'law-devpolaris-prod'
-param appInsightsName string = 'appi-devpolaris-orders-prod'
+The Azure Monitor OpenTelemetry Distro provides instrumentation for .NET, Java, Node.js, and Python. Supported automatic collection can capture common traces, metrics, logs, and exceptions, with custom instrumentation available for application-specific work. Support depends on the language and scenario rather than one universal library configuration.
 
-var workspaceResourceId = '/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.OperationalInsights/workspaces/${workspaceName}'
+### Separate the application resource from its data store
 
-resource applicationInsightsComponent 'Microsoft.Insights/components@2020-02-02' = {
-  name: appInsightsName
-  location: location
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-    WorkspaceResourceId: workspaceResourceId
-  }
-}
+Workspace-based Application Insights associates the application resource with a **Log Analytics workspace**. Current Application Insights resources use this workspace-based model; classic resources have been retired.
+
+The Application Insights resource provides application-oriented configuration and investigation experiences. The associated workspace stores the queryable log and trace telemetry. KQL and the Application Insights views use that evidence for different forms of investigation.
+
+```mermaid
+flowchart TD
+    app["Running application"] --> instrument["OpenTelemetry instrumentation"]
+    instrument --> export["Exporter and connection configuration"]
+    export --> ingestion["Azure Monitor ingestion"]
+    ingestion --> insights["Application Insights"]
+    insights --> workspace["Associated Log Analytics workspace"]
+    workspace --> views["Application views and KQL"]
 ```
 
-This creates the monitoring resource and links it to the workspace. After deployment, the important check is that the component points at the production workspace:
+The diagram distinguishes the responsibilities involved rather than implying that creating each resource alone establishes collection. The application still has to emit and export the intended operations.
 
-| Resource | Expected value |
-|---|---|
-| Application Insights component | `appi-devpolaris-orders-prod` |
-| Workspace resource ID | `/subscriptions/.../workspaces/law-devpolaris-prod` |
-| Application type | `web` |
+### Configure the telemetry destination
 
-The read-back command should prove the workspace link after deployment:
+The **Application Insights connection string** identifies the target resource and supplies endpoint information for ingestion. Production configuration should provide it outside the application source, such as through environment configuration.
 
-```bash
-az monitor app-insights component show \
-  --app appi-devpolaris-orders-prod \
-  --resource-group rg-devpolaris-observability-prod \
-  --query "{name:name,workspace:workspaceResourceId,appType:applicationType}" \
-  --output json
-```
+Instrumentation answers what to observe. Connection configuration answers where to send the resulting telemetry. If instrumentation misses an operation, changing the destination cannot recreate it. If the destination is wrong, correct instrumentation may send the evidence somewhere other than the resource being inspected.
 
-Example output:
+These are separate checks during setup and troubleshooting. Both must work before the workspace can contain useful records for the application.
 
-```json
-{
-  "appType": "web",
-  "name": "appi-devpolaris-orders-prod",
-  "workspace": "/subscriptions/.../resourceGroups/rg-devpolaris-observability-prod/providers/Microsoft.OperationalInsights/workspaces/law-devpolaris-prod"
-}
-```
+### Combine automatic and application-specific instrumentation
 
-If the workspace link points at `law-devpolaris-dev`, production queries will appear empty in the place the incident team expects to use. The application still needs instrumentation. For most code-based server-side apps, Microsoft recommends the Azure Monitor OpenTelemetry Distro. In plain English, the distro is the package that plugs into your runtime, collects telemetry in the OpenTelemetry format, and exports it to Azure Monitor.
+Automatic instrumentation recognizes generic work such as incoming HTTP requests, outgoing HTTP calls, SQL dependencies, and runtime exceptions. It can supply a useful initial view with limited application-specific code.
 
-For the Orders API, the runtime setting might look like this:
+It does not inherently understand the business meaning of `reserve_inventory()`. When that operation is important, manual instrumentation can add a `ReserveInventory` span or event inside checkout.
 
-```bash
-APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://westeurope-0.in.applicationinsights.azure.com/"
-```
+This difference also appears in custom events. Generic HTTP instrumentation can report that `POST /checkout` succeeded. A custom business event can report `order_created`, a value of £142, and payment provider A. Other meaningful events include `order_submitted`, `payment_authorized`, `basket_abandoned`, `subscription_renewed`, and `invoice_generated`.
 
-The exact app setting depends on the hosting service. App Service, Azure Functions, Container Apps, AKS, and VMs all have slightly different places to put runtime settings. The shape stays the same: create the Application Insights component, link it to a workspace, add instrumentation to the app, and configure the connection string for the correct environment.
+Both forms are useful. Automatic telemetry describes common technical boundaries; manual additions describe the application semantics needed to operate the service. They should add context without copying unnecessary sensitive payloads.
 
-![Application Insights telemetry path from an Orders API through OpenTelemetry instrumentation, an Application Insights component, Log Analytics tables, and KQL portal views](/content-assets/articles/article-cloud-providers-azure-observability-azure-application-insights-backend-apis/telemetry-path.png)
-
-*The useful path includes instrumentation, an Application Insights component, workspace-backed tables, KQL, and portal views. Each part has a job in the investigation.*
-
-Once telemetry starts flowing, the first row most backend teams inspect is the request row.
+OpenTelemetry reduces dependence on one monitoring vendor's proprietary instrumentation interface by providing a common model for traces, metrics, and logs. The backend still supplies storage, analysis, and product-specific experiences. The distinction lets the application describe its work through a more portable instrumentation standard.
 
 ## What Do Requests, Dependencies, Exceptions, and Traces Record?
-<!-- section-summary: A request row records one incoming operation handled by the application, including route, result, duration, success, role, and operation ID. -->
+<!-- section-summary: Requests describe incoming work, dependencies describe outgoing work, exceptions explain code failures, and correlated spans assemble the full distributed journey. -->
 
-A **request** is one incoming operation handled by the application. For a web API, that usually means one HTTP request such as `POST /checkout`, `GET /orders/{id}`, or `POST /payments/webhook`. Application Insights stores those records in the `AppRequests` table when you query through Log Analytics.
+Application Insights records several kinds of application evidence. Understanding their direction and meaning makes both table queries and portal views easier to interpret.
 
-The request row gives the first shape of the incident. It tells the team what route ran, when it started, how long it took, whether the app counted it as successful, which result code the app returned, and which application role produced the row. For `devpolaris-orders-api`, the request row for the failed checkout might say `Name = POST /checkout`, `ResultCode = 500`, `DurationMs = 1840`, `Success = false`, and `OperationId = checkout-5001`.
+### Requests describe incoming work
 
-Here is a first query an engineer might run during the support request:
+A **request** represents an operation arriving at the application. For a web service, an example is `POST /checkout` at 18:42:17, lasting 812 ms, returning result code 200, and marked successful.
+
+The workspace table `AppRequests` contains incoming request telemetry. Useful fields include `TimeGenerated`, `Name`, `DurationMs`, `ResultCode`, `Success`, `OperationId`, and application-role information.
+
+Request measurements help localize performance. If `GET /products` has p95 latency of 80 ms, `POST /login` has p95 of 140 ms, and `POST /checkout` has p95 of 4,800 ms, the checkout path deserves specific attention.
+
+The p95 represents a point below which approximately 95% of measured request durations fall. It helps describe slower experiences that an average alone can obscure.
+
+Outcome and duration must be considered together. An HTTP 200 response after 28 seconds can be technically successful while still delivering a poor user experience. Request telemetry preserves both whether the operation worked and how long the user waited.
+
+### Dependencies describe outgoing work
+
+A **dependency** is work the application asks another system to perform. SQL, Redis, a Payment API, Service Bus, or another microservice can all be dependencies.
+
+A SQL call might record type SQL, target `orders-db`, duration 420 ms, and a successful result. The `AppDependencies` table preserves fields such as type, target, duration, success, result code, operation identifier, and parent information.
+
+The distinction depends on perspective. A checkout call arriving at the Checkout API is its request. Its outgoing SQL call is its dependency. If it calls an instrumented Orders API, that network call can appear as an outgoing dependency at the caller and an incoming request at the callee.
+
+These paired observations are the basis of following work across services. The caller describes what it asked another service to do; the callee describes the work it received.
+
+### Traces connect timed operations
+
+A **distributed trace** represents the whole connected request journey. Each timed operation within it is a **span**.
+
+A checkout trace might contain an overall duration of 920 ms, a frontend request of 910 ms, an Orders API operation of 760 ms, and Inventory and SQL operations of 120 ms and 510 ms within the Orders work. The hierarchy shows which operations called others rather than treating every duration as unrelated.
+
+The parent operation contains the time spent performing its work and waiting for required children. Reading the structure is therefore as important as reading the numbers. It identifies the place to inspect when an overall request is slow.
+
+There is a naming distinction worth keeping clear: **`AppTraces` stores application log or trace messages**. It is not a table containing complete distributed trace trees by itself. The distributed journey is reconstructed from correlated requests, dependencies, exceptions, logs, and related telemetry.
+
+| Table | Evidence |
+| --- | --- |
+| `AppRequests` | Incoming requests |
+| `AppDependencies` | Outgoing dependency operations |
+| `AppExceptions` | Exception details |
+| `AppTraces` | Application log and trace messages |
+| `AppMetrics` | Metric telemetry |
+
+### Exceptions explain unexpected code failures
+
+Suppose `OrdersService.Save()` raises `SqlTimeoutException` during checkout. The request might show result code 500 and failure. The dependency might show SQL failing after 30 seconds. Exception telemetry supplies the code-level information: type, message, method, stack information, and problem identifier.
+
+The `AppExceptions` schema includes fields such as `OuterType`, `OuterMessage`, `Method`, `ProblemId`, `OperationId`, and severity.
+
+An exception without context still leaves a question: did it affect login, checkout, report generation, or a background job? The next step is to connect it with the operation that produced it. Application logs can then add information about the state the code had reached before failure.
+
+The record types complement each other. A failed request identifies user-facing harm, a failed dependency locates an external operation, an exception identifies the code-level fault, and a log can explain additional application context.
+
+## How Does Correlation Follow One Operation?
+<!-- section-summary: OperationId identifies the distributed journey, while individual IDs and parent relationships establish which operations caused others. -->
+
+Consider 10,000 simultaneous requests producing 35,000 dependency records, 400 exceptions, and 80,000 logs. The total is 125,400 telemetry records. Without their relationships, the team must guess which exception belongs to which customer operation.
+
+**Correlation** preserves those relationships. A shared `OperationId` can appear on the checkout request, its SQL and Payment dependencies, trace messages, and exception. The records can then be examined as one transaction.
+
+Application Insights maps `OperationId` to the distributed trace identifier and uses parent relationships to reconstruct the operation structure. Its correlation model aligns with W3C Trace Context.
+
+### Distinguish the journey from its individual spans
+
+Suppose the entire checkout has trace ID `ABC`. Its incoming request is Span 1, an Orders call is Span 2, a SQL call within that Orders operation is Span 3, and a separate Payment call is Span 4.
+
+```mermaid
+flowchart TD
+    request["Span 1: Checkout request"] --> orders["Span 2: Orders call"]
+    orders --> sql["Span 3: SQL call"]
+    request --> payment["Span 4: Payment call"]
+```
+
+The fields express different identities. `OperationId` identifies the overall distributed operation. `Id` identifies a particular request, dependency, or span. `ParentId` identifies the operation that caused that item.
+
+A shared trace identifier groups the records, while parent links establish the causal hierarchy. Both are needed to turn flat records into a useful call graph.
+
+### Reconstruct a failed checkout
+
+A customer begins checkout at 18:41. Inventory and Payment succeed, but Orders SQL times out and the application records `SqlTimeoutException`.
+
+The workspace can contain four connected records:
+
+| Dataset | Evidence for operation 7F92 |
+| --- | --- |
+| `AppRequests` | POST /checkout, failure, duration 30.4 seconds |
+| `AppDependencies` | Orders SQL, failure, duration 30.0 seconds |
+| `AppExceptions` | SqlTimeoutException |
+| `AppTraces` | Failed to persist order |
+
+All four share `OperationId=7F92`. This is one request history represented in several schemas, not four unrelated failures.
+
+The exception gains context from the request. The request gains an explanation from the dependency and exception. The log can state that persistence failed after other work had completed. Correlation preserves those relationships at production concurrency levels where timestamps and message wording alone are insufficient.
+
+### Preserve logical service and instance identity
+
+Correlation within one transaction is complemented by identity across the application's deployment. Ten containers may all run the Checkout service. They should normally appear as instances of that logical component rather than ten unrelated applications.
+
+`AppRoleName` identifies the logical service or component, and `AppRoleInstance` identifies a concrete running instance. Correct role naming helps Application Map and other views group telemetry coherently.
+
+These fields also let the team distinguish a service-wide issue from one instance's behavior. They are part of the instrumentation configuration, not cosmetic labels added after collection.
+
+## How Do You Query One Checkout Failure?
+<!-- section-summary: KQL locates failed requests, follows OperationId into dependencies and exceptions, and can join related datasets directly. -->
+
+Workspace-based telemetry can be queried through KQL. Begin with failed checkout requests from the last 30 minutes:
 
 ```kusto
 AppRequests
-| where TimeGenerated between (datetime(2026-06-11T09:30:00Z) .. datetime(2026-06-11T10:00:00Z))
-| where Name == "POST /checkout"
-| project TimeGenerated, AppRoleName, OperationId, Name, ResultCode, DurationMs, Success
+| where TimeGenerated > ago(30m)
+| where Name contains "checkout"
+| where Success == false
+| project TimeGenerated,
+          Name,
+          ResultCode,
+          DurationMs,
+          OperationId,
+          AppRoleName,
+          AppVersion
 | order by TimeGenerated desc
 ```
 
-This query filters the route first because support often gives the user-facing action before it gives an operation ID. The expected output should quickly show whether failures cluster around one time window or release:
+The query first chooses recent records, then checkout operations, then failures. Projection keeps the outcome, duration, correlation identifier, service role, and version needed for the next investigative step.
 
-| TimeGenerated | AppRoleName | OperationId | Name | ResultCode | DurationMs | Success |
-|---|---|---|---|---|---|---|
-| `2026-06-11T09:42:12.005Z` | `devpolaris-orders-api` | `checkout-5001` | `POST /checkout` | `500` | `1840` | `false` |
-| `2026-06-11T09:41:48.331Z` | `devpolaris-orders-api` | `checkout-4998` | `POST /checkout` | `200` | `312` | `true` |
-
-The important beginner habit is to keep the request row as the entry point, because it gives the team the operation ID that connects the rest of the evidence. If support already gives `checkout-5001`, the team can start with that ID. If support gives only a time window and a route, the request table often helps find the right operation.
-
-Common request fields look like this:
-
-| Field | What it tells you | Orders example |
-| --- | --- | --- |
-| `TimeGenerated` | When the request started | `2026-06-11T09:42:12Z` |
-| `AppRoleName` | Which app role emitted the row | `devpolaris-orders-api` |
-| `Name` | Route or operation name | `POST /checkout` |
-| `ResultCode` | Response code from the app | `500` |
-| `DurationMs` | How long the app took | `1840` |
-| `Success` | Whether the app marked the request successful | `false` |
-| `OperationId` | Shared operation identifier | `checkout-5001` |
-
-The request row tells us the user-facing result, but checkout rarely lives inside one function call. It writes a database row, calls a payment provider, stores a receipt, publishes an event, or calls another service. Those outbound calls are dependencies.
-
-### Dependencies
-<!-- section-summary: A dependency row records one outbound call from the application to another service, database, storage account, queue, or API. -->
-
-A **dependency** is something your application calls while it handles work. For a backend API, that might be Azure SQL, Cosmos DB, Blob Storage, Service Bus, Redis, a payment provider, another internal HTTP service, or a file system call on a VM. Application Insights stores dependency records in `AppDependencies`.
-
-Dependency rows matter because many user-facing failures start outside the route handler. The checkout controller may be fine, while the SQL write takes 1.7 seconds and times out. The receipt upload may fail because Storage rejects the request. A downstream payment API may return `429` because the app crossed a rate limit.
-
-The Orders team can query dependencies for the same operation ID:
+Suppose it returns operation `7F92`. Inspect the associated dependencies:
 
 ```kusto
 AppDependencies
-| where OperationId == "checkout-5001"
-| project TimeGenerated, AppRoleName, DependencyType, Target, Name, ResultCode, DurationMs, Success
+| where OperationId == "7F92"
+| project TimeGenerated,
+          DependencyType,
+          Name,
+          Target,
+          DurationMs,
+          Success,
+          ResultCode
 | order by TimeGenerated asc
 ```
 
-A useful result might look like this:
+The example result shows Inventory API succeeding in 42 ms, Payment API succeeding in 192 ms, and Orders SQL failing after 30,001 ms. The ordering helps inspect the sequence, while the target and type identify the system involved.
 
-| TimeGenerated | DependencyType | Target | Name | ResultCode | DurationMs | Success |
-| --- | --- | --- | --- | --- | --- | --- |
-| `09:42:12.120` | `HTTP` | `payments.example.com` | `POST /authorize` | `200` | `210` | `true` |
-| `09:42:12.421` | `SQL` | `orders-db-prod.database.windows.net` | `InsertOrder` | `Timeout` | `1500` | `false` |
-| `09:42:13.930` | `Blob` | `stordersprod.blob.core.windows.net` | `Put receipt` | `Skipped` | `0` | `false` |
-
-Now the story has moved. The request failed with a `500`, and the dependency evidence points at a SQL timeout during the order write. That still leaves a code question. Did the app throw an exception after the dependency failed? Did the logs include the order ID, tenant ID, or retry decision? Exceptions and traces answer that next layer.
-
-### Exceptions and Traces
-<!-- section-summary: Exceptions capture code errors, while traces capture app log messages and checkpoints from the same operation. -->
-
-An **exception** is error information from the application runtime. It usually includes an exception type, message, method, stack details, severity, and operation ID. Application Insights stores these rows in `AppExceptions`, and the exact detail depends on the runtime, instrumentation, and how the application handles errors.
-
-A **trace** is an application log or diagnostic message emitted by the code. It might come from a logging framework, OpenTelemetry log exporter, or Application Insights SDK path. Application Insights stores those rows in `AppTraces`, with fields such as `Message`, `SeverityLevel`, `Properties`, `AppRoleName`, and `OperationId`.
-
-For the failed checkout, exceptions and traces add the human-readable code story:
+Now inspect the exception:
 
 ```kusto
 AppExceptions
-| where OperationId == "checkout-5001"
-| project TimeGenerated, AppRoleName, ExceptionType, OuterMessage, Method, SeverityLevel
-| order by TimeGenerated asc
+| where OperationId == "7F92"
+| project TimeGenerated,
+          OuterType,
+          OuterMessage,
+          Method,
+          ProblemId
 ```
 
-```kusto
-AppTraces
-| where OperationId == "checkout-5001"
-| project TimeGenerated, AppRoleName, SeverityLevel, Message, Properties
-| order by TimeGenerated asc
-```
+An `OuterType` of `SqlException` with an `OuterMessage` stating that a timeout expired while obtaining a connection narrows the failure further. The query has moved from an unsuccessful checkout to a particular dependency operation and code-level cause.
 
-The exception query might show `SqlTimeoutException` from `OrdersRepository.InsertOrder`. The trace query might show `checkout validation complete`, `payment authorization approved`, and `order write failed after sql timeout`. Those messages matter because the dependency row tells us the SQL call failed, while the trace tells us what the app had already done before the failure.
+The short correlation queries emphasize the shared identifier. In an actual incident, preserve the relevant time window while moving between tables so the investigation remains scoped to the intended period.
 
-This is also where structured logging pays off. A trace message such as `order write failed` helps a little. A trace with properties such as `orderId`, `customerId`, `tenantId`, `releaseVersion`, `correlationId`, and `featureFlag` helps much more. The `Properties` column can carry that extra context, and operators can filter or summarize by those values during an incident.
+### Join related evidence
 
-So far we have talked about four telemetry types. Requests, dependencies, exceptions, and traces all become useful together because they share a correlation path. That path is the next concept.
-
-## How Does Correlation Follow One Operation?
-<!-- section-summary: Correlation ties request, dependency, exception, and trace rows from the same operation into one readable timeline. -->
-
-**Correlation** means connecting separate telemetry rows that belong to the same operation. A checkout request can create one request row, several dependency rows, one exception row, and many trace rows. Correlation gives those rows shared fields so the team can follow the operation instead of searching every table by hand.
-
-The field beginners see first is usually `OperationId`. In our scenario, `checkout-5001` is the value that connects the request, SQL dependency, exception, and logs. Application Insights also uses parent and child identifiers, such as `Id` and `ParentId`, to show which operation created which child call.
-
-This connects to the wider tracing world. **Distributed tracing** follows work across services. **W3C Trace Context** is the standard header format that lets services pass trace identity through HTTP calls. A **span** is one timed unit of work inside a trace, such as the incoming request span or the SQL dependency span. OpenTelemetry uses this language, and Application Insights maps the collected telemetry into Azure Monitor tables and portal views.
-
-
-A common production setup carries both platform correlation and business correlation. Application Insights might use `OperationId = checkout-5001`, while the app logs also carry `correlationId = corr-checkout-5001` and `orderId = ord-8147`. The operation ID connects telemetry rows. The business IDs help the team connect telemetry to support requests, database records, customer communication, and audit trails.
-
-The safest habit is to keep these identifiers consistent and visible:
-
-| Identifier | Where it helps | Orders example |
-| --- | --- | --- |
-| `OperationId` | Connects telemetry rows in Application Insights | `checkout-5001` |
-| `Id` | Identifies one telemetry item, such as a request or dependency span | Request row ID |
-| `ParentId` | Shows which telemetry item created this child item | SQL dependency parent points to request |
-| `correlationId` | App-defined value that can appear in logs and messages | `corr-checkout-5001` |
-| `orderId` | Business record for support and audit | `ord-8147` |
-| `AppRoleName` | Service or component name on maps and queries | `devpolaris-orders-api` |
-
-Correlation gives the team the thread. Now the team can write one query that assembles the whole failed checkout timeline.
-
-## How Do You Query One Checkout Failure?
-<!-- section-summary: A combined KQL query can show the request, dependencies, exceptions, and traces for one operation in chronological order. -->
-
-KQL is very practical once the team has the operation ID. The goal is simple: pull the important rows from the main Application Insights tables, shape them into similar columns, and sort them by time. That gives the incident channel one readable timeline.
-
-Here is a combined query for operation ID `checkout-5001`:
-
-```kusto
-let operationId = "checkout-5001";
-union
-  (AppRequests
-    | where OperationId == operationId
-    | project TimeGenerated, Type, AppRoleName, Name, ResultCode, DurationMs, Success, Detail = tostring(Url)),
-  (AppDependencies
-    | where OperationId == operationId
-    | project TimeGenerated, Type, AppRoleName, Name, ResultCode, DurationMs, Success, Detail = strcat(DependencyType, " ", Target)),
-  (AppExceptions
-    | where OperationId == operationId
-    | project TimeGenerated, Type, AppRoleName, Name = ExceptionType, ResultCode = "", DurationMs = real(null), Success = false, Detail = OuterMessage),
-  (AppTraces
-    | where OperationId == operationId
-    | project TimeGenerated, Type, AppRoleName, Name = Message, ResultCode = "", DurationMs = real(null), Success = bool(null), Detail = tostring(Properties))
-| order by TimeGenerated asc
-```
-
-The result should read like a timeline:
-
-| TimeGenerated | Type | Name | Detail | DurationMs | Success |
-| --- | --- | --- | --- | --- | --- |
-| `09:42:12.005` | `AppRequests` | `POST /checkout` | `/checkout` | `1840` | `false` |
-| `09:42:12.040` | `AppTraces` | `checkout validation complete` | `orderId=ord-8147` | | |
-| `09:42:12.120` | `AppDependencies` | `POST /authorize` | `HTTP payments.example.com` | `210` | `true` |
-| `09:42:12.421` | `AppDependencies` | `InsertOrder` | `SQL orders-db-prod.database.windows.net` | `1500` | `false` |
-| `09:42:13.925` | `AppExceptions` | `SqlTimeoutException` | `Execution timeout expired` | | `false` |
-| `09:42:13.940` | `AppTraces` | `checkout failed before receipt write` | `release=2026.06.11.2` | | |
-
-![One operation ID connecting Application Insights request, trace, dependency, and exception rows for a checkout failure](/content-assets/articles/article-cloud-providers-azure-observability-azure-application-insights-backend-apis/checkout-operation-timeline.png)
-
-*The operation ID is the thread through the incident. The request shows the user-facing failure, traces explain the app's checkpoints, dependencies show the slow SQL call, and the exception names the code failure.*
-
-This is the moment Application Insights earns its keep. The team can explain the failed checkout from telemetry rows instead of CPU graphs or a thousand unrelated log lines. The request failed, payment authorization succeeded, the SQL order write timed out, the app threw a SQL timeout exception, and the receipt write never ran.
-
-The word **trace** has two related meanings that beginners should keep separate. A distributed trace is the whole request tree made of spans. An Application Insights trace row can also mean an application log or diagnostic message stored in `AppTraces`. A message such as `checkout validation complete` is one event inside the wider distributed trace. Operation and trace identifiers are what let the row join the request and dependency spans around it.
-
-KQL can also join or union datasets when one table is not enough. `union` is useful for a time-ordered view across requests, dependencies, exceptions, and traces. `join` is useful when two datasets share a key and the operator wants columns from both, such as matching failed dependency calls to deployment metadata by operation or release identifier. The query should retain enough identifiers to make that relationship testable.
-
-Application version is crucial evidence. A role name tells the team which service emitted the row; a release version or commit SHA tells it which code emitted the row. During a rollout, grouping failures by `releaseVersion` can show that the candidate fails while the stable version remains healthy. Without version context, telemetry from both revisions can blend into an average that hides the release regression.
-
-That timeline works well for one operation. During a wider incident, the team also needs to see patterns across routes, dependencies, and services. Application Insights gives portal views for that wider shape.
-
-## What Do Application Map and Performance Views Show?
-<!-- section-summary: Application Map, failures, and performance views turn telemetry into a service topology and help teams find hot routes and bad dependencies. -->
-
-**Application Map** is the Application Insights view that shows application components and their dependencies as a topology. A node might represent the Orders API, the checkout worker, or another application role. A line might represent an HTTP dependency, SQL call, queue call, or storage dependency discovered from telemetry.
-
-The map uses fields such as application role name and dependency calls to build the picture. This is why naming matters. If every service reports the same role name, the map turns into a blob of mixed telemetry. If `devpolaris-orders-api`, `devpolaris-checkout-worker`, and `devpolaris-receipt-worker` each report clear role names, the map can show which component talks to which dependency.
-
-For the checkout incident, the map can show the Orders API connected to Azure SQL, Blob Storage, and the payment provider. If the SQL connector has a high failure rate or long average duration, the map makes the relationship visible. The operator can select the node or connector and jump into failures, performance, transaction details, or Logs for deeper KQL work.
-
-The portal also has **Failures** and **Performance** views. Failures helps the team group failed operations, exceptions, and failing dependencies. Performance helps the team find slow routes, slow dependencies, and latency patterns. These views help during triage because the team can start broad, find the hotspot, and then drop into the exact operation timeline.
-
-Here are common ways teams use these views:
-
-| View | Good first question | Orders example |
-| --- | --- | --- |
-| **Application Map** | Which component or dependency looks unhealthy? | SQL connector from Orders API has rising failures |
-| **Failures** | Which operation or exception type appears most? | `POST /checkout` and `SqlTimeoutException` spike after release |
-| **Performance** | Which route or dependency adds latency? | `InsertOrder` p95 moves from 80 ms to 1400 ms |
-| **Transaction details** | What happened inside one operation? | `checkout-5001` request, dependencies, exception, traces |
-| **Logs** | What exact query proves the story? | Combined KQL timeline for the operation |
-
-As traffic grows, telemetry volume grows too. A busy API can create a request row, many dependency spans, traces, metrics, and exceptions for every operation. That makes sampling, filtering, privacy, and cost part of the design rather than an afterthought.
-
-## How Do Sampling, Privacy, and Cost Affect Telemetry?
-<!-- section-summary: Production telemetry needs volume control, useful filtering, and careful handling of sensitive data before rows land in a workspace. -->
-
-**Sampling** means keeping a controlled portion of telemetry instead of storing every trace from every request. This matters because high-volume applications can produce a lot of telemetry, and Azure Monitor charges for data ingestion and retention. Sampling helps control cost while keeping enough evidence for troubleshooting.
-
-With OpenTelemetry-based Application Insights, Microsoft documents two common sampling styles. **Fixed-rate sampling** keeps a percentage of traces, such as about 10 percent. **Rate-limited sampling** keeps up to a maximum number of traces per second. The important production idea is trace completeness: sampling should keep the pieces of a trace together so the request, dependencies, and spans still tell a coherent story.
-
-Sampling has a tradeoff. For routine successful requests, a sampled trace may be enough. For errors, critical workflows, canary releases, and payment paths, the team may want more complete evidence. Many teams pair sampling with focused logging levels, custom metrics, alert rules, and short-term overrides during high-risk releases.
-
-**Filtering** means dropping or reshaping low-value telemetry before storage. For example, the Orders team may decide that `/healthz` requests add noise because the platform probes the route many times per minute. The team may also filter debug logs that contain large payloads. Application Insights and Azure Monitor support filtering paths through OpenTelemetry configuration and through workspace transformation data collection rules for supported tables.
-
-**Privacy** means keeping secrets and personal data out of telemetry. This is a production access, retention, and trust concern. Queryable logs often reach many engineers, incident tools, dashboards, exports, and retention policies. Application code should avoid sending passwords, tokens, full credit card data, raw request bodies, full authorization headers, and unnecessary personal data in trace messages or dependency details.
-
-A practical production checklist looks like this:
-
-| Area | Safer practice | Orders example |
-| --- | --- | --- |
-| **Sampling** | Keep traces coherent and review error coverage | Keep checkout failures and release canary traces easy to inspect |
-| **Health checks** | Reduce noisy routine probes | Filter or downsample `/healthz` request telemetry |
-| **Log level** | Send actionable logs from production | Prefer warnings and errors over verbose debug payloads |
-| **Properties** | Store useful IDs without raw secrets | `orderId`, `tenantId`, `releaseVersion`, `correlationId` |
-| **Sensitive data** | Redact secrets before export | Avoid tokens, card data, passwords, and raw request bodies |
-| **Retention** | Match retention to incident and compliance needs | Keep hot telemetry for operational review, archive only what policy needs |
-
-Now we have the operating choices. The remaining question is how new applications should collect telemetry in a portable way. That brings us to OpenTelemetry.
-
-## How Do You Set Up and Validate OpenTelemetry?
-<!-- section-summary: OpenTelemetry gives applications a standard way to produce telemetry, and the Azure Monitor distro exports it to Application Insights. -->
-
-**OpenTelemetry** is an open-source observability standard for traces, metrics, and logs. It gives teams common language and APIs for spans, resources, attributes, context propagation, exporters, and collectors. In simple terms, OpenTelemetry helps the app describe what happened, and an exporter sends that description to a backend such as Azure Monitor.
-
-Microsoft recommends the **Azure Monitor OpenTelemetry Distro** for most code-based server-side Application Insights scenarios. A distro is a packaged set of OpenTelemetry components chosen and configured to work well together. The Azure Monitor distro collects common telemetry, supports Azure Monitor features, and exports data to Application Insights through the connection string.
-
-The setup path has four ordinary steps:
-
-1. Create a workspace-based Application Insights resource.
-2. Get the Application Insights connection string.
-3. Add the Azure Monitor OpenTelemetry Distro to the app.
-4. Configure the app setting that points telemetry at the right resource.
-
-The exact code depends on the runtime. The idea stays the same across .NET, Java, Node.js, Python, containers, VMs, and many Azure hosting services. The app emits telemetry with service names, spans, metrics, logs, and useful attributes. Application Insights receives that data and makes it available through portal views and Log Analytics tables.
-
-For a Node.js API, the setup can look like this. The telemetry bootstrap should run before the web framework, database client, or HTTP client starts handling work, because instrumentation needs to see those libraries early.
-
-```bash
-npm install @azure/monitor-opentelemetry
-```
-
-```js
-const { useAzureMonitor } = require("@azure/monitor-opentelemetry");
-
-useAzureMonitor({
-  azureMonitorExporterOptions: {
-    connectionString: process.env.APPLICATIONINSIGHTS_CONNECTION_STRING
-  }
-});
-```
-
-In production, teams pass the connection string through the hosting environment rather than source code. For Container Apps, App Service, Functions, AKS, or a VM, the deployment pipeline should set `APPLICATIONINSIGHTS_CONNECTION_STRING` per environment and keep the value out of the repository. The application startup should also set a clear service or role name so the emitted rows identify `devpolaris-orders-api` instead of a generic process name.
-
-Good setup also names the application role clearly. `devpolaris-orders-api` tells the map and queries what emitted the telemetry. A vague role name such as `web` causes pain once a system has several APIs, workers, jobs, and background consumers. The role name should match how the team talks about the service during incidents.
-
-For the Orders API, the production telemetry contract might say:
-
-| Contract item | Production value |
-| --- | --- |
-| Application Insights component | `appi-devpolaris-orders-prod` |
-| Workspace | `law-devpolaris-prod` |
-| App role name | `devpolaris-orders-api` |
-| Required properties | `correlationId`, `orderId`, `tenantId`, `releaseVersion` |
-| High-value operations | `POST /checkout`, payment authorization, order write, receipt write |
-| Noise policy | Filter routine health probes and verbose request bodies |
-| Review path | Application Map, Failures, Performance, KQL timeline |
-
-With that contract in place, a future incident has a known path. The team follows the telemetry that the app already emits during the outage.
-
-### Validate the Telemetry Path
-<!-- section-summary: After instrumentation is deployed, a small smoke test should prove that requests, dependencies, traces, exceptions, and operation IDs reach the workspace. -->
-
-Application Insights setup finishes only after the team proves that telemetry is flowing. Microsoft documentation warns that data can take a few minutes to appear, so the first validation should use a short recent window and a route that the team can trigger on purpose. For the Orders API, a staging smoke test can call `POST /checkout` with a safe test order and then run a query in `law-devpolaris-prod` or the staging workspace.
+When several failed operations need examination, KQL can connect requests and exceptions without manually copying each identifier:
 
 ```kusto
 AppRequests
-| where TimeGenerated > ago(30m)
-| where AppRoleName == "devpolaris-orders-api"
-| summarize requests = count(), failures = countif(Success == false), latest = max(TimeGenerated)
+| where TimeGenerated > ago(1h)
+| where Success == false
+| where Name contains "checkout"
+| join kind=leftouter (
+    AppExceptions
+    | where TimeGenerated > ago(1h)
+) on OperationId
+| project
+    TimeGenerated,
+    Name,
+    ResultCode,
+    DurationMs,
+    OperationId,
+    ExceptionType = OuterType,
+    ExceptionMessage = OuterMessage
+| order by TimeGenerated desc
 ```
 
-That query confirms the request table and app role. A healthy staging smoke test might return this shape:
+The request side selects failures from the last hour. The exception side selects the same period. Joining on `OperationId` connects records from the same distributed operation, and the projection gives exception fields clear output names.
 
-| requests | failures | latest |
-|---|---|---|
-| `12` | `1` | `2026-06-11T09:58:44.238Z` |
+A left-outer join retains the selected request records while adding matching exception data where available. That matters because a failed request may still be worth investigating even when there is no matching exception record in the queried data.
 
-The next check proves dependency tracking, because checkout is only useful if the SQL, storage, payment, and messaging calls appear as related evidence.
+The query expresses the same reasoning as the manual investigation: find affected work, retain its identity, and add evidence that explains its outcome. Microsoft's query examples use `OperationId` for this association.
 
-```kusto
-AppDependencies
-| where TimeGenerated > ago(30m)
-| where AppRoleName == "devpolaris-orders-api"
-| summarize calls = count(), failedCalls = countif(Success == false) by DependencyType, Target
-| order by failedCalls desc, calls desc
-```
+### Relate the application fault to the underlying resource
 
-The dependency result should show the systems the checkout path actually uses:
+Application Insights may show slow SQL dependencies while Azure SQL metrics show connection utilization at 100%. Together they suggest a capacity, connection leak, or concurrency issue to investigate.
 
-| DependencyType | Target | calls | failedCalls |
-|---|---|---|---|
-| `SQL` | `orders-db-prod.database.windows.net` | `12` | `1` |
-| `HTTP` | `payments.example.com` | `12` | `0` |
-| `Blob` | `stordersprod.blob.core.windows.net` | `11` | `0` |
+The sequence starts with the user's slow checkout, identifies SQL as the slow dependency, and then examines database connections as a possible constraint. A log stating “SQL timeout” is useful, but the surrounding request, instance, version, previous operations, and subsequent outcome make it substantially more informative.
 
-The team should also validate one correlated timeline. Pick a recent operation ID from `AppRequests`, then query requests, dependencies, exceptions, and traces together. If dependencies appear with a different operation ID, or traces miss the custom properties the incident process expects, the setup needs a fix before the next release.
+This is how Application Insights complements both ordinary application logs and infrastructure monitoring. It provides the application relationships that let evidence from those layers be interpreted together.
 
-```kusto
-let operationId = toscalar(
-  AppRequests
-  | where TimeGenerated > ago(30m)
-  | where AppRoleName == "devpolaris-orders-api"
-  | top 1 by TimeGenerated desc
-  | project OperationId
-);
-union AppRequests, AppDependencies, AppExceptions, AppTraces
-| where OperationId == operationId
-| project TimeGenerated, Type, AppRoleName, Name, ResultCode, Success, DurationMs, OperationId
-| order by TimeGenerated asc
-```
+## What Do Application Map and Performance Views Show?
+<!-- section-summary: Application Map, Performance, Failures, Transaction Diagnostics, Search, and Live Metrics answer different questions over collected application evidence. -->
 
-The timeline output should include at least one request row and the dependency rows that belong to the same `OperationId`. A result with only an `AppRequests` row usually means dependency instrumentation started too late, a client library is unsupported, or a custom worker path needs manual spans.
+Application Insights presents several views of the same underlying telemetry. Choose the view according to the question rather than treating each as an unrelated monitoring product.
 
-A practical release gate can be small: one successful checkout, one controlled validation failure, one dependency call, one trace with `releaseVersion`, and one operation timeline that links the rows. That gate catches broken connection strings, missing role names, noisy health probes, and lost correlation while the team still has deployment context fresh in their heads.
+### Application Map shows observed relationships
 
-### Putting It All Together
-<!-- section-summary: Application Insights turns one failed checkout into a connected evidence story across request, dependency, exception, trace, and map views. -->
+Suppose Web calls Checkout, which calls Inventory, Payments, and Orders, and Orders calls SQL. Application Map uses observed request and dependency telemetry to show application components and calls between them.
 
-Let's walk the full incident one last time. A customer reports that checkout failed at 09:42 UTC. Support finds operation ID `checkout-5001` and sends it to engineering. The Orders API reports telemetry to `appi-devpolaris-orders-prod`, and the component stores queryable rows in `law-devpolaris-prod`.
+Nodes represent components or dependencies; edges represent observed calls. Failure or performance concentrations can reveal which relationship deserves closer attention.
 
-The engineer opens `AppRequests` and confirms `POST /checkout` returned `500` after 1840 ms. The request row gives the app role, route, result code, duration, success flag, and operation ID. That gives the team the entry point into the rest of the operation.
+The map is evidence of runtime behavior. An architecture document may say that Checkout calls a Payment API; Application Map indicates that telemetry observed that call. A missing relationship can mean the call never happened, instrumentation is absent, correlation is broken, dependency tracking is unsupported, role naming is wrong, or telemetry was sampled or lost.
 
-Next, the engineer queries `AppDependencies` for the same operation ID. Payment authorization succeeded in 210 ms, while the Azure SQL order insert timed out after 1500 ms. That moves the incident from a vague checkout failure to a specific failed dependency call.
+A blank or incomplete map is therefore not automatically evidence that a service is unused. Investigate collection and identity before drawing that conclusion. Correct cloud role names are particularly important for grouping a service's instances consistently.
 
-Then the engineer checks `AppExceptions` and `AppTraces`. The exception shows a SQL timeout in `OrdersRepository.InsertOrder`, and the traces show that validation and payment succeeded before the order write failed. The app never reached the receipt write, so the team avoids chasing Blob Storage or email delivery.
+### Performance connects duration with volume
 
-Finally, the engineer checks Application Map and Performance views. The SQL connector from `devpolaris-orders-api` has elevated duration and failure rate since release `2026.06.11.2`. The team now has the release, route, dependency, exception, and operation timeline needed for a rollback or narrow database fix.
+The Performance view summarizes operations and supports drilling into slow requests and their dependencies. A service might show:
 
-That is the beginner win. Application Insights helps the team explain what happened inside the app from application telemetry and platform health together. Requests tell the user-facing result, dependencies show outbound calls, exceptions show code failures, traces add human context, correlation connects the rows, maps show the wider service shape, and sampling plus privacy rules keep the telemetry useful in production.
+| Operation | Request count | Duration |
+| --- | ---: | ---: |
+| /products | 2 million | 70 ms |
+| /search | 1 million | 180 ms |
+| /checkout | 200,000 | 1,900 ms |
 
-![Application Insights operating loop showing instrumentation, collection, correlation, querying, mapping, cost control, and the four signal types combining into one incident story](/content-assets/articles/article-cloud-providers-azure-observability-azure-application-insights-backend-apis/application-insights-operating-loop.png)
+Checkout is visibly slower than the other high-level operations and provides a useful starting point for investigation.
 
-*A production team repeats this loop: instrument the app, collect the main signal types, correlate them, query the incident, map the wider service shape, and control telemetry cost so the evidence stays useful.*
+Priority still depends on more than the longest duration. An AdminReport taking 20 seconds three times per day may matter less than Checkout taking two seconds 500,000 times per day. A 100 ms regression on an operation used millions of times can have greater impact than a ten-second regression on an obscure internal screen.
 
+Consider latency, traffic, and business importance together. The view reveals where time goes; the workload's purpose helps determine which delay deserves attention first.
 
----
+### Failures identifies affected work
+
+The Failures view aggregates unsuccessful operations and supports investigation of failed requests, exceptions, failed dependencies, affected operations, and affected users.
+
+A useful sequence is to identify the operation, inspect its failure pattern, select a representative transaction, and then examine dependencies and exceptions. Search provides another way to locate telemetry, while KQL allows custom questions about the same stored evidence.
+
+The result should connect a broad failure pattern to the underlying operations. Counting exceptions without knowing which service work they affected is an incomplete assessment of impact.
+
+### Transaction Diagnostics follows a single request
+
+Once a problematic transaction has been selected, Transaction Diagnostics presents the end-to-end operation with its timings, dependencies, exceptions, and related events.
+
+A five-second checkout timeline might show short Inventory and Payment operations followed by long Orders API and SQL operations. The visual relationship reveals where the parent request waited and which child operation warrants examination.
+
+This is the request-level complement to aggregate Performance and Failures views. Aggregates identify a pattern; transaction detail helps explain an actual occurrence.
+
+### Live Metrics shows immediate activity
+
+Most stored telemetry follows an event, ingestion, and later query sequence. During an active incident, the question may instead be what the application is doing right now.
+
+Live Metrics supplies near-real-time application activity through the Azure Monitor OpenTelemetry Distro. It serves an immediate operating view rather than replacing historical queries.
+
+A responder can use live signals while changing or observing the system, then use stored request and exception evidence for the more complete historical investigation. The two views serve different time needs.
+
+### Keep versions visible
+
+Suppose an error rate is 0.2% at 12:00, 0.3% at 12:10, 0.2% at 12:20, and 8.9% at 12:30. A record that version 4.18 was deployed at 12:28 creates a clear hypothesis to investigate.
+
+Request telemetry includes `AppVersion`, and release annotations can connect deployments with changes in failures and performance in relevant views. The timing does not prove the version caused the incident, but it preserves a meaningful candidate explanation.
+
+Version and role context therefore belong beside request outcomes and durations. They let the team examine whether a problem follows a particular release, service, or instance.
+
+## How Do Sampling, Privacy, and Cost Affect Telemetry?
+<!-- section-summary: Sampling controls volume but limits retained history, while privacy and cost decisions should preserve useful correlations without unnecessary payloads. -->
+
+Telemetry can grow faster than the application request count suggests. At 10,000 requests per second, one request record, four dependency spans, and three log messages per request produce:
+
+$$
+10{,}000 \times 8 = 80{,}000\text{ telemetry items per second}
+$$
+
+Across 86,400 seconds in a day, that is approximately 6.9 billion items. Storing every successful operation may be expensive without adding proportionate diagnostic value.
+
+**Sampling** retains a selected portion of telemetry. Its purpose is to preserve enough representative detail to understand behavior while reducing volume.
+
+### Preserve complete relationships where possible
+
+Sampling individual records independently can leave a request without one dependency or its exception. The result is a trace with gaps: the parent is retained, Dependency A is dropped, Dependency B remains, and the exception is missing.
+
+Trace-aware sampling aims to make coherent decisions for a related trace so its request, dependencies, and logs can be retained or dropped together. Application Insights OpenTelemetry guidance emphasizes trace completeness while controlling volume.
+
+Defaults and configuration vary by language and distro version. The actual sampler must be inspected rather than assuming a universal retention percentage or that every configuration automatically preserves the same kinds of records.
+
+### Distinguish sampled diagnosis from complete audit history
+
+Retaining 10% of traces can still support analysis of performance patterns, common dependency behavior, and recurring failure paths. It does not preserve every individual historical request.
+
+If someone asks for the exact telemetry of a customer's request from yesterday, sampling may have removed it. Statistical observability and complete audit evidence therefore require different guarantees.
+
+Application Insights is primarily an application observability system. It should not be treated as a replacement for a dedicated business audit ledger merely because it can record custom business events.
+
+Metrics can preserve compact aggregate signals separately from detailed sampled traces. One million requests, 2,100 errors, and p95 latency of 420 ms can describe overall service behavior without a retained diagnostic record for every request. The metric and trace collection behavior still needs to be understood so queries are interpreted correctly.
+
+### Relate collection to operational value
+
+Workspace-based Application Insights telemetry is billed through its associated Log Analytics workspace. Ingestion volume, retention, and some query or feature costs can become significant.
+
+For each telemetry source, ask which operational question it answers, how often it emits, whether the information can be aggregated, whether successful traces can be sampled, and whether DEBUG logs are needed in production.
+
+These decisions should preserve the ability to explain failures. Removing context indiscriminately may reduce cost while making investigations ineffective; keeping repetitive detail nobody uses can raise the bill without improving understanding.
+
+The practical objective is useful evidence at a justified cost. Sampling and retention are therefore part of the instrumentation design, not settings to consider only after an unexpectedly large invoice.
+
+### Capture context without copying secrets
+
+Application telemetry can include user IDs, IP information, URLs, query parameters, database commands, exception messages, and custom properties. These fields require deliberate privacy and security consideration.
+
+Avoid sending passwords, access tokens, payment-card data, secret keys, or unnecessary personal data. Microsoft's FAQ notes that request POST bodies are not automatically logged by Application Insights. Adding custom payload collection introduces responsibilities that automatic instrumentation did not remove.
+
+To identify a failed checkout, the team may need a trace ID, an appropriate order identifier, application version, region, service name, and dependency target. Full card details, authentication tokens, and passwords generally add no necessary explanation of the request path.
+
+Correlation properties connect events without reproducing the entire business payload. Choose them according to privacy and cardinality requirements, and keep their operational purpose clear.
+
+### Respect the browser/server boundary
+
+Server instrumentation observes backend activity. Browser instrumentation can add page views, browser requests, client-side failures, and client timing, bringing evidence closer to the user experience.
+
+Those client-side records have additional privacy and security implications because they originate on users' devices. Backend visibility should not be mistaken for complete browser visibility, and browser collection should be designed intentionally rather than assumed as a consequence of server instrumentation.
+
+## How Do You Set Up and Validate OpenTelemetry?
+<!-- section-summary: Instrument one important service, configure its destination and identity, generate known operations, and verify both the records and their relationships. -->
+
+Begin with one service important to the workload. The conceptual setup is:
+
+1. Create or select its Application Insights resource.
+2. Associate it with a Log Analytics workspace.
+3. Obtain the connection configuration.
+4. Add and configure the supported OpenTelemetry instrumentation.
+5. Configure logical service and instance identity.
+6. Run the application.
+7. Generate known traffic.
+8. Verify telemetry and its relationships.
+
+The specific installation and configuration follow the supported language and runtime guidance. The shared purpose is the same: instrument the work, send its evidence to the intended destination, and establish that it can be investigated.
+
+### Prove collection with known operations
+
+Generate a known successful request, such as `GET /health-test` at 18:20, followed by a controlled failure such as `/test/known-error` at 18:22.
+
+Verify that `AppRequests` contains the request, `AppDependencies` contains the expected outgoing call, and `AppExceptions` contains the controlled exception. Check that the relevant operation identifiers connect the records, and that Application Map shows the expected relationships.
+
+This test proves more than the existence of an Application Insights resource. It checks the application, instrumentation, export, storage, and investigation path against an event whose behavior is known.
+
+A record in each table is still insufficient if the records cannot be associated. The useful outcome is the ability to open the known operation and follow its request, dependencies, exception, and context together.
+
+### Debug missing telemetry by stage
+
+If evidence does not appear, first confirm that the application performed the operation. Then check whether instrumentation is enabled and supports that operation.
+
+Next, inspect export: connection configuration, network access, and authentication. Confirm that ingestion accepted the telemetry and that the correct Application Insights resource is selected.
+
+Finally, check the associated workspace, table, time range, and query or investigation view. Most Application Insights telemetry normally arrives in under five minutes according to the cited FAQ, although some ingestion can take longer.
+
+This sequence is more informative than repeatedly reinstalling SDKs. It separates an operation that never happened from missing instrumentation, failed export, wrong resource selection, and an overly narrow query.
+
+### Establish the first useful questions
+
+For the initial service, confirm incoming requests, outgoing dependencies, exceptions, application logs, and distributed correlation. Then test whether the collected data answers the operating questions:
+
+- What is the request rate?
+- What proportion fails?
+- What is p95 latency?
+- Which endpoints and dependencies are slow?
+- Can one failed transaction be opened and followed through its complete path?
+
+These questions assess the usable result rather than the number of configuration steps completed. If the team can answer them, it has a meaningful foundation for application observability.
+
+### Add the business meaning the generic telemetry lacks
+
+An endpoint such as `POST /api/v2/action` may be technically accurate but unclear during an incident. Adding `operation=Checkout` gives the work a recognizable meaning.
+
+Relevant custom dimensions might include `paymentProvider`, `region`, `deployment`, and `orderType`, subject to privacy and cardinality constraints. The purpose is to connect the technical path to the service people actually operate.
+
+Custom instrumentation should complement the captured HTTP and dependency operations. It should not replace their timings or correlation with a disconnected business message.
+
+### Use a repeatable investigation path
+
+When checkout failures rise, begin in Failures to identify the affected operation. Open Transaction Diagnostics for a representative transaction, locate the failing dependency, and inspect its exception and log evidence.
+
+Use Application Map to understand the component relationship and Azure Monitor infrastructure signals to investigate the underlying constraint. For a SQL timeout, that might mean moving from checkout to the SQL span and then to connection utilization, resource capacity, or a concurrency change.
+
+Performance, Failures, Search, Transaction Diagnostics, Application Map, and KQL are different ways to examine related evidence. Learning the question each view answers makes the workflow more efficient than clicking through the portal without a hypothesis.
+
+The completed setup should turn a report such as “checkout failed at 18:41” into an identifiable request, operation ID, dependency path, SQL failure, exception, affected service and version, and a supported hypothesis to investigate.
+
+That is the application-level capability being built. Instrumentation creates the evidence, the connection configuration delivers it, the workspace stores it, correlation preserves its structure, and Application Insights makes the application's observed behavior available for explanation and action.
 
 ## Check Your Answers
 
 :::expand[What Does Application Insights Explain?]{kind="recap"}
-Application Insights is the Azure Monitor feature that records application-level telemetry from running code. Platform metrics show the outside of a running resource, while Application Insights records what the application did inside one operation.
+It explains application work: request success, duration, dependencies, exceptions, version, and instance. Healthy infrastructure alone cannot establish that users can complete checkout.
 :::
 
 :::expand[How Do Workspace and Instrumentation Connect?]{kind="recap"}
-A workspace-based Application Insights component receives telemetry from instrumented code and stores queryable rows in Log Analytics.
+Instrumentation records operations, connection configuration selects the destination, and the associated Log Analytics workspace stores queryable telemetry. Automatic instrumentation covers common technical work; manual additions supply application meaning.
 :::
 
 :::expand[What Do Requests, Dependencies, Exceptions, and Traces Record?]{kind="recap"}
-A request row records one incoming operation handled by the application, including route, result, duration, success, role, and operation ID. A dependency row records one outbound call from the application to another service, database, storage account, queue, or API. Exceptions capture code errors, while traces capture app log messages and checkpoints from the same operation.
+Requests are incoming work, dependencies are outgoing work, exceptions describe code failures, and spans form the distributed journey. AppTraces stores log messages rather than complete distributed traces by itself.
 :::
 
 :::expand[How Does Correlation Follow One Operation?]{kind="recap"}
-Correlation ties request, dependency, exception, and trace rows from the same operation into one readable timeline.
+OperationId identifies the overall journey. Individual IDs and parent IDs preserve the span structure, while role and instance names identify the service and running instance that produced the evidence.
 :::
 
 :::expand[How Do You Query One Checkout Failure?]{kind="recap"}
-A combined KQL query can show the request, dependencies, exceptions, and traces for one operation in chronological order.
+Find recent failed checkout requests, retain OperationId, and inspect related dependencies and exceptions. KQL can join those datasets directly. Resource metrics then help explain the constraint identified in the application path.
 :::
 
 :::expand[What Do Application Map and Performance Views Show?]{kind="recap"}
-Application Map, failures, and performance views turn telemetry into a service topology and help teams find hot routes and bad dependencies.
+Application Map shows observed component relationships; Performance examines duration and volume; Failures groups broken work; Transaction Diagnostics follows one operation; Live Metrics shows immediate activity. Version markers support change-related investigation.
 :::
 
 :::expand[How Do Sampling, Privacy, and Cost Affect Telemetry?]{kind="recap"}
-Production telemetry needs volume control, useful filtering, and careful handling of sensitive data before rows land in a workspace.
+Sampling limits retained detail and should preserve coherent traces. Sampled observability is not a complete audit ledger. Choose useful context, protect sensitive data, and balance collection and retention against diagnostic value.
 :::
 
 :::expand[How Do You Set Up and Validate OpenTelemetry?]{kind="recap"}
-OpenTelemetry gives applications a standard way to produce telemetry, and the Azure Monitor distro exports it to Application Insights. After instrumentation is deployed, a small smoke test should prove that requests, dependencies, traces, exceptions, and operation IDs reach the workspace. Application Insights turns one failed checkout into a connected evidence story across request, dependency, exception, trace, and map views. Microsoft Learn documentation backs the Application Insights concepts, tables, resource setup, maps, sampling, and OpenTelemetry guidance in this article.
+Configure the application resource, workspace, instrumentation, destination, and service identity. Generate known success and failure, verify records and correlation, and establish a repeatable path from service symptom to supporting evidence.
 :::
 
 ## References
-<!-- section-summary: Microsoft Learn documentation backs the Application Insights concepts, tables, resource setup, maps, sampling, and OpenTelemetry guidance in this article. -->
 
-- [Introduction to Application Insights - OpenTelemetry observability](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview) - Microsoft overview of Application Insights as an Azure Monitor APM feature, its investigation views, and the current OpenTelemetry setup path.
-- [Application Insights telemetry data model](https://learn.microsoft.com/en-us/azure/azure-monitor/app/data-model-complete) - Microsoft reference for request, dependency, exception, trace, metric, and other telemetry types.
-- [Create and configure Application Insights resources](https://learn.microsoft.com/en-us/azure/azure-monitor/app/create-workspace-resource) - Microsoft guide for creating workspace-based Application Insights resources, retrieving connection strings, and configuring monitoring.
-- [Connection strings in Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/connection-strings) - Microsoft explanation of connection strings, instrumentation keys, application IDs, and ingestion endpoints.
-- [Enable OpenTelemetry in Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-enable) - Microsoft setup guide that also explains how to confirm telemetry is flowing after instrumentation.
-- [Configure OpenTelemetry in Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-configuration) - Microsoft configuration guide for OpenTelemetry setup across supported runtimes.
-- [Azure Monitor OpenTelemetry for JavaScript](https://learn.microsoft.com/en-us/javascript/api/overview/azure/monitor-opentelemetry-readme?view=azure-node-latest) - Microsoft JavaScript package reference for `@azure/monitor-opentelemetry`, connection strings, and sampling configuration.
-- [Dependency tracking in Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/dependencies) - Microsoft guide to tracking outbound calls such as HTTP, database, and storage dependencies.
-- [Application Map in Azure Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-map) - Microsoft guide to the topology view, component nodes, dependency edges, failures, performance, and transaction detail entry points.
-- [W3C Trace Context](https://www.w3.org/TR/trace-context/) - Official standard for propagating trace context across services for distributed tracing.
-- [Sampling in Azure Monitor Application Insights with OpenTelemetry](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-sampling) - Microsoft guidance on fixed-rate sampling, rate-limited sampling, trace completeness, and cost control.
-- [Filter Azure Monitor OpenTelemetry](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-filter) - Microsoft guidance on filtering telemetry and mapping OpenTelemetry signals to Application Insights tables.
-- [AppRequests table reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/apprequests) - Microsoft table reference for request fields such as `Name`, `ResultCode`, `DurationMs`, `Success`, and `OperationId`.
-- [AppDependencies table reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/appdependencies) - Microsoft table reference for dependency fields such as `DependencyType`, `Target`, `ResultCode`, `DurationMs`, and `OperationId`.
-
-### What's Next
-
-Application Insights gives the team a way to investigate one operation and understand application behavior from the inside. The next article turns those signals into operating loops with metrics, dashboards, alert rules, action groups, and alert noise control.
+- [Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)
+- [Enable OpenTelemetry](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-enable)
+- [Workspace-based Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/create-workspace-resource)
+- [Connection strings](https://learn.microsoft.com/en-us/azure/azure-monitor/app/connection-strings)
+- [AppRequests schema](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/apprequests)
+- [AppDependencies schema](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/appdependencies)
+- [OpenTelemetry filtering and table mapping](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-filter)
+- [AppExceptions schema](https://learn.microsoft.com/da-dk/azure/azure-monitor/reference/tables/appexceptions)
+- [Application Insights correlation model](https://learn.microsoft.com/sr-latn-rs/azure/azure-monitor/app/classic-api)
+- [AppRequests query examples](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/queries/apprequests)
+- [Application Map](https://learn.microsoft.com/sr-latn-rs/azure/azure-monitor/app/app-map)
+- [Application Map troubleshooting](https://learn.microsoft.com/en-us/troubleshoot/azure/azure-monitor/app-insights/troubleshoot-application-map-issues)
+- [Failures, performance, and transaction investigation](https://learn.microsoft.com/en-us/azure/azure-monitor/app/failures-performance-transactions)
+- [Application Insights FAQ](https://learn.microsoft.com/en-us/azure/azure-monitor/app/application-insights-faq)
+- [OpenTelemetry sampling](https://learn.microsoft.com/nb-no/azure/azure-monitor/app/opentelemetry-sampling)
+- [Sampling and aggregate signals](https://learn.microsoft.com/uk-ua/azure/azure-monitor/app/opentelemetry-sampling?view=azps-1.0.0)

@@ -1,0 +1,45 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/tmp": { "type": "dir" },
+    "/home/dev/release source": { "type": "dir" },
+    "/home/dev/release source/app.conf": { "type": "file", "content": "port=8080\n" },
+    "/home/dev/release source/release notes.txt": { "type": "file", "content": "approved\n" },
+    "/home/dev/backups": { "type": "dir" },
+    "/home/dev/backup.sh": { "type": "file", "mode": 420, "content": "#!/usr/bin/env bash\ntar -czf /home/dev/backups/release.tar.gz /home/dev/release source\nprintf \"backup published\\n\"\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": ["vim", "chmod", "./backup.sh"],
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/backup.sh",
+        "invocation": "direct",
+        "args": ["/home/dev/release source"],
+        "exitCode": 64,
+        "stdoutContains": ["usage: backup.sh SOURCE DESTINATION"]
+      },
+      {
+        "path": "/home/dev/backup.sh",
+        "invocation": "direct",
+        "args": ["/home/dev/release source", "/home/dev/backups"],
+        "exitCode": 0,
+        "stdoutContains": ["backup published"]
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/backup.sh": {
+        "type": "file",
+        "modeEquals": 493,
+        "contentMatches": "set\\s+-[^\\n]*e[^\\n]*u[^\\n]*o\\s+pipefail[\\s\\S]*\\$#[\\s\\S]*exit\\s+64[\\s\\S]*mktemp\\s+-d[\\s\\S]*trap\\s+cleanup\\s+EXIT[\\s\\S]*tar\\s+-czf[\\s\\S]*mv"
+      },
+      "/home/dev/backups/release.tar.gz": {
+        "type": "file",
+        "contentMatches": "app\\.conf[\\s\\S]*release notes\\.txt"
+      },
+      "/tmp/backup.000001": { "type": "dir", "exists": false }
+    }
+  }
+}

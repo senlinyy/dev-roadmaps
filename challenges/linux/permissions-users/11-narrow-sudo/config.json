@@ -1,0 +1,44 @@
+{
+  "cwd": "/home/deploy",
+  "env": { "USER": "deploy", "HOME": "/home/deploy" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/deploy": { "type": "dir", "mode": 488, "owner": "deploy", "group": "deploy" },
+    "/etc": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/etc/sudoers.d": { "type": "dir", "mode": 488, "owner": "root", "group": "root" },
+    "/usr": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/usr/bin": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/usr/bin/systemctl": { "type": "file", "content": "simulated systemctl binary\n", "mode": 493, "owner": "root", "group": "root" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "deploy",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "deploy", "uid": 1003, "primaryGroup": "deploy", "gid": 1003 }
+    ],
+    "sessionGroups": ["deploy"],
+    "umask": 18,
+    "sudoRules": []
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["sudo", "echo", "tee", "chmod", "visudo"],
+    "forbidCommandPatterns": ["NOPASSWD:\\s+ALL", "systemctl\\s+\\*"],
+    "minCommandCount": 6,
+    "expectedFs": {
+      "/etc/sudoers.d/app-deploy": {
+        "type": "file",
+        "contentEquals": "deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart app.service\n",
+        "modeEquals": 288,
+        "ownerEquals": "root",
+        "groupEquals": "root"
+      }
+    },
+    "expectedPermissions": {
+      "sudoRules": [
+        { "user": "deploy", "runAs": "root", "command": "/usr/bin/systemctl restart app.service", "noPassword": true }
+      ]
+    }
+  }
+}

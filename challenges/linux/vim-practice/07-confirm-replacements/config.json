@@ -1,0 +1,53 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/endpoints.conf": {
+      "type": "file",
+      "content": "primary=api-dev.example.com\nmirrors=api-dev.example.com,api-dev.example.com\n# rollback example: api-dev.example.com\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "vim",
+      "cat"
+    ],
+    "expectedFs": {
+      "/home/dev/endpoints.conf": {
+        "type": "file",
+        "contentEquals": "primary=api-prod.example.com\nmirrors=api-prod.example.com,api-prod.example.com\n# rollback example: api-dev.example.com\n"
+      }
+    },
+    "expectedVim": [
+      {
+        "label": "Replace Carefully",
+        "path": "/home/dev/endpoints.conf",
+        "actions": [
+          "substitute",
+          "confirm-yes",
+          "confirm-no",
+          "write"
+        ],
+        "savedContentEquals": "primary=api-prod.example.com\nmirrors=api-prod.example.com,api-prod.example.com\n# rollback example: api-dev.example.com\n",
+        "edited": true
+      }
+    ],
+    "expectedResults": [
+      {
+        "label": "saved file inspection",
+        "commands": [
+          "cat"
+        ],
+        "stdoutEquals": "primary=api-prod.example.com\nmirrors=api-prod.example.com,api-prod.example.com\n# rollback example: api-dev.example.com\n",
+        "exitCode": 0
+      }
+    ]
+  }
+}

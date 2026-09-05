@@ -1,0 +1,171 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/tmp": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 1023
+    },
+    "/etc": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/myapp": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/myapp/config.json": {
+      "type": "file",
+      "content": "{\"port\":8080,\"environment\":\"production\"}\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 384
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "alice",
+        "uid": 1001,
+        "primaryGroup": "alice",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "bob",
+        "uid": 1002,
+        "primaryGroup": "bob",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "myapp",
+        "uid": 2000,
+        "primaryGroup": "myapp"
+      },
+      {
+        "name": "api",
+        "uid": 2001,
+        "primaryGroup": "api"
+      },
+      {
+        "name": "logwriter",
+        "uid": 2002,
+        "primaryGroup": "logwriter"
+      }
+    ],
+    "sessionGroups": [
+      "dev",
+      "team"
+    ],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "expectedFs": {
+      "/etc/myapp/config.json": {
+        "type": "file",
+        "contentEquals": "{\"port\":8080,\"environment\":\"production\"}\n",
+        "modeEquals": 416,
+        "ownerEquals": "root",
+        "groupEquals": "myapp"
+      }
+    },
+    "expectedPermissions": {
+      "access": [
+        {
+          "user": "myapp",
+          "path": "/etc/myapp/config.json",
+          "operation": "read",
+          "allowed": true
+        },
+        {
+          "user": "alice",
+          "path": "/etc/myapp/config.json",
+          "operation": "read",
+          "allowed": false
+        }
+      ]
+    },
+    "requireCommands": [
+      "stat"
+    ],
+    "expectedSystem": {
+      "diagnostics": [
+        "status:myapp:failed",
+        "identity:myapp"
+      ],
+      "services": [
+        "myapp"
+      ]
+    }
+  },
+  "system": {
+    "services": [
+      {
+        "name": "myapp",
+        "user": "myapp",
+        "command": "/usr/local/bin/myapp",
+        "pid": 2400,
+        "active": false,
+        "logs": [
+          "myapp: Permission denied reading /etc/myapp/config.json"
+        ],
+        "config": {
+          "path": "/etc/myapp/config.json",
+          "required": {
+            "port": 8080,
+            "environment": "production"
+          }
+        }
+      }
+    ]
+  }
+}

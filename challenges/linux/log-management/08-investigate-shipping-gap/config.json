@@ -1,0 +1,160 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/etc/systemd/system/rsyslog.service": {
+      "type": "file",
+      "content": "[Unit]\nDescription=System Logging Service\n[Service]\nExecStart=/usr/sbin/rsyslogd\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    },
+    "/usr/sbin/rsyslogd": {
+      "type": "file",
+      "content": "authored forwarder workload\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/var/spool/rsyslog/forward-logs.0001": {
+      "type": "file",
+      "content": "queued application records awaiting collector acknowledgement\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 384,
+      "size": 8388608
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "adm"
+        ]
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "www-data",
+        "uid": 33,
+        "primaryGroup": "www-data"
+      }
+    ],
+    "umask": 18
+  },
+  "system": {
+    "services": [],
+    "manager": {
+      "units": [
+        {
+          "name": "rsyslog.service",
+          "state": "active",
+          "workload": {
+            "command": "/usr/sbin/rsyslogd"
+          }
+        }
+      ],
+      "epoch": "2026-09-01T10:30:00Z",
+      "journal": [
+        {
+          "unit": "rsyslog.service",
+          "at": -45,
+          "boot": 0,
+          "priority": 4,
+          "message": "action 'forward-logs' suspended: collector connection refused; queue retained",
+          "comm": "rsyslogd"
+        }
+      ]
+    },
+    "logging": {}
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "systemctl",
+      "journalctl",
+      "du",
+      "logger"
+    ],
+    "expectedLogging": {
+      "queries": [
+        {
+          "label": "Forwarding failure evidence",
+          "unit": "rsyslog.service",
+          "count": 20,
+          "contains": [
+            "collector connection refused",
+            "queue retained"
+          ]
+        },
+        {
+          "label": "New local marker",
+          "since": -60,
+          "origin": "logger",
+          "fields": {
+            "SYSLOG_IDENTIFIER": [
+              "shipping-probe"
+            ]
+          },
+          "contains": [
+            "devpolaris shipping probe 20260901"
+          ]
+        }
+      ]
+    },
+    "expectedUnits": [
+      {
+        "name": "rsyslog.service",
+        "label": "Preserve the forwarder",
+        "state": "active",
+        "untouched": true,
+        "verified": [
+          "status"
+        ]
+      }
+    ],
+    "expectedFs": {
+      "/var/spool/rsyslog/forward-logs.0001": {
+        "contentEquals": "queued application records awaiting collector acknowledgement\n",
+        "sizeEquals": 8388608
+      }
+    },
+    "expectedResults": [
+      {
+        "label": "Retained local buffer",
+        "commandsAnyOf": [
+          "du",
+          "sudo"
+        ],
+        "stdoutEquals": "8.0M /var/spool/rsyslog\n",
+        "exitCode": 0
+      }
+    ],
+    "loose": true
+  }
+}

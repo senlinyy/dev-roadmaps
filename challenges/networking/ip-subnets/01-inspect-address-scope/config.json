@@ -1,0 +1,16 @@
+{
+  "cwd": "/home/dev", "env": {"USER":"dev","HOME":"/home/dev"},
+  "fs": {"/home/dev":{"type":"dir","owner":"dev","group":"dev","mode":493}},
+  "commandModules": ["linux-system","networking"],
+  "system": {"services":[],"processes":{"entries":[]},"network":{
+    "interfaces":[
+      {"name":"lo","index":1,"mac":"00:00:00:00:00:00","mtu":65536,"up":true,"carrier":true,"addresses":["127.0.0.1/8","::1/128"]},
+      {"name":"eth0","index":2,"mac":"52:54:00:64:00:10","mtu":1500,"up":true,"carrier":true,"addresses":["10.64.8.10/24","fe80::5054:ff:fe64:10/64","2001:db8:64:8::10/64"]}
+    ],
+    "routes":[{"prefix":"10.64.8.0/24","dev":"eth0","src":"10.64.8.10"}], "neighbors":[]
+  }},
+  "grader":{"strategy":"final-fs-state","expectedFs":[],"requireCommands":["ip"],"expectedNetwork":{"readOnly":true,"observations":[
+    {"kind":"address","dev":"lo","contains":["127.0.0.1/8 scope host","::1/128 scope host"],"label":"Inspect both loopback addresses and their scope."},
+    {"kind":"address","dev":"eth0","contains":["10.64.8.10/24 scope global","fe80::5054:ff:fe64:10/64 scope link","2001:db8:64:8::10/64 scope global"],"label":"Inspect IPv4, link-local IPv6, and global IPv6 on eth0."}
+  ]}}
+}

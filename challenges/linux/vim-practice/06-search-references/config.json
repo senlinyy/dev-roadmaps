@@ -1,0 +1,53 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/upstreams.conf": {
+      "type": "file",
+      "content": "# backend references\nprimary=api.internal\nhealth=api.internal\nfallback=api.internal\n# end\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "vim",
+      "cat"
+    ],
+    "expectedFs": {
+      "/home/dev/upstreams.conf": {
+        "type": "file",
+        "contentEquals": "# backend references\nprimary=api.internal\nhealth=api.internal\nfallback=api.internal\n# end\n"
+      }
+    },
+    "expectedVim": [
+      {
+        "label": "Find the Right Reference",
+        "path": "/home/dev/upstreams.conf",
+        "actions": [
+          "search-forward",
+          "search-next",
+          "search-previous",
+          "search-backward"
+        ],
+        "savedContentEquals": "# backend references\nprimary=api.internal\nhealth=api.internal\nfallback=api.internal\n# end\n",
+        "edited": false
+      }
+    ],
+    "expectedResults": [
+      {
+        "label": "saved file inspection",
+        "commands": [
+          "cat"
+        ],
+        "stdoutEquals": "# backend references\nprimary=api.internal\nhealth=api.internal\nfallback=api.internal\n# end\n",
+        "exitCode": 0
+      }
+    ]
+  }
+}

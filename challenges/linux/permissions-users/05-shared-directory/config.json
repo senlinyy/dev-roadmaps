@@ -1,0 +1,35 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/dev": { "type": "dir", "mode": 488, "owner": "dev", "group": "dev" },
+    "/srv": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/srv/project": { "type": "dir", "mode": 509, "owner": "root", "group": "root" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "dev", "uid": 1000, "primaryGroup": "dev", "gid": 1000, "supplementaryGroups": ["developers"] }
+    ],
+    "sessionGroups": ["dev", "developers"],
+    "umask": 2
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["chgrp", "chmod", "touch", "stat"],
+    "forbidCommandPatterns": ["chmod\\s+(?:0?777|a\\+rwx)"],
+    "minCommandCount": 4,
+    "expectedFs": {
+      "/srv/project": { "type": "dir", "modeEquals": 1533, "ownerEquals": "root", "groupEquals": "developers" },
+      "/srv/project/proof.txt": { "type": "file", "modeEquals": 436, "ownerEquals": "dev", "groupEquals": "developers" }
+    },
+    "expectedPermissions": {
+      "access": [
+        { "user": "dev", "path": "/srv/project/another.txt", "operation": "create", "allowed": true }
+      ]
+    }
+  }
+}

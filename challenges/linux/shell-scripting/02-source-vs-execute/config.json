@@ -1,0 +1,19 @@
+{
+  "cwd": "/home/dev/release",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/release": { "type": "dir" },
+    "/home/dev/release/env.sh": { "type": "file", "mode": 420, "content": "DEPLOY_ENV=production\nexport DEPLOY_ENV\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["staging", "production"],
+    "requireCommands": ["bash", "source", "printf"],
+    "expectedScriptRuns": [
+      { "path": "/home/dev/release/env.sh", "invocation": "bash", "args": [], "exitCode": 0 },
+      { "path": "/home/dev/release/env.sh", "invocation": "source", "args": [], "exitCode": 0 }
+    ]
+  }
+}

@@ -1,0 +1,251 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev"
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      }
+    ],
+    "umask": 18
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "mode": 493,
+      "owner": "dev",
+      "group": "dev"
+    },
+    "/usr/bin/node": {
+      "type": "file",
+      "content": "Authored application executable; not run on the host.\n",
+      "mode": 493,
+      "owner": "root",
+      "group": "root"
+    },
+    "/srv/orders": {
+      "type": "dir",
+      "mode": 493,
+      "owner": "root",
+      "group": "root"
+    },
+    "/srv/orders/server.js": {
+      "type": "file",
+      "content": "console.log('orders');\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/etc/systemd/system/orders.service": {
+      "type": "file",
+      "content": "[Unit]\nDescription=Orders API\n\n[Service]\nType=simple\nUser=app\nWorkingDirectory=/srv/orders\nExecStart=/usr/bin/node /srv/orders/server.js\n\n[Install]\nWantedBy=multi-user.target\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    }
+  },
+  "system": {
+    "services": [],
+    "processes": {
+      "entries": [
+        {
+          "pid": 100,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/bin/bash"
+          ],
+          "state": "S",
+          "rss": 4096,
+          "vsz": 262144,
+          "tty": "pts/0"
+        },
+        {
+          "pid": 810,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/python3",
+            "/srv/metrics/collector.py"
+          ],
+          "state": "S",
+          "rss": 65536,
+          "vsz": 1048576
+        }
+      ]
+    },
+    "resources": {
+      "uptime": 86400,
+      "samples": [
+        {
+          "at": 0,
+          "load": [
+            1.8,
+            1.4,
+            1.1
+          ],
+          "cpus": [
+            {
+              "us": 20,
+              "sy": 5,
+              "id": 75,
+              "wa": 0,
+              "st": 0
+            },
+            {
+              "us": 20,
+              "sy": 5,
+              "id": 75,
+              "wa": 0,
+              "st": 0
+            }
+          ],
+          "memory": {
+            "total": 8388608,
+            "free": 262144,
+            "available": 4718592,
+            "buffers": 65536,
+            "cached": 4194304,
+            "reclaimable": 262144,
+            "unreclaimable": 131072,
+            "shared": 32768,
+            "swapTotal": 2097152,
+            "swapFree": 1835008,
+            "dirty": 8192,
+            "writeback": 0
+          },
+          "activity": {
+            "si": 0,
+            "so": 0,
+            "bi": 12,
+            "bo": 40,
+            "interrupts": 1200,
+            "switches": 2400
+          },
+          "processes": [
+            {
+              "unit": "orders.service",
+              "values": {
+                "cpu": 12,
+                "rss": 524288,
+                "vsz": 8388608,
+                "swap": 16384,
+                "smaps": {
+                  "pss": 458752,
+                  "sharedClean": 131072,
+                  "privateDirty": 393216,
+                  "anonymous": 393216
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "boot": {
+        "cpus": [
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          },
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          }
+        ],
+        "activity": {
+          "si": 0,
+          "so": 0,
+          "bi": 12,
+          "bo": 40,
+          "interrupts": 1200,
+          "switches": 2400
+        }
+      }
+    },
+    "manager": {
+      "epoch": "2026-09-01T10:00:00Z",
+      "units": [
+        {
+          "name": "orders.service",
+          "state": "active",
+          "workload": {
+            "command": "/usr/bin/node /srv/orders/server.js"
+          }
+        }
+      ],
+      "journal": []
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCwd": "/home/dev",
+    "expectedResources": {
+      "readOnly": true,
+      "observations": [
+        {
+          "kind": "memory",
+          "label": "Inspect host availability"
+        }
+      ]
+    },
+    "expectedFs": {
+      "/etc/systemd/system/orders.service": {
+        "contentEquals": "[Unit]\nDescription=Orders API\n\n[Service]\nType=simple\nUser=app\nWorkingDirectory=/srv/orders\nExecStart=/usr/bin/node /srv/orders/server.js\n\n[Install]\nWantedBy=multi-user.target\n"
+      }
+    },
+    "expectedUnits": [
+      {
+        "name": "orders.service",
+        "label": "Current orders process",
+        "state": "active",
+        "untouched": true,
+        "properties": [
+          "MainPID"
+        ],
+        "readProcess": [
+          "status",
+          "smaps_rollup"
+        ]
+      }
+    ],
+    "expectedProcesses": [
+      {
+        "command": "/usr/bin/node /srv/orders/server.js",
+        "label": "Resident-memory ranking",
+        "inspectedFields": [
+          "pid",
+          "rss",
+          "vsz",
+          "cmd"
+        ],
+        "sortedBy": "-rss"
+      }
+    ]
+  }
+}

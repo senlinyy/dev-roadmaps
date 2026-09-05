@@ -1,0 +1,277 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "default-deny",
+      "type": "single",
+      "scenario": "A remote host must move from INPUT ACCEPT to DROP without interrupting the current administrative session. What sequence is safest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Set DROP first, then add allows after reconnecting"
+        },
+        {
+          "id": "b",
+          "text": "Add established traffic and required service allows, verify them, then set DROP"
+        },
+        {
+          "id": "c",
+          "text": "Flush all rules and stop the firewall service"
+        },
+        {
+          "id": "d",
+          "text": "Allow every port, then set DROP"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Install and verify the required allow path before changing the default policy. Stateful established-traffic handling protects existing flows while explicit rules protect intended services. [Netfilter iptables extensions](https://man7.org/linux/man-pages/man8/iptables-extensions.8.html)."
+    },
+    {
+      "id": "stateful",
+      "type": "single",
+      "scenario": "An inbound HTTPS request is allowed and the host sends its reply. Which stateful rule commonly permits that return traffic?",
+      "options": [
+        {
+          "id": "a",
+          "text": "ESTABLISHED,RELATED"
+        },
+        {
+          "id": "b",
+          "text": "INVALID only"
+        },
+        {
+          "id": "c",
+          "text": "NEW UDP only"
+        },
+        {
+          "id": "d",
+          "text": "A DNS CNAME rule"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Conntrack classifies reply packets for an established flow, allowing a stateful policy to permit them without opening arbitrary new inbound connections. [Netfilter conntrack](https://docs.kernel.org/networking/nf_conntrack-sysctl.html)."
+    },
+    {
+      "id": "binding",
+      "type": "single",
+      "scenario": "INPUT policy is ACCEPT, but ss shows a service only on 127.0.0.1:9000. Remote probes are refused. What should be reviewed first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether to add an allow-all firewall rule"
+        },
+        {
+          "id": "b",
+          "text": "Whether the public DNS TTL is too long"
+        },
+        {
+          "id": "c",
+          "text": "Whether conntrack is stateful"
+        },
+        {
+          "id": "d",
+          "text": "Whether the service is intentionally loopback-only"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The socket binding, not filtering, limits exposure. Confirm the intended architecture before rebinding an internal service. [ss manual](https://man7.org/linux/man-pages/man8/ss.8.html)."
+    },
+    {
+      "id": "layers",
+      "type": "multiple",
+      "scenario": "A cloud VM listener is healthy, but remote SYN packets never appear in a host capture. Which two upstream controls deserve inspection?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Cloud security-group policy"
+        },
+        {
+          "id": "b",
+          "text": "The application's HTTP cookie attributes"
+        },
+        {
+          "id": "c",
+          "text": "Subnet network ACL policy"
+        },
+        {
+          "id": "d",
+          "text": "The server certificate SAN list"
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Security groups and subnet ACLs can filter traffic before it reaches the host. HTTP cookies and certificate identity occur after transport reaches the endpoint. [AWS VPC security](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html), [Network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html)."
+    },
+    {
+      "id": "rule-order",
+      "type": "single",
+      "scenario": "A broad ACCEPT rule appears before a specific DROP for port 9000. The DROP counter never increases. Why?",
+      "options": [
+        {
+          "id": "a",
+          "text": "DROP works only in OUTPUT"
+        },
+        {
+          "id": "b",
+          "text": "Counters disable filtering"
+        },
+        {
+          "id": "c",
+          "text": "First-match processing accepts the packet before the later rule"
+        },
+        {
+          "id": "d",
+          "text": "Port rules require DNS"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "iptables traverses rules in order and a terminating verdict stops further chain traversal. Inspect line order and counters together. [iptables manual](https://man7.org/linux/man-pages/man8/iptables.8.html)."
+    },
+    {
+      "id": "reject-drop",
+      "type": "single",
+      "scenario": "A filtered TCP probe times out instead of failing immediately. Which verdict is most consistent with that symptom?",
+      "options": [
+        {
+          "id": "a",
+          "text": "REJECT with TCP reset"
+        },
+        {
+          "id": "b",
+          "text": "DROP"
+        },
+        {
+          "id": "c",
+          "text": "ACCEPT"
+        },
+        {
+          "id": "d",
+          "text": "DNAT"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "DROP discards without a rejection response and commonly produces a client timeout. REJECT actively returns an error. [iptables extensions](https://man7.org/linux/man-pages/man8/iptables-extensions.8.html)."
+    },
+    {
+      "id": "ssh-hardening",
+      "type": "single",
+      "scenario": "A team plans to disable password authentication over SSH. What should happen before the current session is closed?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Delete every authorized key"
+        },
+        {
+          "id": "b",
+          "text": "Expose SSH to all sources temporarily"
+        },
+        {
+          "id": "c",
+          "text": "Validate the configuration and prove a separate key-based session works"
+        },
+        {
+          "id": "d",
+          "text": "Disable host-key checking on clients"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Validate configuration and test a second administrative path before ending the known-good session. This reduces lockout risk while preserving authentication guarantees. [sshd manual](https://man.openbsd.org/sshd.8)."
+    },
+    {
+      "id": "fail2ban",
+      "type": "single",
+      "scenario": "A password-guessing source is blocked by fail2ban. What limitation should the incident report preserve?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It proves every SSH credential is strong"
+        },
+        {
+          "id": "b",
+          "text": "It encrypts SSH traffic"
+        },
+        {
+          "id": "c",
+          "text": "It replaces the host firewall"
+        },
+        {
+          "id": "d",
+          "text": "Reactive bans supplement but do not replace preventive controls"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Reactive bans respond after observed failures. Strong authentication, limited exposure, logging, and baseline firewall policy remain necessary. [fail2ban manual](https://manpages.debian.org/fail2ban-client)."
+    },
+    {
+      "id": "safe-scope",
+      "type": "multiple",
+      "scenario": "Only corporate administrators should reach SSH. Which two controls reduce exposure without weakening application traffic?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Open port 22 to 0.0.0.0/0"
+        },
+        {
+          "id": "b",
+          "text": "Restrict port 22 to the management CIDR"
+        },
+        {
+          "id": "c",
+          "text": "Disable TLS on the web service"
+        },
+        {
+          "id": "d",
+          "text": "Keep established return traffic allowed"
+        }
+      ],
+      "correct": [
+        "b",
+        "d"
+      ],
+      "explanation": "Source-scoped SSH and stateful return handling limit administrative exposure while preserving intended flows. Opening SSH globally or weakening unrelated TLS expands risk. [iptables manual](https://man7.org/linux/man-pages/man8/iptables.8.html)."
+    },
+    {
+      "id": "evidence-order",
+      "type": "single",
+      "scenario": "A client times out, but the host has a route, a live listener, and an increasing DROP counter for that port. Where is the failure localized?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Host firewall policy"
+        },
+        {
+          "id": "b",
+          "text": "DNS answer selection"
+        },
+        {
+          "id": "c",
+          "text": "TLS certificate expiry"
+        },
+        {
+          "id": "d",
+          "text": "HTTP application status"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The route and listener exist, while the matching filter counter moves with the failed probe. That directly localizes the observed attempt to host filtering before TLS or HTTP. [iptables manual](https://man7.org/linux/man-pages/man8/iptables.8.html)."
+    }
+  ]
+}

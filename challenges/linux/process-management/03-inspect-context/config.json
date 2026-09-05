@@ -1,0 +1,163 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev"
+      },
+      {
+        "name": "app",
+        "uid": 1001,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      }
+    ]
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/srv/orders": {
+      "type": "dir",
+      "mode": 493,
+      "owner": "app",
+      "group": "app"
+    },
+    "/usr/bin/node": {
+      "type": "file",
+      "content": "simulated executable\n",
+      "mode": 493
+    },
+    "/srv/orders/worker.js": {
+      "type": "file",
+      "content": "authored worker fixture\n"
+    },
+    "/var/log/orders.log": {
+      "type": "file",
+      "content": "orders: worker ready\n",
+      "mode": 420
+    },
+    "/dev/null": {
+      "type": "file",
+      "content": ""
+    }
+  },
+  "system": {
+    "services": [
+      {
+        "name": "orders",
+        "pid": 310,
+        "user": "app",
+        "command": "/usr/bin/node /srv/orders/worker.js",
+        "active": true,
+        "logs": [
+          "orders: worker ready"
+        ]
+      }
+    ],
+    "processes": {
+      "shellPid": 100,
+      "entries": [
+        {
+          "pid": 1,
+          "ppid": 0,
+          "user": "root",
+          "argv": [
+            "/sbin/init"
+          ],
+          "cgroup": "/init.scope"
+        },
+        {
+          "pid": 90,
+          "ppid": 1,
+          "user": "root",
+          "argv": [
+            "/usr/sbin/sshd",
+            "-D"
+          ]
+        },
+        {
+          "pid": 100,
+          "ppid": 90,
+          "user": "dev",
+          "argv": [
+            "/bin/bash"
+          ],
+          "cwd": "/home/dev",
+          "tty": "pts/0"
+        },
+        {
+          "pid": 310,
+          "ppid": 1,
+          "user": "app",
+          "uid": 1001,
+          "argv": [
+            "/usr/bin/node",
+            "/srv/orders/worker.js"
+          ],
+          "cwd": "/srv/orders",
+          "env": {
+            "NODE_ENV": "production",
+            "PATH": "/usr/bin:/bin"
+          },
+          "cgroup": "/system.slice/orders.service",
+          "cpu": 12.3,
+          "rss": 65536,
+          "threads": 4,
+          "fd": {
+            "0": "/dev/null",
+            "1": "/var/log/orders.log",
+            "2": "/var/log/orders.log",
+            "18": "socket:[48122]"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCwd": "/home/dev",
+    "expectedProcesses": [
+      {
+        "label": "Managed orders worker",
+        "pid": 310,
+        "state": "S",
+        "untouched": true,
+        "readPaths": [
+          "exe",
+          "cwd",
+          "environ",
+          "limits",
+          "fd"
+        ]
+      }
+    ],
+    "expectedResults": [
+      {
+        "label": "Only the requested environment setting",
+        "commands": [
+          "tr",
+          "grep"
+        ],
+        "stdoutEquals": "NODE_ENV=production\n",
+        "exitCode": 0
+      }
+    ]
+  }
+}
+

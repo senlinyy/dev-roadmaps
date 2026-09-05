@@ -1,8 +1,8 @@
 ---
 title: "Shell Scripting Basics"
-description: "From your first script through control flow, safety flags, parameter expansion, functions, and safe file iteration. Each step targets a section of the Shell Scripting article."
+description: "Repair and run scripts that exercise execution rules, scope, PATH, quoting, arguments, control flow, safe iteration, strict mode, cleanup, and atomic backup publication."
 articleId: article-devops-foundation-linux-linux-basics-shell-scripting
 difficulty: medium
 order: 3
-tags: [bash, scripts, variables, control-flow, functions, traps, safety]
+tags: [bash, scripts, quoting, arguments, control-flow, pipefail, traps, backup]
 ---

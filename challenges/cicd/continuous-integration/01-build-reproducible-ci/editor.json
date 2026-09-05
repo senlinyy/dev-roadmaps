@@ -1,114 +1,116 @@
 {
   "language": "yaml",
-  "filename": ".github/workflows/ci.yml",
-  "completionProfile": "github-actions",
-  "initialValue": "name: CI\non:\n  push:\n    branches: [main]\n\njobs:\n  validate:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v6\n      - uses: actions/setup-node@v6\n        with:\n          node-version: \"22\"\n      - run: npm install\n",
-  "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
+  "activeFile": "pipeline.yaml",
+  "files": [
+    {
+      "filename": "pipeline.yaml",
+      "initialValue": "# Add validation without merging it into the packaging worker.\nversion: 1\njobs:\n  build:\n    steps:\n      - checkout: true\n      - run: npm install\n      - run: npm run build\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 1,
+    "filename": "pipeline.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint fixture passed: no lint errors."
+      },
+      "test": {
+        "passed": true,
+        "message": "Test fixture passed: checkout totals match expected results."
+      },
+      "build": {
+        "passed": true,
+        "message": "Build fixture passed: packaged the checkout application."
+      }
+    },
+    "cases": [
       {
-        "path": [
-          "on",
-          "pull_request",
-          "branches"
-        ],
-        "includes": "main",
-        "label": "pull requests to main"
+        "id": "healthy",
+        "title": "Healthy change",
+        "description": "All authored checks pass. Complete the full required workflow."
       },
       {
-        "path": [
-          "permissions",
-          "contents"
-        ],
-        "equals": "read",
-        "label": "read-only repository permission"
-      },
-      {
-        "path": [
-          "concurrency",
-          "group"
-        ],
-        "contains": "github.workflow",
-        "label": "workflow-scoped concurrency group"
-      },
-      {
-        "path": [
-          "concurrency",
-          "cancel-in-progress"
-        ],
-        "equals": true,
-        "label": "superseded runs cancelled"
-      },
-      {
-        "path": [
-          "jobs",
-          "validate",
-          "steps"
-        ],
-        "containsObject": {
-          "uses": "actions/setup-node@v6",
-          "with": {
-            "node-version": "22",
-            "cache": "npm"
+        "id": "lint-failure",
+        "title": "Lint failure",
+        "description": "An authored lint violation must block packaging.",
+        "checks": {
+          "lint": {
+            "passed": false,
+            "message": "src/app.js: unused variable in checkoutTotal (authored lint fixture)."
           }
-        },
-        "label": "Node.js setup with npm cache"
+        }
       },
       {
-        "path": [
-          "jobs",
-          "validate",
-          "steps"
-        ],
-        "containsObject": {
-          "run": "npm ci"
-        },
-        "label": "locked dependency installation"
-      },
-      {
-        "path": [
-          "jobs",
-          "validate",
-          "steps"
-        ],
-        "containsObject": {
-          "run": "npm run lint"
-        },
-        "label": "lint gate"
-      },
-      {
-        "path": [
-          "jobs",
-          "validate",
-          "steps"
-        ],
-        "containsObject": {
-          "run": "npm test"
-        },
-        "label": "test gate"
-      },
-      {
-        "path": [
-          "jobs",
-          "validate",
-          "steps"
-        ],
-        "containsObject": {
-          "run": "npm run build"
-        },
-        "label": "build gate"
-      },
-      {
-        "path": [
-          "jobs",
-          "validate",
-          "steps"
-        ],
-        "excludesObject": {
-          "run": "npm install"
-        },
-        "label": "mutable install removed"
+        "id": "test-failure",
+        "title": "Unit-test failure",
+        "description": "An authored checkout-total test fails. Packaging must not proceed.",
+        "checks": {
+          "test": {
+            "passed": false,
+            "message": "checkoutTotal: expected 12, received 10 (authored unit-test fixture)."
+          }
+        }
       }
     ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "checks": [
+      "lint",
+      "test",
+      "build"
+    ],
+    "lockedInstalls": true,
+    "buildAfterChecks": [
+      "lint",
+      "test"
+    ],
+    "cases": [
+      {
+        "id": "healthy"
+      },
+      {
+        "id": "lint-failure",
+        "failure": "lint",
+        "forbid": [
+          "build",
+          "upload",
+          "verify",
+          "deploy"
+        ]
+      },
+      {
+        "id": "test-failure",
+        "failure": "test",
+        "forbid": [
+          "build",
+          "upload",
+          "verify",
+          "deploy"
+        ]
+      }
+    ],
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n"
+    },
+    "separateBuild": true
   }
 }

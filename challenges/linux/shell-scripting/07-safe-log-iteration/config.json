@@ -1,0 +1,30 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var/log/orders/api.log": { "type": "file", "content": "ready\n" },
+    "/var/log/orders/night shift.log": { "type": "file", "content": "ready\n" },
+    "/home/dev/process-logs.sh": { "type": "file", "mode": 493, "content": "#!/usr/bin/env bash\nfor file in $(find /var/log/orders -type f); do\n  printf \"%s\\n\" $file\ndone\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": ["vim", "./process-logs.sh"],
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/process-logs.sh",
+        "invocation": "direct",
+        "args": [],
+        "exitCode": 0,
+        "stdoutContains": ["/var/log/orders/api.log", "/var/log/orders/night shift.log"]
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/process-logs.sh": {
+        "type": "file",
+        "contentMatches": "find[\\s\\S]*-print0[\\s\\S]*read\\s+-r\\s+-d\\s+''[\\s\\S]*\"\\$file\"",
+        "contentExcludes": "for file in $(find"
+      }
+    }
+  }
+}

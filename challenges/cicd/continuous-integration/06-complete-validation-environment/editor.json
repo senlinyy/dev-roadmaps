@@ -1,0 +1,398 @@
+{
+  "language": "yaml",
+  "activeFile": "pipeline.yaml",
+  "files": [
+    {
+      "filename": "pipeline.yaml",
+      "initialValue": "version: 2\njobs:\n  validate:\n    needs: []\n    steps:\n      -\n        checkout:\n          ref: \"candidate\"\n      -\n        setup:\n          runtime: \"22\"\n      -\n        install:\n          mode: \"locked\"\n      -\n        check:\n          name: \"unit\"\n      -\n        build:\n          artifact: \"app\"\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "readOnly": true,
+      "initialValue": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Healthy service\",\n      \"description\": \"All layers pass once the service is ready.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"slow-service\",\n      \"title\": \"Slow startup\",\n      \"description\": \"PostgreSQL needs 25 simulated seconds to become ready.\",\n      \"workshop\": {\n        \"services\": {\n          \"postgres\": {\n            \"image\": \"postgres-17\",\n            \"readyAfter\": 25,\n            \"healthy\": true\n          },\n          \"app\": {\n            \"image\": \"checkout-test\",\n            \"readyAfter\": 2,\n            \"healthy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"type-failure\",\n      \"title\": \"Type contract fails\",\n      \"description\": \"A type error must stop later packaging.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": true,\n            \"message\": \"Checkout unit tests passed.\"\n          },\n          \"types\": {\n            \"passed\": false,\n            \"message\": \"Checkout request type is incompatible.\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"Checkout API/database integration passed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"integration-failure\",\n      \"title\": \"Database contract fails\",\n      \"description\": \"Readiness and unit tests pass, but the API/database contract fails.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": true,\n            \"message\": \"Checkout unit tests passed.\"\n          },\n          \"types\": {\n            \"passed\": true,\n            \"message\": \"Type contract passed.\"\n          },\n          \"integration\": {\n            \"passed\": false,\n            \"message\": \"Checkout row contract failed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"unready\",\n      \"title\": \"Service never ready\",\n      \"description\": \"No success may be inferred from a running process.\",\n      \"workshop\": {\n        \"services\": {\n          \"postgres\": {\n            \"image\": \"postgres-17\",\n            \"readyAfter\": 3,\n            \"healthy\": false\n          },\n          \"app\": {\n            \"image\": \"checkout-test\",\n            \"readyAfter\": 2,\n            \"healthy\": true\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "pipeline.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "workshop": {
+      "candidate": "candidate-43",
+      "head": "head-42",
+      "now": 1000,
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "Lint passed."
+        },
+        "unit": {
+          "passed": true,
+          "message": "Checkout unit tests passed."
+        },
+        "types": {
+          "passed": true,
+          "message": "Type contract passed."
+        },
+        "integration": {
+          "passed": true,
+          "message": "Checkout API/database integration passed.",
+          "runtime": "24",
+          "service": "postgres"
+        }
+      },
+      "pools": {
+        "public": {
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "trusted": false,
+          "network": []
+        },
+        "release": {
+          "os": [
+            "linux"
+          ],
+          "trusted": true,
+          "network": [
+            "production"
+          ]
+        },
+        "linux-only": {
+          "os": [
+            "linux"
+          ],
+          "trusted": false,
+          "network": []
+        }
+      },
+      "services": {
+        "postgres": {
+          "image": "postgres-17",
+          "readyAfter": 3,
+          "healthy": true
+        },
+        "app": {
+          "image": "checkout-test",
+          "readyAfter": 2,
+          "healthy": true
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "title": "Healthy service",
+        "description": "All layers pass once the service is ready.",
+        "workshop": {}
+      },
+      {
+        "id": "slow-service",
+        "title": "Slow startup",
+        "description": "PostgreSQL needs 25 simulated seconds to become ready.",
+        "workshop": {
+          "services": {
+            "postgres": {
+              "image": "postgres-17",
+              "readyAfter": 25,
+              "healthy": true
+            },
+            "app": {
+              "image": "checkout-test",
+              "readyAfter": 2,
+              "healthy": true
+            }
+          }
+        }
+      },
+      {
+        "id": "type-failure",
+        "title": "Type contract fails",
+        "description": "A type error must stop later packaging.",
+        "workshop": {
+          "checks": {
+            "lint": {
+              "passed": true,
+              "message": "Lint passed."
+            },
+            "unit": {
+              "passed": true,
+              "message": "Checkout unit tests passed."
+            },
+            "types": {
+              "passed": false,
+              "message": "Checkout request type is incompatible."
+            },
+            "integration": {
+              "passed": true,
+              "message": "Checkout API/database integration passed.",
+              "runtime": "24",
+              "service": "postgres"
+            }
+          }
+        }
+      },
+      {
+        "id": "integration-failure",
+        "title": "Database contract fails",
+        "description": "Readiness and unit tests pass, but the API/database contract fails.",
+        "workshop": {
+          "checks": {
+            "lint": {
+              "passed": true,
+              "message": "Lint passed."
+            },
+            "unit": {
+              "passed": true,
+              "message": "Checkout unit tests passed."
+            },
+            "types": {
+              "passed": true,
+              "message": "Type contract passed."
+            },
+            "integration": {
+              "passed": false,
+              "message": "Checkout row contract failed.",
+              "runtime": "24",
+              "service": "postgres"
+            }
+          }
+        }
+      },
+      {
+        "id": "unready",
+        "title": "Service never ready",
+        "description": "No success may be inferred from a running process.",
+        "workshop": {
+          "services": {
+            "postgres": {
+              "image": "postgres-17",
+              "readyAfter": 3,
+              "healthy": false
+            },
+            "app": {
+              "image": "checkout-test",
+              "readyAfter": 2,
+              "healthy": true
+            }
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Healthy service\",\n      \"description\": \"All layers pass once the service is ready.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"slow-service\",\n      \"title\": \"Slow startup\",\n      \"description\": \"PostgreSQL needs 25 simulated seconds to become ready.\",\n      \"workshop\": {\n        \"services\": {\n          \"postgres\": {\n            \"image\": \"postgres-17\",\n            \"readyAfter\": 25,\n            \"healthy\": true\n          },\n          \"app\": {\n            \"image\": \"checkout-test\",\n            \"readyAfter\": 2,\n            \"healthy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"type-failure\",\n      \"title\": \"Type contract fails\",\n      \"description\": \"A type error must stop later packaging.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": true,\n            \"message\": \"Checkout unit tests passed.\"\n          },\n          \"types\": {\n            \"passed\": false,\n            \"message\": \"Checkout request type is incompatible.\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"Checkout API/database integration passed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"integration-failure\",\n      \"title\": \"Database contract fails\",\n      \"description\": \"Readiness and unit tests pass, but the API/database contract fails.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": true,\n            \"message\": \"Checkout unit tests passed.\"\n          },\n          \"types\": {\n            \"passed\": true,\n            \"message\": \"Type contract passed.\"\n          },\n          \"integration\": {\n            \"passed\": false,\n            \"message\": \"Checkout row contract failed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"unready\",\n      \"title\": \"Service never ready\",\n      \"description\": \"No success may be inferred from a running process.\",\n      \"workshop\": {\n        \"services\": {\n          \"postgres\": {\n            \"image\": \"postgres-17\",\n            \"readyAfter\": 3,\n            \"healthy\": false\n          },\n          \"app\": {\n            \"image\": \"checkout-test\",\n            \"readyAfter\": 2,\n            \"healthy\": true\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "outcome": "passed",
+              "count": 4
+            },
+            {
+              "action": "build",
+              "subject": "app",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "cleanup",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "types",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "integration",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "workers.filesClean": true,
+            "workers.processesClean": true
+          },
+          "absent": []
+        }
+      },
+      {
+        "id": "slow-service",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "wait",
+              "subject": "postgres",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "integration",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "build",
+              "subject": "app",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "types",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "workers.processesClean": true
+          },
+          "absent": []
+        }
+      },
+      {
+        "id": "type-failure",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "types",
+              "outcome": "failed",
+              "count": 1
+            },
+            {
+              "action": "cleanup",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "workers.processesClean": true
+          },
+          "absent": [
+            {
+              "action": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "integration-failure",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "integration",
+              "outcome": "failed",
+              "count": 1
+            },
+            {
+              "action": "cleanup",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "unready",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "wait",
+              "subject": "postgres",
+              "outcome": "failed",
+              "count": 1
+            },
+            {
+              "action": "cleanup",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "workers.processesClean": true
+          },
+          "absent": [
+            {
+              "action": "check"
+            },
+            {
+              "action": "build"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

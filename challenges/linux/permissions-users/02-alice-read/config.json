@@ -1,0 +1,37 @@
+{
+  "cwd": "/home/alice",
+  "env": { "USER": "alice", "HOME": "/home/alice" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/alice": { "type": "dir", "mode": 488, "owner": "alice", "group": "alice" },
+    "/srv": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/srv/secure": { "type": "dir", "mode": 488, "owner": "root", "group": "analysts" },
+    "/srv/secure/secrets.txt": { "type": "file", "content": "quarterly-token=bluebird\n", "mode": 384, "owner": "root", "group": "root" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "alice",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "alice", "uid": 1001, "primaryGroup": "alice", "gid": 1001, "supplementaryGroups": ["analysts"] }
+    ],
+    "sessionGroups": ["alice", "analysts"],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["cat", "ls", "chgrp", "chmod"],
+    "forbidCommandPatterns": ["chmod\\s+(?:0?777|a\\+rwx)"],
+    "minCommandCount": 5,
+    "expectedFs": {
+      "/srv/secure/secrets.txt": { "type": "file", "modeEquals": 416, "ownerEquals": "root", "groupEquals": "analysts" }
+    },
+    "expectedPermissions": {
+      "access": [
+        { "user": "alice", "path": "/srv/secure/secrets.txt", "operation": "read", "allowed": true },
+        { "user": "alice", "path": "/srv/secure/secrets.txt", "operation": "write", "allowed": false }
+      ],
+      "diagnostics": ["denied:alice:read:/srv/secure/secrets.txt"]
+    }
+  }
+}

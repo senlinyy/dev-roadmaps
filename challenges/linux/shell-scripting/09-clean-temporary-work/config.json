@@ -1,0 +1,31 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/tmp": { "type": "dir" },
+    "/home/dev/stage-release.sh": { "type": "file", "mode": 493, "content": "#!/usr/bin/env bash\ntmp_dir=/tmp/release-work\nmkdir -p $tmp_dir\nprintf \"%s\\n\" $tmp_dir\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": ["vim", "./stage-release.sh"],
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/stage-release.sh",
+        "invocation": "direct",
+        "args": [],
+        "exitCode": 0,
+        "stdoutContains": ["/tmp/release."]
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/stage-release.sh": {
+        "type": "file",
+        "contentMatches": "mktemp\\s+-d[\\s\\S]*cleanup\\s*\\(\\)[\\s\\S]*trap\\s+cleanup\\s+EXIT",
+        "contentExcludes": "tmp_dir=/tmp/release-work"
+      },
+      "/tmp/release-work": { "type": "dir", "exists": false },
+      "/tmp/release.000001": { "type": "dir", "exists": false }
+    }
+  }
+}

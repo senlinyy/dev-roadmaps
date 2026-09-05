@@ -1,7 +1,7 @@
 ---
 title: "Logs and Workspaces"
-description: "Collect Azure resource logs and application logs into Log Analytics workspaces, then query them with KQL."
-overview: "Useful Azure log work connects the resource that emits evidence, the diagnostic setting that routes it, the workspace that stores it, the table that shapes it, and the KQL query that turns it into an answer. This article follows one checkout failure through Azure Monitor, diagnostic settings, Log Analytics workspaces, tables, KQL, retention, cost, and access."
+description: "Follow Azure logs from source and collection route into workspace tables, KQL investigation, correlation, retention, access, and cost decisions."
+overview: "A log preserves an event after the request has ended. A Log Analytics workspace stores and governs that evidence so queries can explain what happened across related resources."
 tags: ["azure-monitor", "log-analytics", "diagnostic-settings", "kql"]
 order: 2
 id: article-cloud-providers-azure-observability-azure-monitor-log-analytics
@@ -23,13 +23,9 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-Let's use one production story for the whole article. The DevPolaris Orders team runs `devpolaris-orders-api` on Azure Container Apps, sends customer traffic through Application Gateway, and stores observability data in a Log Analytics workspace named `law-devpolaris-prod`. A customer reports that checkout failed around `2026-05-07T09:42:00Z`, and the incident note includes operation ID `checkout-5001`.
+A checkout request fails, and the customer reports it five minutes later. The request has already ended. To investigate the database timeout that occurred inside it, you need a record created while the operation was happening.
 
-At that moment, the Azure portal resource list can look calm. The Container App can still have healthy replicas, the gateway can still accept traffic, and the database can still respond to other requests. The team needs records from the running system: the app runtime message, the gateway status, the operation ID, the resource IDs, and the time window around the failure.
-
-The evidence path has several separate responsibilities. **Azure Monitor** provides the monitoring platform. **Diagnostic settings** route resource logs from Azure services, and a **Log Analytics workspace** stores the records. **Tables** give those records a shape, while **KQL** turns rows into an answer. **Retention, cost, and access** determine how long the evidence stays, how much it costs, and who can read it.
-
-Keep these questions in view as you work through the lesson:
+Logs preserve that history. In Azure, useful investigation depends on the full path: a resource or application produces a record, collection routes it to a Log Analytics workspace, a table stores it, and a query finds it. Each part has a separate job, and each can explain why expected evidence is missing.
 
 1. **What Production Questions Should Logs Answer?**
 2. **How Do Azure Monitor Logs and Diagnostic Settings Connect?**
@@ -41,402 +37,584 @@ Keep these questions in view as you work through the lesson:
 8. **How Should You Design Workspace Boundaries?**
 
 ## What Production Questions Should Logs Answer?
-<!-- section-summary: Azure log work has one practical question: where will the evidence live when a production request fails? -->
+<!-- section-summary: Logs preserve temporary events as searchable history so investigations can identify what happened, when, where, and within which request. -->
 
-In real incidents, this order gives the team a checklist. First confirm that each resource has a route. Then confirm that the records reached the expected workspace. Finally, inspect the table and columns before writing the query. The investigation follows the records from Azure Monitor all the way to the KQL result.
+When checkout fails, the customer may see only “Something went wrong.” Internally, the request may have passed through the Checkout API and Order service before SQL connection acquisition timed out. Once the execution ends, a debugger cannot return to that past moment.
 
-![Application resources flowing through diagnostic settings into workspace tables and a KQL answer](/content-assets/articles/article-cloud-providers-azure-observability-azure-monitor-log-analytics/log-route-before-query.png)
+A **log record** preserves evidence while the event occurs. For the failed request, it might contain:
 
-*Useful logs depend on connecting the resource, diagnostic setting, workspace, table, and KQL answer before the incident starts.*
+```text
+Time:       18:04:27
+Operation:  Checkout
+Result:     Failed
+Reason:     SqlTimeout
+Duration:   30.2 seconds
+Trace ID:   7F92...
+```
+
+The original event is temporary; the record remains available for later inspection. Context about the affected customer may also be relevant where appropriate, but the record should avoid unnecessary sensitive information.
+
+Over time, such records form a dataset:
+
+| Time | Operation | Result | Reason |
+| --- | --- | --- | --- |
+| 18:00 | Checkout | Success | |
+| 18:01 | Checkout | Success | |
+| 18:02 | Payment | Failed | Timeout |
+| 18:03 | Checkout | Success | |
+| 18:04 | Checkout | Failed | SqlTimeout |
+
+The investigation can now be expressed as questions about data. Show failures after 18:00. Select only checkout failures. Group them by reason. Find every record associated with request `7F92`.
+
+Structured fields make those questions possible. An operation identifies the work, a result indicates its outcome, a reason identifies the failure category, and a timestamp places it in the incident. A correlation identifier supplies the relationship to other records produced during the same request.
+
+This is the first important purpose of logging: preserving enough information to reconstruct an event after direct inspection is no longer possible. Collecting a large volume is less useful if the records omit the context needed to distinguish one failed operation from another.
 
 ## How Do Azure Monitor Logs and Diagnostic Settings Connect?
-<!-- section-summary: Azure Monitor collects telemetry, while Azure Monitor Logs stores detailed records that teams query during investigation. -->
+<!-- section-summary: Azure Monitor Logs stores and queries evidence, diagnostic settings route selected Azure resource telemetry, and each source needs an appropriate collection mechanism. -->
 
-**Azure Monitor** is Azure's monitoring platform for collecting, analyzing, visualizing, and alerting on telemetry from Azure resources, applications, and supporting systems. Telemetry is the evidence a running system emits about its behavior. In Azure, that evidence includes metrics, logs, traces, activity records, and alert data.
+**Azure Monitor** is the broader observability platform that includes metrics, logs, alerts, and related capabilities. **Azure Monitor Logs** handles stored log and trace data and its analysis. A **Log Analytics workspace** is a data store for that evidence.
 
-**Azure Monitor Logs** is the log data platform inside Azure Monitor. It stores detailed records in Log Analytics workspaces and lets you query those records with Kusto Query Language, usually shortened to **KQL**. When the Orders team wants to inspect one failed checkout request, they usually need logs, because logs carry event-level detail such as a message, status code, operation ID, resource ID, timestamp, and sometimes an exception text.
+The similar name **Azure Monitor workspace** identifies a different resource type used for Prometheus-related metrics. In this article, *workspace* means a Log Analytics workspace. Keeping the names distinct prevents looking for logs in a resource intended for a different telemetry type.
 
-There are a few log types worth separating early. The **Azure Activity log** records subscription-level control-plane events, such as someone updating a resource, creating a diagnostic setting, or changing access. **Resource logs** come from Azure services and describe the operation of those resources, such as Application Gateway access records or Blob Storage read and write records. **Application logs and telemetry** come from the running app or instrumentation layer, such as Container App console logs or Application Insights request and exception records.
+Evidence originates at several layers. Azure SQL, Key Vault, Storage, and Application Gateway can produce resource logs. A VM's operating system can produce Windows events, Linux syslog, and application files. Applications can produce request records, exceptions, dependency measurements, and traces.
 
+Creating a workspace does not automatically collect all of those sources. It creates a destination. Collection still needs a route from the source to that destination.
 
-For `devpolaris-orders-api`, each type answers a different question. Activity records can show whether someone changed the gateway or diagnostic settings. Resource logs can show that Application Gateway returned HTTP `500` for `POST /checkout`. Application logs can show that the Container App printed `checkout failed while calling sql-devpolaris-orders-prod.database.windows.net`.
+### Route Azure resource logs with diagnostic settings
 
-Knowing the log types gives the team the vocabulary. The next question is more operational: how do those records leave the Azure resources and arrive in `law-devpolaris-prod`?
+A Key Vault may generate request, access, and audit events. **Diagnostic settings** specify which available categories of telemetry from that resource should be sent to which destinations.
 
-### Diagnostic Settings
-<!-- section-summary: Diagnostic settings are routing rules that tell Azure which resource logs and metrics to send to a destination such as a Log Analytics workspace. -->
+Conceptually, a setting could select audit logs and some supported metrics from `production-key-vault` and send them to `prod-log-workspace`. The setting is routing configuration; it is not the place where records are stored.
 
-A **diagnostic setting** is a routing rule on an Azure resource. It says which log categories or metrics Azure should collect from that resource and which destination should receive them. Microsoft documents that resource logs need diagnostic settings, and each setting defines both the data to collect and the destination to send it to.
+Destinations can include Log Analytics workspaces, Storage accounts, Event Hubs, and supported partner solutions. The appropriate destination depends on how the evidence will be stored, processed, or queried.
 
-Think about `ca-devpolaris-orders-prod`, the Container App that runs the Orders API. The team wants console logs and system logs in `law-devpolaris-prod`, so the Container App gets a diagnostic setting named `send-containerapp-logs-to-law`. The Application Gateway gets a separate diagnostic setting named `send-appgateway-logs-to-law`, because gateway access logs come from the gateway resource while app runtime logs come from the Container App.
+For a storage resource, categories may distinguish read, write, and delete operations. A collection policy could enable writes and deletes while omitting reads if the investigation requirements do not justify their volume. More collection produces more ingestion, more stored data, potentially greater cost, and more material to search.
 
-Diagnostic settings can send data to several destination types. A **Log Analytics workspace** is the normal destination for interactive operations, KQL queries, dashboards, and log alerts. A **Storage account** is useful for cheaper audit archives or immutable long-term files. An **Event Hub** streams records to external tools such as a SIEM, a data platform, or a third-party observability system. Azure Monitor partner destinations also exist for supported integrations.
+The choice should be explicit. Omitting a category removes the corresponding evidence from that route; enabling everything can create unnecessary expense without improving the questions the team can answer.
 
-The important beginner detail is that diagnostic settings belong to the emitting resource. If only the Container App sends logs, the team sees only half the checkout path. During the incident, the app might show an internal timeout while the gateway evidence is missing, or the gateway might show a `500` while the app runtime record is missing.
+### Separate source, route, and destination
 
-Here is a small Bicep example for the Container App side of the story. The exact log category names vary by resource type, so production templates usually come from a tested module rather than a copy-paste guess.
+Three common paths illustrate the distinction:
 
-```bicep
-param containerAppName string = 'ca-devpolaris-orders-prod'
-param workspaceName string = 'law-devpolaris-prod'
+| Evidence source | Collection or routing mechanism | Destination |
+| --- | --- | --- |
+| Azure SQL resource logs | Diagnostic setting | Log Analytics workspace |
+| VM operating-system data | Azure Monitor Agent and Data Collection Rule | Log Analytics workspace |
+| Application requests and dependencies | OpenTelemetry/Application Insights instrumentation | Log Analytics workspace |
 
-resource containerApp 'Microsoft.App/containerApps@2024-03-01' existing = {
-  name: containerAppName
-}
+The **Azure Monitor Agent** runs where guest operating-system evidence must be collected. A **Data Collection Rule**, or DCR, describes what to collect, how to process it, and where to send it. Application instrumentation produces evidence about the application itself.
 
-resource workspace 'Microsoft.OperationalInsights/workspaces@2025-07-01' existing = {
-  name: workspaceName
-}
-
-resource containerAppDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
-  name: 'send-containerapp-logs-to-law'
-  scope: containerApp
-  properties: {
-    workspaceId: workspace.id
-    logs: [
-      {
-        category: 'ContainerAppConsoleLogs'
-        enabled: true
-      }
-      {
-        category: 'ContainerAppSystemLogs'
-        enabled: true
-      }
-    ]
-    metrics: [
-      {
-        category: 'AllMetrics'
-        enabled: true
-      }
-    ]
-  }
-}
+```mermaid
+flowchart TD
+    resource["Azure resource"] --> diagnostic["Diagnostic setting"]
+    vm["VM guest data"] --> agent["Agent and DCR"]
+    app["Application events"] --> instrument["Application instrumentation"]
+    diagnostic --> workspace["Log Analytics workspace"]
+    agent --> workspace
+    instrument --> workspace
+    workspace --> tables["Tables"]
+    tables --> query["KQL"]
+    query --> investigate["Investigation, dashboard, or alert"]
 ```
 
-This template gives the app runtime a path into the workspace. The gateway needs its own diagnostic setting with gateway categories such as access, performance, and firewall logs. Now the records have a route, so the next thing to understand is the destination.
+Calling the entire chain “Azure Monitor” can obscure the failing part. Naming each responsibility makes both design and troubleshooting more precise.
+
+The distinction also explains what each configuration can and cannot fix. Selecting a different workspace changes the destination; it does not add an event that the application never recorded. Enabling a resource-log category changes which resource events are routed; it does not instrument an application's internal checkout logic. Adding application instrumentation supplies that missing application evidence, but it still needs a working collection path.
+
+For the same reason, a successful source operation and a successful logging test are different observations. The Key Vault request may finish even if its audit record is not present in the expected table. To establish the logging result, follow that known operation through its selected category, route, and destination. This is the practical benefit of treating the pipeline as several connected responsibilities instead of one switch.
 
 ## How Do You Verify the Log Route?
-<!-- section-summary: A diagnostic setting deserves a quick verification loop so the team knows which categories are enabled and whether rows reached the workspace. -->
+<!-- section-summary: Verify source events, selected categories, destination, ingestion delay, table, and query scope; a known safe event provides a concrete test. -->
 
-After a diagnostic setting is deployed, the team should verify the route before they trust it during an incident. The first check is the resource-side configuration. Azure CLI can list the categories that a resource supports, then list the active diagnostic settings on that resource.
+A diagnostic setting does not manufacture events. If SQL has not performed an operation that generates the selected category since collection was configured, there may be no corresponding record to find.
 
-```bash
-container_app_id="/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod"
+The sequence is configuration, a relevant event, routing, and ingestion. The destination table may only appear after the first records arrive. Microsoft's diagnostic-settings guidance allows up to 90 minutes for data to begin flowing after a setting is created, so immediate absence does not by itself prove failure.
 
-az monitor diagnostic-settings categories list \
-  --resource "$container_app_id" \
-  --query "[].name" \
-  --output table
+When expected logs are missing, inspect the path in order:
 
-az monitor diagnostic-settings list \
-  --resource "$container_app_id" \
-  --output table
-```
+1. Confirm that the source generated the intended event.
+2. Check that its log category was selected.
+3. Check the diagnostic setting and its configuration.
+4. Confirm the selected workspace.
+5. Allow for the collection and ingestion interval.
+6. Identify the table associated with that category.
+7. Check the query's time range and filters.
 
-Those commands answer two practical questions. The category list tells the team which log and metric categories Azure exposes for this resource type. The diagnostic settings list tells the team whether a setting exists, which categories it enables, and which destination receives the records.
+Each check tests a different explanation. Repeatedly changing settings without identifying the failed stage can make the original problem harder to understand.
 
-A healthy check might show categories like this:
+### Produce an event with a known time
 
-| Name |
-|---|
-| `ContainerAppConsoleLogs` |
-| `ContainerAppSystemLogs` |
-| `AllMetrics` |
+For Key Vault logging, perform a deliberate, safe read of a known test secret at 18:15 and record the time. Then search the relevant destination around 18:14–18:17 after allowing for ingestion.
 
-The diagnostic setting output should also show the expected setting name and destination. If the list returns no rows, or if the workspace resource ID points to a development workspace, the incident query will miss production evidence even though the app is running.
+This gives the test a known input and an expected record. It is stronger evidence than assuming someone probably used the resource earlier in the day. The test should reveal whether the source emitted the chosen event and whether the intended route delivered it.
 
-| Name | ResourceGroup | WorkspaceId |
-|---|---|---|
-| `send-containerapp-logs-to-law` | `rg-devpolaris-app-prod` | `/subscriptions/.../workspaces/law-devpolaris-prod` |
+The action is a verification exercise, not a reason to expose secret contents in logs. The useful evidence is the access event and its context.
 
-The second check happens in Log Analytics. After a few minutes of normal traffic, query the expected table for the resource ID and summarize the row count. The exact table depends on the resource and diagnostic mode, so the team chooses the table they expect and adjusts after checking the workspace schema.
+### Investigate an empty query backward
+
+An empty result can also be approached from the query end. Suppose:
 
 ```kusto
-ContainerAppConsoleLogs_CL
-| where TimeGenerated > ago(30m)
-| where _ResourceId has "/containerApps/ca-devpolaris-orders-prod"
-| summarize rows = count(), latest = max(TimeGenerated)
+SomeResourceTable
+| where TimeGenerated > ago(1h)
 ```
 
-A healthy result should show recent rows and a recent timestamp:
+returns no rows. First consider the query: wrong time range, overly restrictive filters, wrong workspace, or wrong table. Then check whether anything was ingested. Next inspect the route, categories, and destination, and finally confirm source activity.
 
-| rows | latest |
-|---|---|
-| `182` | `2026-05-07T09:47:18.221Z` |
+This prevents the conclusion “no events happened” from being drawn solely from “no rows matched this query.” A correct event can exist in another table or outside the selected time window.
 
-A zero-row result can mean the app has not emitted logs, the category is disabled, the diagnostic setting points at a different workspace, ingestion has not completed yet, or the team queried the wrong table. That short list gives the operator a calm path: check the diagnostic setting, check the destination workspace, check the table schema, then generate a small known log event and query again.
+The same reasoning applies during an incident. Understanding the route gives the team a specific place to investigate instead of treating missing telemetry as one undifferentiated logging failure.
 
 ## What Does a Log Analytics Workspace Store?
-<!-- section-summary: A Log Analytics workspace is the queryable data store where Azure Monitor Logs keeps collected records in tables. -->
+<!-- section-summary: A workspace groups operational evidence in tables and also governs query context, access, retention, and ownership. -->
 
-A **Log Analytics workspace** is a data store for log data from Azure resources, non-Azure resources, and applications. In plain English, it is the place where collected log records become searchable. The Orders team uses `law-devpolaris-prod` as the production log home for the app, gateway, and application telemetry connected to the checkout system.
+A workspace such as `prod-observability-workspace` provides a common location for evidence from Azure resources, non-Azure resources, and applications. It can hold `AppRequests`, `AppExceptions`, `AppDependencies`, `AzureActivity`, resource-specific tables, and custom tables.
 
-The workspace is more than a folder full of log files. It is a query boundary, a retention boundary, an access boundary, and a cost boundary. The team queries the workspace in Log Analytics, configures retention on the workspace and its tables, grants people access to the workspace or to resource-scoped data, and pays for the data ingested and retained there.
+Central storage supports correlation. If application, SQL, VM, and firewall records are stored in unrelated places, responders first have to locate each dataset. A common workspace can make the relevant evidence available for connected queries.
 
-Inside the workspace, Azure Monitor Logs stores records in **tables**. Microsoft documents that a workspace contains multiple tables, and Azure Monitor creates many required tables automatically when data first arrives. For the Orders incident, `law-devpolaris-prod` might contain tables like these:
+The data is organized into **tables**. A table defines columns—its **schema**—and each row represents a record. The schema states which fields are available and what kind of evidence the table contains.
 
-| Table | What it can tell the Orders team |
-| --- | --- |
-| `ContainerAppConsoleLogs_CL` | Runtime messages printed by `ca-devpolaris-orders-prod`, including app errors and revision details. |
-| `AzureDiagnostics` | Gateway or other resource logs when a resource uses Azure Diagnostics mode. |
-| `AGWAccessLogs` | Application Gateway access records when resource-specific tables are used. |
-| `AppRequests` | Application Insights request records, including route, result code, duration, and operation ID. |
-| `AppDependencies` | Outbound dependency calls, such as SQL, HTTP, or storage calls made by the app. |
-| `AppExceptions` | Exception records that can hold the first useful code-level error. |
+An illustrative `AppRequests` table might contain:
 
-Notice that the workspace can hold records from different teams and resource groups. The app team may own the Container App, the network team may own the gateway, and the platform team may own the shared workspace. That split is normal in production, and it means naming, tags, resource IDs, and access rules need to stay clear.
+| TimeGenerated | Name | Success | DurationMs | OperationId |
+| --- | --- | --- | ---: | --- |
+| 18:01 | Checkout | true | 182 | AAA |
+| 18:02 | Checkout | false | 30021 | BBB |
+| 18:03 | Products | true | 32 | CCC |
 
-The workspace gives the records a home. The table gives each record a shape, so the next section zooms in on tables and columns.
+Request-shaped rows need fields such as name, duration, result code, success, and operation identifier. Exception-shaped rows need different detail, such as exception type, message, and method. Keeping those records in appropriate tables makes their structure easier to understand.
+
+A shared field such as `OperationId` can connect requests with related exceptions or dependency calls. The workspace groups the evidence; the correlation fields preserve the relationships within it.
+
+### Distinguish query contexts
+
+A workspace might contain WebApp A, WebApp B, SQL A, SQL B, Key Vault, and firewall evidence. Sometimes the question concerns everything the operator can access in that workspace. At other times it concerns only SQL A.
+
+**Workspace context** supports querying accessible data across the workspace. **Resource context** scopes the experience to records associated with a particular Azure resource or resource scope. These contexts allow a shared workspace to support focused resource investigation without beginning every query from all stored data.
+
+The `_ResourceId` field is important when available. It associates a record with its Azure resource and supports resource-context queries and access behavior. Microsoft recommends checking this field when investigating whether records can participate correctly in resource-context experiences.
+
+A record therefore benefits from both kinds of identity: the operation identifier connects one request across components, while the resource identifier connects evidence to the Azure resource involved.
 
 ## How Do Tables and KQL Organize Queries?
-<!-- section-summary: Tables organize log rows by schema, which lets engineers query the right columns instead of searching one giant text file. -->
+<!-- section-summary: Table schemas identify the available evidence; KQL pipelines progressively filter, select, aggregate, and connect it into an answer. -->
 
-A **table** is a named collection of log rows with a known set of columns. A row is one event or telemetry item. A column is one field on that row, such as `TimeGenerated`, `_ResourceId`, `OperationId`, `ResultCode`, `DurationMs`, `Message`, or `Category`.
+Before writing a query, establish which table receives the selected source category. Workspace table lists and the Azure Monitor table reference help connect a resource type and diagnostic category to their destination schema.
 
-This structure is the reason Log Analytics feels different from opening a raw `.log` file. The team can filter by time, resource ID, status code, operation ID, category, or duration and skip manual line parsing. A gateway access record and an app exception record have different columns because they describe different parts of the system.
+Historically, many Azure services wrote into the shared `AzureDiagnostics` table. That table had to accommodate several services' differing fields. Resource-specific mode places supported categories into dedicated tables.
 
-Azure has both resource-specific tables and broader legacy-style tables. For example, Storage Blob resource logs can land in `StorageBlobLogs`, where fields such as `OperationName`, `StatusCode`, `ObjectKey`, `CallerIpAddress`, and `_ResourceId` make storage investigations very direct. Some resource logs can also appear in `AzureDiagnostics`, which is a wider table used by services in Azure Diagnostics mode.
+Microsoft recommends resource-specific mode for new diagnostic settings where it is supported because it improves schema discoverability, query usability and performance, and table-level access control. The exact table still depends on the service and category. Assuming every resource log belongs in `AzureDiagnostics` can lead to searching the wrong dataset.
 
-Application Insights tables have their own shapes. `AppRequests` includes fields such as `Name`, `ResultCode`, `DurationMs`, `Success`, `OperationId`, and `TimeGenerated`. `AppDependencies` tells you about outbound calls from the app. `AppExceptions` carries exception information that often gives the first useful developer clue.
+Examples of workspace tables include `StorageBlobLogs` and a custom table such as `MyCustomEvents_CL`, alongside application and activity tables. Inspect the actual schema instead of assuming that every table has the same columns.
 
-During the `checkout-5001` incident, table choice changes the question. `ContainerAppConsoleLogs_CL` can answer what the Orders API printed. `AzureDiagnostics` or `AGWAccessLogs` can answer what the gateway saw. `AppRequests`, `AppDependencies`, and `AppExceptions` can answer how the application request, dependency call, and exception relate to one operation.
+### Read a query as a sequence of operations
 
-Tables give us the nouns. KQL gives us the grammar for asking useful questions about those nouns.
+Azure Monitor Logs uses **Kusto Query Language**, or KQL. A query starts with a dataset and applies operators to it. The pipe character, `|`, passes the result of one stage to the next.
 
-### KQL
-<!-- section-summary: KQL is the read-only query language Azure Monitor Logs uses to filter, shape, join, and summarize workspace data. -->
+The smallest failure query is:
 
-**Kusto Query Language**, or **KQL**, is the read-only query language used by Azure Monitor Logs. Microsoft describes Azure Monitor log queries as using the same KQL foundation as Azure Data Explorer. A KQL query usually names a table first, then uses pipe-separated operators to filter, shape, group, and order the rows.
-
-
-The first habit is choosing the time window. Scanning a huge window can make log work expensive and noisy, and incident work usually has a known time range. For the Orders incident, the team begins around `2026-05-07T09:42:00Z`, then expands the window if needed.
-
-Here is the basic shape:
-
-```kql
-ContainerAppConsoleLogs_CL
-| where TimeGenerated between (datetime(2026-05-07T09:35:00Z) .. datetime(2026-05-07T09:50:00Z))
-| where OperationId == "checkout-5001"
-| project TimeGenerated, OperationId, ResultCode, SeverityLevel, Message, _ResourceId
-| order by TimeGenerated asc
+```kusto
+AppRequests
+| where Success == false
 ```
 
-The query flows from the broadest choice to the narrowest evidence. `ContainerAppConsoleLogs_CL` chooses the table. The first `where` narrows the time window. The second `where` keeps the one operation. `project` chooses the columns that matter for the incident note. `order by` puts the records into a timeline.
+It selects the request dataset and keeps rows marked unsuccessful. The query does not change the stored requests; it selects a result for analysis.
 
-The output should give the responder a short event list rather than a dump of every log field:
+Starting from a table containing one million rows, time is usually the first useful restriction:
 
-| TimeGenerated | OperationId | ResultCode | SeverityLevel | Message |
-|---|---|---|---|---|
-| `2026-05-07T09:42:10.884Z` | `checkout-5001` | `500` | `Error` | `checkout failed while calling sql-devpolaris-orders-prod.database.windows.net` |
+```kusto
+AppRequests
+| where TimeGenerated > ago(1h)
+```
 
-KQL names are case-sensitive, including table names, column names, operators, and functions. Real Azure schemas also vary across services and collection modes, so a careful engineer inspects the table schema before assuming a column name. If one table uses `OperationId` and another older example uses `operation_Id`, the spelling difference matters.
+The `ago(1h)` expression identifies a point one hour before the query's current time. Comparing `TimeGenerated` with that value selects recent records.
 
-Once the team can write a small query, the next step is combining evidence from more than one table. That is where logs start helping with real production debugging.
+Add the failure condition:
+
+```kusto
+AppRequests
+| where TimeGenerated > ago(1h)
+| where Success == false
+```
+
+Then narrow the operation:
+
+```kusto
+AppRequests
+| where TimeGenerated > ago(1h)
+| where Success == false
+| where Name contains "checkout"
+```
+
+Select the fields needed for inspection:
+
+```kusto
+AppRequests
+| where TimeGenerated > ago(1h)
+| where Success == false
+| where Name contains "checkout"
+| project TimeGenerated, Name, ResultCode, DurationMs, OperationId
+```
+
+Finally, put the newest records first:
+
+```kusto
+AppRequests
+| where TimeGenerated > ago(1h)
+| where Success == false
+| where Name contains "checkout"
+| project TimeGenerated, Name, ResultCode, DurationMs, OperationId
+| order by TimeGenerated desc
+```
+
+Every added stage answers a concrete question: when, whether it failed, which operation, which evidence fields, and in what order. The large dataset has been reduced to a focused investigation.
+
+The distinction between rows and columns helps when reading this pipeline. A row represents a recorded request; filtering removes requests that do not match the question. A column represents one attribute of the remaining records; projection chooses which of those attributes appear in the result. Sorting changes the presentation order so the newest relevant operation is easy to inspect.
+
+These steps should follow the investigation rather than be added mechanically. If the question is when a problem began, preserve the timestamp. If it is which operation failed, preserve the name and result. If the next step is following a dependency, retain the operation identifier even if the initial display would otherwise look simpler without it. Removing a correlation field from the query result does not erase it from storage, but it makes the next investigative step harder to take.
+
+### Learn the core operators by their jobs
+
+| Operator | Purpose |
+| --- | --- |
+| `where` | Filter rows |
+| `project` | Select or reshape columns |
+| `summarize` | Aggregate records |
+| `count` | Count rows |
+| `order by` | Sort the result |
+| `take` | Return a limited selection of rows |
+| `extend` | Add calculated columns |
+| `join` | Connect datasets through matching fields |
+| `union` | Combine datasets |
+
+These operators cover much of an initial investigation. For example, `where TimeGenerated > ago(30m)` limits requests to the last 30 minutes, and a subsequent `where Success == false` narrows that set to failures.
+
+Further restrictions can move from a relevant period to a service, endpoint, and eventually one request. The query structure mirrors the act of narrowing possible explanations.
+
+### Aggregate events into patterns
+
+To identify the operation with the most failures:
+
+```kusto
+AppRequests
+| where TimeGenerated > ago(1h)
+| where Success == false
+| summarize Failures = count() by Name
+| order by Failures desc
+```
+
+An example result is 928 Checkout failures, 31 Search failures, and 12 Login failures. Instead of inspecting each event individually, the aggregation reveals where most failures are concentrated.
+
+Logs can also produce a time series:
+
+```kusto
+AppRequests
+| summarize
+    Requests = count(),
+    Failures = countif(Success == false)
+  by bin(TimeGenerated, 5m)
+```
+
+`count()` counts all records in each group, `countif` counts the ones satisfying the failure condition, and `bin` groups timestamps into five-minute intervals.
+
+| Interval | Requests | Failures |
+| --- | ---: | ---: |
+| 18:00 | 10,421 | 12 |
+| 18:05 | 10,883 | 14 |
+| 18:10 | 11,101 | 822 |
+
+The same detailed records now describe an operating trend. The last interval contains a much larger failure count, giving the next investigation a time boundary.
+
+The example shows the aggregation itself. In an incident query, restrict the relevant time period first so the analysis concerns the intended event and not the whole retained history.
 
 ## How Do You Trace One Checkout Failure?
-<!-- section-summary: A useful incident query connects runtime logs, gateway logs, and application telemetry around the same operation and time window. -->
+<!-- section-summary: Find the failed request, preserve its OperationId, then inspect matching dependencies and exceptions before comparing resource metrics. -->
 
-Let's go back to the customer report. The user saw checkout fail. The operation ID is `checkout-5001`. The team has a short incident window around `09:42 UTC`, and the goal is to find the first useful error instead of collecting every possible row.
+A customer reports that checkout failed about ten minutes ago. Begin with recent failed checkout requests:
 
-Start with the app runtime because it is closest to the code path. The Container App console log can show the message the application emitted, the revision that was running, and the result code the app recorded. A good first query keeps the window tight and selects only fields the incident note needs.
+```kusto
+AppRequests
+| where TimeGenerated > ago(30m)
+| where Name contains "checkout"
+| where Success == false
+| project TimeGenerated, Name, ResultCode, DurationMs, OperationId
+| order by TimeGenerated desc
+```
 
-```kql
-ContainerAppConsoleLogs_CL
-| where TimeGenerated between (datetime(2026-05-07T09:35:00Z) .. datetime(2026-05-07T09:50:00Z))
-| where OperationId == "checkout-5001"
-| project TimeGenerated, SeverityLevel, ResultCode, Message, OperationId, _ResourceId
+Suppose a row shows Checkout at 18:41:17, result code 500, duration 30,018 ms, and `OperationId=a81f729...`. That identifier connects the request to the rest of its evidence.
+
+Find its exception:
+
+```kusto
+AppExceptions
+| where TimeGenerated > ago(30m)
+| where OperationId == "a81f729..."
+| project TimeGenerated, ExceptionType, Message, OperationId
+```
+
+The result may identify `SqlException` with the message `Timeout expired`. In the `AppExceptions` schema, `ExceptionType` holds the exception class; `Type` identifies the table, so it would not provide the exception detail needed here. Now inspect dependency operations:
+
+```kusto
+AppDependencies
+| where TimeGenerated > ago(30m)
+| where OperationId == "a81f729..."
+| project TimeGenerated, Name, Target, DurationMs, Success, ResultCode
 | order by TimeGenerated asc
 ```
 
-A useful result might look like this:
+The ordered results could show Inventory API succeeding in 42 ms, Payment API succeeding in 182 ms, and Orders SQL failing after 30,000 ms. The request, SQL dependency, and exception now form a connected explanation of the customer's report.
 
-| TimeGenerated | SeverityLevel | ResultCode | Message |
-|---|---|---|---|
-| `2026-05-07T09:42:10.884Z` | `Error` | `500` | `checkout failed while calling sql-devpolaris-orders-prod.database.windows.net` |
+Without correlation, a dataset with ten million requests, 20 million dependencies, and 500,000 exceptions leaves the responder guessing which records belong together. Preserving `OperationId` turns separate datasets into a request history. Microsoft's AppRequests query examples use that field to connect failed requests and exceptions.
 
-That row points toward the application path, but the user reached the app through Application Gateway. The next query checks what the gateway saw for the same time window.
+### Investigate an alert across multiple requests
 
-```kql
-AzureDiagnostics
-| where TimeGenerated between (datetime(2026-05-07T09:35:00Z) .. datetime(2026-05-07T09:50:00Z))
-| where _ResourceId has "/applicationGateways/agw-devpolaris-prod"
-| where OperationId == "checkout-5001" or Message has "POST /checkout"
-| project TimeGenerated, Category, ResultCode, Message, OperationId, _ResourceId
+A broader incident may begin with an alert that checkout failure rate is above 5%. First establish the timing:
+
+```kusto
+AppRequests
+| where TimeGenerated > ago(30m)
+| summarize
+    Requests = count(),
+    Failed = countif(Success == false)
+  by bin(TimeGenerated, 5m)
 | order by TimeGenerated asc
 ```
 
-If the gateway row says `Application Gateway backend ca-devpolaris-orders-prod returned 500 for POST /checkout`, the team now has two pieces of evidence. The gateway received the request and returned the backend failure to the user. The app runtime recorded a SQL-related failure at the same time and operation ID.
+The query returns counts from which the failure proportions can be examined. Suppose the corresponding rates are 0.2% at 18:30, 0.3% at 18:35, 7.8% at 18:40, and 9.1% at 18:45. The incident begins around 18:40.
 
-| TimeGenerated | Category | ResultCode | Message |
-|---|---|---|---|
-| `2026-05-07T09:42:10.912Z` | `ApplicationGatewayAccessLog` | `500` | `backend ca-devpolaris-orders-prod returned 500 for POST /checkout` |
+Requests and failures need to be interpreted together. The failure count identifies the number of unsuccessful operations, while dividing it by the total requests in the same interval gives the affected proportion. A larger failure count can accompany a much larger workload, so comparing rates helps establish whether service quality changed as well as volume.
 
-When Application Insights is connected to the same workspace, the team can build a wider timeline. This query unions common app and platform tables, filters the same operation, and sorts everything by time. It turns separate rows into one incident sequence.
+The five-minute grouping is useful because the investigation now needs a trend rather than every event. It identifies a short period worth exploring in detail. The next query returns to individual operation names, and the query after that selects actual requests. Moving between aggregate patterns and individual records is deliberate: the aggregate identifies the likely problem area, while the record provides the identifier needed to explain one occurrence.
 
-```kql
-union ContainerAppConsoleLogs_CL, AzureDiagnostics, AppRequests, AppDependencies, AppExceptions
-| where TimeGenerated between (datetime(2026-05-07T09:35:00Z) .. datetime(2026-05-07T09:50:00Z))
-| where OperationId == "checkout-5001"
-| project TimeGenerated, Type, SeverityLevel, ResultCode, Message, OperationId, _ResourceId
+Next, identify the affected operation:
+
+```kusto
+AppRequests
+| where TimeGenerated > ago(30m)
+| where Success == false
+| summarize Failures = count() by Name
+| order by Failures desc
+```
+
+An example result—1,821 Checkout failures, 12 Login failures, and four Search failures—focuses the investigation on checkout rather than the whole application.
+
+Select recent failed requests:
+
+```kusto
+AppRequests
+| where TimeGenerated > ago(30m)
+| where Name contains "checkout"
+| where Success == false
+| project TimeGenerated, DurationMs, ResultCode, OperationId
+| order by TimeGenerated desc
+| take 20
+```
+
+Choose operation `7F92` and inspect its dependency history:
+
+```kusto
+AppDependencies
+| where OperationId == "7F92"
+| project TimeGenerated, Name, Target, DurationMs, Success, ResultCode
 | order by TimeGenerated asc
 ```
 
-The combined result might read like this:
+The resulting records show Inventory succeeding in 41 ms, Payments succeeding in 201 ms, and Orders DB failing after 30,001 ms. Inspect the matching exception:
 
-| TimeGenerated | Type | ResultCode | Message |
-|---|---|---|---|
-| `09:42:10.840` | `AppRequests` | `500` | `POST /checkout` |
-| `09:42:10.884` | `ContainerAppConsoleLogs_CL` | `500` | `checkout failed while calling sql-devpolaris-orders-prod.database.windows.net` |
-| `09:42:10.912` | `AzureDiagnostics` | `500` | `backend ca-devpolaris-orders-prod returned 500` |
-| `09:42:11.023` | `AppDependencies` | `Timeout` | `SQL InsertOrder exceeded 1500 ms` |
-| `09:42:11.041` | `AppExceptions` | | `SqlTimeoutException in OrdersRepository.InsertOrder` |
+```kusto
+AppExceptions
+| where OperationId == "7F92"
+| project TimeGenerated, ExceptionType, Message
+```
 
-The final answer is direct: `POST /checkout` returned `500`; the gateway passed that backend failure to the user; the app logged a SQL timeout; Application Insights recorded a dependency timeout and an exception. That is enough to move from "checkout is broken" to "the Orders API failed while calling SQL during one checkout operation."
+The exception reports `SqlException: Timeout expired while obtaining connection.` The alert has led to an affected interval, an endpoint, one request, a failed SQL dependency, and a specific connection-acquisition failure.
 
-![Checkout incident evidence connected by the same operation ID across gateway, runtime, dependency, and exception records](/content-assets/articles/article-cloud-providers-azure-observability-azure-monitor-log-analytics/operation-id-incident-trail.png)
+For a live investigation, keep the relevant time restriction when moving between tables. The short correlation queries above make the shared identifier visible; the incident window helps keep the result focused.
 
-*The operation ID keeps gateway, runtime, dependency, and exception evidence in one incident trail.*
+### Combine the records with resource measurements
 
-Now the incident has an answer. The next production concern is keeping this evidence useful while the workspace stays focused, affordable, and properly protected.
+A SQL timeout is an observation to explain. Inspect connections, CPU, I/O latency, query duration, and resource saturation for the database. If connections reached 100% at 18:40, that measurement supports the hypothesis that pool saturation caused waiting and checkout failure.
+
+The evidence should agree across levels: the resource metric indicates saturation, the log identifies the timeout, and the request or trace shows the user operation that failed. The combination supports a more precise explanation than treating either a resource chart or one exception as sufficient.
+
+Time is central to this comparison. `TimeGenerated` lets the team inspect conditions before the failure, changes near its start, the signals during the incident, and whether they recover after mitigation.
+
+### Reuse the evidence for detection
+
+Log queries are useful beyond interactive investigation. A failure selection can be aggregated:
+
+```kusto
+AppRequests
+| where Success == false
+| summarize Failures = count()
+```
+
+An alert can evaluate whether the resulting count exceeds an acceptable threshold over its configured evaluation period. The stored events then support both automatic detection and the later explanation of that detection.
+
+A log alert still needs a meaningful condition and time scope. The ability to count failures does not itself decide how many justify intervention.
 
 ## How Do Retention, Cost, and Access Affect Logs?
-<!-- section-summary: Retention, cost, and access settings decide how long log data remains useful, how much the workspace costs, and who can read sensitive evidence. -->
+<!-- section-summary: Logs contain sensitive historical data, so access boundaries, table plans, retention periods, and ingestion volume are part of the design. -->
 
-**Retention** means how long log data stays available. Log Analytics has an interactive analytics retention period for normal queries and a long-term retention state for older data that can be retrieved through search jobs. Microsoft documents a common default of 30 days for many tables, longer defaults for some tables, analytics retention that can be extended for Analytics tables, and total retention that can reach long-term periods when the business needs it.
+A workspace preserves operational history. That history can contain IP addresses, user identifiers, authentication events, security alerts, database activity, application payload details, error messages, and infrastructure topology.
 
-For the Orders team, 30 days might be enough for normal debugging, but some audit or security records may need a longer window. A payment-related access investigation might arrive months after the event. A gateway troubleshooting query from yesterday needs interactive search, while a compliance request from last quarter can tolerate a slower retrieval workflow.
+Permission to inspect an Azure resource and permission to query its logs are therefore related security questions, not assumptions to leave implicit. Azure uses RBAC and workspace or resource access rules to govern query access. Finer-grained controls include table-level and row-level RBAC and protected tables for sensitive telemetry.
 
-**Cost** comes mostly from data ingestion and retention. Microsoft describes workspace cost around the data you ingest and keep, so every selected category can add volume. A noisy debug log category can become expensive quickly if every request prints full payloads, stack traces, or repeated health-check records.
+Consider a workspace containing `AppRequests`, `Performance`, `SecurityEvent`, `SigninLogs`, and `PaymentAudit_CL`. An application team may need request and performance records without unrestricted access to payment audit or security tables. Shared storage does not require identical access to every dataset.
 
-The practical cost habit is to collect the categories the team will actually use. Container app console logs, gateway access logs, gateway firewall logs, Application Insights requests, dependencies, and exceptions can be valuable for the checkout path. A high-volume category with no owner, no query, and no retention reason deserves review before it turns into permanent production noise.
+The chosen access configuration must support the intended boundaries. This is part of workspace architecture, especially when several teams share one store.
 
-Azure Monitor can also transform or filter some incoming log data before it lands in a workspace through data collection rule-based transformations. This is useful for removing noisy fields, shaping records, or dropping known low-value rows such as routine health probes. Treat transformations like production code because they can remove evidence before anyone can query it. Keep the rule in infrastructure code, review it with the team that owns the incident process, and test a known event after every change.
+This is also why common storage and common access should be considered separately. Grouping requests and security events in one location may help an authorized investigation connect them. It does not mean every application responder needs to read every authentication event or payment audit record. Table structure and resource identity provide information on which narrower access decisions can depend.
 
-Azure Monitor table plans make the value-versus-cost decision more explicit. An Analytics plan fits frequently queried operational data that drives dashboards, investigations, and alerts. Lower-cost plans can fit high-volume records that are queried less often, but they do not promise the same interactive features or query behavior. The team should choose the plan from how quickly the evidence must answer a production question, not simply from how many rows arrive.
+During design, connect each operational role to the questions it needs to answer and the datasets needed for those questions. The application team's ability to inspect request failures should remain usable, while sensitive records retain their intended restrictions. The resulting boundary should be checked with the actual query context rather than inferred solely from the fact that the person can open a workspace or resource page.
 
-A useful retention review names three periods. The **detection window** is how long a problem may exist before someone notices. The **investigation window** is how far engineers commonly look back to compare healthy and failing behavior. The **obligation window** is how long legal, security, or audit requirements demand evidence. Interactive retention should cover normal operations, while long-term retention can cover older evidence whose slower retrieval is acceptable.
+### Decide how much history remains available
 
-Cost and usefulness should be reviewed together. A category that produces millions of rows but has no owner, no saved query, no alert, and no incident use is a candidate for filtering or shorter retention. A rare security event may justify long retention even at low query frequency. The goal is not the smallest workspace bill; it is enough trustworthy historical evidence at a cost the team understands.
+Thirty-day retention is enough to examine yesterday's incident, but it cannot answer a question about suspicious activity six months ago once that data has been discarded. Retention defines how far back the team can investigate.
 
-KQL keeps this evidence usable through a small set of composable verbs. `where` reduces the rows to the relevant time, resource, operation, or result. `project` keeps only the fields that prove the story. `extend` calculates a useful derived field. `summarize` turns events into counts, rates, or percentiles. `order by` reconstructs a timeline. A query is easiest to debug when it reads as a chain of narrow questions instead of one giant expression.
+Azure Monitor Logs distinguishes recent interactive or analytics retention from longer-term retention. Most tables have a 30-day default, while some have a 90-day default. Analytics-plan tables support interactive retention up to two years and total retention up to 12 years. Older long-term records use different access mechanisms, such as search jobs.
 
-When a query returns nothing, walk the pipeline backward: confirm the table and schema, the workspace, the diagnostic route, the enabled category, the source resource, and finally whether the source produced the known event. Empty results are evidence about the collection path, not immediate proof that nothing happened.
+These periods depend on the relevant table and plan; a maximum supported duration is not the default setting of every table. Recent data supports regular queries, alerts, and analysis. Older data may be kept for occasional investigation, security, or compliance and need a different access and cost profile.
 
-**Access** controls who can read the log data. A Log Analytics workspace supports workspace-context access, where a user can query workspace data they have permission to see, and resource-context access, where a user opens logs from a resource and sees records associated with resources they can access. This is important because logs can contain URLs, account IDs, IP addresses, user identifiers, exception text, and operational details.
+Choose retention according to evidence value. Verbose debugging traces may be useful for days, performance records for weeks or months, security audit events for much longer, and regulatory evidence for years.
 
-In `law-devpolaris-prod`, the platform team might have workspace-level permissions because they operate shared observability. The Orders app team might use resource-context access so they can inspect their Container App records while broad workspace visibility stays with the platform owners. Security engineers might have table or workspace access for specific audit investigations.
+For each dataset, ask how often it is likely to be queried, the harm if it is unavailable, applicable regulatory requirements, and the cost of its volume. Retention is part of the ability to answer questions, not simply storage housekeeping.
 
-This is also why resource IDs matter. A log row with `_ResourceId` populated can support resource-context queries and cleaner filtering. When a query includes `_ResourceId`, the team can separate gateway evidence, app evidence, and Application Insights evidence even when those rows live in the same workspace.
+### Consider ingestion before retention
 
-Retention, cost, and access belong in the first design pass. They are part of the log design. That design shows up most clearly when the team chooses how many workspaces to create.
+Collection volume can already be expensive before deciding how long to keep it. One kilobyte per log, 100 logs per request, and 5,000 requests per second produce:
 
-## How Should You Design Workspace Boundaries?
-<!-- section-summary: Workspace design balances shared investigation, environment separation, compliance boundaries, regional placement, cost ownership, and access control. -->
+$$
+1\text{ KB} \times 100 \times 5{,}000
+= 500{,}000\text{ KB per second}
+$$
 
-A **workspace design** is the decision about which logs go into which Log Analytics workspaces. Microsoft documents that a single workspace can collect many kinds of data, and multiple workspaces can help with regulatory requirements, data location, billing separation, and resilience. In real teams, the choice usually comes down to investigation needs and organizational boundaries.
+Using decimal units, that is approximately 500 MB per second of telemetry. Recording everything imaginable can therefore consume substantial resources without producing a proportionate improvement in understanding.
 
-A single shared production workspace supports cross-service incident queries. The Orders team can union app, gateway, dependency, and exception data in one place. The platform team can build shared dashboards and log alerts around one production workspace ID.
+Compare `entered function CalculateTax` emitted ten billion times with a meaningful failure record:
 
-Separate workspaces fit cases where the boundary matters more than one big query surface. Development and production usually deserve separate workspaces because dev logs can be noisy, experimental, and less protected. Regulated systems may need their own workspace because access, retention, and data residency rules are stricter. A large company may separate workspaces by business unit so cost ownership and permissions stay understandable.
-
-For DevPolaris, `law-devpolaris-prod` is a reasonable production shared workspace for the Orders scenario. It sits in the observability resource group, receives logs from the app and gateway, and has a clear production retention policy. A matching `law-devpolaris-dev` workspace could collect development logs so test traffic stays out of production incident queries.
-
-Here is a small workspace declaration that keeps the important production choices visible in code:
-
-```bicep
-param workspaceName string = 'law-devpolaris-prod'
-param location string = resourceGroup().location
-
-resource workspace 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
-  name: workspaceName
-  location: location
-  properties: {
-    sku: {
-      name: 'PerGB2018'
-    }
-    retentionInDays: 30
-    features: {
-      enableLogAccessUsingOnlyResourcePermissions: true
-    }
-  }
-}
+```text
+event=checkout_failed
+traceId=...
+dependency=TaxAPI
+durationMs=30000
+reason=timeout
 ```
 
-The name tells humans this is the production Log Analytics workspace. `retentionInDays` sets the default interactive retention for Analytics tables that still use the workspace default. `enableLogAccessUsingOnlyResourcePermissions` supports the resource-context access model, which helps application teams query logs for resources they are allowed to read.
+The second record, emitted for relevant failures or state changes, can provide much more diagnostic value with far less volume. Good logging aims for useful information per byte.
 
-A healthy workspace has a clear job. The team should be able to explain why a workspace exists, which resources send logs to it, who owns the cost, who can query it, and how long the data stays. That explanation saves time during the next incident.
+Filtering or transforming data before or during ingestion can reduce unnecessary or sensitive content. Collection choices should preserve the evidence needed for real questions while avoiding repeated low-value detail.
 
-### Putting It All Together
-<!-- section-summary: Azure log operations work when resources route the right categories into a workspace, tables keep the data structured, and KQL turns records into an incident answer. -->
+### Match the table plan to its use
 
-Let's connect the full path for `checkout-5001`. The Container App emits runtime messages. Application Gateway emits access records. Application Insights can emit requests, dependencies, and exceptions. Diagnostic settings route resource logs from the app and gateway into `law-devpolaris-prod`, while the Application Insights configuration writes application telemetry into workspace-backed tables.
+Azure Monitor Logs offers table plans for different access patterns:
 
-The workspace stores those records in tables. `ContainerAppConsoleLogs_CL` carries the app runtime message, `AzureDiagnostics` or `AGWAccessLogs` carries gateway evidence, and Application Insights tables carry request, dependency, and exception detail. Each row has a timestamp, and many useful rows carry an operation ID or resource ID that lets the team connect them.
+| Plan | Intended role |
+| --- | --- |
+| Analytics | Frequent interactive analysis, monitoring, and alerting |
+| Basic | Lower-cost troubleshooting data with a more constrained query model |
+| Auxiliary | Lower-touch, verbose, or audit-style data |
 
-KQL turns that stored evidence into an answer. Start with a time window, filter by operation ID or resource ID, project the columns that matter, and order the results into a timeline. The team can then explain production behavior from records instead of container access, resource-health guesses, or screenshots from every service owner.
+The decision depends on how often the data is queried and which capabilities those queries need. Frequently investigated failure evidence and rarely accessed historical telemetry do not necessarily justify the same economics.
 
-Good log design also includes operational guardrails. Retention keeps recent evidence queryable and older evidence retrievable when the business needs it. Cost review keeps noisy categories under control. Access design lets the right team see the right records while broad workspace exposure stays under control.
+A cheaper plan can also change query behavior, so selection must follow the intended use rather than price alone. The team should be able to explain how the chosen plan supports the actual investigation or retention requirement.
 
-That is the practical value of Logs and Workspaces in Azure. They give the Orders team one reliable place to collect, structure, query, protect, and retain the evidence they need when production behavior has to be explained.
+### Keep secrets out of historical records
 
-![Logs and Workspaces production checklist for collecting, storing, querying, and governing Azure log evidence](/content-assets/articles/article-cloud-providers-azure-observability-azure-monitor-log-analytics/logs-workspaces-checklist.png)
+Authorization bearer tokens, passwords, and credit-card values are dangerous log contents. Logs may be retained, queried by several teams, exported, used by security systems, or backed up, extending exposure beyond the original operation.
 
-*The production checklist keeps log design grounded in four questions: collect, store, query, and govern.*
+Record sufficient diagnostic context without copying unnecessary credentials or payloads. Apply appropriate filtering, transformation, redaction, and access controls. A searchable operational store should not quietly become another location containing production secrets.
 
-### What's Next
-<!-- section-summary: Application Insights adds request, dependency, exception, trace, and correlation detail from inside application code. -->
+## How Should You Design Workspace Boundaries?
+<!-- section-summary: Choose workspace boundaries by correlation, access, retention, regional requirements, cost ownership, and operations rather than automatically centralizing or separating every resource. -->
 
-You now have the workspace layer: resource logs are routed, stored in tables, queried with KQL, retained intentionally, and protected with access controls. That is enough to answer many platform and resource questions around a production incident.
+An organization with 100 applications, 20 subscriptions, eight development teams, and three environments has a real architectural choice: one workspace or several.
 
-The next article goes inside the application. Application Insights adds request telemetry, dependency calls, exceptions, traces, operation IDs, and correlation. That helps the Orders team follow one checkout request through code, SQL, storage, and downstream services instead of stopping at the gateway or container log.
+The workspace simultaneously influences data aggregation, security, retention, regional placement, cost governance, operational ownership, and compliance. A resource count alone cannot decide those boundaries.
 
----
+Centralization can make cross-system investigation easier. If checkout passes through an application, API, database, and Key Vault, storing their relevant evidence together helps answer what happened throughout the service at 18:42. Application, SQL, VM, network, and identity records can be queried as parts of the same incident.
+
+Separation can also be justified. Production, development, highly regulated finance, and security operations may have different permissions, retention requirements, regional obligations, cost owners, and administrators. Separate finance, engineering, and security workspaces may make those boundaries easier to manage.
+
+### Avoid separation without a requirement
+
+Creating one workspace per VM, one per database, and one per application can fragment a request's evidence. An incident spanning ten components may require ten separate searches.
+
+A different resource is not by itself a sufficient reason for a different evidence store. Meaningful reasons include access, regulatory constraints, regional or data-residency requirements, billing and ownership, or strong operational separation.
+
+The design should preserve easy correlation where teams need to investigate a shared service. Otherwise the collection architecture recreates the same fragmentation that centralized logging was meant to reduce.
+
+### Avoid centralization without governance
+
+Putting every company's log into one workspace can create difficulties with sensitive tables, access, cost attribution, data sovereignty, different retention needs, and administrative responsibility.
+
+The appropriate balance is between the correlation benefits of grouping evidence and the isolation benefits of separating it. The workspace is a governed place to store and query historical evidence, so its boundary should answer who needs to investigate together and which information must remain separated.
+
+Table-level controls and resource context can support shared use, but the design still needs explicit ownership and access decisions. No default topology removes those responsibilities.
+
+### Maintain the evidence path
+
+Three habits keep the architecture useful. First, produce structured records such as `event=checkout_failed`, `reason=sql_timeout`, and `traceId=7F92` rather than an unsearchable general message.
+
+Second, preserve relationships through `OperationId`, trace identifiers, resource identity, and deployed version. These fields allow one request, resource, or change to be followed across datasets.
+
+Third, document the actual route: the source, collection mechanism, workspace, and table. When a query returns nothing, that record of the route gives the responder a concrete sequence to check.
+
+The complete chain begins when something meaningful happens. A log is produced, a diagnostic setting, agent/DCR, or application instrumentation delivers it, a workspace receives it, and a table gives it structure. KQL filters and connects the records into an explanation, dashboard, or alert.
+
+A workspace's value therefore includes several decisions at once: which evidence is grouped, who can query it, which schemas organize it, how long it remains available, what ingestion and storage cost, and which systems can correlate their activity.
+
+The result is an evidence-management capability. Logs capture the past, collection delivers it, the workspace preserves and governs it, and queries turn it into answers about production behavior.
 
 ## Check Your Answers
 
 :::expand[What Production Questions Should Logs Answer?]{kind="recap"}
-Azure log work has one practical question: where will the evidence live when a production request fails?.
+Logs should explain what happened, when, where, with which result, and within which request. Structured records preserve events that can no longer be inspected directly.
 :::
 
 :::expand[How Do Azure Monitor Logs and Diagnostic Settings Connect?]{kind="recap"}
-Azure Monitor collects telemetry, while Azure Monitor Logs stores detailed records that teams query during investigation. Diagnostic settings are routing rules that tell Azure which resource logs and metrics to send to a destination such as a Log Analytics workspace.
+Azure Monitor Logs stores and queries evidence in Log Analytics workspaces. Diagnostic settings route selected Azure resource categories. VM and application evidence use their own appropriate agent or instrumentation paths.
 :::
 
 :::expand[How Do You Verify the Log Route?]{kind="recap"}
-A diagnostic setting deserves a quick verification loop so the team knows which categories are enabled and whether rows reached the workspace.
+Check source activity, category, collection configuration, workspace, ingestion interval, table, and query scope. A deliberate safe event at a known time provides a concrete test. Empty results do not automatically mean no event occurred.
 :::
 
 :::expand[What Does a Log Analytics Workspace Store?]{kind="recap"}
-A Log Analytics workspace is the queryable data store where Azure Monitor Logs keeps collected records in tables.
+It stores structured records in tables and supports correlation across sources. Workspace and resource contexts determine the scope of investigation, while fields such as OperationId and _ResourceId preserve request and resource identity.
 :::
 
 :::expand[How Do Tables and KQL Organize Queries?]{kind="recap"}
-Tables organize log rows by schema, which lets engineers query the right columns instead of searching one giant text file. KQL is the read-only query language Azure Monitor Logs uses to filter, shape, join, and summarize workspace data.
+Tables provide schemas for different evidence types. KQL pipelines narrow records by time, outcome, and operation, select fields, aggregate patterns, and connect datasets. Check the actual destination table instead of assuming AzureDiagnostics.
 :::
 
 :::expand[How Do You Trace One Checkout Failure?]{kind="recap"}
-A useful incident query connects runtime logs, gateway logs, and application telemetry around the same operation and time window.
+Locate the failed request, retain its OperationId, and inspect related dependencies and exceptions. Compare the resulting explanation with resource metrics and the incident timeline.
 :::
 
 :::expand[How Do Retention, Cost, and Access Affect Logs?]{kind="recap"}
-Retention, cost, and access settings decide how long log data remains useful, how much the workspace costs, and who can read sensitive evidence.
+Retention controls available history, access controls protect sensitive records, and ingestion volume and table plans affect economics and query capability. Keep high-value context while excluding unnecessary sensitive data.
 :::
 
 :::expand[How Should You Design Workspace Boundaries?]{kind="recap"}
-Workspace design balances shared investigation, environment separation, compliance boundaries, regional placement, cost ownership, and access control. Azure log operations work when resources route the right categories into a workspace, tables keep the data structured, and KQL turns records into an incident answer. Application Insights adds request, dependency, exception, trace, and correlation detail from inside application code.
+Balance shared investigation against access, regional, retention, compliance, cost, and ownership needs. Avoid a separate workspace for every resource or one universal workspace without considering those requirements.
 :::
 
 ## References
 
-- [Diagnostic settings in Azure Monitor](https://learn.microsoft.com/en-us/azure/azure-monitor/platform/diagnostic-settings) - Explains diagnostic setting sources, destinations, category groups, limits, latency, and cost considerations.
-- [az monitor diagnostic-settings CLI reference](https://learn.microsoft.com/en-us/cli/azure/monitor/diagnostic-settings?view=azure-cli-latest) - Documents CLI commands for listing, showing, creating, updating, and deleting resource diagnostic settings.
-- [az monitor diagnostic-settings categories CLI reference](https://learn.microsoft.com/en-us/cli/azure/monitor/diagnostic-settings/categories?view=azure-cli-latest) - Documents how to list diagnostic setting categories for a resource before choosing which categories to route.
-- [Log Analytics workspace overview](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/log-analytics-workspace-overview) - Defines Log Analytics workspaces, log tables, retention states, access concepts, transformations, and cost drivers.
-- [Azure Monitor resource log and table reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables-index) - Lists Azure Monitor resource log tables and explains that resource logs are stored in tables when exported to a workspace.
-- [Log queries in Azure Monitor](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/log-query-overview) - Explains where Azure Monitor uses KQL queries, including Log Analytics, log alerts, workbooks, dashboards, automation, and APIs.
-- [Kusto Query Language overview](https://learn.microsoft.com/en-us/kusto/query/?view=microsoft-fabric) - Describes KQL, pipe-separated tabular operators, read-only queries, and the data-flow query style.
-- [Transformations in Azure Monitor](https://learn.microsoft.com/en-us/azure/azure-monitor/data-collection/data-collection-transformations) - Explains how Azure Monitor transformations can filter or modify incoming data before it reaches a Log Analytics workspace.
-- [Manage data retention in a Log Analytics workspace](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/data-retention-configure) - Documents analytics retention, long-term retention, default periods, search jobs, and table-level retention behavior.
-- [Manage access to Log Analytics workspaces](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/manage-access) - Explains workspace-context access, resource-context access, access control modes, Azure RBAC, and table-level access options.
-- [StorageBlobLogs table reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/storagebloblogs) - Shows common Storage Blob log columns such as operation, status, caller IP, object key, resource ID, and billing fields.
-- [AppRequests table reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/apprequests) - Documents request telemetry columns such as operation ID, result code, duration, success, resource ID, and timestamp.
+- [AppExceptions column definitions](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/appexceptions)
+
+- [Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/overview)
+- [Azure Monitor workspace](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/azure-monitor-workspace-overview)
+- [Log Analytics workspace](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/log-analytics-workspace-overview)
+- [Azure resource logs](https://learn.microsoft.com/en-us/azure/azure-monitor/platform/resource-logs)
+- [Diagnostic settings](https://learn.microsoft.com/en-us/azure/azure-monitor/platform/diagnostic-settings)
+- [Diagnostic settings and initial data flow](https://learn.microsoft.com/uk-ua/azure/azure-monitor/platform/diagnostic-settings)
+- [Tables and table plans](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/logs-table-overview)
+- [Azure Monitor table reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables-index)
+- [AppRequests query examples](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/queries/apprequests)
+- [Workspace and resource access](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/manage-access)
+- [Table-level access](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/manage-table-access)
+- [Log retention](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/data-retention-configure)
+- [Azure Monitor Logs best practices](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/best-practices-logs)

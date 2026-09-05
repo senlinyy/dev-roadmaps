@@ -1,0 +1,278 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "resolver-roles",
+      "type": "single",
+      "scenario": "A workstation asks `10.20.0.53` for `app.example.com`. That server has no cached answer and follows root and TLD referrals to `ns1.example.com`. The team wants to monitor the component doing that lookup work. Which component should it monitor?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The workstation's stub, because it performs the hierarchy walk after sending the query."
+        },
+        {
+          "id": "b",
+          "text": "The recursive resolver at 10.20.0.53, because it follows referrals on the client's behalf."
+        },
+        {
+          "id": "c",
+          "text": "The root server, because it assembles and caches the complete application answer for this client."
+        },
+        {
+          "id": "d",
+          "text": "The authoritative server, because it manages the workstation's resolver configuration."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The recursive resolver performs the lookup work; the stub submits the question. Root and TLD servers provide referrals, and the authority serves its zone data rather than configuring clients. [RFC 1034](https://datatracker.ietf.org/doc/html/rfc1034)."
+    },
+    {
+      "id": "alias-and-mail",
+      "type": "single",
+      "scenario": "A release changes the address of `app.example.com` monthly. `www.example.com` must follow those changes without a second address edit, while existing email delivery must remain unchanged. Which record design meets that requirement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Publish separate A records for app and www and rely on their identical TTLs to synchronize changes."
+        },
+        {
+          "id": "b",
+          "text": "Replace the domain's MX target with app so mail and web share one migration control."
+        },
+        {
+          "id": "c",
+          "text": "Publish app as an A record, make www a CNAME to app, and preserve the MX records."
+        },
+        {
+          "id": "d",
+          "text": "Publish www as a TXT record containing app's hostname and keep the current A record for app."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "An A record supplies the address and the CNAME follows its owner name. Equal TTLs do not synchronize independent records. MX changes affect mail delivery, and TXT is not an address alias. [RFC 1034](https://datatracker.ietf.org/doc/html/rfc1034)."
+    },
+    {
+      "id": "delegation-owner",
+      "type": "single",
+      "scenario": "After moving `stage.example.com`, a trace still refers clients to `old-ns.stage.example.com`, which times out. A direct query to the intended new authority returns the correct A record. Where should the team focus its repair?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The NS referral in the parent example.com zone, verifying the delegated server's reachability afterward."
+        },
+        {
+          "id": "b",
+          "text": "The new authority's A record, replacing its correct address with the old nameserver's address."
+        },
+        {
+          "id": "c",
+          "text": "The recursive cache TTL, lowering it on the new authority to redirect the parent referral immediately."
+        },
+        {
+          "id": "d",
+          "text": "The application's TLS certificate, replacing it before any resolver can follow the new referral."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The wrong parent referral sends lookups away from the new authority. Correct source data does not repair that referral; lowering an A TTL does not rewrite parent NS data, and TLS is a later boundary. [RFC 1034](https://datatracker.ietf.org/doc/html/rfc1034)."
+    },
+    {
+      "id": "empty-type",
+      "type": "single",
+      "scenario": "A host returns these responses for a mail-routing name:\n\n```text\n$ dig mail.example.com A\n;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 401\n;; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 1\n\n$ dig mail.example.com MX\n;; ANSWER SECTION:\nmail.example.com. 300 IN MX 10 mx.example.com.\n```\n\nWhat does the evidence establish?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The whole mail.example.com name is absent, and the MX response is necessarily stale."
+        },
+        {
+          "id": "b",
+          "text": "The resolver refused both queries because mail cannot use DNS address records."
+        },
+        {
+          "id": "c",
+          "text": "The A lookup timed out, while the MX lookup reached the authority."
+        },
+        {
+          "id": "d",
+          "text": "The owner exists with MX data, but this view has no A answer for it."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "NOERROR with no A answer is distinct from NXDOMAIN; the MX answer demonstrates other data at the owner. A timeout has no usable DNS response, and refusal is a different response code. [RFC 2308](https://www.rfc-editor.org/rfc/rfc2308.html)."
+    },
+    {
+      "id": "resolver-failure",
+      "type": "single",
+      "scenario": "The corporate resolver returns SERVFAIL for `app.example.com`. A public resolver and the authoritative server both return `203.0.113.25`. Which next investigation is best supported?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Delete and recreate the authoritative A record to invalidate the corporate result."
+        },
+        {
+          "id": "b",
+          "text": "Inspect the corporate resolver's validation, upstream reachability, and resolution path."
+        },
+        {
+          "id": "c",
+          "text": "Restart the web process at 203.0.113.25 before checking the resolver."
+        },
+        {
+          "id": "d",
+          "text": "Treat the corporate result as proof that app.example.com does not exist."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "SERVFAIL identifies failed resolution, not absence or an HTTP failure. Working source and public answers focus the next checks on the corporate path, but do not identify one specific cause without further evidence. [BIND dig reference](https://bind9.readthedocs.io/en/latest/manpages.html#dig-dns-lookup-utility)."
+    },
+    {
+      "id": "cutover-timing",
+      "type": "single",
+      "scenario": "At 11:55, a resolver caches an A record with TTL 3600. At 12:00, the team lowers the authoritative TTL to 60 and immediately switches the address. That resolver still serves the old address at 12:10. What should the team have done?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Lowered the TTL early enough for the previous lifetime to elapse before cutover, with both targets safe during overlap."
+        },
+        {
+          "id": "b",
+          "text": "Raised the old TTL so recursive resolvers would prioritize fetching the new source value."
+        },
+        {
+          "id": "c",
+          "text": "Changed the authoritative nameserver at noon to invalidate the previously cached A record."
+        },
+        {
+          "id": "d",
+          "text": "Repeated the same address update every minute until the resolver forgot its old TTL."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The existing copy retains its original lifetime. Changing authority or repeating edits does not erase it, and a longer TTL increases the overlap. Lower TTLs help future cache entries, so preparation must precede cutover. [RFC 1034](https://datatracker.ietf.org/doc/html/rfc1034)."
+    },
+    {
+      "id": "negative-cache",
+      "type": "single",
+      "scenario": "An office resolver received NXDOMAIN for `new.example.com` 20 seconds before launch, with a 60-second negative lifetime. Public and authoritative queries now return its A record, but the office query still returns NXDOMAIN. What is the safest first interpretation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The positive A record must use an IPv6 address to replace the earlier negative answer."
+        },
+        {
+          "id": "b",
+          "text": "The public resolver is authoritative because it discovered the new record first."
+        },
+        {
+          "id": "c",
+          "text": "The office resolver may retain the negative answer for the remaining 40 seconds; verify again after expiry."
+        },
+        {
+          "id": "d",
+          "text": "The new name cannot exist until the application's HTTP cache is cleared."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Negative responses are cacheable too. A new positive record does not remotely erase an earlier negative copy. Address family and HTTP caching do not explain the resolver lifetime, and a fresh public response does not confer authority. [RFC 2308](https://www.rfc-editor.org/rfc/rfc2308.html)."
+    },
+    {
+      "id": "search-suffix",
+      "type": "single",
+      "scenario": "A workstation has `search corp.example.com`. An application using `db` reaches an internal database, while an explicit query for `db.example.com.` returns a different address. Which evidence should be gathered before changing DNS?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Only the public A TTL, because the application's short name must refer to the same owner."
+        },
+        {
+          "id": "b",
+          "text": "The actual expanded name and resolver used by the application, compared with the explicit fully qualified query."
+        },
+        {
+          "id": "c",
+          "text": "Only the authoritative serial, because a trailing dot tells the server to bypass every cache."
+        },
+        {
+          "id": "d",
+          "text": "The service's MX records, because search suffixes select mail routes for short names."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Search expansion can turn a short input into a different DNS question. Check the application's actual lookup and resolver; a trailing dot qualifies the name but does not disable caching. MX and serial changes do not establish that the same name was queried. [BIND dig reference](https://bind9.readthedocs.io/en/latest/manpages.html#dig-dns-lookup-utility)."
+    },
+    {
+      "id": "split-view-evidence",
+      "type": "multiple",
+      "scenario": "The approved deployment uses `10.20.5.15` internally and `203.0.113.25` publicly. Corporate DNS returns the private address, public DNS returns the public address, and the private authority agrees with corporate DNS. Which review conclusions are justified? Select two.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Corporate DNS must be stale because its response is not publicly routable."
+        },
+        {
+          "id": "b",
+          "text": "The authoritative agreement proves that HTTPS is healthy on the private endpoint."
+        },
+        {
+          "id": "c",
+          "text": "Different answers fit the approved split-view deployment."
+        },
+        {
+          "id": "d",
+          "text": "A failing employee's actual resolver and subsequent endpoint connection still need checking."
+        }
+      ],
+      "correct": [
+        "c",
+        "d"
+      ],
+      "explanation": "The deployment intentionally has two views, and the private answer agrees with its authority. That does not prove the failing employee used this resolver or that the endpoint works. Public routability is not required for the private view. [RFC 1034](https://datatracker.ietf.org/doc/html/rfc1034)."
+    },
+    {
+      "id": "transport-boundaries",
+      "type": "multiple",
+      "scenario": "A client receives a truncated DNS reply over UDP. Retrying over TCP times out. Another engineer proposes enabling DNSSEC to encrypt the query and avoid TCP. Which observations are correct? Select two.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The required TCP path to the resolver needs investigation even though small UDP responses work."
+        },
+        {
+          "id": "b",
+          "text": "DNSSEC encrypts this exchange and removes the need for TCP fallback."
+        },
+        {
+          "id": "c",
+          "text": "The DNS result already proves that the application certificate is valid."
+        },
+        {
+          "id": "d",
+          "text": "DNSSEC validates DNS data integrity; it does not encrypt the lookup or validate the later HTTPS connection."
+        }
+      ],
+      "correct": [
+        "a",
+        "d"
+      ],
+      "explanation": "Truncation can require TCP, whose path may fail independently of UDP. DNSSEC authenticates DNS data rather than encrypting queries; HTTPS has a separate certificate and connection boundary. Encrypted DNS transports are different mechanisms. [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) and [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html)."
+    }
+  ]
+}
+

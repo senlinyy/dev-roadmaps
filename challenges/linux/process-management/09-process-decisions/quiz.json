@@ -1,0 +1,287 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A health check passes on port `3000`, but `systemctl status app.service` reports the service failed. The host shows:\n\n```text\n$ ss -ltnp | grep ':3000'\nLISTEN 0 511 127.0.0.1:3000 0.0.0.0:* users:((\"node\",pid=2601,fd=18))\n\n$ ps -o pid,ppid,user,cmd -p 2601\n  PID  PPID USER   CMD\n 2601  2310 deploy node /home/deploy/app/server.js\n\n$ ps -p 2310 -o pid,cmd\n  PID CMD\n 2310 -bash\n```\n\nWhat is the best diagnosis?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The unit likely uses socket activation, so a shell-owned Node process is expected to inherit the managed listener"
+        },
+        {
+          "id": "b",
+          "text": "The health check is reaching a stray copy started from the deploy shell, while the intended systemd service can still be failed"
+        },
+        {
+          "id": "c",
+          "text": "The failed status is stale and should be cleared because a passing health check identifies the process as the unit's MainPID"
+        },
+        {
+          "id": "d",
+          "text": "The unit probably forked into the deploy shell, so PPID `2310` still demonstrates systemd supervision"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "PID `2601` owns the port and its PPID points to an interactive bash process, not PID 1 or the service manager. A manually started copy can keep a health check green while the managed unit is failed. A shell parent does not make a live listener a zombie. The [ps manual](https://man7.org/linux/man-pages/man1/ps.1.html) documents PID, PPID, state, and command fields."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A helper exits, but remains in the process table:\n\n```text\n$ ps -o pid,ppid,stat,cmd -p 30241\n  PID  PPID STAT CMD\n30241 29810 Z    [sync-helper] <defunct>\n```\n\nSending `kill -KILL 30241` does not remove the row. What should the owner fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Wait for more CPU capacity so the helper can finish its exit handler"
+        },
+        {
+          "id": "b",
+          "text": "Investigate storage first, treating the entry as an uninterruptible I/O wait"
+        },
+        {
+          "id": "c",
+          "text": "Retry termination as the parent's user because the earlier signal may have lacked permission"
+        },
+        {
+          "id": "d",
+          "text": "Investigate parent PID 29810 and its child-reaping behavior; arrange a controlled parent recovery if needed"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "A zombie has already finished running. Its remaining entry holds the exit status until the parent collects it, so another signal cannot kill it again. `/proc` is kernel-provided state, not a directory to delete manually, and priority cannot schedule a dead process. The [proc manual](https://man7.org/linux/man-pages/man5/proc.5.html) and [ps manual](https://man7.org/linux/man-pages/man1/ps.1.html) document process state."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A developer starts `node server.js` over SSH and verifies the app. After the laptop disconnects, the process disappears and no restart occurs. Which production change addresses the ownership problem?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Run the app as a systemd service with declared lifecycle, logs, boot behavior, and restart policy"
+        },
+        {
+          "id": "b",
+          "text": "Background the command in the deploy shell and save its PID for the next operator"
+        },
+        {
+          "id": "c",
+          "text": "Use nohup with redirected logs, treating session survival as equivalent to restart and boot supervision"
+        },
+        {
+          "id": "d",
+          "text": "Keep the application in a persistent tmux session and rely on an operator to recover failures"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A service unit declares lifecycle, logging, boot activation, and restart behavior. Backgrounding does not detach all terminal relationships. nohup and tmux can help one-off work but do not provide the same supervision contract. See the [systemd service manual](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The site is slow and an operator captures:\n\n```text\n$ ps -eo pid,ppid,user,%cpu,%mem,etime,stat,cmd --sort=-%cpu | head\n  PID  PPID USER  %CPU %MEM ELAPSED STAT CMD\n 1842     1 app   197.0 22.1 04:02:11 Rsl  /usr/bin/node /srv/app/current/server.js\n  913   912 www    12.3  1.1 14-03:12 S    nginx: worker process\n```\n\nWhat should happen before an immediate restart?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat CPU above 100 percent as a measurement error and investigate only the proxy worker"
+        },
+        {
+          "id": "b",
+          "text": "Immediately force-kill Node to relieve pressure before collecting its state or logs"
+        },
+        {
+          "id": "c",
+          "text": "Capture logs, deploy context, traffic, and process details; confirm the owning unit before a controlled action"
+        },
+        {
+          "id": "d",
+          "text": "Renice Node and conclude the incident is resolved once its scheduling priority changes"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Multiple threads can consume more than one CPU core. Capture evidence and confirm ownership before a controlled action. PPID 1 alone is not proof of systemd supervision because orphaned processes may also be reparented. Nice changes scheduling preference, not application correctness. See the [ps manual](https://man7.org/linux/man-pages/man1/ps.1.html)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "During a deploy, plain `kill 1842` starts a graceful shutdown, but the process is still present after ten seconds. Logs show it is draining active requests. Which escalation policy is safest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Force-kill it now because a successful TERM command should have removed the PID immediately"
+        },
+        {
+          "id": "b",
+          "text": "Allow a bounded drain period, inspect state and logs, and use KILL only if graceful shutdown fails and force is justified"
+        },
+        {
+          "id": "c",
+          "text": "Suspend the process during the drain window to reduce contention while waiting for cleanup"
+        },
+        {
+          "id": "d",
+          "text": "Keep sending TERM without checking state or the shutdown budget until the PID disappears"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Plain `kill` sends SIGTERM by default, allowing the process to run cleanup handlers. A short, bounded drain protects in-flight work. SIGKILL bypasses cleanup and belongs at the end of the escalation path. SIGSTOP pauses execution, so it cannot help the process drain. The [signal manual](https://man7.org/linux/man-pages/man7/signal.7.html) documents default actions and uncatchable signals."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "During a data export, an operator starts `long-report-generator &` in an SSH shell and records `[1] 2409`. The shift changes before the export finishes, so a teammate opens a separate SSH session and tries `fg %1`, but that shell reports no such job. Both users are on the same host and can see PID `2409` in `ps`. Which explanation should guide the handoff?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The second shell must refresh its process list before it can adopt the original job number"
+        },
+        {
+          "id": "b",
+          "text": "The second operator can use fg with the system PID instead of the shell-local job number"
+        },
+        {
+          "id": "c",
+          "text": "Job number %1 belongs to the first shell's job table, while PID 2409 identifies the process in the shared PID namespace"
+        },
+        {
+          "id": "d",
+          "text": "The second shell must use elevated privilege to access the first shell's job table"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "`[1]` is a shell-local job number, while `2409` is the Linux PID visible system-wide. Another shell can inspect or signal the PID if permissions allow, but it cannot use the first shell's `%1` job-control reference. Backgrounding does not make a process supervised or immune to session loss. The [bash job-control documentation](https://www.gnu.org/software/bash/manual/html_node/Job-Control-Basics.html) describes shell job tables."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A backup competes with the web app for CPU. The team wants the backup to yield more readily without stopping it. Which action and verification fit the goal?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Run or renice the backup to a higher nice value, then verify the NI field for its PID"
+        },
+        {
+          "id": "b",
+          "text": "Set a negative nice value so the backup finishes sooner and then leaves more CPU for requests"
+        },
+        {
+          "id": "c",
+          "text": "Set low I/O priority and assume this also lowers the backup's CPU scheduling preference"
+        },
+        {
+          "id": "d",
+          "text": "Raise the nice value and treat it as an enforced percentage cap on CPU consumption"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A higher nice value lowers the process's CPU scheduling priority relative to other work. The NI field verifies the applied value. Negative nice values raise priority and normally require privilege, while signals and parent IDs do not provide a generic CPU-throttling contract. The [nice manual](https://man7.org/linux/man-pages/man1/nice.1.html) documents priority adjustment."
+    },
+    {
+      "id": "q8",
+      "type": "multiple",
+      "scenario": "During an outage, an investigator follows three worker processes instead of treating a visible PID as proof of health. Worker 1842 has stdout directed to `/var/log/app/stdout.log` and descriptor 18 linked to `socket:[48122]`. A second worker remains in state `D` inside an NFS wait channel after SIGKILL was requested. The kernel journal reports `Out of memory: Killed process 26631 (java)` for the third. Which interpretations belong in the incident timeline? Select all that apply.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Worker 1842's descriptor 18 should be investigated as another log file because descriptors above stderr conventionally map to disk output"
+        },
+        {
+          "id": "b",
+          "text": "Worker 1842 has stdout directed to the log and an open socket descriptor"
+        },
+        {
+          "id": "c",
+          "text": "The NFS-blocked worker can remain visible until the kernel wait permits termination"
+        },
+        {
+          "id": "d",
+          "text": "The Java worker should be classified as an application-requested shutdown unless its own log contains an uncaught exception"
+        },
+        {
+          "id": "e",
+          "text": "The Java worker requires memory-pressure and limit investigation rather than classification as a clean app exit"
+        }
+      ],
+      "correct": [
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "`/proc/<pid>/fd` exposes real descriptor targets, including logs and sockets. A `D` state is uninterruptible kernel wait, so even SIGKILL may not take effect until I/O returns. An OOM-killer event is forced termination, not a graceful application shutdown, and needs memory-pressure investigation. The [proc manual](https://man7.org/linux/man-pages/man5/proc.5.html) and [signal manual](https://man7.org/linux/man-pages/man7/signal.7.html) cover these observations."
+    },
+    {
+      "id": "q9",
+      "type": "single",
+      "scenario": "Yesterday's incident note identifies PID 1842 as a runaway report job. Today that PID belongs to an orders worker started five minutes ago, under a different user and cgroup. The old command remains in shell history. What should the operator do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use the recorded PID because the incident note preserves the original process identity"
+        },
+        {
+          "id": "b",
+          "text": "Confirm the current workload using its start time, executable, owner, and cgroup; do not signal the replacement"
+        },
+        {
+          "id": "c",
+          "text": "Signal all processes with the old program name to avoid depending on PID reuse"
+        },
+        {
+          "id": "d",
+          "text": "Use signal zero and treat success as confirmation of yesterday's workload identity"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "PIDs can be reused. Current identity evidence overrides an old handle; signal zero checks existence and permission, not the previous workload's identity. Broad name-based signaling risks unrelated instances. See the [kill manual](https://man7.org/linux/man-pages/man2/kill.2.html) and [proc manual](https://man7.org/linux/man-pages/man5/proc.5.html)."
+    },
+    {
+      "id": "q10",
+      "type": "multiple",
+      "scenario": "A worker exits after being signaled. Seconds later the same command appears with a new PID. The unit reports Restart=on-failure and its restart counter has increased. A teammate proposes repeatedly killing new PIDs. Which review comments are justified? Select all that apply.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The changing PID and restart counter are consistent with the supervisor creating a replacement"
+        },
+        {
+          "id": "b",
+          "text": "The new PID proves the earlier signal was not delivered to the previous worker"
+        },
+        {
+          "id": "c",
+          "text": "If taking the workload down is authorized, use its managing unit instead of repeatedly signaling replacements"
+        },
+        {
+          "id": "d",
+          "text": "A replacement proves application health has recovered without testing its interface"
+        },
+        {
+          "id": "e",
+          "text": "An unchanged command line makes the replacement the same process for lifecycle tracking"
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Restart policy can create a new process. The controller is the right lifecycle boundary for an authorized stop; a new PID does not prove health. Command-line equality is not persistent identity. See the [systemd service manual](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)."
+    }
+  ]
+}
+

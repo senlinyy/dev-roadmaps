@@ -1,7 +1,7 @@
 ---
 title: "Azure SQL Database"
-description: "Azure SQL Database fits relational application records that need tables, transactions, constraints, query flexibility, secure access, and restore."
-overview: "Azure SQL Database is Azure's managed relational database for business records such as orders, payments, customers, and line items. This article explains logical servers, databases, tables, constraints, transactions, connections, service tiers, migrations, and point-in-time restore."
+description: "Learn how Azure SQL Database keeps relational data structured, queryable, transactional, securely accessible, and recoverable."
+overview: "Build from customers, orders, keys, constraints, indexes, and transactions to Azure SQL logical servers, connections, service tiers, migration, and tested recovery."
 tags: ["azure", "sql", "database", "transactions", "restore"]
 order: 3
 id: article-cloud-providers-azure-storage-databases-azure-sql-database
@@ -20,15 +20,13 @@ id: article-cloud-providers-azure-storage-databases-azure-sql-database
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-Azure SQL Database is Azure's managed relational database service for applications that store structured business records. Relational data means the records have relationships: a customer places orders, an order has line items, a payment belongs to an order, and a refund changes the state of that payment. SQL gives the application a language for asking questions across those records, and the database engine gives the team rules for keeping those records valid.
+An online shop has to remember customers, orders, products, payments, and inventory. Saving those facts is only the beginning. An order must belong to a real customer, its ID must be unique, and a purchase must not leave stock reduced while the payment and order records remain unchanged.
 
-We will follow one production example through the article. The Orders team runs `orders-api-prod`, an API that handles checkout for an online store. Receipt PDFs live in Blob Storage, because those are file-shaped bytes. The actual order facts live in Azure SQL Database, because the team needs tables, joins, transactions, constraints, indexes, and point-in-time restore.
+The application also needs to ask questions of those facts. Which orders for customer 928 are still pending? How much does that customer owe? Two application servers might ask or change these things at the same time, so correctness cannot depend on one process happening to finish before another starts.
 
-That split matters in a real system. A receipt file answers, "What did the customer download?" The relational database answers, "Which customer placed this order, which items did it include, which payment authorized it, which shipment belongs to it, and what happened if the payment succeeded but inventory failed?" Those questions connect many facts, so Azure SQL is the better starting point than object storage or a simple key-value document.
+A relational database supplies the structure and coordination needed for this work. Azure SQL Database provides Microsoft's relational database engine as a managed Azure service. You still define the business rules and queries, while Azure handles much of the infrastructure, patching, availability, and backup machinery.
 
-Keep the data model and service operation connected: keys and transactions protect record correctness, while identity, network paths, capacity, migration order, backups, and restore evidence determine whether that correct database remains reachable and recoverable in production.
-
-Keep these questions in view as you work through the lesson:
+Understanding the database first makes the Azure choices easier to explain. The same order that needs a valid customer also needs an authorized connection, enough capacity to finish its transaction, and a recovery plan if a bad script changes its data. The following questions connect those responsibilities:
 
 1. **What Is Azure SQL Database?**
 2. **How Do Logical Servers and Databases Organize Access?**
@@ -40,440 +38,657 @@ Keep these questions in view as you work through the lesson:
 8. **How Do Backup and Restore Protect the Database?**
 
 ## What Is Azure SQL Database?
-<!-- section-summary: Azure SQL Database is the managed Azure home for relational records that need SQL, rules, transactions, and recovery. -->
 
-![Orders API split between Blob Storage receipt files and Azure SQL relational order records](/content-assets/articles/article-cloud-providers-azure-storage-databases-azure-sql-database/azure-sql-relational-records.png)
+Azure SQL Database is a **relational database platform service**. Relational data has declared structure and relationships: customers place orders, orders contain lines, lines refer to products, and payments belong to orders. A database engine stores those facts, enforces rules about them, answers queries, and coordinates concurrent changes.
 
-*This visual separates file-shaped data from relational business records: Blob Storage keeps receipt bytes, while Azure SQL keeps connected order facts with keys, constraints, transactions, and restore.*
+This is more than object storage with a query interface. Blob Storage can preserve bytes in objects such as `customers.json`, `orders.json`, and `payments.json`. But if two application servers rewrite the orders file simultaneously, something must coordinate their writes. If a process crashes halfway through, something must establish the valid state. If the application needs all unpaid orders for London customers created during the last seven days, something must find them without repeatedly reading every file.
 
-Azure SQL Database is a platform as a service database. Microsoft operates the service platform, high availability infrastructure, patching path, and automated backup system. The application team still owns the database design: table shape, indexes, queries, access permissions, connection behavior, migration safety, data growth, and restore practice. A managed database still needs real database engineering from the application team.
+As those requirements accumulate, application code would effectively be rebuilding database mechanisms. A database engine supplies them as a coherent system rather than asking each application to invent its own approach.
 
-The reason to use a database engine is not merely that it stores bytes durably. An application could place `customers.json`, `orders.json`, and `payments.json` in ordinary storage, but it would then have to coordinate simultaneous writers, recover from half-written files, scan large files to answer queries, and enforce relationships itself. A relational engine provides those mechanisms once. It parses SQL, chooses an execution plan, coordinates concurrent work, maintains indexes, records committed changes, and recovers durable state after failure.
+### Ask for a result rather than disk operations
 
-SQL is **declarative**. The application states the result it wants:
+SQL is **declarative**: a query describes the result wanted, while the engine decides how to obtain it. For example:
 
 ```sql
-SELECT order_id, total_cents
-FROM orders
-WHERE customer_id = 928
-ORDER BY created_at DESC;
+SELECT *
+FROM Orders
+WHERE CustomerId = 928
+  AND Status = 'Pending';
 ```
 
-The application does not tell the engine which data page to open or which row pointer to follow. The query optimizer chooses a plan from the available tables, indexes, statistics, and operators. That separation lets the same query use a different plan as the amount and distribution of data changes.
+The application asks for matching orders. It does not specify which data file to open, which storage page to seek, or which internal pointer to follow. Likewise, sorting can be part of the requested result:
 
-An index is an additional lookup structure, much like the index at the back of a book. It can turn "scan every order until customer 928 appears" into a direct path toward matching rows. The tradeoff is important: every useful index can speed up some reads, but it consumes storage and adds work when inserts, updates, or deletes must maintain it. Adding indexes without knowing the query pattern can therefore make writes slower without helping the workload that matters.
+```sql
+SELECT *
+FROM Orders
+WHERE CustomerId = 928
+ORDER BY CreatedAt DESC;
+```
 
-The whole article follows that responsibility split. First we name the Azure resources, then we look at the data rules inside the database, then we look at transactions, connections, capacity, migrations, and recovery. Those pieces connect because a production database needs all of them at the same time.
+The engine parses SQL, chooses an execution strategy through its query optimizer, manages buffers and caches, and accesses durable storage. For changes, it also manages transactions, locking or versioning, and logging.
+
+Consider this update:
+
+```sql
+UPDATE Accounts
+SET Balance = Balance - 100
+WHERE AccountId = 42;
+```
+
+The application expresses the intended change. The engine determines where the row is, which access path to use, whether another transaction is changing it, and what must be recorded durably. Application code does not directly manipulate disk sectors.
+
+That division is valuable as data grows. A query can express the same result while the engine chooses a different execution strategy for a larger table or a different available index. Declarative SQL does not guarantee that every written query is efficient, but it provides the engine with responsibility for execution rather than hard-coding storage traversal into the application.
+
+### Understand what Azure manages
+
+A self-managed SQL Server installation traditionally involves a physical or virtual machine, Windows or Linux, the SQL Server installation and instance, and the databases within it. The operator is responsible for substantial parts of OS management, installation, patching, engine upgrades, storage, availability configuration, backups, and hardware replacement.
+
+Azure SQL Database removes several of those layers from direct customer management. Azure runs the database-engine infrastructure and manages platform patching, upgrades, automated backups, availability mechanisms, storage infrastructure, and the underlying compute lifecycle. Azure also operates the physical machines, datacenter networking, power, and cooling.
+
+You remain responsible for schema, tables, indexes, queries, transactions, users, permissions, application correctness, capacity choices, and recovery objectives. These are the decisions that describe what the database should contain and what successful operation means for the business.
+
+| Responsibility | Main owner in this service model |
+|---|---|
+| Tables, relationships, constraints, queries, and transaction design | Application team |
+| Users, database permissions, capacity decisions, and recovery requirements | Application team |
+| Database platform, patching, automated backup workflow, and infrastructure availability | Azure SQL Database |
+| Physical machines, datacenter infrastructure, power, and cooling | Azure |
+
+This is the practical meaning of database **Platform as a Service**, or PaaS. It transfers much of the platform operation, not ownership of the business logic.
+
+For example, an authorized statement such as the following can be syntactically valid while being disastrous for the application:
+
+```sql
+UPDATE Employees
+SET Salary = 0;
+```
+
+Azure cannot infer that the caller intended something else. Nor can it know that customer 928 should receive a 20% discount unless the application or schema encodes that rule. Managed infrastructure does not make every authorized data change correct.
+
+### Choose storage according to the state
+
+An `invoice.pdf` naturally fits Blob Storage: a name identifies document bytes. Invoice facts such as `InvoiceId`, `CustomerId`, `InvoiceDate`, `Amount`, and `Status` naturally fit relational tables when the application needs queries such as:
+
+```sql
+SELECT SUM(Amount)
+FROM Invoices
+WHERE CustomerId = 928
+  AND Status = 'Unpaid';
+```
+
+The services can work together. An invoice row might contain invoice 92811, customer 928, amount 79.99, and a `BlobName` pointing to `invoices/928/92811.pdf`. SQL stores the structured business facts and the reference; Blob Storage stores the larger document bytes.
+
+Cosmos DB addresses a different design emphasis: document- or key-based access, partitioning, and globally distributed request patterns. Azure SQL Database is a natural candidate when complex relational integrity, joins, rich SQL, and traditional transaction-processing semantics are the difficult requirements. Neither service should be chosen merely because it can hold the data.
 
 ## How Do Logical Servers and Databases Organize Access?
-<!-- section-summary: The logical server gives Azure a management and connection boundary, while each database owns schema, data, compute choices, and backup settings. -->
 
-Before the Orders team creates tables, it needs an Azure SQL shape to hold them. The first resource beginners usually meet is the **logical server**. A logical server is the Azure management wrapper and DNS name for one or more Azure SQL databases in a region. It holds settings such as the server name, administrator configuration, firewall rules, private endpoint relationships, and Microsoft Entra authentication setup.
+Azure SQL Database is not SQL Server installed on a VM that you administer. SQL Server on an Azure VM exposes a recognizable machine, operating system, and SQL Server instance. Azure SQL Database exposes a database-oriented service without operating-system administrator access or a conventional user-managed instance underneath it.
 
-The logical server gives the app a connection endpoint such as `sql-orders-prod.database.windows.net`. That name feels like a normal SQL Server machine name, and the logical server acts as an Azure control boundary around managed database resources. Azure runs the operating system layer, server platform, patching path, and service software for the team.
+This difference explains the term **logical server**. It is an administrative and namespace construct for databases and elastic pools, not a virtual machine. Microsoft describes it as a grouping that provides the connection endpoint and server-level policies.
 
-The word *server* should not make you picture one customer-visible VM or one traditional SQL Server instance. The logical server is primarily a namespace, policy boundary, and administrative parent. Databases listed beneath it are not guaranteed to be files co-located on one machine, and customers do not receive operating-system or instance-level access through it. That reduced machine control is precisely what lets Azure manage more of the platform.
+For example, a logical server called `sql-prod-1` could organize databases named `orders`, `customers`, and `billing`. That hierarchy tells you how the resources are named and administered. It does not mean those databases are files attached to one visible SQL Server process.
 
+### Use the namespace without assuming a machine
 
-The **database** is the resource that holds the application schema and data. The Orders team might create a database named `orders` on `sql-orders-prod.database.windows.net`. Inside `orders`, the team creates tables such as `customers`, `orders`, `order_items`, `payments`, and `shipments`. The database also owns important choices such as service tier, compute model, maximum size, backup retention, and many performance settings.
+A logical server named `acme-prod` has an endpoint resembling:
 
-Here is a simple production naming picture:
-
-| Azure resource | Example name | What the team reviews there |
-| --- | --- | --- |
-| Resource group | `rg-orders-prod-weu` | Ownership, lifecycle, tags, policy, deployment scope |
-| Logical server | `sql-orders-prod` | DNS name, firewall, private endpoint, administrators, Entra setup |
-| Database | `orders` | Tables, data, indexes, service tier, backups, restore, query behavior |
-
-This separation helps in design reviews. The network team may care about the logical server's firewall and private endpoint. The application team may care about the database schema and migrations. The platform team may care about tags, cost, backup retention, and deployment policy. Everyone talks about "the database," but Azure splits the responsibilities across resources and settings.
-
-The Orders team can also place multiple databases on one logical server. For example, `orders` and `billing` could share the same server endpoint while keeping separate schemas and data. That arrangement can make administration simpler for related systems, but it also means server-level firewall and administrator choices deserve extra care. A server-level rule affects every database behind that logical server unless the team narrows access at the database layer too. Once the Azure wrapper exists, the real business rules move inside the database where tables, keys, and constraints protect the records themselves.
-
-Before the first schema review, the team should verify the Azure wrapper it is about to use. These commands prove that the application is pointing at the intended logical server and that the database has the expected SKU shape before developers start debugging SQL from the wrong place.
-
-```bash
-az sql server show \
-  --resource-group rg-orders-prod-weu \
-  --name sql-orders-prod \
-  --query "{fqdn:fullyQualifiedDomainName,publicNetworkAccess:publicNetworkAccess}"
-
-az sql db show \
-  --resource-group rg-orders-prod-weu \
-  --server sql-orders-prod \
-  --name orders \
-  --query "{database:name,tier:sku.tier,sku:sku.name,capacity:sku.capacity,maxSizeBytes:maxSizeBytes,zoneRedundant:zoneRedundant}"
+```text
+acme-prod.database.windows.net
 ```
 
-The `fqdn` value is what the app uses as `Server=` in the connection string. `publicNetworkAccess` tells the network reviewer whether public access is still allowed at the logical server. `tier`, `sku`, and `capacity` tell the application owner which performance and cost shape the database is actually using, because the name `orders` alone says nothing about the service tier.
+Applications use that server name together with a database name when connecting. The server also supplies a boundary for network and firewall configuration, the Microsoft Entra administrator, auditing and policies, database administration, and failover-group relationships.
 
-The expected output should line up with the release record. A private production database might show this shape:
+Databases under one logical server are in the same Azure region as that server. However, the administrative grouping does not guarantee traditional instance-style physical colocation. Database A and Database B are not necessarily two files served by one customer-visible VM.
 
-| Check | Healthy value |
-| --- | --- |
-| Server `fqdn` | `sql-orders-prod.database.windows.net` |
-| Server `publicNetworkAccess` | `Disabled` when the app uses private access |
-| Database `tier` | `GeneralPurpose`, `BusinessCritical`, or the approved tier |
-| Database `sku` | The SKU from the capacity review, such as `GP_Gen5_4` |
-| Database `zoneRedundant` | `true` only where the chosen tier and region support that design |
+Keeping these meanings separate prevents incorrect assumptions about both management and performance. Sharing an endpoint namespace does not by itself establish that two databases share one fixed compute allocation. That is a separate resource choice.
+
+### Give one database its own capacity
+
+A **single database** is an isolated managed database resource with allocated service characteristics, including compute, storage, and service tier. It is administered through the logical server while retaining its own scaling and lifecycle decisions.
+
+For example, an orders service can use `OrdersDB`, a billing service can use `BillingDB`, and an identity service can use `IdentityDB`. The grouping lets each database's capacity follow its workload rather than treating every application as one inseparable machine-sized deployment.
+
+This does not mean that independent databases no longer need coordinated application design. It means the Azure resource model gives each database a distinct capacity and management unit. Deciding what belongs in each database remains an application architecture decision.
+
+### Share capacity through an elastic pool
+
+Now consider a SaaS product with 500 customers, each assigned a database from `customer-001` through `customer-500`. Their peaks do not necessarily happen together. At 09:00, customer 18 may be busy while customers 92 and 301 are idle. At 14:00, customer 18 may be idle, customer 92 busy, and customer 301 moderately active.
+
+Provisioning every database for its individual maximum could leave a great deal of capacity unused. An **elastic pool** lets multiple databases share compute, memory, and related resources so differing usage patterns can make more economical use of a common allocation.
+
+```mermaid
+flowchart TD
+    A["SQL logical server"] --> B["Single database"]
+    A --> C["Elastic pool"]
+    B --> D["Own capacity allocation"]
+    C --> E["Customer 18 database"]
+    C --> F["Customer 92 database"]
+    C --> G["Customer 301 database"]
+    class A control
+    class B,C,E,F,G storage
+    class D data
+```
+
+The databases remain separate logical databases. The pool is a capacity-sharing mechanism, not an instruction to merge all customers into one table. Its suitability depends on the aggregate workload: the benefit in this example comes from peaks occurring at different times.
+
+Database-versus-pool allocation and service-tier selection answer different questions. The first determines whether capacity is dedicated to one database or shared among a group. The second determines the performance, storage, and availability architecture that provides that capacity. Before choosing the latter, it helps to understand the work the engine performs inside each database.
 
 ## How Do Tables, Keys, and Constraints Protect Data?
-<!-- section-summary: Tables store the facts, while keys and constraints keep relationships valid even when bugs, retries, or scripts try to write bad data. -->
 
-A **table** stores records as rows and columns. In the orders database, `customers` might hold one row per customer, `orders` might hold one row per checkout, and `order_items` might hold one row per purchased product. A table gives the data a predictable shape so the application, reports, and support tools all read the same facts.
+A table gives stored facts a declared shape. Consider two customer rows:
 
-A **primary key** gives each row a stable identity inside a table. A customer row may use `customer_id`, and an order row may use `order_id`. A **foreign key** connects one table to another. The `orders.customer_id` column can point back to `customers.customer_id`, which means every order belongs to a real customer row.
+| CustomerId | Name | Email |
+|---|---|---|
+| 928 | Alice | alice@example.com |
+| 412 | Bob | bob@example.com |
 
-A **constraint** is a database rule that protects data correctness. A unique constraint can prevent two customer accounts from using the same email address. A check constraint can reject an order item with quantity `0`. A foreign key can reject an order that points to a missing customer. These rules matter because application validation is only one door into the database. Admin scripts, data imports, queue retries, migration jobs, and bug fixes can all write data too.
+A row represents an entity or fact. Columns define its attributes: an integer customer ID, a text name, and a text email address. This resembles a relation—a set of rows with a defined structure—rather than an arbitrary sequence of bytes.
 
-The Orders team might start with a schema like this:
+An introductory table definition could be:
 
 ```sql
-CREATE TABLE customers (
-  customer_id bigint PRIMARY KEY,
-  email nvarchar(320) NOT NULL UNIQUE,
-  created_at datetime2 NOT NULL
-);
-
-CREATE TABLE orders (
-  order_id bigint PRIMARY KEY,
-  customer_id bigint NOT NULL,
-  status nvarchar(32) NOT NULL,
-  total_cents int NOT NULL,
-  created_at datetime2 NOT NULL,
-  CONSTRAINT fk_orders_customers
-    FOREIGN KEY (customer_id) REFERENCES customers(customer_id),
-  CONSTRAINT ck_orders_total_cents
-    CHECK (total_cents >= 0)
-);
-
-CREATE TABLE order_items (
-  order_item_id bigint PRIMARY KEY,
-  order_id bigint NOT NULL,
-  sku nvarchar(64) NOT NULL,
-  quantity int NOT NULL,
-  unit_price_cents int NOT NULL,
-  CONSTRAINT fk_order_items_orders
-    FOREIGN KEY (order_id) REFERENCES orders(order_id),
-  CONSTRAINT ck_order_items_quantity
-    CHECK (quantity > 0)
+CREATE TABLE Customers
+(
+    CustomerId INT,
+    Name       NVARCHAR(200),
+    Email      NVARCHAR(320)
 );
 ```
 
-This example has a few important ideas packed inside it. The `orders` table accepts only customer IDs that already exist. The `order_items` table accepts only order IDs that already exist. The database rejects negative order totals and zero-quantity items. The API still validates input before it sends SQL, and the database is the last line that protects permanent business facts.
+Here, `INT` describes an integer and `NVARCHAR` describes text with the declared length. The engine can distinguish attributes by name and type rather than relying on an application to interpret positions in a file.
 
-Indexes come next because correct data also needs useful lookup paths. An **index** is a data structure the database maintains so queries can find rows without scanning everything. If support often searches all orders for one customer, the team may add an index on `orders(customer_id, created_at)`. If checkout frequently checks the latest payment state for an order, the team may add an index that matches that query. Indexes speed up reads, but every index adds write work and storage, so production teams review them against real query patterns.
+An orders table might contain:
 
-Tables and constraints protect individual writes. The next problem appears when one business action changes several tables at once.
+| OrderId | CustomerId | Total | Status |
+|---|---|---|---|
+| 1001 | 928 | 79.99 | Paid |
+| 1002 | 928 | 15.00 | Pending |
+| 1003 | 412 | 42.50 | Paid |
+
+The application can retrieve the order ID and total for customer 928:
+
+```sql
+SELECT OrderId, Total
+FROM Orders
+WHERE CustomerId = 928;
+```
+
+The result follows from the structure and values in the table. The engine knows which field represents a customer and which represents an order total.
+
+### Give each row a stable identity
+
+A **primary key** identifies a row and prevents duplicate identities. The following is an alternative, simplified definition of the customer table, showing the key rather than an additional statement to run after the earlier creation example:
+
+```sql
+CREATE TABLE Customers
+(
+    CustomerId INT PRIMARY KEY,
+    Name       NVARCHAR(200)
+);
+```
+
+With that key, rows `928 | Alice` and `928 | Bob` cannot both claim the same customer identity. The database enforces uniqueness instead of relying only on the application to avoid duplicates.
+
+An order needs identity too. An `OrderId` should distinguish order 381 from every other order, while its `CustomerId` can state that it belongs to customer 928. These fields answer different questions: which order is this, and which customer does it reference?
+
+### Enforce relationships with foreign keys
+
+A **foreign key** expresses a relationship between tables. If an order refers to customer 928, the database can require that a customer with that identity exists.
+
+The relevant constraint fragment is:
+
+```sql
+FOREIGN KEY (CustomerId)
+REFERENCES Customers(CustomerId)
+```
+
+This expresses the relationship from `Orders.CustomerId` to `Customers.CustomerId`. It prevents an order from referencing a nonexistent customer such as 99999999. Enforcing valid references is called **referential integrity**.
+
+The rule belongs next to the data, where every writer must obey it. A web application may validate customer IDs before sending a request, but another application or a defective code path could bypass that validation. A database constraint still applies to the stored result.
+
+### Declare the values that are allowed
+
+The same reasoning applies to quantities. If a line's quantity must be positive, the database can enforce:
+
+```sql
+CHECK (Quantity > 0)
+```
+
+This is stricter than merely disallowing negative numbers: it also rejects zero. State the actual business rule before choosing the constraint so the database enforces the intended condition.
+
+Different constraints address different invariants, or truths that should remain valid:
+
+| Constraint | Rule it expresses |
+|---|---|
+| `PRIMARY KEY` | Each row has a distinct primary identity |
+| `FOREIGN KEY` | A referenced row exists in the related table |
+| `UNIQUE` | Values covered by the constraint do not duplicate |
+| `NOT NULL` | A required value must be present |
+| `CHECK` | Values satisfy a declared allowed-value condition |
+
+These rules do not replace all application validation. They establish a durable boundary around important facts, so correctness does not depend exclusively on the last application that happened to write them.
+
+### Use indexes to find structured facts efficiently
+
+A valid table can still be expensive to search. With one billion orders, locating order 823,918,221 by scanning rows could inspect an enormous amount of data.
+
+An **index** is an additional structure optimized for finding data. A book's index provides a useful analogy: instead of reading every page until Alice appears, look up Alice and follow the entry to page 417. A database index similarly gives the engine an efficient path toward matching rows, though its internal implementation is more sophisticated than a printed lookup list.
+
+Indexes are not free copies of performance. They occupy storage, and data changes may require corresponding index changes. More indexes can improve some reads while increasing write work. The right set follows from the queries and modifications the application actually performs.
+
+This connects structure to declarative SQL. A query states which result is wanted; an index offers an execution path that may help obtain it. The optimizer decides which path to use. Adding capacity without considering schema, queries, and indexes can leave the engine doing unnecessary work.
+
+### Put the order relationships together
+
+A complete order model can include `Customers`, `Products`, `Orders`, `OrderLines`, and `Payments`. Customer keys connect customers to orders. Order keys connect orders to their lines and payments. Product keys connect each line to a product.
+
+```mermaid
+flowchart TD
+    A["Customers"] -->|"CustomerId"| B["Orders"]
+    B -->|"OrderId"| C["OrderLines"]
+    C -->|"ProductId"| D["Products"]
+    B --> E["Payments"]
+    class A,B,C,D,E storage
+```
+
+Primary and foreign keys protect these relationships. However, a schema containing valid relationships can still be left in the wrong business state if only some steps of a purchase succeed. That is the problem transactions address.
 
 ## How Do Transactions Preserve Correctness?
-<!-- section-summary: Transactions let a checkout change several tables as one unit, so the database avoids half-written business events. -->
 
-A **transaction** is a group of database changes that commit together or roll back together. The Orders team needs this because checkout writes more than one row. A successful payment may update the order status, insert a payment record, insert order items, and write an audit event. The business wants one completed checkout instead of a mixed result with three successful writes and one failed write hiding in the corner.
+A transaction treats related changes as one logical unit. Suppose a purchase for £100 requires reducing stock, creating a payment record, and marking the order paid. If stock changes but the database process crashes before the other steps, the stored facts disagree about what happened.
 
-Here is a simplified checkout transaction:
+Another coordinated operation might subtract £100 from available credit, create a payment, and mark the order paid. In either case, the requirement is not simply that each individual row is valid. The changes must succeed together or not be committed at all.
 
-```sql
-BEGIN TRANSACTION;
+The logical sequence is to begin a transaction, perform the required operations, and commit only if all of them succeed. If a required operation fails, roll back the transaction. This sequence describes the transaction boundary; it is not a complete executable payment implementation.
 
-UPDATE orders
-SET status = 'paid'
-WHERE order_id = 417
-  AND status = 'pending';
+### Treat commit as the boundary
 
-INSERT INTO payments (payment_id, order_id, provider_reference, status, created_at)
-VALUES (9001, 417, 'pi_8K2...', 'authorized', SYSUTCDATETIME());
+Before `COMMIT`, the transaction's work is tentative. A successful commit makes the changes committed as a unit. `ROLLBACK` undoes the transaction instead of leaving an arbitrary subset of its steps committed.
 
-INSERT INTO order_events (order_id, event_type, created_at)
-VALUES (417, 'payment_authorized', SYSUTCDATETIME());
+For changes A, B, and C, a failure in C should not leave A and B independently accepted when the business operation requires all three. The database is maintaining one connected state change, not performing three unrelated file edits.
 
-COMMIT TRANSACTION;
-```
+The order example makes that requirement concrete. Customer 928 buys two units of product 42. A transaction can verify stock, create the order, create its order line, reduce inventory, and commit. If any required step fails, rollback prevents an incomplete order operation from remaining as the committed result.
 
-If the payment insert fails, a `paid` status by itself would mislead support, finance, and the customer. The transaction lets the database undo the whole group before it is permanent. That all-or-nothing behavior is one reason relational databases remain so useful for money, inventory, enrollment, approvals, and other workflows where partial state creates real support pain.
+The transaction boundary must correspond to the business operation. Merely putting some statements between transaction commands does not prove that the correct statements were included or that the business conditions were checked. Defining those conditions remains the application's responsibility.
 
-Behind that behavior sits the **transaction log**. The transaction log records database changes in order so the database can recover committed work after a failure and discard incomplete work. Azure SQL Database manages the service log files for you, and the concept still matters. The log supports transaction durability, crash recovery, replication features, and point-in-time restore.
+### Understand the four ACID properties
 
-Transactions also interact with concurrency. Concurrency means many requests touch the database at the same time. Two customers might buy the last item, two support agents might edit the same order, and a reporting query might read rows while checkout writes them. Azure SQL uses SQL Server database engine behavior to coordinate locks, row versions, isolation levels, and consistency rules. The beginner takeaway is practical: the app keeps transactions focused, avoids long pauses while a transaction stays open, and tests race conditions that matter to the business.
+**Atomicity** means the changes are handled as a unit. If A and B succeed but C fails, A and B should not remain committed on their own when they belong to the same transaction.
 
-The usual shorthand for transaction guarantees is **ACID**:
+**Consistency** means the committed result satisfies the database's declared rules. Foreign keys remain valid, unique keys remain unique, and constraints remain satisfied. In this context, consistency concerns valid state; it is not the same topic as choosing a freshness guarantee for globally replicated reads.
 
-- **Atomicity** means the grouped changes commit as a unit or roll back as a unit.
-- **Consistency** means a successful transaction leaves declared keys and constraints satisfied.
-- **Isolation** controls what concurrent transactions can observe and how they interfere.
-- **Durability** means a committed change survives ordinary infrastructure failure.
+**Isolation** governs interaction between concurrent transactions. Other work must not interfere arbitrarily with a transaction's reads and changes. The chosen isolation model determines what concurrent state can be observed and how conflicting work is coordinated.
 
-Isolation always involves a performance tradeoff. Allowing only one transaction at a time would make reasoning simple and throughput terrible. Real database engines permit concurrent work while using locks and row versions around contested state. A slow checkout can therefore be waiting for another transaction even when CPU is low. Useful database evidence includes blocking sessions, lock waits, deadlocks, query plans, data I/O, and transaction-log pressure—not CPU alone.
+**Durability** means successfully committed changes are preserved despite ordinary infrastructure failures. The system needs a recoverable record of what was committed, not merely modified memory that disappears with a process.
 
-The transaction log is the ordered durability record behind this behavior. The engine can acknowledge a commit after the required log information is durable, then bring data pages to their final state safely. During recovery, it uses the log to preserve committed work and discard incomplete work. A write-heavy system can consequently hit a log-throughput ceiling even while data-file I/O and CPU appear comfortable.
+These properties explain why a database engine includes more than table storage. It needs transaction management, concurrency control, logging, and recovery to uphold them.
 
-At this point, the Orders database can store valid records and protect multi-step changes. The next question moves outside the tables: how does the app reach the database safely?
+### Coordinate concurrent buyers
+
+Imagine stock is 1. Transaction A reads 1, and transaction B also reads 1 before either completes its purchase. Both conclude that they can sell the last unit. Without appropriate coordination, two sales can imply stock of -1.
+
+This is a concurrency problem. Database engines use mechanisms such as locks and row versioning, governed by isolation rules, to coordinate competing transactions. The key questions are what another transaction may observe and when both transactions may change the same state.
+
+Allowing only one transaction at a time would simplify some coordination but severely limit throughput. Database engines instead allow substantial concurrency while protecting relevant state where needed. Stronger coordination can introduce waiting and contention.
+
+That waiting can dominate performance even when CPU is not busy. Transaction A may block B, B may block C, and C may block D. An investigation that checks only processor utilization will miss the reason requests are slow. Waits, blocking, locks, deadlocks, query execution, I/O, and resource limits all belong in database observability.
+
+The stock example also shows why “the database supports transactions” is not enough by itself. The application must use a transaction and isolation approach that matches the competing operation. The engine supplies the coordination mechanisms; the application defines the state change that needs their protection.
+
+### Record committed work durably
+
+Changing a row can require updates to several internal storage pages. If the server crashes partway through those writes, the engine needs to determine which transactions committed and how to recover their state.
+
+A **transaction log** provides an ordered durable record for that purpose. Suppose account 42 changes from 500 to 400. The engine records the required transaction information durably before acknowledging commit, then persists data pages according to its storage and recovery mechanisms.
+
+This explains both a correctness mechanism and a performance limit. A write-heavy workload can saturate transaction-log throughput while CPU or ordinary data-file I/O still looks acceptable. The log is part of the work required to commit safely, not optional bookkeeping.
+
+In the Azure-hosted order system, an internet-facing web API can connect through a private endpoint using managed identity, then execute the transaction in `OrdersDB` under its logical server. The network path establishes reachability and the identity supplies credentials; the transaction inside the database coordinates the business changes. These mechanisms cooperate but do not replace one another.
+
+The resulting responsibility boundary is straightforward: Azure operates much of the database platform, while the application defines and uses the rules that keep orders correct. The next section follows how that application establishes a usable, appropriately authorized SQL session.
 
 ## How Do Connections, Identity, and Network Access Work?
-<!-- section-summary: A working Azure SQL connection needs the right database name, network path, authentication method, and database permissions. -->
 
-An Azure SQL connection has four parts: the endpoint name, the network path, the authentication method, and the database permissions. A connection string only names some of that story. Production failures often come from one of the other parts: DNS returns the wrong address, the firewall blocks the caller, the identity fails authentication, or the database user lacks permission to run the query.
+An application does not normally open Azure SQL data files. It establishes a SQL connection using a server name, database name, identity or credentials, and encryption settings. TCP, TLS, and the SQL protocol carry the session to the appropriate database, where the application sends commands.
 
-For the Orders API, a modern connection string might look like this:
+There are separate questions to answer: can packets reach the service, can the caller authenticate, and what is that caller authorized to do? A success at one layer does not imply success at the others.
 
-```ini
-Server=tcp:sql-orders-prod.database.windows.net,1433;
-Database=orders;
-Authentication=Active Directory Default;
-Encrypt=True;
-```
+### Follow the network path
 
-The server name points at the logical server. The database name points at the `orders` database. `Authentication=Active Directory Default` tells supported drivers to use Microsoft Entra authentication from the environment, which can include a managed identity when the app runs in Azure. `Encrypt=True` keeps the client connection encrypted.
+Azure SQL Database has a public endpoint architecture with server and database firewall policies controlling allowed source addresses. Connection attempts that do not match the relevant allowed rules are denied. A simple development arrangement might allow one specific client IP, while a production design should establish the network boundary its workload requires.
 
-The connection string values line up with Azure and database evidence. `Server` should match the logical server fully qualified domain name. `Database` should match the database resource and the catalog the app expects. `Authentication` should match the deployed runtime identity path. `Encrypt=True` should stay in place because Azure SQL expects encrypted client connections in normal production designs.
+The public connection begins through the Azure SQL gateway, rather than a hostname pointing permanently to one dedicated database VM. A simplified connection starts on TCP port `1433`. Depending on the connection policy, the gateway can proxy the session or redirect the client toward the infrastructure hosting the database.
 
-**Authentication** proves who is connecting. Azure SQL supports SQL authentication with SQL logins, and it also supports Microsoft Entra authentication. In production Azure apps, Microsoft Entra authentication with managed identity often gives a cleaner path because the app can connect without a database password stored in configuration. The App Service, Function App, Container Apps workload, VM, or AKS workload receives an Azure identity, and the database accepts that identity after the team configures the right Entra administrator and database user.
+Microsoft recommends **Redirect** where practical because it reduces latency and improves throughput. The important architectural point is the routing layer: the logical-server hostname is a managed endpoint, not proof that the client is connecting to a conventional customer-owned SQL Server machine.
 
-**Authorization** decides what that identity can do after it connects. Azure RBAC can control management actions on the Azure SQL resources, but data access inside the database still uses database permissions and roles. The Orders API identity might receive permission to execute stored procedures or read and write specific tables. A reporting identity may receive read access only. A migration identity may receive broader schema-change permissions during deployment, then those permissions can be removed or tightly controlled.
+A **private endpoint** provides a privately reachable address within the network design. The application reaches that private IP from its VNet path and connects to Azure SQL Database through Private Link. For a private-only architecture, public network access should also be disabled. Creating a private path and leaving a public path available are separate configuration decisions.
 
-The database user setup may look like this:
+DNS and routing must support the intended connection. An online database with broken private DNS is still unusable to the application. A private endpoint is therefore one component of reachability, not a guarantee that every client will automatically resolve and use it correctly.
 
-```sql
-CREATE USER [mi-orders-api-prod] FROM EXTERNAL PROVIDER;
-ALTER ROLE db_datareader ADD MEMBER [mi-orders-api-prod];
-ALTER ROLE db_datawriter ADD MEMBER [mi-orders-api-prod];
-```
+### Authenticate without confusing identity with permissions
 
-That example creates a database user for a Microsoft Entra identity and grants broad read/write roles. Many production teams go narrower than this over time. They create custom roles, grant access to selected schemas, or expose stored procedures for specific operations. The app identity needs database permissions alongside any Azure role on the server resource.
+Traditional SQL authentication uses a username and password. That is straightforward, but the application now has a secret that must be stored, protected, rotated, and distributed.
 
-**Network access** controls whether traffic can reach the logical server. Azure SQL databases reject connections unless the network rules allow them. A small development database may temporarily allow one office IP address through a server firewall rule. A production checkout database usually deserves a more controlled path, such as a private endpoint through Azure Private Link. With a private endpoint, the app resolves the normal SQL hostname to a private IP address inside the virtual network, and traffic reaches Azure SQL through that approved private path.
+Azure SQL Database also supports **Microsoft Entra authentication**. A Microsoft Entra administrator is configured on the logical server to establish Entra-based database identities. An Azure workload can then use a managed identity to obtain an access token rather than maintaining a long-lived database password.
 
-![Private Azure SQL connection path through managed identity, private DNS, private endpoint, logical server, and database permission checks](/content-assets/articles/article-cloud-providers-azure-storage-databases-azure-sql-database/azure-sql-private-access-path.png)
+For an App Service application using `OrdersDB`, the contrast is simple. A password design places values such as `DB_USERNAME` and `DB_PASSWORD` in application configuration. A managed-identity design uses the application's Azure identity and an Entra token.
 
-*This visual shows the connection path as four checks: the app needs the right name, network route, identity, and database permission before a SQL query can run.*
+In both designs, the database still needs authorization rules. Authentication answers who the caller is. Database permissions answer what the caller may do. Assigning an identity to an application is not the same action as granting that identity access to the required tables or operations.
 
-Private access adds DNS to the design. If `orders-api-prod` uses a private endpoint, the app still connects to `sql-orders-prod.database.windows.net`, and private DNS resolves that name to the private endpoint address for approved clients. If DNS points to the public address, the app may hit firewall errors even though the private endpoint exists. If DNS points to the private address from a network without a route there, the connection fails for a different reason.
+A web API that reads orders, creates orders, and updates order status usually does not need database-owner authority. A reporting service might need `SELECT` while having no reason to receive `DELETE`, `ALTER TABLE`, or `DROP DATABASE` permissions. Narrow permissions reduce the range of damage that an erroneous or compromised caller can cause.
 
-Connection pooling finishes the connection story. A **connection pool** keeps reusable database connections open for the application process. Opening a new database connection for every request wastes time and can exhaust database resources during traffic spikes. A pool lets the app reuse connections, but the team still needs limits. If every container instance opens too many connections, scaling the app can overload the database before CPU or memory looks busy.
+The complete production arrangement can therefore combine managed identity, database permissions, a private endpoint, and disabled public access. None of those controls substitutes for the others: identity establishes the caller, permissions limit actions, and the network establishes the allowed path.
 
-Now the app can reach the database. The next question is how much database capacity the team buys and what kind of performance shape it needs.
+### Reuse established connections
+
+Opening a database connection can require network setup, TLS negotiation, authentication, and SQL session initialization. Repeating all of that for every small query wastes time and resources under load.
+
+**Connection pooling** maintains reusable connections. A request borrows a connection, executes its work, and returns it to the pool. Another request can then reuse the established session instead of repeating the entire setup process.
+
+This is why a high-traffic pattern of opening, querying, and closing needs effective client-library pooling. The application-level lifecycle should cooperate with the pool rather than accidentally forcing every operation through a new physical connection.
+
+Managed availability does not mean every connection lasts forever. Failover, transient interruption, or a connection drop can still require sensible connection retry behavior. Pooling reduces repeated setup; retry handling addresses temporary failures. They solve different parts of reliable connectivity.
+
+### Verify the actual caller and path
+
+When the application cannot connect, separate the checks. Confirm the application is using the intended server and database. Establish whether authentication succeeds. Check firewall rules, any VNet-related access rules, private DNS, and routing for the intended network design. Then verify the database is online and the caller has the permissions needed for its command.
+
+A successful administrator connection proves only that the administrator's identity and path work. The application may use another identity or network route. Likewise, a successful connection does not prove that its query is permitted or that its transaction produces correct results.
+
+Following the application's own path provides stronger evidence than treating “database problem” as one undifferentiated diagnosis. Once the connection is usable, performance investigation can move to the resources and queries behind that session.
 
 ## How Do Service Tiers and Capacity Affect Performance?
-<!-- section-summary: Service tier and compute choices shape cost, latency, availability behavior, scaling options, and how the database handles growth. -->
 
-A **service tier** is the performance, storage, and availability shape of an Azure SQL database. It affects how much compute the database has, how storage behaves, which high availability architecture Azure uses, which features are available, and how the bill grows. The team chooses it from workload evidence rather than from a label that sounds mature.
+Database capacity has several dimensions: CPU, memory, data I/O, transaction-log write rate, worker threads, connections, and storage capacity. Buying more capacity should address an observed limit, not an undefined feeling that the database needs to be faster.
 
-The vCore purchasing model is usually the clearest place to start. A **vCore** is a virtual core of compute capacity. In this model, the team chooses a service tier, hardware configuration, compute amount, storage amount, and backup storage behavior. Older DTU-based choices still exist, but vCore maps more directly to the way many teams discuss CPU, memory, storage, and licensing.
+For example, CPU at 30% does not exclude a bottleneck. Transaction-log throughput could be saturated. Data I/O could also be the limiting resource while CPU remains nearly idle. Adding an index or increasing a processor allocation may not address the resource the workload is actually waiting for.
 
-The main vCore service tiers are **General Purpose**, **Business Critical**, and **Hyperscale**. General Purpose fits many standard business applications where balanced cost and managed availability matter. Business Critical targets lower-latency and higher-transaction workloads with a different architecture and replicas. Hyperscale uses a separate architecture designed for very large databases, fast storage scaling, and restore behavior with a different timing profile from traditional size-of-data restores.
+### Separate the purchasing model from the architecture
 
-These labels describe different platform architectures, not a simple small-medium-large ladder. **General Purpose** separates database compute from durable remote storage and is the balanced, cost-conscious starting point for many ordinary APIs and internal systems. **Business Critical** uses multiple database engine replicas and local SSD-oriented storage to target lower I/O latency and faster failover for demanding transaction workloads. **Hyperscale** separates compute more strongly from a distributed storage architecture so very large databases can grow and add read replicas without treating every compute change like a full movement of the database.
+Azure SQL Database offers **vCore-based** and **DTU-based** purchasing models. A vCore represents logical CPU capacity and exposes resource choices more directly. A database's capacity profile combines the service tier, hardware configuration, vCore count, and storage.
 
-The architecture should follow the bottleneck and recovery need:
+The **DTU**, or Database Transaction Unit, model bundles compute, memory, and I/O into a blended measure. Labels such as S2, S3, and P1 simplify purchasing but provide a less direct view of individual CPU and memory resources.
 
-| Workload evidence | Design question |
-| --- | --- |
-| Ordinary business workload with balanced latency and cost | Does General Purpose meet the measured query and availability needs? |
-| User-visible transaction latency remains sensitive after query and index work | Does Business Critical's storage and replica design justify its higher cost? |
-| Data volume grows into many terabytes or large-database restore and read scale dominate | Does Hyperscale's separated compute and storage model fit the operating requirements? |
-| Hundreds of small tenant databases spike at different times | Can an elastic pool share capacity economically without one tenant overwhelming the pool? |
+The purchasing model is not the entire architecture. A service tier determines broader storage, performance, scaling, and availability behavior. Two choices with a comparable-looking capacity number can still be built differently underneath.
 
-Capacity is multidimensional. A database can wait on CPU, memory, data I/O, transaction-log write rate, worker threads, connections, storage, or locks. `CPU = 30%` does not prove spare capacity when log I/O is saturated, and adding vCores does not fix a query that scans a billion rows because its predicate cannot use an index. The investigation should identify what the workload is waiting for before the team changes the SKU.
+### Compare the service tiers
 
-The DTU purchasing model bundles compute, memory, and I/O into an abstract capacity measure. The vCore model exposes compute and related choices more directly. Neither model removes the need for query evidence. Query Store, execution plans, wait information, blocking, connection counts, and Azure resource metrics explain whether the constraint lives in application SQL, concurrency, or the purchased service limit.
+**General Purpose** is the balanced, cost-conscious option for many ordinary relational workloads. Its architecture combines compute with durable premium remote storage and managed availability. Business applications, ordinary APIs, internal systems, and many standard OLTP databases are candidates if their latency and throughput requirements fit.
 
-For the Orders team, the first production database may begin in General Purpose with measured CPU, data I/O, log I/O, storage, and query duration alerts. If checkout traffic grows and write latency is a user-visible problem, the team can review whether query design, indexes, connection pooling, or Business Critical capacity gives the right improvement. If the database grows into many terabytes and restore-size concerns are central, Hyperscale deserves a more serious review.
+**Business Critical** targets workloads particularly sensitive to I/O latency and failover time, such as payment authorization, trading, and high-volume order processing. It uses multiple database-engine replicas with local SSD-oriented storage. The standard architecture described in Microsoft's service-tier guidance has four database-engine nodes: one primary and additional replicas using synchronous replication.
 
-Azure SQL Database also has **provisioned** and **serverless** compute choices in supported tiers. Provisioned compute keeps a fixed amount of compute allocated. Serverless compute can automatically scale within configured limits, and in some configurations it can auto-pause during inactive periods. Serverless can fit intermittent internal tools and development workloads nicely. A checkout path with steady traffic, strict latency expectations, or private networking behavior may prefer provisioned capacity after testing.
+That richer architecture costs more because it supplies more than a larger processor allocation. Storage locality and replica arrangements contribute to the performance and availability characteristics.
 
-"Serverless" does not mean SQL runs without physical servers. It means the team sets a compute range instead of continuously provisioning one fixed amount itself. When a supported General Purpose serverless database auto-pauses, the next connection must wait for the database to resume. That tradeoff can be acceptable for an internal tool used twice a day and unacceptable for a checkout API whose first customer request has a strict latency target. Hyperscale serverless and General Purpose serverless also do not have identical pause behavior, so the team must review the chosen tier rather than applying the word *serverless* as one universal promise.
+**Hyperscale** separates compute more strongly from durable storage. It addresses needs such as tens of terabytes of data, rapid compute scaling, multiple read replicas, and different large-database backup and restore behavior. The documented storage limit is up to 128 TB.
 
-Elastic pools solve a different capacity problem. An **elastic pool** lets multiple databases on one logical server share a pool of resources at a set price. This can fit SaaS products with one database per tenant, where most tenant databases sit quiet most of the time and only a few spike at once. One busy database can still create pressure, so teams monitor pool usage and per-database behavior rather than treating the pool as unlimited shared magic.
+```mermaid
+flowchart TD
+    A["Durable storage architecture"] --> B["Primary compute"]
+    A --> C["Read replica"]
+    A --> D["Another read replica"]
+    class A storage
+    class B,C,D workload
+```
 
-Capacity planning connects back to connections and queries. If the Orders API scales from two app instances to twenty, the database sees more concurrent work. If every request runs an unindexed query, a bigger service tier may only hide the issue for a while. Healthy database scaling includes query plans, indexes, connection pool limits, retry behavior, slow query tracking, and a clear cost review. After the team chooses a capacity shape, it still needs one unavoidable production habit: schema changes must move safely because live data keeps serving customers during the release.
+This separation means increasing compute does not necessarily require moving the entire database's data to a new machine. It enables more independent scaling of compute and storage, supports large data volumes and read-scale patterns, and changes some backup and restore economics.
 
-A useful capacity review ends with evidence rather than adjectives. Record the p50 and p95 query latency, CPU, data I/O, log I/O, worker and session pressure, storage growth, blocking time, and the slowest important query plans. Then change one relevant capacity or query variable and compare the same evidence. "Business Critical sounds faster" is a weak reason; "checkout waits on storage latency after the query plan and indexes were corrected, and the tested tier cuts p95 below the service objective" is a reviewable reason.
+| Service tier | Architectural emphasis |
+|---|---|
+| General Purpose | Balanced compute with durable remote storage |
+| Business Critical | Local SSD-oriented replicas, low I/O latency, and fast failover |
+| Hyperscale | More independent compute and storage scaling for large and growing databases |
 
-This keeps scaling connected to the relational contract. More compute can increase capacity, but it cannot invent a missing foreign key, make a logically incorrect update safe, or decide where one business transaction begins and ends. Azure manages the service machinery; the application team still owns correctness and the evidence used to change capacity.
+These descriptions explain why the tiers exist. They are not a universal ranking. The appropriate tier follows the workload's requirements and measured behavior.
 
-The same boundary applies to business logic. Azure can keep the engine healthy, but it cannot know that an authorized `UPDATE` set every salary or order total to the wrong value. Correct permissions, constraints, transaction boundaries, reviews, and recovery drills remain part of the application design.
+### Choose provisioned or serverless compute separately
 
-The data shape also keeps service choice honest. Azure SQL Database is natural when the hard requirement is relational integrity, joins, rich SQL, and coordinated transactions. Cosmos DB starts from document or key-based access, partitioning, and distributed scale. Blob Storage starts from a name mapped to bytes. An invoice system can use SQL for invoice ID, customer, date, amount, and payment status while storing the rendered PDF in Blob Storage. One service keeps structured truth; the other keeps the large document bytes.
+A **compute tier** is a different choice from the service tier. Provisioned compute keeps a selected amount of capacity continuously available and is a natural fit for steady demand.
 
-That combination is not duplication. The SQL row stores the exact blob name as part of the business record, and the application coordinates creation and repair through an idempotent workflow. The choice follows the contract of each state type instead of asking one database to be a filesystem or one object store to enforce relational rules.
+Serverless compute adjusts capacity within configured bounds and charges according to usage. It still runs on computers; Azure manages their allocation more dynamically instead of requiring a continuously fixed compute choice.
 
-The design stays understandable because each service has one clear responsibility and one recovery path.
+Serverless is available in the vCore model for General Purpose and Hyperscale. General Purpose serverless can auto-pause during qualifying inactivity and resume when work returns. Hyperscale serverless does not support auto-pause. This difference matters because “serverless” does not promise the same pause behavior in both service tiers.
 
-## How Do You Migrate Safely?
-<!-- section-summary: Migrations turn database changes into planned releases because persistent data survives container image replacement. -->
+A paused database must resume before it serves returning work. Applications requiring uniformly immediate responsiveness may prefer provisioned compute. The decision is about the workload's usage pattern and tolerance for that behavior, not merely whether automatic scaling sounds convenient.
 
-A **migration** is a controlled change to database schema or data. Application code changes often need new tables, columns, indexes, constraints, or backfilled values. The database already holds live business records, so the migration has to respect existing data and old application versions that may still run during a deployment.
+### Fix unnecessary work as well as resource limits
 
-The Orders team might add checkout-session tracking. The desired end state is a new `checkout_session_id` column on `orders`, a unique index for lookups, and application code that writes the value. A risky release tries to add the column as required, deploy new code, and remove old behavior all at once. A safer release breaks the change into steps.
-
-An additive migration might start like this:
+Consider a query like this:
 
 ```sql
-ALTER TABLE orders
-ADD checkout_session_id nvarchar(128) NULL;
-
-CREATE INDEX ix_orders_checkout_session_id
-ON orders(checkout_session_id)
-WHERE checkout_session_id IS NOT NULL;
+SELECT *
+FROM Orders
+WHERE LOWER(CustomerEmail) = 'alice@example.com';
 ```
 
-That first step gives the new code a place to write without breaking old rows. Then the team deploys application code that can handle rows with and without `checkout_session_id`. A background job backfills old rows if the business needs it. After monitoring confirms every active code path writes the new value, a later migration can tighten the rule, maybe by adding a constraint or changing the column requirement.
+Depending on the available schema and indexes, applying the function may prevent an efficient access path and lead to excessive scanning. If every request scans a billion rows, moving from 4 vCores to 32 vCores may reduce the symptom while preserving the wasteful work.
 
-This release style matters because a container rollback and a database rollback behave differently. A bad container image can usually be replaced with the previous image. A destructive database change may have already deleted a column, rewritten values, or locked a large table. The database needs migration reviews, staging tests with realistic data volume, backups that can restore to a usable place, and a clear plan for forward fixes.
+Performance reflects schema design, indexes, query design, concurrency behavior, resource capacity, and data distribution together. Cloud scaling adds options; it does not replace database engineering.
 
-Indexes deserve special attention during migrations. Adding an index can help a query, but it can also scan a large table, consume log space, and add write overhead. Changing a column type can touch every row. Adding a foreign key can validate existing data. These operations may behave quickly in a tiny development database and slowly in production. The team tests migrations against data volume that resembles production, then schedules high-impact changes with the same care as application releases.
+Useful runtime observations differ:
 
-Migrations change live data shape. That naturally leads to the recovery question: what happens when a migration, script, or bug writes the wrong data?
+| Observation | What it suggests investigating |
+|---|---|
+| CPU at 96% | Processor demand and expensive execution |
+| CPU at 30%, data I/O at 100% | Data access and I/O limits |
+| CPU at 15%, log write at 100% | Transaction-log demand and write limits |
+| Resource usage looks fine but sessions are blocked | Locks, waits, and transaction interaction |
 
-There is a second migration problem: moving an existing SQL Server workload into Azure SQL Database. That begins with **compatibility assessment**, not byte copying. A traditional SQL Server installation may depend on SQL Server Agent jobs, linked servers, Windows authentication, server-level configuration, or other instance features that Azure SQL Database intentionally does not expose.
+Azure SQL governs resources at database and pool levels. Reaching a resource ceiling can cause queuing and higher latency. Check the allocation the workload is actually using: a pool's aggregate capacity and an individual database's behavior are both relevant.
 
-The target should follow the dependency shape. SQL Server on an Azure VM preserves the most machine and instance control. Azure SQL Managed Instance keeps more instance-level compatibility while moving substantial platform work to Azure. Azure SQL Database provides the strongest database-level PaaS abstraction. Choosing Azure SQL Database makes sense when the application primarily needs a relational database and can remove or redesign its instance-level dependencies.
+### Measure success beyond an online resource
 
-A safe source migration separates several jobs:
+An Azure resource can report online while private DNS prevents the application from reaching it. A connection can work while every request takes 30 seconds due to blocking. Queries can run quickly while the application commits incorrect totals.
 
-1. Discover the databases and all external dependencies.
-2. Assess feature and schema compatibility with the proposed Azure target.
-3. Provision the target network, identity, capacity, and recovery settings.
-4. Move schema objects such as tables, indexes, views, constraints, and procedures.
-5. Move the row data and, for a low-downtime migration, keep later source changes synchronized.
-6. Validate row counts, constraints, query results, performance, permissions, and operational runbooks.
-7. Stop writes briefly, apply the final changes, switch application connections, and watch the target.
+Health evidence therefore needs to move toward the user outcome: the resource is healthy, the connection works, the query succeeds, the transaction succeeds, the business result is correct, and the user can check out.
 
-An offline migration can stop the application, copy the database, and restart against Azure when the data set and downtime allowance are small. A larger business system may need an initial transfer followed by ongoing synchronization and a short cutover window. In either case, "the copy completed" is not acceptance. Schema, data, security, performance, and business operations must all work on the target.
+Investigate the application, identity, network, database state, resource saturation, expensive queries, and concurrency behavior before accepting the result. The last check is business correctness, because a technically successful transaction can still represent the wrong operation.
+
+This same standard applies when moving a database to Azure. A completed transfer and an online target are only early pieces of migration evidence.
+
+## How Do You Migrate Safely?
+
+A migration begins by assessing compatibility, not by copying bytes. An existing SQL Server workload can include tables, views, stored procedures, SQL Server Agent jobs, server-level configuration, linked servers, Windows authentication, and other instance-level features.
+
+Azure SQL Database intentionally does not expose a full traditional SQL Server instance. Some dependencies may be unsupported or require redesign. Asking whether an MDF file can be copied to Azure therefore misses the central question: does the workload fit the database-level service abstraction?
+
+### Select the target after understanding dependencies
+
+Azure offers different SQL deployment models because applications need different levels of control. SQL Server on an Azure VM provides the most recognizable machine and instance environment. Azure SQL Managed Instance provides a more managed instance-oriented option. Azure SQL Database provides the strongest database-level PaaS abstraction among these choices.
+
+If an application heavily depends on instance behavior, Managed Instance or a SQL Server VM may be the more natural target. If it primarily needs a relational database and fits the database-level model, SQL Database can remove more platform operation from the team's responsibilities.
+
+The migration assessment must include more than tables. Jobs and server-scoped dependencies can be operationally essential even if the row data itself looks ordinary. Discovering them after cutover leaves the application moved but incomplete.
+
+### Follow an assessed migration sequence
+
+A sensible sequence is discovery, assessment, target selection, compatibility remediation, target provisioning, schema and data transfer, synchronization of remaining changes where applicable, validation, and application cutover.
+
+```mermaid
+flowchart TD
+    A["Discover and assess workload"] --> B["Choose target and resolve compatibility"]
+    B --> C["Provision target"]
+    C --> D["Move schema and data"]
+    D --> E["Synchronize remaining changes"]
+    E --> F["Validate target"]
+    F --> G["Cut over application"]
+    class A,B,F decision
+    class C,D,E control
+    class G workload
+```
+
+Azure Migrate can assist discovery, assessment, and sizing. Azure Database Migration Service is one of the migration services identified in Microsoft's guidance for transferring workloads to Azure SQL. The tooling supports the workflow, but it does not eliminate the need to assess what the application requires.
+
+The diagram includes synchronization because a source database can continue changing during a transfer. Whether that step is needed, and how it is carried out, depends on the migration method and downtime requirement. It should not be silently assumed that an initial copy is current at cutover.
+
+### Match the method to the downtime window
+
+For a small database with acceptable downtime, an offline approach can stop the application, export or copy data, import it into Azure SQL, change the connection string, and restart the application. The interruption is explicit and must fit the business requirement.
+
+A larger system may need a low-downtime approach. Perform an initial transfer, keep source changes synchronized, verify the target, then use a shorter cutover window to switch applications. Source and target consistency must be checked before treating the transfer as complete.
+
+These approaches solve the same migration problem under different availability constraints. “Low downtime” does not mean no preparation or no validation. It shifts much of the work ahead of the final switch and requires careful handling of changes that arrive during that work.
+
+### Validate schema, data, and application behavior
+
+**Schema migration** moves structures such as tables, indexes, foreign keys, views, and stored procedures. **Data migration** moves the facts stored in those structures—for example, 2 TB of row data.
+
+A target containing rows but missing required constraints or indexes is not equivalent to the source. A target containing all structures but missing recent data is not equivalent either. Both aspects need verification.
+
+Security, application compatibility, performance, connection changes, and operational readiness are also part of the migration. A transfer that technically succeeds but leaves the application ten times slower is not a successful production result.
+
+Validation should exercise the application's own identity, network path, queries, and transactions. The same checkout operation used to explain the data model can demonstrate whether the target supports the intended business workflow. Merely showing that an administrator can connect does not establish that result.
+
+Capacity selection also belongs here. The target may use a different managed architecture from the original SQL Server installation. Assessment and measured behavior should guide the service tier and allocation, rather than assuming that a superficially similar number of processors guarantees the same result.
+
+### Include the rest of the application state
+
+SQL is often only one part of the application. Blob Storage may contain documents, Redis may hold cached state, Service Bus may contain queued work, and Key Vault may hold secrets used by the system.
+
+This matters during recovery as well as migration. Restoring SQL to 10:00 while every other component remains at 10:30 can create cross-system inconsistency. The database's recovered rows may refer to work or documents whose surrounding state reflects a later time.
+
+Ask which systems together represent one business state. Database migration and point-in-time restore address the SQL portion. Application readiness requires considering the connected components and the operations that use them.
+
+This is a useful bridge to recovery planning. Moving a database and restoring a database both require more than producing a target resource: the application must connect, interpret its state correctly, and complete the intended business operations.
 
 ## How Do Backup and Restore Protect the Database?
-<!-- section-summary: Azure SQL automated backups support point-in-time restore, but recovery still needs retention choices, restore drills, and careful repair decisions. -->
 
-**Backup** is the stored recovery material Azure SQL keeps for the database. **Restore** is the process of creating a usable database from that material. Azure SQL Database automatically performs full, differential, and transaction log backups so a database can restore to a point in time within the configured retention period.
+High availability and backup address different failures. If a machine serving the database fails, the service should continue through healthy infrastructure or replicas. If an authorized statement deletes the wrong data and commits, those same availability mechanisms should preserve and reproduce the committed change.
 
-High availability and backup solve different failures. If the infrastructure serving a healthy database fails, Azure's service architecture can move work to healthy capacity. If an authorized script commits `DELETE FROM customers`, healthy replicas can faithfully copy that deletion. Availability protects service continuity after component failure; backups preserve an earlier data state after logical damage. Applications should still retry transient connection failures because a managed failover does not promise that every existing TCP session survives.
+For example, this statement is a destructive illustration, not an instruction to run:
 
-Point-in-time restore, often called **PITR**, helps when the problem is logical corruption rather than hardware failure. Logical corruption means the database service stayed healthy, but the data became wrong. A migration set every paid order to `cancelled`, an admin script updated the wrong tenant, or a bug inserted duplicate payment events. The database needs a way to recover the data state around the moment before the bad write.
-
-
-![Azure SQL migration and point-in-time restore flow from good state to bad migration, restored copy, comparison, and active database repair](/content-assets/articles/article-cloud-providers-azure-storage-databases-azure-sql-database/azure-sql-migration-pitr.png)
-
-*This visual shows the recovery loop after a bad change: restore a copy from before the problem, compare rows, then repair the active database with care.*
-
-For new, restored, and copied databases, Azure SQL Database keeps enough backups for point-in-time restore for the last seven days by default. Teams can configure short-term retention, commonly up to thirty-five days for Azure SQL Database. Microsoft documentation also describes regular full, differential, and log backups for the backup chain. Hyperscale uses its own snapshot-based backup architecture, so teams check Hyperscale-specific behavior before assuming every detail matches non-Hyperscale databases.
-
-A restore usually creates another database rather than rewinding the active one in place. If the Orders team discovers at 14:20 that a 14:05 migration corrupted order statuses, it might restore a copy named `orders-restore-1404`. The team can compare the restored copy with the active database and choose the recovery path. Sometimes the app points to the restored database. Often the safer path is surgical repair: copy the affected rows back after careful review, while preserving valid transactions that happened after 14:05.
-
-Long-term retention solves a different problem. Short-term PITR covers recent mistakes. **Long-term retention**, often shortened to LTR, can keep selected full backups for months or years for compliance or audit needs. LTR complements a practical incident restore plan. It gives the team older recovery points, and the team still proves that restored data can become useful during a real event.
-
-Backups also connect to cost and deletion. Backup storage consumes money, and retained backups can remain after a database is deleted until the retention period ages out. This is usually a good safety feature, but it surprises teams that expect cost to disappear the moment they delete a database. Production cleanup includes a backup retention review.
-
-The most important recovery habit is a restore drill. A restore drill means the team actually restores a database, checks how long it takes, checks who can access it, checks whether application configuration can point to it if needed, and practices the repair decision. Backups that nobody has restored are only a hope. A tested restore path gives the team evidence.
-
-Regional disaster recovery adds another boundary. Active geo-replication and failover groups can maintain a secondary database in another Azure region. Cross-region replication is normally asynchronous because waiting for a distant region before every commit would add network latency to every transaction. The design therefore needs a recovery point objective: during a forced failover, how much recently committed data could be missing from the secondary? A graceful synchronized failover and a forced regional-disaster failover do not make the same data-loss promise.
-
-SQL may also be only one part of the business state. The Orders system uses Blob Storage for receipts and Service Bus for deferred work. Restoring SQL to 14:04 while blobs and queued messages remain at 14:20 can create cross-service inconsistency. A database restore drill should state which other services must be reconciled so the recovered application represents one coherent business moment.
-
-Here is the concrete shape of that drill from Azure CLI. The restore point is the moment before the bad migration. The destination name makes it obvious that this is a separate database for comparison instead of an in-place rewind of production.
-
-```bash
-az sql db str-policy show \
-  --resource-group rg-orders-prod-weu \
-  --server sql-orders-prod \
-  --name orders \
-  --query "{retentionDays:retentionDays}"
-
-az sql db restore \
-  --resource-group rg-orders-prod-weu \
-  --server sql-orders-prod \
-  --name orders \
-  --dest-name orders-restore-1404 \
-  --time "2026-06-11T14:04:00"
+```sql
+DELETE FROM Customers;
 ```
 
-The first command checks whether the short-term retention window can even cover the incident time. The second command creates `orders-restore-1404` as a new target. The recovery team then grants access to the reviewer identity, compares affected rows, and decides whether to point an app at the restored database or copy a small repaired data set back into the active database.
+A healthy replica does not know that the deletion was unintended. Recovering the previous customer data requires historical state, not just another copy of the latest database.
 
-The healthy result is a separate database that the team can inspect without overwriting production. The restore command should return a database name like `orders-restore-1404`, a status that moves toward `Online`, and the same logical server unless the runbook intentionally restores somewhere else. If the retention command returns fewer days than the incident age, the team should stop and choose another recovery source instead of running a restore that cannot reach the target timestamp.
+### Rely on managed availability without assuming permanent connections
 
-The read-back check confirms that the restored database exists as a separate target:
+Azure SQL Database manages local infrastructure availability. The exact storage and replica mechanisms differ among General Purpose, Business Critical, and Hyperscale. You do not need to construct SQL Server failover clustering on VMs merely to use the database service.
 
-```bash
-az sql db show \
-  --resource-group rg-orders-prod-weu \
-  --server sql-orders-prod \
-  --name orders-restore-1404 \
-  --query "{name:name,status:status,creationDate:creationDate,currentServiceObjectiveName:currentServiceObjectiveName}" \
-  --output table
+Applications must still expect transient interruptions. Connections can drop, failovers can occur, and sessions may need to be reestablished. Sensible connection retry logic remains necessary even though Azure manages the underlying availability machinery.
+
+This distinction is important operationally. The service can meet its availability design while an application that never recovers a dropped connection continues failing. Managed infrastructure and resilient client behavior work together.
+
+### Restore a recent point in time
+
+Azure SQL Database automatically creates the backup information required for point-in-time recovery. For General Purpose and Business Critical, the workflow includes full, differential, and transaction-log backups. Short-term retention is generally configurable from 1 to 35 days, with 7 days as the default.
+
+The team does not normally schedule a nightly `BACKUP DATABASE` to a local disk as it might on a self-managed SQL Server machine. Azure owns the underlying automated workflow; the team still chooses retention and recovery objectives appropriate to the application.
+
+Suppose a bad script runs at 14:03:00. At 14:05:00, the team discovers that 100,000 rows were corrupted. The useful recovery request is for the database state immediately before the script, approximately 14:02:59.
+
+**Point-in-time restore**, or PITR, restores that state into a **new database**. It does not rewind the running database in place. The new database allows the team to inspect the recovered state before deciding how the application should use it.
+
+```mermaid
+flowchart LR
+    A["Current database"] --> B["Backup and log history"]
+    B --> C["Select 14:02:59"]
+    C --> D["New restored database"]
+    D --> E["Validate data and application access"]
+    class A,B,D storage
+    class C decision
+    class E workload
 ```
 
-Example output:
+The time selection, restore operation, and validation are distinct steps. A successful restore operation establishes that Azure produced a database from the selected history. It does not establish that the chosen time was correct or that the application is ready to use the restored resource.
 
-```console
-Name                 Status    CreationDate          CurrentServiceObjectiveName
--------------------  --------  --------------------  ---------------------------
-orders-restore-1404  Online    2026-06-11T14:19:31Z  GP_Gen5_4
-```
+### Keep longer history when required
 
-### Putting It All Together
-<!-- section-summary: A healthy Azure SQL design connects relational modeling, secure access, capacity, migrations, and recovery into one production habit. -->
+Short-term PITR addresses recent operational mistakes. A different requirement might be to keep annual backups for seven years. **Long-Term Retention**, or LTR, can retain selected full backups for up to ten years.
 
-Azure SQL Database is the Azure service to learn first when an application has relational business records. The Orders team uses it because customers, orders, line items, payments, shipments, refunds, and support workflows all connect. Tables give those facts shape. Keys and constraints protect relationships. Transactions keep multi-step checkout changes together. SQL queries let support, reporting, and application code ask useful questions across the data.
+PITR and LTR should therefore be described separately. One supplies recent operational recovery points; the other preserves selected backups over a much longer historical period. Choosing long retention does not remove the need to know how the application would recover from a mistake this afternoon.
 
-The managed service removes a lot of infrastructure work, but the team still has real database ownership. The logical server needs secure network and identity configuration. The database needs careful schema design, indexes, and permissions. The app needs connection pooling and retry behavior that respect database limits. The service tier needs to match actual workload pressure. Migrations need staged releases because persistent data survives stateless compute replacement. Backup settings need restore drills because recovery only matters when the restored data is usable.
+Microsoft recommends periodic recovery drills for mission-critical LTR scenarios. Retained backup history is valuable only if the team can turn it into usable recovered state when required.
 
-A good production review for Azure SQL follows one request through the system. The customer clicks checkout. The API connects through the approved network path with its managed identity. The database user has only the permissions the app needs. The checkout transaction writes order, payment, and event rows together. Indexes support the next read path. Monitoring catches slow queries and capacity pressure. A migration process evolves the schema safely. PITR and retention settings give the team a tested recovery path when a human or script makes a bad change.
+### Test recovery through a business operation
 
-Beginners can keep that full shape in mind. Azure SQL Database gives you a managed SQL engine, and the application team still designs the data, access, release, performance, and recovery story around it.
+A useful drill follows the whole chain: confirm the backup exists, perform the restore, verify database access, check users and permissions, connect the application, inspect logical data correctness, and complete a business operation.
 
-![Azure SQL production review summary with schema rules, transactions, secure access, capacity, migrations, restore drills, and app ownership](/content-assets/articles/article-cloud-providers-azure-storage-databases-azure-sql-database/azure-sql-production-review.png)
+Each step can uncover a different failure. The restore may succeed while the application identity lacks access. Connectivity may work while the selected recovery time still contains the bad update. Data may look reasonable while connected systems remain at an incompatible point in time.
 
-*This final review board summarizes the production responsibilities around Azure SQL: schema rules, transactions, secure access, capacity planning, migration safety, and restore drills.*
+The order system provides a concrete acceptance test. Can the intended application identity reach the recovered database through its intended network path? Can it read the correct customer and order relationships? Does the relevant transaction produce the expected result? These checks turn “we have backups” into evidence that recovery works.
 
-### What's Next
+Recovery is therefore larger than a storage operation. It includes permissions, network configuration, application configuration, and the business meaning of the restored data. A backup that has never been restored represents an expectation; a completed drill tests that expectation.
 
-Next we look at Cosmos DB, where the main design question changes from relational records and transactions to item-shaped data, partition keys, request units, TTL, and consistency choices. The same Orders system can use Cosmos DB for temporary checkout or idempotency records, so the next article shows what changes when the app reads and writes known items instead of joining relational tables.
+### Plan separately for a regional failure
 
----
+Local availability mechanisms address failures within a region. A major regional outage introduces another failure domain and may require a database in another region.
+
+Azure SQL Database supports active geo-replication for individual databases and failover groups for coordinated patterns across databases, with stable listener endpoints. A primary in region A can asynchronously replicate to a secondary in region B.
+
+Asynchronous replication avoids requiring every commit to wait for a round trip across regions. A transaction committed in London would otherwise inherit the network delay of traveling to another region and back before acknowledgment.
+
+The trade-off is a possible gap: the primary has transaction X while the secondary has not yet received it. If the primary region is lost during that window, forced disaster-recovery failover can lose some recent data. A graceful synchronized failover and a forced failover with possible data loss are different operations.
+
+This is a **Recovery Point Objective**, or RPO, decision: how much recent state can the recovery plan tolerate losing? The business requirement must guide the replication and failover plan. Merely configuring a second region does not answer that question.
+
+### Bring the design back to its core requirements
+
+An Azure SQL design should explain six things: the truths enforced by the schema; the changes that must be atomic; the identities allowed to connect; the networks from which they can connect; the capacity model; and the response to infrastructure failure or human error.
+
+These questions connect tables and constraints to transaction boundaries, managed identity and permissions to firewall or private paths, databases and pools to service tiers, and local availability to PITR, LTR, geo-replication, failover, and tested recovery.
+
+The service can be understood in three layers. Relational state contains customers, orders, payments, products, keys, constraints, transactions, and indexes. The SQL engine parses and optimizes queries, coordinates concurrency, writes the transaction log, and recovers committed state. The managed Azure platform supplies compute, storage, replication, patching, endpoints, backup, availability, and service management.
+
+The application mostly designs the first layer, relies on SQL technology for the second, and configures and uses the Azure-managed third layer. That boundary explains both the service's value and its limits.
+
+Choose Azure SQL Database when related facts and their state changes need to remain correct under concurrent use. Then judge the result by the application's behavior, not only by whether a resource exists: the correct caller can connect, the intended transaction succeeds, the resulting state is valid, and the team can recover that state after a failure or mistake.
 
 ## Check Your Answers
 
 :::expand[What Is Azure SQL Database?]{kind="recap"}
-Azure SQL Database is the managed Azure home for relational records that need SQL, rules, transactions, and recovery.
+Azure SQL Database provides a relational database engine as a managed platform service. The engine handles structured queries, concurrency, transactions, logging, and storage. Azure operates much of the platform, while the application team owns schema, business rules, queries, permissions, capacity decisions, and recovery requirements. Blob Storage and Cosmos DB serve different data-access needs.
 :::
 
 :::expand[How Do Logical Servers and Databases Organize Access?]{kind="recap"}
-The logical server gives Azure a management and connection boundary, while each database owns schema, data, compute choices, and backup settings.
+A logical server supplies a namespace and administrative boundary, not a VM or traditional SQL Server instance. A single database has its own managed capacity characteristics. An elastic pool lets multiple databases share resources, which can suit customers whose workloads peak at different times. Sharing a logical server does not guarantee physical colocation.
 :::
 
 :::expand[How Do Tables, Keys, and Constraints Protect Data?]{kind="recap"}
-Tables store the facts, while keys and constraints keep relationships valid even when bugs, retries, or scripts try to write bad data.
+Tables declare the structure of facts. Primary keys establish identity, foreign keys enforce valid relationships, and constraints restrict invalid values. Indexes help locate data efficiently but require storage and write maintenance. Together, these mechanisms let several applications rely on rules enforced at the data layer rather than only in individual code paths.
 :::
 
 :::expand[How Do Transactions Preserve Correctness?]{kind="recap"}
-Transactions let a checkout change several tables as one unit, so the database avoids half-written business events.
+Transactions group related changes so they commit together or roll back. ACID describes atomicity, valid state, concurrency isolation, and durability. Locks and row versioning help coordinate competing work, while the transaction log records committed changes for recovery. The application still has to define the correct transaction boundary and business conditions.
 :::
 
 :::expand[How Do Connections, Identity, and Network Access Work?]{kind="recap"}
-A working Azure SQL connection needs the right database name, network path, authentication method, and database permissions.
+A SQL session needs a usable network path, valid authentication, and appropriate database permissions. Public firewall controls and private endpoints govern reachability. SQL credentials or Entra identities authenticate callers, and managed identity can remove a long-lived application password. Connection pools reuse sessions, while retry handling addresses transient connection failures.
 :::
 
 :::expand[How Do Service Tiers and Capacity Affect Performance?]{kind="recap"}
-Service tier and compute choices shape cost, latency, availability behavior, scaling options, and how the database handles growth.
+Capacity includes CPU, memory, data I/O, log throughput, workers, connections, and storage. General Purpose, Business Critical, and Hyperscale provide different architectures; provisioned and serverless describe compute allocation. Runtime metrics, query behavior, and blocking identify actual limits. More vCores do not automatically repair wasteful queries or incorrect transactions.
 :::
 
 :::expand[How Do You Migrate Safely?]{kind="recap"}
-Migrations turn database changes into planned releases because persistent data survives container image replacement.
+Assess dependencies and compatibility before choosing SQL Database, Managed Instance, or a SQL Server VM. Move both schema and data, synchronize changes where needed, and validate identity, network access, performance, and business behavior before cutover. Offline and low-downtime methods fit different interruption windows. Connected application systems also belong in readiness and recovery planning.
 :::
 
 :::expand[How Do Backup and Restore Protect the Database?]{kind="recap"}
-Azure SQL automated backups support point-in-time restore, but recovery still needs retention choices, restore drills, and careful repair decisions. A healthy Azure SQL design connects relational modeling, secure access, capacity, migrations, and recovery into one production habit.
+Availability preserves service through infrastructure failures; backup preserves historical state after wrong changes. PITR creates a new database for a recent recovery point, while LTR retains selected backups longer. Regional replication addresses another failure domain and asynchronous failover can involve data loss. Recovery is proven by restoring and completing the intended application operation.
 :::
 
 ## References
 
-* [What is Azure SQL Database?](https://learn.microsoft.com/en-us/azure/azure-sql/database/sql-database-paas-overview?view=azuresql) - Official overview of Azure SQL Database as a managed database service, including backups, scaling, and platform responsibilities.
-* [Logical server in Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/logical-servers?view=azuresql) - Explains the logical server boundary and how it differs from an on-premises SQL Server instance.
-* [vCore purchasing model](https://learn.microsoft.com/en-us/azure/azure-sql/database/service-tiers-sql-database-vcore?view=azuresql) - Documents General Purpose, Business Critical, Hyperscale, compute, storage, and availability differences.
-* [Azure SQL Database serverless](https://learn.microsoft.com/en-us/azure/azure-sql/database/serverless-tier-overview?view=azuresql) - Describes automatic compute scaling and auto-pause behavior for supported serverless configurations.
-* [Azure Private Link for Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/private-endpoint-overview?view=azuresql) - Explains private endpoints and private DNS behavior for SQL connectivity.
-* [Microsoft Entra authentication with Azure SQL](https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-overview?view=azuresql) - Covers Microsoft Entra authentication, administrators, users, and identity behavior.
-* [Authorize database access to Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/logins-create-manage?view=azuresql) - Describes contained database users, groups, roles, and database permissions.
-* [Automated backups in Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/automated-backups-overview?view=azuresql) - Documents short-term retention, backup frequency, backup storage, and restore support.
-* [Restore a database from backups](https://learn.microsoft.com/en-us/azure/azure-sql/database/recovery-using-backups?view=azuresql) - Explains point-in-time restore operations and restore considerations.
-* [az sql db restore](https://learn.microsoft.com/en-us/cli/azure/sql/db?view=azure-cli-latest#az-sql-db-restore) - Azure CLI reference for restoring a database to a new destination from a backup.
-* [az sql db str-policy](https://learn.microsoft.com/en-us/cli/azure/sql/db/str-policy?view=azure-cli-latest) - Azure CLI reference for checking and setting short-term backup retention.
-* [Long-term retention backups](https://learn.microsoft.com/en-us/azure/azure-sql/database/long-term-retention-overview?view=azuresql) - Documents long-term retention for selected full backups.
+1. [Azure SQL Database PaaS overview](https://learn.microsoft.com/en-us/azure/azure-sql/database/sql-database-paas-overview?view=azuresql)
+2. [Logical servers](https://learn.microsoft.com/en-us/azure/azure-sql/database/logical-servers?view=azuresql)
+3. [Single database overview](https://learn.microsoft.com/en-us/azure/azure-sql/database/single-database-overview?view=azuresql)
+4. [Network access controls](https://learn.microsoft.com/en-us/azure/azure-sql/database/network-access-controls-overview?view=azuresql)
+5. [Connectivity architecture](https://learn.microsoft.com/en-us/azure/azure-sql/database/connectivity-architecture?view=azuresql)
+6. [Private Link overview](https://learn.microsoft.com/en-us/azure/azure-sql/database/private-endpoint-overview?view=azuresql)
+7. [Microsoft Entra authentication](https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-overview?view=azuresql)
+8. [Purchasing models](https://learn.microsoft.com/en-us/azure/azure-sql/database/purchasing-models?view=azuresql)
+9. [vCore service tiers](https://learn.microsoft.com/en-us/azure/azure-sql/database/service-tiers-sql-database-vcore?view=azuresql)
+10. [Hyperscale FAQ](https://learn.microsoft.com/en-us/azure/azure-sql/database/service-tier-hyperscale-frequently-asked-questions-faq?view=azuresql)
+11. [Hyperscale service tier](https://learn.microsoft.com/en-us/azure/azure-sql/database/service-tier-hyperscale?view=azuresql)
+12. [Serverless compute tier](https://learn.microsoft.com/en-us/azure/azure-sql/database/serverless-tier-overview?view=azuresql)
+13. [Resource management](https://learn.microsoft.com/en-us/azure/azure-sql/database/resource-limits-logical-server?view=azuresql)
+14. [Long-term retention overview](https://learn.microsoft.com/en-gb/azure/azure-sql/database/long-term-retention-overview?view=azuresql-mi)
+15. [Long-term retention and recovery drills](https://learn.microsoft.com/en-us/azure/azure-sql/database/long-term-retention-overview?view=azuresql)
+16. [Configure geo-replication and failover](https://learn.microsoft.com/en-us/azure/azure-sql/database/active-geo-replication-configure-portal?view=azuresql)
+17. [Disaster recovery guidance](https://learn.microsoft.com/en-us/azure/azure-sql/database/disaster-recovery-guidance?view=azuresql)
+18. [Migration assessment rules](https://learn.microsoft.com/en-us/data-migration/sql-server/database/assessment-rules)
+19. [Migrate from SQL Server](https://learn.microsoft.com/en-us/data-migration/sql-server/overview)
+20. [SQL Server to Azure SQL Database migration guide](https://learn.microsoft.com/en-us/azure/azure-sql/database/migrate-to-database-from-sql-server?view=azuresql)
+21. [Reliability in Azure SQL Database](https://learn.microsoft.com/en-us/azure/reliability/reliability-sql-database)

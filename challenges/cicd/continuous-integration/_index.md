@@ -1,8 +1,8 @@
 ---
 title: "Continuous Integration"
-description: "Build a reproducible pull-request workflow with locked dependencies, tests, caching, and least privilege."
+description: "Construct trustworthy validation, diagnose hidden dependencies, restore reproducibility, and improve feedback without bypassing checks."
 articleId: article-cicd-fundamentals-continuous-integration
 difficulty: medium
-order: 1
-tags: [ci, github-actions, nodejs, pull-request]
+order: 0
+tags: [ci, pipelines, runners, dependencies, parallelism]
 ---

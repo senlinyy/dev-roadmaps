@@ -1,0 +1,246 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/etc": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/systemd": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/systemd/system": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/orders": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr/bin": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr/lib": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr/lib/systemd": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr/lib/systemd/system": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/orders": {
+      "type": "dir",
+      "owner": "app",
+      "group": "app",
+      "mode": 493
+    },
+    "/usr/bin/node": {
+      "type": "file",
+      "content": "Authored Node executable.\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/orders/server.js": {
+      "type": "file",
+      "content": "console.log('orders application');\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    },
+    "/etc/orders/app.env": {
+      "type": "file",
+      "content": "NODE_ENV=production\nPORT=3000\nLOG_LEVEL=info\nDATABASE_URL=\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 384
+    },
+    "/etc/systemd/system/orders.service": {
+      "type": "file",
+      "content": "[Unit]\nDescription=Orders API\nStartLimitIntervalSec=60\nStartLimitBurst=3\n\n[Service]\nType=simple\nRestart=on-failure\nRestartSec=5s\nUser=app\nGroup=app\nWorkingDirectory=/srv/orders\nEnvironmentFile=/etc/orders/app.env\nExecStart=/usr/bin/node /srv/orders/server.js\n\n[Install]\nWantedBy=multi-user.target\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev"
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "deploy",
+        "uid": 2001,
+        "primaryGroup": "app"
+      }
+    ],
+    "umask": 18
+  },
+  "system": {
+    "services": [],
+    "manager": {
+      "units": [
+        {
+          "name": "orders.service",
+          "state": "failed",
+          "result": "start-limit-hit",
+          "workload": {
+            "command": "/usr/bin/node /srv/orders/server.js",
+            "requiredEnv": {
+              "NODE_ENV": "production",
+              "DATABASE_URL": "postgres://orders@db.internal/orders"
+            },
+            "readPaths": [
+              "server.js"
+            ],
+            "message": "Orders API initialized; listening on the configured port."
+          }
+        }
+      ],
+      "journal": [
+        {
+          "unit": "orders.service",
+          "at": -20,
+          "boot": 0,
+          "priority": 3,
+          "message": "Application: missing or invalid DATABASE_URL. Main process exited, code=exited, status=1/FAILURE."
+        },
+        {
+          "unit": "orders.service",
+          "at": -5,
+          "boot": 0,
+          "priority": 3,
+          "message": "Start request repeated too quickly. Failed with result start-limit-hit."
+        },
+        {
+          "unit": "orders.service",
+          "at": -8000,
+          "boot": -1,
+          "priority": 3,
+          "message": "Previous boot: old release executable missing."
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "systemctl"
+    ],
+    "expectedUnits": [
+      {
+        "name": "orders.service",
+        "label": "Orders API",
+        "state": "active",
+        "currentDefinition": true,
+        "currentProcess": true,
+        "before": [
+          "journal"
+        ],
+        "properties": [
+          "ActiveState",
+          "Result",
+          "Restart",
+          "RestartUSec",
+          "NRestarts"
+        ],
+        "loaded": {
+          "Service.Restart": "on-failure",
+          "Service.RestartSec": "5s",
+          "Unit.StartLimitIntervalSec": "60",
+          "Unit.StartLimitBurst": "3"
+        },
+        "process": {
+          "user": "app",
+          "env": {
+            "DATABASE_URL": "postgres://orders@db.internal/orders"
+          }
+        },
+        "stableSeconds": 10
+      }
+    ],
+    "expectedFs": {
+      "/etc/systemd/system/orders.service": {
+        "contentEquals": "[Unit]\nDescription=Orders API\nStartLimitIntervalSec=60\nStartLimitBurst=3\n\n[Service]\nType=simple\nRestart=on-failure\nRestartSec=5s\nUser=app\nGroup=app\nWorkingDirectory=/srv/orders\nEnvironmentFile=/etc/orders/app.env\nExecStart=/usr/bin/node /srv/orders/server.js\n\n[Install]\nWantedBy=multi-user.target\n"
+      },
+      "/etc/orders/app.env": {
+        "modeEquals": 384,
+        "ownerEquals": "root",
+        "contentContains": "DATABASE_URL=postgres://orders@db.internal/orders",
+        "contentEquals": "NODE_ENV=production\nPORT=3000\nLOG_LEVEL=info\nDATABASE_URL=postgres://orders@db.internal/orders\n"
+      }
+    }
+  }
+}

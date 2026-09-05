@@ -1,0 +1,51 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/var/log/orders/status-sample.log": {
+      "type": "file",
+      "content": "14:01:00 192.0.2.10 GET /items/0 200 503\n14:01:01 192.0.2.10 GET /items/1 401 840\n14:01:02 192.0.2.10 GET /items/2 200 840\n14:01:03 192.0.2.10 GET /items/3 404 840\n14:01:04 192.0.2.10 GET /items/4 200 840\n14:01:05 192.0.2.10 GET /items/5 401 840\n14:01:06 192.0.2.10 GET /items/6 200 840\n14:01:07 192.0.2.10 GET /items/7 503 840\n14:01:08 192.0.2.10 GET /items/8 200 840\n14:01:09 192.0.2.10 GET /items/9 200 840\n14:01:10 192.0.2.10 GET /items/10 404 840\n14:01:11 192.0.2.10 GET /items/11 200 840\n14:01:12 192.0.2.10 GET /items/12 401 840\n14:01:13 192.0.2.10 GET /items/13 200 840\n14:01:14 192.0.2.10 GET /items/14 200 840\n14:01:15 192.0.2.10 GET /items/15 401 840\n14:01:16 192.0.2.10 GET /items/16 200 840\n14:01:17 192.0.2.10 GET /items/17 200 840\n14:01:18 192.0.2.10 GET /items/18 200 840\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "head",
+      "sort",
+      "uniq"
+    ],
+    "expectedResults": [
+      {
+        "label": "status-log sample",
+        "commands": [
+          "head"
+        ],
+        "stdoutEquals": "14:01:00 192.0.2.10 GET /items/0 200 503\n14:01:01 192.0.2.10 GET /items/1 401 840\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "complete descending status ranking",
+        "commands": [
+          "sort"
+        ],
+        "stdoutEquals": "12 200\n4 401\n2 404\n1 503\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/var/log/orders/status-sample.log": {
+        "type": "file",
+        "contentEquals": "14:01:00 192.0.2.10 GET /items/0 200 503\n14:01:01 192.0.2.10 GET /items/1 401 840\n14:01:02 192.0.2.10 GET /items/2 200 840\n14:01:03 192.0.2.10 GET /items/3 404 840\n14:01:04 192.0.2.10 GET /items/4 200 840\n14:01:05 192.0.2.10 GET /items/5 401 840\n14:01:06 192.0.2.10 GET /items/6 200 840\n14:01:07 192.0.2.10 GET /items/7 503 840\n14:01:08 192.0.2.10 GET /items/8 200 840\n14:01:09 192.0.2.10 GET /items/9 200 840\n14:01:10 192.0.2.10 GET /items/10 404 840\n14:01:11 192.0.2.10 GET /items/11 200 840\n14:01:12 192.0.2.10 GET /items/12 401 840\n14:01:13 192.0.2.10 GET /items/13 200 840\n14:01:14 192.0.2.10 GET /items/14 200 840\n14:01:15 192.0.2.10 GET /items/15 401 840\n14:01:16 192.0.2.10 GET /items/16 200 840\n14:01:17 192.0.2.10 GET /items/17 200 840\n14:01:18 192.0.2.10 GET /items/18 200 840\n"
+      }
+    }
+  }
+}

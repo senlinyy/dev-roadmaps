@@ -1,28 +1,94 @@
+### pipeline.yaml
+
 ```yaml
-name: Secure release
-on: [pull_request, push]
-
+version: 2
 jobs:
-  test:
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
+  build:
+    needs: []
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
-      - run: npm test
-
-  publish:
-    needs: test
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-    runs-on: ubuntu-latest
+      -
+        checkout:
+          ref: "candidate"
+      -
+        setup:
+          runtime: "24"
+      -
+        install:
+          mode: "locked"
+      -
+        scan:
+          kind: "source"
+          policy: "security.yaml"
+      -
+        scan:
+          kind: "dependencies"
+          policy: "security.yaml"
+      -
+        check:
+          name: "lint"
+      -
+        check:
+          name: "unit"
+      -
+        build:
+          artifact: "app"
+      -
+        upload:
+          artifact: "app"
+  security:
+    needs:
+      - "build"
     steps:
-      - run: ./publish-signed-image.sh
+      -
+        download:
+          artifact: "app"
+      -
+        scan:
+          kind: "image"
+          artifact: "app"
+          policy: "security.yaml"
+  staging:
+    needs:
+      - "security"
+    steps:
+      -
+        download:
+          artifact: "app"
+      -
+        deploy:
+          artifact: "app"
+          environment: "staging"
+          policy: "release.yaml"
+      -
+        verify:
+          artifact: "app"
+          environment: "staging"
+  production:
+    needs:
+      - "staging"
+    steps:
+      -
+        download:
+          artifact: "app"
+      -
+        deploy:
+          artifact: "app"
+          environment: "production"
+          policy: "release.yaml"
 ```
 
-Untrusted validation cannot mint cloud credentials or publish packages. Stronger permissions appear only in the protected downstream job.
+### security.yaml
+
+```yaml
+block:
+  - "high"
+  - "critical"
+```
+
+### release.yaml
+
+```yaml
+security: true
+```
+
+Source, dependency, and image reports answer different questions. Their placement follows input availability. Failed or absent evidence stops downstream work, while successful security cannot override failed staging health.

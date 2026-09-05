@@ -1,0 +1,389 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev"
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      }
+    ],
+    "umask": 18
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "mode": 493,
+      "owner": "dev",
+      "group": "dev"
+    }
+  },
+  "system": {
+    "services": [],
+    "processes": {
+      "entries": [
+        {
+          "pid": 100,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/bin/bash"
+          ],
+          "state": "S",
+          "rss": 4096,
+          "vsz": 262144,
+          "tty": "pts/0"
+        },
+        {
+          "pid": 920,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/java",
+            "-jar",
+            "/srv/batch/import.jar"
+          ],
+          "state": "S",
+          "rss": 6291456,
+          "vsz": 10485760,
+          "swap": 786432
+        },
+        {
+          "pid": 930,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/node",
+            "/srv/orders/server.js"
+          ],
+          "state": "S",
+          "rss": 524288,
+          "vsz": 262144,
+          "swap": 262144
+        }
+      ]
+    },
+    "resources": {
+      "uptime": 86400,
+      "samples": [
+        {
+          "at": 0,
+          "load": [
+            1.8,
+            1.4,
+            1.1
+          ],
+          "cpus": [
+            {
+              "us": 35,
+              "sy": 10,
+              "id": 25,
+              "wa": 30,
+              "st": 0
+            },
+            {
+              "us": 35,
+              "sy": 10,
+              "id": 25,
+              "wa": 30,
+              "st": 0
+            }
+          ],
+          "memory": {
+            "total": 8388608,
+            "free": 65536,
+            "available": 131072,
+            "buffers": 65536,
+            "cached": 262144,
+            "reclaimable": 32768,
+            "unreclaimable": 131072,
+            "shared": 32768,
+            "swapTotal": 2097152,
+            "swapFree": 1048576,
+            "dirty": 8192,
+            "writeback": 0
+          },
+          "activity": {
+            "si": 256,
+            "so": 512,
+            "bi": 1200,
+            "bo": 1600,
+            "interrupts": 1200,
+            "switches": 2400
+          },
+          "pressure": {
+            "memory": {
+              "some": [
+                22,
+                15,
+                7,
+                22000000
+              ],
+              "full": [
+                8,
+                4,
+                1,
+                8000000
+              ]
+            },
+            "io": {
+              "some": [
+                12,
+                8,
+                3,
+                12000000
+              ],
+              "full": [
+                3,
+                1,
+                0.5,
+                3000000
+              ]
+            }
+          }
+        },
+        {
+          "at": 5,
+          "load": [
+            1.8,
+            1.4,
+            1.1
+          ],
+          "cpus": [
+            {
+              "us": 35,
+              "sy": 10,
+              "id": 25,
+              "wa": 30,
+              "st": 0
+            },
+            {
+              "us": 35,
+              "sy": 10,
+              "id": 25,
+              "wa": 30,
+              "st": 0
+            }
+          ],
+          "memory": {
+            "total": 8388608,
+            "free": 65536,
+            "available": 131072,
+            "buffers": 65536,
+            "cached": 262144,
+            "reclaimable": 32768,
+            "unreclaimable": 131072,
+            "shared": 32768,
+            "swapTotal": 2097152,
+            "swapFree": 1047296,
+            "dirty": 8192,
+            "writeback": 0
+          },
+          "activity": {
+            "si": 256,
+            "so": 512,
+            "bi": 1200,
+            "bo": 1600,
+            "interrupts": 1200,
+            "switches": 2400
+          },
+          "pressure": {
+            "memory": {
+              "some": [
+                22,
+                15,
+                7,
+                22000000
+              ],
+              "full": [
+                8,
+                4,
+                1,
+                8000000
+              ]
+            },
+            "io": {
+              "some": [
+                12,
+                8,
+                3,
+                12000000
+              ],
+              "full": [
+                3,
+                1,
+                0.5,
+                3000000
+              ]
+            }
+          }
+        },
+        {
+          "at": 10,
+          "load": [
+            1.8,
+            1.4,
+            1.1
+          ],
+          "cpus": [
+            {
+              "us": 35,
+              "sy": 10,
+              "id": 25,
+              "wa": 30,
+              "st": 0
+            },
+            {
+              "us": 35,
+              "sy": 10,
+              "id": 25,
+              "wa": 30,
+              "st": 0
+            }
+          ],
+          "memory": {
+            "total": 8388608,
+            "free": 65536,
+            "available": 131072,
+            "buffers": 65536,
+            "cached": 262144,
+            "reclaimable": 32768,
+            "unreclaimable": 131072,
+            "shared": 32768,
+            "swapTotal": 2097152,
+            "swapFree": 1046016,
+            "dirty": 8192,
+            "writeback": 0
+          },
+          "activity": {
+            "si": 256,
+            "so": 512,
+            "bi": 1200,
+            "bo": 1600,
+            "interrupts": 1200,
+            "switches": 2400
+          },
+          "pressure": {
+            "memory": {
+              "some": [
+                22,
+                15,
+                7,
+                22000000
+              ],
+              "full": [
+                8,
+                4,
+                1,
+                8000000
+              ]
+            },
+            "io": {
+              "some": [
+                12,
+                8,
+                3,
+                12000000
+              ],
+              "full": [
+                3,
+                1,
+                0.5,
+                3000000
+              ]
+            }
+          }
+        }
+      ],
+      "boot": {
+        "cpus": [
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          },
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          }
+        ],
+        "activity": {
+          "si": 0,
+          "so": 0,
+          "bi": 12,
+          "bo": 40,
+          "interrupts": 1200,
+          "switches": 2400
+        }
+      }
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCwd": "/home/dev",
+    "expectedResources": {
+      "readOnly": true,
+      "observations": [
+        {
+          "kind": "memory",
+          "label": "Inspect available RAM and swap allocation"
+        },
+        {
+          "kind": "vmstat:interval",
+          "label": "Collect current swap rates",
+          "count": 2,
+          "minInterval": 5
+        },
+        {
+          "kind": "read:/proc/pressure/memory",
+          "label": "Inspect memory stalls",
+          "contains": [
+            "some avg10=",
+            "full avg10="
+          ]
+        }
+      ]
+    },
+    "expectedProcesses": [
+      {
+        "pid": 920,
+        "label": "Largest resident consumer",
+        "sortedBy": "-rss",
+        "inspectedFields": [
+          "pid",
+          "user",
+          "rss",
+          "cmd"
+        ],
+        "readPaths": [
+          "status"
+        ],
+        "untouched": true
+      }
+    ]
+  }
+}

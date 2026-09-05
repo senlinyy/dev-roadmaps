@@ -1,0 +1,34 @@
+{
+  "cwd": "/home/alice",
+  "env": { "USER": "alice", "HOME": "/home/alice" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/alice": { "type": "dir", "mode": 488, "owner": "alice", "group": "alice" },
+    "/shared": { "type": "dir", "mode": 1023, "owner": "root", "group": "root" },
+    "/shared/bob.txt": { "type": "file", "content": "Bob's work\n", "mode": 420, "owner": "bob", "group": "bob" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "alice",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "alice", "uid": 1001, "primaryGroup": "alice", "gid": 1001 },
+      { "name": "bob", "uid": 1002, "primaryGroup": "bob", "gid": 1002 }
+    ],
+    "sessionGroups": ["alice"],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["stat", "rm", "touch"],
+    "minCommandCount": 4,
+    "expectedFs": {
+      "/shared": { "type": "dir", "modeEquals": 1023, "ownerEquals": "root", "groupEquals": "root" },
+      "/shared/bob.txt": { "type": "file", "exists": true, "ownerEquals": "bob", "groupEquals": "bob" },
+      "/shared/alice.txt": { "type": "file", "exists": false }
+    },
+    "expectedPermissions": {
+      "diagnostics": ["denied:alice:delete:/shared/bob.txt"]
+    }
+  }
+}

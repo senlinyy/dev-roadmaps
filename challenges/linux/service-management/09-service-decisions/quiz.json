@@ -1,0 +1,277 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "During a maintenance window, an operator stopped `orders.service`. The next operator sees:\n\n```console\n$ systemctl is-enabled orders\nenabled\n$ systemctl is-active orders\ninactive\n```\n\nMaintenance is complete and the existing boot policy should remain. Which action best restores the intended state?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Start the service and verify its runtime state and application evidence."
+        },
+        {
+          "id": "b",
+          "text": "Enable the service again, then treat the existing enabled result as the availability check."
+        },
+        {
+          "id": "c",
+          "text": "Reload the application configuration, since the unit is already enabled."
+        },
+        {
+          "id": "d",
+          "text": "Reset the failed marker, then wait for boot enablement to launch the service during this boot."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Start requests activation now. Enablement already exists and does not itself prove availability. Reload requires a running, reload-capable service. Reset-failed clears remembered failure and counters, but does not start an inactive service. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemctl.xml)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An engineer saves a drop-in that changes `EnvironmentFile`. `systemctl cat orders` displays the new file path, but `systemctl show orders -p EnvironmentFiles` still reports the previous path. The old main PID is serving requests. What is the next safe sequence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Restart the service immediately; the presence of the drop-in in cat proves the manager already loaded it."
+        },
+        {
+          "id": "b",
+          "text": "Reload manager definitions, restart the workload, then verify the loaded path and the new process settings."
+        },
+        {
+          "id": "c",
+          "text": "Reload the application, then inspect the same process environment for the new inherited variables."
+        },
+        {
+          "id": "d",
+          "text": "Re-enable the service and use the boot link as proof that the existing process received the new environment."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Cat displays files on disk, which can differ from the manager's loaded definition. Daemon-reload reconciles definitions; restart replaces the process and its inherited environment. A restart with stale definitions, an application reload, or an enablement link alone does not establish that the running process received the intended settings. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemctl.xml)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The orders API needs a local credential helper to start successfully. Its unit currently has only `After=credentials.service`. During boot, the helper is not included in the startup transaction. The app must be ordered after the helper and must not start when the helper's start job fails. Which relationship meets that requirement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep After alone and enable the helper separately; ordering is sufficient to express the required failure relationship."
+        },
+        {
+          "id": "b",
+          "text": "Use Wants alone so the helper is included, relying on that dependency to supply ordering."
+        },
+        {
+          "id": "c",
+          "text": "Use Requires together with After to include the helper and order the app after its successful start job."
+        },
+        {
+          "id": "d",
+          "text": "Use Requires alone so both services enter the transaction and the API can initialize in parallel."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Requires pulls in the helper and, combined with After, prevents the ordered app from starting when the required start job fails. Wants is weaker, and neither dependency alone supplies ordering. After alone does not pull the helper into the transaction. This is a local startup relationship, not a guarantee of lasting application health. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemd.unit.xml)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A foreground API uses `Type=simple`. `systemctl start` succeeds, but the first health requests fail while a cache loads for several seconds. A deploy script currently treats the command's exit status as the traffic-switch gate. What should change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Add After=network-online.target and keep the command exit status as the application's readiness gate."
+        },
+        {
+          "id": "b",
+          "text": "Change the unit to Type=notify without changing the application, then rely on the manager to infer readiness."
+        },
+        {
+          "id": "c",
+          "text": "Insert a fixed five-second delay before traffic switching, sized from this one deployment."
+        },
+        {
+          "id": "d",
+          "text": "Gate traffic on application readiness, or implement a notification protocol before choosing Type=notify."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Manager activation and application readiness are distinct. Verify the promised application interface, or use notify only when the application implements its protocol. Network ordering does not prove cache initialization, and a fixed sleep can be too short or unnecessarily long as startup conditions change. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A legacy daemon forks into the background when started. A new worker stays in the foreground and handles requests until stopped. A release audit suggests forcing both into the same service type to simplify operations. Which review response is best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Match service type to lifecycle: reliable main-process tracking for the forking daemon, and simple supervision for the foreground worker."
+        },
+        {
+          "id": "b",
+          "text": "Use oneshot for both because each ExecStart command is invoked only once per start request."
+        },
+        {
+          "id": "c",
+          "text": "Use simple for both and use the PID printed by the shell as the permanent service identity."
+        },
+        {
+          "id": "d",
+          "text": "Use notify for both because a process reaching the background is equivalent to sending readiness notification."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Forking and foreground programs expose different process lifecycles. Forking services need reliable main-process identification; a foreground workload fits simple supervision. Oneshot describes finite work, and notify requires an explicit application protocol rather than inferring readiness from daemonization. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml)."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A journal shows the first failure as `missing DATABASE_URL`, followed by repeated starts and `start-limit-hit`. The service uses a five-second restart delay and a bounded start burst. Which recovery plan addresses the evidence while keeping safeguards?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Double the allowed start burst and retry the same release, then inspect the environment if it still fails."
+        },
+        {
+          "id": "b",
+          "text": "Repair the unit's environment source, reset the failed state, start it, and verify the resulting process and logs."
+        },
+        {
+          "id": "c",
+          "text": "Change the restart policy to always, then use the restart count to decide whether the environment needs repair."
+        },
+        {
+          "id": "d",
+          "text": "Clear the failed state and enable the unit again so the next attempt receives the operator's shell exports."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The missing variable is the cause; the start limit is the protective consequence. Repairing the declared environment and then clearing failure allows a meaningful new attempt. More retries or a broader restart policy leave the same deterministic failure. Enablement does not inherit arbitrary interactive shell exports. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml)."
+    },
+    {
+      "id": "q7",
+      "type": "multiple",
+      "scenario": "A long-running simple service uses `Restart=on-failure` with a five-second delay. It has no custom successful-exit overrides. During a controlled test, engineers compare an operator stop with an unexpected SIGKILL. Which observations are consistent with this policy? Select two.",
+      "options": [
+        {
+          "id": "a",
+          "text": "An explicit systemctl stop can leave the service stopped even though automatic recovery is configured."
+        },
+        {
+          "id": "b",
+          "text": "A disabled but active service cannot be restarted automatically after failure until it is enabled for boot."
+        },
+        {
+          "id": "c",
+          "text": "An unexpected SIGKILL can trigger a delayed automatic restart with a new main PID."
+        },
+        {
+          "id": "d",
+          "text": "The operator must remove Restart=on-failure before systemctl stop can keep the workload down."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "An explicit manager stop is intentional and does not trigger the restart policy. SIGKILL is an abnormal termination and can trigger the configured delayed recovery. Boot enablement is independent of an active unit's recovery policy, and maintenance does not require deleting that policy. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml)."
+    },
+    {
+      "id": "q8",
+      "type": "single",
+      "scenario": "A drop-in sets `MemoryMax=512M`, `CPUQuota=80%`, and `LimitNOFILE=8192`. After reloading manager definitions, show reports the intended resource configuration, but the existing process still has its old open-file limit. What does that evidence justify?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Raise MemoryMax because file descriptors consume memory and will inherit the larger capacity automatically."
+        },
+        {
+          "id": "b",
+          "text": "Switch to an application reload because it preserves the PID while replacing all inherited process limits."
+        },
+        {
+          "id": "c",
+          "text": "Replace the process through a restart and verify the new PID's limits, while checking the cgroup settings separately."
+        },
+        {
+          "id": "d",
+          "text": "Move LimitNOFILE into the Install section so future enablement links can propagate it to the existing PID."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "File-descriptor limits are inherited by the launched process; reading a newly loaded definition does not change that inherited state. Restart and inspect the new PID. Memory capacity is a different mechanism, application reload does not generally replace inherited limits, and Install controls activation links rather than execution limits. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)."
+    },
+    {
+      "id": "q9",
+      "type": "multiple",
+      "scenario": "A daily release-check timer is enabled with a calendar schedule and `Persistent=true`. Its paired oneshot service has previously completed successfully and now reports inactive. The host was powered off across today's scheduled time. Which two conclusions are justified?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The inactive oneshot proves the timer failed, because a scheduled job must remain running between activations."
+        },
+        {
+          "id": "b",
+          "text": "A successful oneshot can become inactive after completing; inspect its result and journal rather than treating inactivity alone as failure."
+        },
+        {
+          "id": "c",
+          "text": "Persistent=true keeps the maintenance process alive while the host is powered off."
+        },
+        {
+          "id": "d",
+          "text": "When the persistent calendar timer becomes active again, it can catch up a missed activation; inspect the service journal to verify the work."
+        }
+      ],
+      "correct": [
+        "b",
+        "d"
+      ],
+      "explanation": "A oneshot normally finishes rather than leaving a permanent daemon. The timer owns scheduling and the service journal records work. Persistent calendar timers can account for missed activations after inactivity, but no process runs while the host is powered off. Inactivity alone is not evidence of failed finite work. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemd.timer.xml)."
+    },
+    {
+      "id": "q10",
+      "type": "single",
+      "scenario": "An obsolete service was disabled, but another unit's dependency starts it during a test. The approved containment requirement is to prevent ordinary manual and dependency activation until its configuration is repaired. What is the appropriate distinction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Disabling removes boot installation links; masking is the stronger block on ordinary activation."
+        },
+        {
+          "id": "b",
+          "text": "Disabling and masking are equivalent, so only the dependent unit needs a restart to refresh its process environment."
+        },
+        {
+          "id": "c",
+          "text": "Stopping the service once also removes every dependency and future activation path."
+        },
+        {
+          "id": "d",
+          "text": "Reset-failed prevents the manager from accepting another start until the unit is explicitly enabled."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Disable removes installation links but does not prohibit manual or dependency activation. Masking is the stronger activation block for the stated requirement. Stop changes current runtime state, while reset-failed clears failure state and counters. Neither establishes the requested activation block. [Official systemd reference](https://github.com/systemd/systemd/blob/main/man/systemctl.xml)."
+    }
+  ]
+}

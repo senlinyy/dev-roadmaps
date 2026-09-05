@@ -1,1 +1,0 @@
-Start by reading the entire fstab with `cat /etc/fstab`. Commented-out lines (starting with `#`) still tell you about planned or disabled mounts. Use `grep` to search for specific keywords like `nfs` or `swap`. Remember that `df -T` adds a Type column to the output.

@@ -1,8 +1,8 @@
 ---
 title: "Firewalls & Security"
-description: "Audit and remediate a real Linux ops stack: inspect iptables rules, diagnose AWS Security Group vs NACL behavior, choose SSH hardening fixes, interpret fail2ban jail status against auth.log, and diagnose an iptables rule-ordering bug that lets abuse traffic through."
+description: "Inspect live chains and counters, separate binding from filtering, apply a safe default-deny policy, test loopback exposure, and diagnose a layered reachability incident."
 articleId: article-devops-foundation-networking-firewalls-security
 difficulty: medium
-order: 12
-tags: [iptables, security-groups, sshd, fail2ban, hardening, audit]
+order: 14
+tags: [iptables, stateful-firewall, default-deny, ssh, hardening, troubleshooting]
 ---

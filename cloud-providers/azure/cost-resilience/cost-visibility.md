@@ -1,8 +1,8 @@
 ---
 title: "Cost Visibility"
-description: "Use Azure Cost Management, Cost Analysis, tags, budgets, Advisor, and right-sizing to understand spend before changing resources."
-overview: "Cost work starts with visibility. This article follows one Azure bill increase and shows how a team connects spend to scopes, services, resources, owners, alerts, and safe tuning decisions."
-tags: ["cost-management", "cost-analysis", "tags", "budgets", "advisor"]
+description: "Understand Azure spending through usage, ownership, budgets, capacity requirements, resilience costs, and cost per useful outcome."
+overview: "An Azure bill shows how much was spent. Cost visibility explains which resources produced it, what they support, and which changes can reduce waste without weakening recovery or availability."
+tags: ["cost-management", "cost-analysis", "tags", "budgets", "right-sizing"]
 order: 2
 id: article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags
 aliases:
@@ -23,11 +23,11 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-Imagine the ticketing team opens Azure Cost Management on Monday morning and sees a rough surprise. The subscription that usually lands near `8,000 USD` for the month now forecasts closer to `13,500 USD`. Nobody changed the official budget. Nobody planned a big traffic launch. The first feeling is usually panic, because the bill is one big number and one big number gives the team almost no direction.
+A monthly Azure bill of £42,000 does not tell you whether the system is expensive to run. Customer traffic might have doubled. A second region might now protect the application from a regional outage. Or development machines might be running all night while a recent release fills the logging service with unnecessary messages.
 
-The large bill is not actionable until the team can trace it through progressively smaller boundaries. The subscription identifies the billing scope, the service and resource identify the source of usage, tags identify the owner and purpose, and runtime evidence shows whether the increase is waste or the cost of real work. Budgets provide warning; right-sizing comes only after that evidence makes the tradeoff visible.
+Before changing resources, you need to explain the spending. That means connecting each cost to a resource, an owner, and a reason for keeping it. The same investigation should distinguish an idle machine that nobody needs from a quiet standby database that the recovery plan depends on.
 
-Keep these questions in view as you work through the lesson:
+The questions below follow that investigation from the total bill to a justified decision:
 
 1. **Why Did the Bill Jump?**
 2. **What Does Cost Visibility Mean?**
@@ -39,405 +39,303 @@ Keep these questions in view as you work through the lesson:
 8. **How Does a Cost Review Fit Together?**
 
 ## Why Did the Bill Jump?
-<!-- section-summary: Cost visibility starts with one uncomfortable bill and turns it into smaller questions the team can actually answer. -->
+<!-- section-summary: Cloud spending follows resource consumption over time, so an increase needs an explanation of usage, rates, ownership, and purpose. -->
 
-The order of those cost checks matters. Cost work goes badly when a team jumps straight from "the bill is high" to "delete something" or "make the database smaller." A production system has real traffic, recovery promises, backups, logs, and security needs. Some spending is waste, and some spending is the price of keeping a promise to users. **Cost visibility** gives the team enough evidence to tell those two apart.
+In a traditional data center, many costs are visible before an application goes live. Buying 20 servers involves paying for machines, storage, networking equipment, software licenses, and support contracts. Those purchases make a large part of the commitment apparent at the start.
+
+Cloud resources change that timing. A team can create infrastructure in seconds, enable automatic scaling, keep another copy in a different region, or begin collecting terabytes of logs. Each choice can increase consumption after the initial deployment. Resources can also continue running long after their original purpose has ended.
+
+At the billing level, the calculation combines the amount consumed with the price of each unit:
+
+$$
+\text{Cloud cost} = \sum (\text{Quantity consumed} \times \text{Price per unit})
+$$
+
+For an engineering investigation, expand that calculation into four things to inspect: **the resource, its usage, the applicable rate, and how long the usage continued**. This is a reasoning aid rather than one universal Azure billing meter. It helps you ask whether a charge changed because the system used more capacity, ran for longer, or paid a different rate.
+
+The resource's purpose adds the context that arithmetic cannot provide. Who owns it? Why was it created? Which business requirement, availability target, or recovery requirement does it support? Without those answers, reducing the total can mean removing useful capacity.
+
+Return to the £42,000 bill. Suppose the preceding month cost £20,000. That increase could come from more customers, the deliberate addition of another region, verbose application logging, or 40 development VMs left running overnight. The same total can contain several of these causes at once.
+
+A useful investigation separates the questions:
+
+| Question | What it helps identify |
+| --- | --- |
+| Which service generated the charge? | Compute, SQL, Storage, networking, or logs |
+| Which resource within that service? | The particular VM, database, cluster, or storage account |
+| Which application uses it? | Checkout, identity, analytics, or another workload |
+| Which environment is it in? | Production, staging, or development |
+| Which team owns the decision? | Payments, platform, or data |
+| Where does it run? | A region such as UK South or West Europe |
+| When did spending change? | The point at which the cost trend moved |
+| What changed at that time? | Usage, scaling, price, or architecture |
+| Why is the resource present? | Its business or technical purpose |
+| Does it protect the system? | Replication, backups, disaster recovery, or spare capacity |
+
+These dimensions explain why a total alone cannot guide an optimization. You first need to attribute the money to the work and the requirement behind it.
 
 ## What Does Cost Visibility Mean?
-<!-- section-summary: Cost visibility is the habit of connecting Azure spend to time, service, resource, owner, and workload value before tuning anything. -->
+<!-- section-summary: Cost visibility connects spending to purpose and ownership, then uses measurement and verification to guide changes. -->
 
-**Cost visibility** means the team can explain where Azure spend came from in plain operational terms. A useful cost view can say, "The ticketing production Log Analytics workspace created most of the May increase after release `v2.4` raised ingestion volume," instead of only saying, "Azure is expensive this month."
+**Cost visibility** is the ability to explain where money goes, why it is spent, who is responsible, and what useful service or protection it provides. Microsoft Cost Management supplies tools for analyzing, monitoring, allocating, and optimizing Azure spending. Those tools provide the financial information; the people responsible for the workload supply the operational context.
 
-Azure gives you a few building blocks for that explanation. **Azure Cost Management** is the billing and cost toolset for monitoring, analyzing, allocating, and optimizing spend. **Cost Analysis** is the interactive view inside that toolset where you group and filter cost data by dimensions such as subscription, resource group, service name, meter, resource, location, and tag. A **budget** is a tracked spending limit that sends notifications when actual or forecasted cost crosses a threshold. A **tag** is a key-value label on a resource, resource group, or subscription, such as `service=ticketing` or `env=prod`.
+This work follows a feedback loop. First, measure the spending. Next, attribute it to a resource, workload, environment, team, or customer. Compare it with the expected amount, detect unusual changes, and investigate their causes. Only then choose an action. Possible actions include removing unused resources, changing capacity, changing architecture, or accepting a justified cost.
 
-Those tools answer different parts of the same story. Cost Analysis finds the shape of the spending. Tags explain ownership. Budgets create the alert loop. Azure Advisor adds recommendations for idle or underused resources. Metrics, logs, deployment records, and incident history explain whether a recommendation is safe for the workload.
+Verification closes the loop. A smaller bill is one result to check, but the application must also continue meeting its reliability requirements. If a change removes the spare capacity required during a failure, it has exchanged one problem for another.
 
-Here is the flow we will use for the ticketing service:
+```mermaid
+flowchart TD
+    measure["Measure spending"] --> attribute["Identify resource, owner, and purpose"]
+    attribute --> compare["Compare with expected spending"]
+    compare --> detect["Find unusual changes"]
+    detect --> investigate["Explain the cause"]
+    investigate --> act["Remove waste, resize, redesign, or keep"]
+    act --> verify["Check cost and reliability"]
+    verify --> measure
+```
 
-![Cost visibility investigation loop moving from a bill forecast jump through scope, grouped spend, resource, tags, budget alerts, runtime evidence, and a safe decision](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/cost-visibility-investigation-loop.png)
+Consider what happens if the team skips attribution. A high bill leads directly to smaller resources, and the immediate saving looks successful. The next demand spike or instance failure may then exceed the remaining capacity. By understanding the purpose first, the team can isolate unnecessary spending while keeping the resources that satisfy a real requirement.
 
-*The investigation loop turns bill shock into a sequence of smaller checks, so the team can find the expensive area and explain the runtime cause before changing anything.*
-
-The important beginner idea is that cost data trails behind runtime data. Azure services emit usage into the billing system, Cost Management processes that usage, and the portal shows the result after the data refreshes. For Enterprise Agreement and Microsoft Customer Agreement subscriptions, cost and usage data is commonly available within 8 to 24 hours. For pay-as-you-go subscriptions, it can take up to 72 hours. Current month costs are also estimates until the invoice is generated.
-
-So a cost graph tells you what the billing system knows so far. It gives the team a financial clue, then the team checks operational evidence. If a cost line jumps on May 16, the next questions are about May 16 deployments, traffic, log volume, storage growth, queue retries, and scale events.
-
-:::expand[Under the Hood: Why Billing Data Arrives Later]{kind="design"}
-Azure cost data comes from usage records emitted by many services. A virtual machine emits compute usage. A storage account emits capacity, operation, and data transfer usage. Log Analytics emits ingestion and retention usage. Those records move into billing and cost systems, where Azure applies pricing, reservations, savings plans, marketplace rules, taxes, credits, and account-specific billing scope behavior.
-
-That path gives Cost Management a different job from Azure Monitor. Azure Monitor is for live operational signals such as CPU, memory, request rate, logs, and alerts. Cost Management is for financial records. A bad deployment can start writing too many logs at 10:00, application logs can show the problem almost immediately, and Cost Analysis can show the cost effect after the usage data reaches the cost pipeline.
-
-That delay changes how good teams work. They use budgets and anomaly review for early financial warnings, but they also keep deployment records, ownership tags, and runtime dashboards close by. The cost tool points to the expensive area. The operating tools explain what happened inside that area.
-:::
-
-The ticketing bill is still high, though. The next step is finding the expensive area.
+The sequence also gives ownership a practical role. Someone must be able to explain why a resource exists and approve the tradeoff involved in changing it. Cost allocation is therefore part of the technical investigation, not just a finance report produced after the work is over.
 
 ## How Does Cost Analysis Find the Cause?
-<!-- section-summary: Cost Analysis turns one large Azure number into grouped views by scope, service, resource, tag, and date. -->
+<!-- section-summary: Cost Analysis separates a total into services, resources, scopes, and dates so changes can be linked to their causes. -->
 
-**Cost Analysis** is the place where the team slices Azure spend into useful views. A **scope** is the boundary you are looking at, such as a billing account, management group, subscription, or resource group. The scope matters because a company may have shared platform subscriptions, product subscriptions, sandbox subscriptions, and one-off test resource groups. A bill increase is actionable only after the team knows which boundary contains it.
+Azure **Cost Analysis** presents spending along different dimensions. You can examine built-in views of resources, resource groups, subscriptions, services, and cost trends. A resource group collects related Azure resources; a subscription provides another management and billing scope. Choosing a scope determines which part of the environment you are examining.
 
-For the ticketing service, the team starts at the subscription scope and compares the current month against the previous month. The first grouping is **service name**, because that separates broad Azure product families. The chart shows that Virtual Machines stayed flat, Azure SQL grew a little, and Log Analytics grew a lot. That tells the team the increase probably comes from monitoring data instead of compute.
+The investigation can move from a broad question to a specific one. How much did Azure SQL cost? Which SQL database contributed the increase? Which application owns that database? Why did its cost change on August 12? Each answer narrows the next question without assuming in advance that the database is wasteful.
 
-Now the team narrows the view. They filter to the Log Analytics service, group by **resource**, and switch to daily granularity. The expensive resource is `law-ticketing-prod`. The daily view shows the jump starting on May 16, the same day release `v2.4` went out. The original statement, "Azure costs are up," turns into a useful investigation sentence:
+The following monthly comparison illustrates the process:
 
-> The ticketing production Log Analytics workspace `law-ticketing-prod` started costing more on May 16 because log ingestion grew after release `v2.4`.
+| Component | Last month | This month |
+| --- | ---: | ---: |
+| Compute | £4,000 | £6,500 |
+| Database | £3,000 | £3,100 |
+| Logging | £900 | £2,400 |
+| Storage | £600 | £650 |
+| Networking | £400 | £1,000 |
+| Disaster-recovery replica | £2,000 | £2,000 |
+| **Total** | **£10,900** | **£15,650** |
 
-That is the value of Cost Analysis. It reduces the problem to a place where engineering can investigate. The team can now ask the application team why `v2.4` wrote more logs. Maybe a retry loop produced repeated stack traces. Maybe debug logging stayed on in production. Maybe real customer traffic grew and the extra logging is expected. Those answers come from operational data, but Cost Analysis got everyone to the correct place.
+The overall increase is £4,750. Looking at the components shows that compute, logging, and networking deserve particular attention. The database and storage changed only slightly, while the disaster-recovery replica cost stayed constant.
 
-![Cost Analysis drilldown from subscription to service name, resource, date, and the investigation question for a Log Analytics spike](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/cost-analysis-drilldown.png)
+Suppose the subsequent investigation finds that autoscaling's minimum instance count increased from four to eight. That explains the compute rise: the system now maintains more capacity even before demand requires extra instances. A production release also enabled debug logging, explaining the increase in log volume. An architectural change sends more traffic between regions, explaining the network charge.
 
-*The drilldown view shows the practical shape of the investigation: subscription first, then service, resource, date, and the concrete question the owner needs to answer.*
+The £2,000 replica serves a different purpose. It remains in place to meet disaster-recovery requirements. Its unchanged cost is an intentional part of the design rather than evidence of the newly introduced waste.
 
-The same investigation can be written as a Cost Management Query API request. A platform team might keep a query like this in an internal notebook so the same question can be repeated during monthly reviews:
-
-```http
-POST https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CostManagement/query?api-version=2025-03-01
-Content-Type: application/json
-
-{
-  "type": "Usage",
-  "timeframe": "MonthToDate",
-  "dataset": {
-    "granularity": "Daily",
-    "aggregation": {
-      "totalCost": {
-        "name": "PreTaxCost",
-        "function": "Sum"
-      }
-    },
-    "grouping": [
-      {
-        "type": "Dimension",
-        "name": "ResourceGroup"
-      }
-    ],
-    "filter": {
-      "tags": {
-        "name": "service",
-        "operator": "In",
-        "values": [
-          "ticketing"
-        ]
-      }
-    }
-  }
-}
-```
-
-The query asks Azure for month-to-date usage cost, grouped by resource group, filtered to resources tagged with `service=ticketing`. A shortened response might look like this:
-
-```json
-{
-  "properties": {
-    "columns": [
-      { "name": "PreTaxCost", "type": "Number" },
-      { "name": "ResourceGroup", "type": "String" },
-      { "name": "UsageDate", "type": "Number" },
-      { "name": "Currency", "type": "String" }
-    ],
-    "rows": [
-      [184.32, "rg-ticketing-prod", 20260516, "USD"],
-      [211.47, "rg-ticketing-prod", 20260517, "USD"],
-      [38.76, "rg-ticketing-staging", 20260517, "USD"]
-    ]
-  }
-}
-```
-
-The columns tell the team how to read each row: daily pretax cost, resource group, usage date, and currency. The two high `rg-ticketing-prod` rows point the investigation at production rather than staging. The exact report design changes by scope and API version, but the idea stays the same: cost work is repeatable when the team can ask the same grouped question every month.
-
-Cost Analysis also has limits that beginners often miss. Some charges have no deployed resource behind them, such as purchases or marketplace charges. Some resource types leave tags out of usage data. Resource tags show in Cost Management only after cost data refreshes. A tag applied today affects future refreshed data rather than last month's history. That is why a clean cost process needs tags long before the bill review.
-
-The expensive workspace is now visible. The next question is ownership.
+These findings identify three areas to review, with a separate explanation for the recovery expense. They do not automatically justify deleting everything that increased. The minimum instance count may have a reason, and the cross-region traffic may support a required design. Cost Analysis tells the team where to look; understanding the change tells the team what can safely be adjusted.
 
 ## How Do Tags Assign Ownership?
-<!-- section-summary: Tags connect cost records to service, environment, owner, and budget context, but they need enforcement and boring values. -->
+<!-- section-summary: Tags attach workload and business context to technical resources so costs can be attributed consistently. -->
 
-A **tag** is a small key-value label attached to Azure resources, resource groups, or subscriptions. In cost work, tags act like ownership coordinates. A resource name such as `law-ticketing-prod` helps a human guess what the resource does, but tags let billing reports group spend by stable fields such as `service`, `env`, `owner`, and `cost-center`.
+Azure can identify a resource technically, for example as `Microsoft.Compute/virtualMachines/my-vm-243`. That name alone does not explain that the VM belongs to the production checkout application operated by the Payments team.
 
-For the ticketing system, a simple tag set might look like this:
+**Tags** supply this missing context as key-value metadata. A key names the category, such as `Environment`, and its value identifies the resource's place in that category, such as `Production`. Microsoft supports tags as a way to categorize resources and group costs.
 
-| Tag key | Example value | Why the team uses it |
-| --- | --- | --- |
-| `service` | `ticketing` | Groups all resources that support the ticketing workflow. |
-| `env` | `prod` | Separates production spend from staging and development spend. |
-| `owner` | `events-platform` | Routes review and budget alerts to the right engineering team. |
-| `cost-center` | `events-042` | Connects Azure spend to the finance budget. |
-| `criticality` | `tier-1` | Helps reviewers treat production checkout differently from a sandbox. |
+A resource associated with checkout might carry the following labels:
 
-The safest tag values are boring and low-risk. Tag values can appear in cost reports, exports, dashboards, and third-party tooling. That makes tags a bad place for customer names, secrets, access tokens, private incident notes, or anything that would create a data leak if copied into a spreadsheet.
+| Tag | Value |
+| --- | --- |
+| `Application` | `Checkout` |
+| `Environment` | `Production` |
+| `Owner` | `Payments-Team` |
+| `CostCenter` | `CC-2401` |
+| `Criticality` | `Tier-1` |
+| `ResilienceRole` | `DisasterRecovery` |
 
-Here is the same ownership idea in Bicep for a resource group:
+Together, these labels connect the technical resource to an application, environment, accountable team, financial grouping, importance level, and recovery purpose. They let a finance question about the Payments team's £70,000 spend lead to identifiable infrastructure. They also let an engineering question about disaster-recovery expenditure lead to a financial breakdown.
 
-```bicep
-targetScope = 'subscription'
+The connection works in both directions. Resources explain the bill, while the business labels explain why those resources are funded. Without a consistent mapping, allocating shared cloud spending relies on guesswork.
 
-param location string = 'eastus'
+Do not assume that labeling a parent scope automatically labels every resource beneath it. Resource tags are not universally inherited from resource groups or subscriptions. Azure provides policy capabilities and Cost Management features such as tag inheritance to help with consistent assignment and allocation. The important check is whether the cost view actually contains the ownership and purpose information you expect.
 
-resource ticketingProdRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
-  name: 'rg-ticketing-prod'
-  location: location
-  tags: {
-    service: 'ticketing'
-    env: 'prod'
-    owner: 'events-platform'
-    costCenter: 'events-042'
-    criticality: 'tier-1'
-  }
-}
-```
-
-The resource group tag set gives the team a useful boundary, but there is an important Azure detail here. Parent tags stay on the parent scope unless policy or a Cost Management allocation feature copies them into the place you need. If the team only tags `rg-ticketing-prod`, the storage account, workspace, database, and app service plan inside that group may still lack their own tags. Cost Management can also support tag inheritance for usage records in supported billing account types, and that allocation setting differs from resource metadata in Azure Resource Manager.
-
-That distinction matters during the ticketing investigation. If `law-ticketing-prod` has `service=ticketing` and `owner=events-platform`, the budget and monthly report can route the increase to the right team. If the workspace has no tags, the finance report may show the charge as untagged, and the platform team has to inspect resource names and deployment history by hand.
-
-**Azure Policy** is the usual way to keep tags consistent. Azure Policy is a governance service that evaluates resource configuration against rules. For tags, a policy can audit missing tags, deny a deployment that lacks required tags, or use the `modify` effect to add or update tags during create or update operations. A common production pattern is to require `service`, `env`, and `owner` on resources, then use policy remediation to repair older resources where possible.
-
-The practical check is a tag audit the service owner can run without opening every resource page. This query lists the resources that Cost Management should be able to group under the ticketing service after billing data refreshes.
-
-```bash
-az resource list \
-  --tag service=ticketing \
-  --query "[].{name:name,type:type,resourceGroup:resourceGroup,env:tags.env,owner:tags.owner}" \
-  --output table
-```
-
-The output tells the team where tag values are used:
-
-```console
-Name                      Type                                         ResourceGroup        Env   Owner
-------------------------  -------------------------------------------  -------------------  ----  ---------------
-law-ticketing-prod        Microsoft.OperationalInsights/workspaces     rg-ticketing-prod    prod  events-platform
-app-ticketing-api-prod    Microsoft.Web/sites                          rg-ticketing-prod    prod  events-platform
-stticketingreceiptsprod   Microsoft.Storage/storageAccounts            rg-ticketing-prod    prod  events-platform
-```
-
-`service` groups spend by workload. `env` separates production from staging. `owner` gives the alert or review a destination. If a costly workspace or storage account is missing from this list, the monthly report may put its cost in an untagged bucket even though the resource name looks obvious to humans.
-
-:::expand[Pitfall: Resource Group Tags Alone]{kind="pitfall"}
-Many teams start with a clean resource group naming scheme and assume cost allocation is solved. The names look helpful: `rg-ticketing-prod`, `rg-ticketing-staging`, and `rg-payments-prod`. Then the bill arrives and the untagged bucket is still large.
-
-The reason is simple. Resource groups give lifecycle boundaries, but individual resources create usage records. Some reports can group by resource group, and that is useful. Tag-based reporting needs tag data on the usage records that Cost Management receives. Microsoft documents several constraints: parent tags stay on parent scopes, some resources leave tags out of usage data, and tags become available only after cost data refreshes.
-
-A better pattern combines both ideas. The resource group groups resources that live and die together. Tags identify service, environment, owner, and cost center. Azure Policy keeps the values consistent at deployment time. Cost Management tag inheritance can help billing allocation where the account type supports it, but the team still treats direct resource tagging and policy enforcement as the safer base.
-:::
-
-Now the ticketing workspace has a team owner. The next question is why nobody got warned before the bill felt scary.
+Once the team can attribute ordinary spending, it can set a meaningful expectation for future spending. That is the role of budgets.
 
 ## How Do Budgets Warn Before Overspend?
-<!-- section-summary: Budgets create the financial alert loop, while tested automation is required for any workload change. -->
+<!-- section-summary: Budgets compare actual or forecast spending with expectations and raise warnings without automatically stopping resources. -->
 
-An **Azure budget** is a spending threshold at a chosen scope. The scope might be a subscription, a resource group, or a filtered slice of cost data. A budget can track actual cost, which means the spend already accrued, or forecasted cost, which means Azure predicts the current trend may cross the budget by the end of the period.
+Suppose the Payments platform normally costs £25,000 per month. A budget around that amount defines an expected financial boundary. It helps the team notice when actual spending, or the forecast for the period, moves beyond the planned level.
 
-For the ticketing service, the team might set a monthly production budget of `4,000 USD` for resources tagged `service=ticketing` and `env=prod`. A 50 percent forecast alert can warn the owner early in the month. An 80 percent actual alert can start a review. A 100 percent actual alert can page the service owner and finance contact. The point is to make spend visible while the month is still happening.
+A budget comparison and an efficiency assessment answer different questions. Being £10,000 below budget could mean half of production is broken. Being £5,000 above budget could reflect a 40% increase in customer traffic. Both situations require an explanation of the service being delivered, not just a comparison with a number.
 
-Budgets are alerting tools. When a threshold is crossed, Azure sends notifications to configured contacts, contact groups, or roles, depending on how the budget is set up. Microsoft documents an important behavior: resources keep running and consumption continues. The budget notification leaves the application online. If a company wants a non-production environment to shut down after a budget event, that needs explicit automation, like a tested runbook or workflow connected to the alert path.
+Azure Cost Management budgets can alert on actual or forecast expenditure. Exceeding a budget does not, by itself, shut down Azure resources. The warning gives the responsible people a chance to investigate and decide what to do.
 
-That behavior protects production systems. Imagine the ticketing API crosses 100 percent of its budget during a legitimate sale. An automatic hard stop would create an outage right when customers are using the service. For production, the safer default is an alert that brings humans and playbooks into the loop. For development sandboxes, a team may choose tested automation that deallocates VMs or scales workloads down after hours.
+That behavior matters during unexpected demand. Imagine autoscaling needs another 20 instances to keep serving customers. A rigid rule that prevented all spending above £1,000 per day could stop that expansion. The spending limit would be respected while the service lacked enough capacity.
 
-A basic subscription-level budget can be created from the Azure CLI like this:
+> Use a budget to bring attention to an unexpected cost before deciding whether any resource should be stopped or reduced.
 
-```bash
-az consumption budget create \
-  --budget-name ticketing-prod-monthly \
-  --category cost \
-  --amount 4000 \
-  --start-date 2026-06-01 \
-  --end-date 2027-06-01 \
-  --time-grain monthly \
-  --resource-group-filter rg-ticketing-prod
-
-az consumption budget show \
-  --budget-name ticketing-prod-monthly \
-  --query "{name:name,amount:amount,timeGrain:timeGrain,currentSpend:currentSpend.amount}"
-```
-
-The first command creates a budget scoped by resource group filter. The second command reads it back so the reviewer can confirm the saved name, amount, time grain, and current spend. Shortened output might look like this:
-
-```json
-{
-  "name": "ticketing-prod-monthly",
-  "amount": 4000,
-  "timeGrain": "Monthly",
-  "currentSpend": 1875.42
-}
-```
-
-This example tracks cost for `rg-ticketing-prod` across monthly periods. In a real production setup, the team usually adds notification rules through the portal, ARM/Bicep, REST API, or a platform module so alerts reach the owner email list, finance contact, and incident channel. The important design choice is who owns the alert. A budget that emails one old shared mailbox is almost the same as no budget. A budget routed to the current service owner creates accountability.
-
-Budgets also connect back to tags. A subscription-wide budget tells the cloud platform team that something somewhere is growing. A tag-filtered or resource-group budget tells the ticketing team that their service is growing. Both can exist. The platform budget catches broad account movement, and service budgets create owner-specific signals.
-
-![Owner signals and budget alerts showing resource tags flowing into a cost report and then into forecast and actual budget thresholds](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/owner-signals-budget-alerts.png)
-
-*Tags give the cost report a stable owner, and budget thresholds route the warning while production resources keep running.*
-
-Now the team has an alert loop. The next question is what to do with the recommendation that says a resource looks oversized.
+A financial boundary should be considered alongside the application's resilience requirements. Microsoft's Well-Architected guidance warns that hard spending constraints and overly aggressive reductions can leave insufficient capacity for demand spikes or failures. The budget is useful because it prompts a decision; it cannot make the workload tradeoff on its own.
 
 ## How Does Right-Sizing Remove Waste?
-<!-- section-summary: Right-sizing means changing resource size after cost evidence and workload evidence agree. -->
+<!-- section-summary: Right-sizing accounts for normal demand, peaks, and failure headroom rather than matching capacity only to average utilization. -->
 
-**Right-sizing** means changing the size, tier, or count of a resource so it matches the workload it actually serves. In Azure, this might mean resizing a virtual machine, changing an App Service plan SKU, reducing an Azure SQL compute tier, moving storage to a cooler tier, or cleaning up resources that no longer support a workload.
+**Right-sizing** means choosing enough capacity for legitimate workload requirements, including the capacity needed during failures. The aim is to remove unnecessary provisioned resources while retaining the ability to do the required work.
 
-**Azure Advisor** helps with this work by finding idle and underutilized resources and showing cost recommendations. Advisor can point at virtual machines, virtual machine scale sets, reservations, App Service plans, SQL resources, and other services depending on the recommendation type. It is useful because it turns platform telemetry into a candidate list. It saves the team from manually hunting through every resource.
+Suppose an application usually needs four CPU cores but runs on a resource with 32 cores. The difference is worth investigating. However, the application's normal load is only one part of its requirement. Peak demand might need 12 cores, and a node failure might temporarily leave the surviving instances needing 18 cores.
 
+A useful capacity model is:
 
-Advisor is still the beginning of the decision. A resource can look idle for good reasons. A virtual machine might run a month-end settlement job for two hours and sit quiet for the rest of the month. A database might have low average CPU but strict latency needs during checkout peaks. A standby environment might look wasteful until the day the primary region has a serious issue. The recommendation says, "this deserves review." The owner decides after checking workload context.
+$$
+\text{Required capacity} =
+\text{Normal demand} + \text{Peak allowance} + \text{Failure headroom}
+$$
 
-For the ticketing bill, Advisor flags a Standard `D8s_v5` worker VM with low average CPU. Cost Analysis shows the worker belongs to `rg-ticketing-prod`. Tags show `owner=events-platform`. Metrics show CPU is low most days, but the queue dashboard shows heavy use during Friday refund processing. Deployment notes show the worker runs a weekly reconciliation process that finance depends on. The team has three choices:
+The allowances represent capacity above normal operation; the numbers in the example describe demand under different conditions, rather than values to add mechanically. The question is how much capacity must remain available when the relevant condition occurs.
 
-| Evidence | Possible action | Why it fits |
-| --- | --- | --- |
-| Low CPU, low memory, low queue depth every day | Resize to a smaller VM | The workload has steady unused capacity. |
-| Low average CPU, short weekly spike | Schedule scale-up only for the batch window | The resource needs capacity for a narrow time window. |
-| Low usage because it is a disaster recovery standby | Keep it and document the recovery role | The cost supports a resilience promise. |
+A VM averaging 10% CPU utilization therefore deserves examination, but that average alone does not justify cutting its size by 90%. Memory, input/output activity, latency, demand peaks, autoscaling behavior, failover requirements, and the effects of losing an instance all contribute to the decision.
 
-The same thinking applies to `law-ticketing-prod`. The cost increase came from Log Analytics, so the team checks ingestion volume, table retention, diagnostic settings, and application logging changes. If debug logs went to production by mistake, the fix is a logging configuration change. If the business doubled traffic, the extra telemetry may be valid, and the team may adjust retention or sampling instead of treating all new cost as waste.
+To make those decisions consistently, classify spending by its purpose:
 
-A safe right-sizing review usually combines four kinds of evidence:
+| Resource or capacity | Reason to examine |
+| --- | --- |
+| Capacity currently serving customers | Productive service delivery |
+| Spare capacity for demand spikes | Performance and resilience |
+| Replicas across Availability Zones | Protection against a zone failure |
+| Infrastructure in another region | Disaster recovery |
+| Backups | Recovery of data |
+| Monitoring and logs | Detection, diagnosis, and recovery support |
+| An idle forgotten VM | Potentially avoidable compute spending |
+| An unattached disk | Possible storage waste requiring an ownership check |
+| Unneeded debug logs | Avoidable ingestion and retention |
+| An oversized development database | Capacity that may exceed the environment's needs |
 
-| Evidence type | Example for the ticketing service | What it tells the team |
-| --- | --- | --- |
-| Cost evidence | Cost Analysis shows Log Analytics rose on May 16. | Where the money moved. |
-| Runtime evidence | Azure Monitor shows ingestion volume and error count rose after release `v2.4`. | What the system did. |
-| Ownership evidence | Tags route the workspace to `events-platform`. | Who can judge the workload. |
-| Service promise | The article before this one classified checkout as `tier-1`. | How careful the review needs to be. |
+An Availability Zone is a separate failure location within a region; a secondary region protects against a broader failure. These resources may intentionally be quiet during normal operation.
 
-Right-sizing works best as a measured change. For a production database, the team looks at CPU, memory, DTU or vCore pressure, IOPS, lock waits, connection count, latency, and business traffic windows. For a VM, the team looks at CPU, memory, disk, network, scheduled jobs, and scaling behavior. For logs, the team looks at ingestion by table, retention, diagnostic settings, and whether the data supports security, debugging, compliance, or product analytics.
-
-For the Log Analytics spike in this article, the owner can pair the cost view with a workspace query. The query below complements Cost Analysis because it shows telemetry ingestion by table rather than invoice cost. It shows which data tables grew after release `v2.4`.
-
-```kusto
-Usage
-| where TimeGenerated > ago(14d)
-| summarize IngestedGB = sum(Quantity) / 1024 by DataType, bin(TimeGenerated, 1d)
-| order by TimeGenerated asc, IngestedGB desc
-```
-
-Example output from the query might look like this:
-
-```console
-DataType          TimeGenerated          IngestedGB
-----------------  ---------------------  ----------
-AppTraces         2026-05-16T00:00:00Z   18.4
-AzureDiagnostics  2026-05-16T00:00:00Z   3.1
-AppRequests       2026-05-16T00:00:00Z   1.7
-```
-
-That signal gives the right person something concrete to fix. If `AppTraces` jumped, the app team reviews logging level and repeated exception messages. If `AzureDiagnostics` jumped, the platform team reviews diagnostic settings on chatty resources. If the increase belongs to a security table, the team checks the security requirement before lowering retention or filtering data.
-
-Now the team can tune with context. There is one more practical habit: looking for the cost leaks that appear again and again in Azure accounts.
+A standby database might be almost idle for 99.9% of the year because its job is to be available during the remaining 0.1%, when the primary region fails. Low utilization is consistent with that purpose. The right review asks which outcome the resource provides and whether the business still needs that outcome.
 
 ## Which Azure Cost Leaks Recur?
-<!-- section-summary: Cost leaks are resources or usage patterns that keep billing after their original purpose is gone. -->
+<!-- section-summary: Recurring waste includes forgotten capacity, excessive retention, unnecessary traffic, and poor attribution, but recovery resources need their purpose checked first. -->
 
-A **cost leak** is spend that no longer supports the intended workload. It can be small at first and still matter because cloud billing repeats. A forgotten disk, a noisy log table, or old blob versions can quietly bill every month until someone sees and removes the cause.
+Once resources have owners and stated purposes, common sources of unnecessary spending are easier to recognize:
 
-The first common leak is **unattached managed disks**. When a VM is deleted or a data disk is detached, the disk can remain in storage. That behavior protects data from accidental loss, but the disk still consumes paid storage until the team deletes it. In a development subscription, a few abandoned premium disks can become a boring but real monthly cost.
+| Pattern | How it adds cost |
+| --- | --- |
+| Idle VMs | Compute continues to accrue charges with little useful processing |
+| Oversized VMs or databases | Provisioned capacity is much greater than the workload needs |
+| Development and test resources running continuously | Nights and weekends incur charges without corresponding use |
+| Orphaned disks and snapshots | Storage survives after the associated compute has been removed |
+| Excessive logging | Unnecessary events add ingestion and retention charges |
+| Overlong log retention | Old telemetry continues occupying storage |
+| Unnecessary cross-region traffic | Data movement adds charges through the chosen architecture |
+| Misconfigured autoscaling | A high minimum or failure to scale down retains extra instances |
+| Excessive backup or snapshot retention | Recovery copies accumulate without a justified retention limit |
+| An unsuitable storage tier | The workload pays for storage characteristics it does not need |
+| Predictable demand billed only at pay-as-you-go rates | The rate may offer an optimization opportunity |
+| Forgotten test environments | Temporary resources continue as ongoing expenses |
+| Duplicate services | Separate teams fund repeated solutions to the same need |
+| Untagged resources | Spending lacks clear responsibility and is easier to overlook |
 
-The second common leak is **log ingestion and retention growth**. Log Analytics workspaces are incredibly useful during incidents, but verbose application logs, repeated stack traces, diagnostic settings on noisy resources, and long retention windows can grow cost quickly. The ticketing scenario fits this pattern. A release changed logging behavior, the workspace ingested much more data, and the cost followed.
+Each pattern points to a question, not an automatic deletion instruction. Two databases in different regions might be unnecessary duplication, or they might be essential to the recovery objectives, availability target, or regulatory requirements.
 
-The third common leak is **blob versions, snapshots, and old objects**. Blob versioning and snapshots help recover from overwrites and deletions, which is valuable for important files. They also create more stored data. Azure Blob Storage lifecycle management can move current versions, previous versions, or snapshots to cooler tiers, or delete them at the end of their lifecycle. For a temporary export container, keeping every old version forever usually creates waste.
+Two recovery terms help explain the distinction. The **recovery time objective**, or RTO, is the acceptable time to restore service. The **recovery point objective**, or RPO, describes how much recent data the system can afford to lose. A second regional database may be the mechanism that makes those objectives achievable.
 
-The fourth common leak is **oversized always-on capacity**. App Service plans, virtual machines, provisioned SQL tiers, firewalls, gateways, and some monitoring resources keep billing while they exist or run. A production checkout database might need steady capacity. A staging database that nobody uses overnight might fit serverless, a lower tier, or scheduled stop/start behavior depending on the service.
-
-The fifth common leak is **data movement that nobody budgeted for**. Cross-region replication, public internet egress, NAT gateways, private endpoints, and diagnostic exports can create costs outside the compute line people first notice. If a worker retry loop sends the same payload across a network path thousands of times, the application bug can show up as network spend.
-
-Here is a simple review table the ticketing team can use each month:
-
-| Leak pattern | Azure evidence | Practical review question |
-| --- | --- | --- |
-| Unattached disks | Advisor recommendation, resource graph query, disk list | Does any unattached disk still have a recovery purpose? |
-| Log ingestion spike | Cost Analysis by service, workspace usage tables, deployment date | Did code, diagnostics, or traffic increase log volume? |
-| Old blob versions | Storage account lifecycle policy, container inventory | How long do old versions need to be recoverable? |
-| Oversized capacity | Advisor, Azure Monitor metrics, scaling history | Is this idle headroom, a scheduled peak, or a resilience promise? |
-| Data movement | Cost Analysis by meter, network metrics, retry logs | Did a retry loop, replication path, or export job move more data than expected? |
-
-Notice how none of these reviews start with random deletion. The team first asks what the resource does, who owns it, and whether it supports a service promise. A disk may be trash. It may also be the only recent copy of a database from a failed migration. Visibility keeps cleanup from turning into an outage.
+This is why a useful cost discussion separates the components of a charge. A production database costing £8,000 might include £5,500 for ordinary workload demand, £1,500 for peak capacity, and £1,000 for the geographic replica required by the recovery target. The review can then ask whether the first £7,000 can be reduced while preserving the necessary recovery characteristics. Even within that £7,000, peak capacity still needs justification before it is removed.
 
 ## How Does a Cost Review Fit Together?
-<!-- section-summary: Azure cost visibility connects billing views, tags, budgets, Advisor, and workload evidence into one operating habit. -->
+<!-- section-summary: A complete review compares spending with business output and failure protection, then targets waste while preserving required outcomes. -->
 
-The ticketing team started with one scary forecast. By the end of the investigation, the bill became a chain of evidence. Cost Analysis showed the increase lived in Log Analytics. The resource view found `law-ticketing-prod`. Tags routed the review to `events-platform`. The budget design showed where the alert loop needed improvement. Runtime logs and deployment notes connected the jump to release `v2.4`. Advisor and metrics helped the team separate safe tuning from capacity that still had a purpose.
+The final decision combines three views: how much the system costs, how much useful work it produces, and what protection the spending buys.
 
-That is the real job of cost visibility. It gives engineering, finance, and operations one shared story about spend. It also makes cost optimization safer, because every change has context.
+### Compare resilience spending with failure impact
 
-Total spend is only one view of efficiency. A useful companion measure is **cost per unit of value**:
+Suppose a one-region application costs £20,000 per month. Adding secondary-region infrastructure for disaster recovery increases the total to £27,000. The extra £7,000 has a defined purpose: reducing the impact of an outage.
 
-```text
-cost per successful checkout
-    = Azure cost for the checkout workload
-      / successful checkouts
+Assessing that purpose means comparing the cost of protection with the expected cost of failure. An outage can cause lost transactions, contractual penalties, recovery work, customer churn, damage to reputation, and lost employee productivity. Microsoft's Well-Architected Framework recommends considering this financial tradeoff when choosing prevention and recovery measures.
+
+A higher infrastructure bill can therefore be justified. The goal is to obtain the required business outcome for a reasonable cost, including the ability to survive and recover from the failures that matter.
+
+### Measure cost per useful outcome
+
+Total spending is also easier to interpret when divided by the work delivered. The appropriate denominator depends on the application:
+
+$$
+\text{Cost per order} =
+\frac{\text{Monthly cloud cost}}{\text{Orders processed}}
+$$
+
+$$
+\text{Cost per million requests} =
+\frac{\text{Infrastructure cost}}{\text{Requests}/1{,}000{,}000}
+$$
+
+$$
+\text{Infrastructure cost per customer} =
+\frac{\text{Cloud cost}}{\text{Active customers}}
+$$
+
+For example, spending rises from £100,000 to £130,000 while transactions increase from one million to two million. The first period costs £0.10 per transaction. The second costs £0.065:
+
+$$
+100{,}000 / 1{,}000{,}000 = 0.10
+\qquad
+130{,}000 / 2{,}000{,}000 = 0.065
+$$
+
+The bill grew by 30%, but the cost of each transaction fell by 35%. More useful work was delivered at a lower unit cost. Looking only at the total would conceal that improvement.
+
+### Connect the architecture to its costs
+
+Consider an application behind Front Door, with two application instances, a primary database, a replicated secondary database, monitoring, and backups:
+
+```mermaid
+flowchart TD
+    users["Users"] --> entry["Front Door"]
+    entry --> app1["Application instance"]
+    entry --> app2["Application instance"]
+    app1 --> primary["Primary database"]
+    app2 --> primary
+    primary -->|Replication| secondary["Secondary database"]
+    app1 -->|Logs| monitoring["Monitoring"]
+    app2 -->|Logs| monitoring
+    primary -->|Data copies| backups["Backups"]
 ```
 
-If monthly spend rises 20 percent while successful checkouts rise 50 percent, the system may be becoming more efficient even though the invoice is larger. If spend rises while traffic and successful outcomes stay flat, the team has stronger evidence of waste or a regression. The unit can be an order, active tenant, report, gigabyte processed, or another outcome the business can count. The important point is to connect cloud consumption to useful work rather than optimizing the bill in isolation.
+Application instances serve normal demand, while additional application capacity handles peaks and failures. The primary database stores operational records, and the secondary database supports database or regional recovery. Backups recover data after corruption or deletion. Monitoring helps identify and diagnose failures. Networking carries requests and replicated data between these components.
 
-![Safe cost tuning summary showing cost evidence, runtime evidence, ownership evidence, and service promise feeding a shared review before tuning, cleaning up, or keeping capacity](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/safe-cost-tuning-summary.png)
+This lets the team explain a £40,000 bill by purpose: £24,000 serves ordinary customer demand, £7,000 provides redundancy, £3,000 provides backup and recovery, £2,000 provides observability, and approximately £4,000 appears unnecessary. The first optimization target is the £4,000 identified as waste. Removing the £12,000 allocated to redundancy, recovery, and observability would require a separate decision about the protection being surrendered.
 
-*The final review keeps the team from treating every increase as waste, because some spending supports a service promise and some spending is safe to tune.*
+The review now has a complete sequence. Start with resource usage and prices, inspect the resulting bill by resource, service, subscription, region, and time, and connect the costs to application, environment, team, cost center, and resilience role. Establish normal spending, use budgets and anomaly detection to find deviations, investigate their causes, and choose between right-sizing, removing waste, changing rates, or changing architecture. Finally, verify that reliability requirements still hold.
 
-The important pieces fit together like this:
-
-* **Cost Analysis** slices Azure spend by scope, service, resource, tag, date, and meter so the team can find the expensive area.
-* **Billing delay** means the team pairs cost data with live telemetry, logs, deployments, and incidents instead of treating it as second-by-second monitoring.
-* **Tags** connect resources to service, environment, owner, cost center, and criticality, with Azure Policy helping keep those fields consistent.
-* **Budgets** create actual and forecasted alert loops, while workload changes require explicit, tested automation or human review.
-* **Advisor** gives right-sizing candidates, and service owners validate each recommendation against metrics, schedules, recovery promises, and business context.
-* **Cost leak reviews** catch recurring waste such as unattached disks, log ingestion spikes, old blob versions, oversized tiers, and unexpected data movement.
-
-With that loop in place, the team can say something much more useful than "Azure costs too much." They can say which workload changed, when it changed, who owns it, why it changed, and which action is safe.
-
-### What's Next
-
-Now that the team can see and explain Azure spend, the next article moves into recovery planning. We will use RTO, RPO, backups, redundancy, and restore drills to decide which resilience promises deserve extra cost and which workloads can recover more slowly.
-
----
+Visibility supports understanding; understanding supports accountability; and accountability makes informed optimization possible. Cost optimization seeks the required business value and resilience at the lowest justified cost. Minimizing expenditure without considering those requirements answers a different question.
 
 ## Check Your Answers
 
 :::expand[Why Did the Bill Jump?]{kind="recap"}
-Cost visibility starts with one uncomfortable bill and turns it into smaller questions the team can actually answer.
+A total does not identify the cause. Examine the resource, consumption, rate, duration, and purpose. More customer activity, additional regional protection, verbose logs, and forgotten development VMs can all increase the same bill.
 :::
 
 :::expand[What Does Cost Visibility Mean?]{kind="recap"}
-Cost visibility is the habit of connecting Azure spend to time, service, resource, owner, and workload value before tuning anything.
+It means explaining where spending goes, why it is necessary, and who owns it. Measure, attribute, compare, detect, investigate, act, and verify. The last step checks both the saving and continued reliability.
 :::
 
 :::expand[How Does Cost Analysis Find the Cause?]{kind="recap"}
-Cost Analysis turns one large Azure number into grouped views by scope, service, resource, tag, and date.
+Cost Analysis divides spending by dimensions such as service, resource, scope, and time. In the worked example, those views separate higher compute, logging, and network costs from an unchanged disaster-recovery expense.
 :::
 
 :::expand[How Do Tags Assign Ownership?]{kind="recap"}
-Tags connect cost records to service, environment, owner, and budget context, but they need enforcement and boring values.
+Tags connect a technical resource to its application, environment, owner, cost center, criticality, and resilience purpose. Check that those labels appear where needed rather than assuming parent-scope tags automatically reach every resource.
 :::
 
 :::expand[How Do Budgets Warn Before Overspend?]{kind="recap"}
-Budgets create the financial alert loop, while tested automation is required for any workload change.
+Budgets compare actual or forecast spending with an expected boundary and can raise alerts. Crossing that boundary does not automatically shut down resources, and being under budget does not prove that the service is healthy or efficient.
 :::
 
 :::expand[How Does Right-Sizing Remove Waste?]{kind="recap"}
-Right-sizing means changing resource size after cost evidence and workload evidence agree.
+It matches capacity to normal demand, peaks, and failure requirements. Average CPU usage alone cannot establish the safe size; memory, I/O, latency, autoscaling, and failover needs also matter.
 :::
 
 :::expand[Which Azure Cost Leaks Recur?]{kind="recap"}
-Cost leaks are resources or usage patterns that keep billing after their original purpose is gone.
+Look for forgotten compute, oversized resources, excessive logs and retention, unnecessary traffic, unsuitable tiers or rates, duplicate services, and unowned spending. Check recovery purpose before treating a quiet resource as waste.
 :::
 
 :::expand[How Does a Cost Review Fit Together?]{kind="recap"}
-Azure cost visibility connects billing views, tags, budgets, Advisor, and workload evidence into one operating habit.
+Compare spending with useful output and the protection bought against failures. Attribute architectural costs by purpose, prioritize identified waste, and verify that changes preserve required availability and recovery.
 :::
 
 ## References
 
-* [Azure Cost Management overview](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/overview-cost-mgt)
-* [Understand Cost Management data](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/understand-cost-mgt-data)
-* [Group and filter options in Cost Analysis and Budgets](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/group-filter)
-* [Common cost analysis uses](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/cost-analysis-common-uses)
-* [Cost Management Query API](https://learn.microsoft.com/en-us/rest/api/cost-management/query/usage)
-* [Use tags to organize Azure resources](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/tag-resources)
-* [Policy definitions for tagging resources](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/tag-policies)
-* [Group and allocate costs using tag inheritance](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/enable-tag-inheritance)
-* [Create and manage Azure budgets](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/tutorial-acm-create-budgets)
-* [Cost recommendations in Azure Advisor](https://learn.microsoft.com/en-us/azure/advisor/advisor-reference-cost-recommendations)
-* [Manage data disks in Azure Virtual Machines](https://learn.microsoft.com/en-us/azure/virtual-machines/windows/tutorial-manage-data-disk)
-* [Azure Blob Storage lifecycle management overview](https://learn.microsoft.com/en-us/azure/storage/blobs/lifecycle-management-overview)
+- [Microsoft Cost Management](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/)
+- [Cost Analysis](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/quick-acm-cost-analysis)
+- [Azure resource tags](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/tag-resources)
+- [Azure budgets](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/tutorial-acm-create-budgets)
+- [Cost Optimization tradeoffs](https://learn.microsoft.com/en-us/azure/well-architected/cost-optimization/tradeoffs)

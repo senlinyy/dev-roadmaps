@@ -1,0 +1,37 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/dev": { "type": "dir", "mode": 488, "owner": "dev", "group": "dev" },
+    "/srv": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/srv/myapp": { "type": "dir", "mode": 488, "owner": "root", "group": "myapp" },
+    "/srv/myapp/data": { "type": "dir", "mode": 504, "owner": "root", "group": "myapp" },
+    "/srv/myapp/data/cache.db": { "type": "file", "content": "cache-version=3\n", "mode": 420, "owner": "root", "group": "root" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "dev", "uid": 1000, "primaryGroup": "dev", "gid": 1000 },
+      { "name": "myapp", "uid": 997, "primaryGroup": "myapp", "gid": 997 }
+    ],
+    "sessionGroups": ["dev"],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["namei", "chown", "test", "ls"],
+    "forbidCommandPatterns": ["chmod\\s+(?:0?777|a\\+rwx)"],
+    "minCommandCount": 4,
+    "expectedFs": {
+      "/srv/myapp/data/cache.db": { "type": "file", "modeEquals": 420, "ownerEquals": "myapp", "groupEquals": "myapp" }
+    },
+    "expectedPermissions": {
+      "access": [
+        { "user": "myapp", "path": "/srv/myapp/data/cache.db", "operation": "write", "allowed": true }
+      ]
+    }
+  }
+}

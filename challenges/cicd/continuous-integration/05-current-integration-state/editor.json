@@ -1,0 +1,307 @@
+{
+  "language": "yaml",
+  "activeFile": "pipeline.yaml",
+  "files": [
+    {
+      "filename": "pipeline.yaml",
+      "initialValue": "version: 2\njobs:\n  validate:\n    needs: []\n    steps:\n      -\n        checkout:\n          ref: \"head\"\n      -\n        setup:\n          runtime: \"24\"\n      -\n        install:\n          mode: \"locked\"\n      -\n        check:\n          name: \"lint\"\n  integrate:\n    needs:\n      - \"validate\"\n    steps:\n      -\n        merge:\n          policy: \"merge-policy.yaml\"\n"
+    },
+    {
+      "filename": "merge-policy.yaml",
+      "initialValue": "checks:\n  - \"lint\"\ncurrent: false\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "readOnly": true,
+      "initialValue": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Current candidate is healthy\",\n      \"description\": \"All required checks pass for the candidate.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"unit-failure\",\n      \"title\": \"Integrated unit test fails\",\n      \"description\": \"The older head passed; the candidate does not.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": false,\n            \"message\": \"Combined checkout schema breaks the unit contract.\"\n          },\n          \"types\": {\n            \"passed\": true,\n            \"message\": \"Type contract passed.\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"Checkout API/database integration passed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          },\n          \"unit@head-42\": {\n            \"passed\": true,\n            \"message\": \"Old head passed.\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"stale-evidence\",\n      \"title\": \"Type result belongs to old head\",\n      \"description\": \"A reported green type result names head-42, not the candidate.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": true,\n            \"message\": \"Checkout unit tests passed.\"\n          },\n          \"types\": {\n            \"passed\": true,\n            \"message\": \"Stale type report.\",\n            \"revision\": \"head-42\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"Checkout API/database integration passed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"missing-check\",\n      \"title\": \"Type result is unavailable\",\n      \"description\": \"Missing required evidence must not authorize integration.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": true,\n            \"message\": \"Checkout unit tests passed.\"\n          },\n          \"types\": {\n            \"passed\": false,\n            \"message\": \"Required type-check evidence was not produced.\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"Checkout API/database integration passed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "pipeline.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "workshop": {
+      "candidate": "candidate-43",
+      "head": "head-42",
+      "now": 1000,
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "Lint passed."
+        },
+        "unit": {
+          "passed": true,
+          "message": "Checkout unit tests passed."
+        },
+        "types": {
+          "passed": true,
+          "message": "Type contract passed."
+        },
+        "integration": {
+          "passed": true,
+          "message": "Checkout API/database integration passed.",
+          "runtime": "24",
+          "service": "postgres"
+        }
+      },
+      "pools": {
+        "public": {
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "trusted": false,
+          "network": []
+        },
+        "release": {
+          "os": [
+            "linux"
+          ],
+          "trusted": true,
+          "network": [
+            "production"
+          ]
+        },
+        "linux-only": {
+          "os": [
+            "linux"
+          ],
+          "trusted": false,
+          "network": []
+        }
+      },
+      "services": {
+        "postgres": {
+          "image": "postgres-17",
+          "readyAfter": 3,
+          "healthy": true
+        },
+        "app": {
+          "image": "checkout-test",
+          "readyAfter": 2,
+          "healthy": true
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "title": "Current candidate is healthy",
+        "description": "All required checks pass for the candidate.",
+        "workshop": {}
+      },
+      {
+        "id": "unit-failure",
+        "title": "Integrated unit test fails",
+        "description": "The older head passed; the candidate does not.",
+        "workshop": {
+          "checks": {
+            "lint": {
+              "passed": true,
+              "message": "Lint passed."
+            },
+            "unit": {
+              "passed": false,
+              "message": "Combined checkout schema breaks the unit contract."
+            },
+            "types": {
+              "passed": true,
+              "message": "Type contract passed."
+            },
+            "integration": {
+              "passed": true,
+              "message": "Checkout API/database integration passed.",
+              "runtime": "24",
+              "service": "postgres"
+            },
+            "unit@head-42": {
+              "passed": true,
+              "message": "Old head passed."
+            }
+          }
+        }
+      },
+      {
+        "id": "stale-evidence",
+        "title": "Type result belongs to old head",
+        "description": "A reported green type result names head-42, not the candidate.",
+        "workshop": {
+          "checks": {
+            "lint": {
+              "passed": true,
+              "message": "Lint passed."
+            },
+            "unit": {
+              "passed": true,
+              "message": "Checkout unit tests passed."
+            },
+            "types": {
+              "passed": true,
+              "message": "Stale type report.",
+              "revision": "head-42"
+            },
+            "integration": {
+              "passed": true,
+              "message": "Checkout API/database integration passed.",
+              "runtime": "24",
+              "service": "postgres"
+            }
+          }
+        }
+      },
+      {
+        "id": "missing-check",
+        "title": "Type result is unavailable",
+        "description": "Missing required evidence must not authorize integration.",
+        "workshop": {
+          "checks": {
+            "lint": {
+              "passed": true,
+              "message": "Lint passed."
+            },
+            "unit": {
+              "passed": true,
+              "message": "Checkout unit tests passed."
+            },
+            "types": {
+              "passed": false,
+              "message": "Required type-check evidence was not produced."
+            },
+            "integration": {
+              "passed": true,
+              "message": "Checkout API/database integration passed.",
+              "runtime": "24",
+              "service": "postgres"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Current candidate is healthy\",\n      \"description\": \"All required checks pass for the candidate.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"unit-failure\",\n      \"title\": \"Integrated unit test fails\",\n      \"description\": \"The older head passed; the candidate does not.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": false,\n            \"message\": \"Combined checkout schema breaks the unit contract.\"\n          },\n          \"types\": {\n            \"passed\": true,\n            \"message\": \"Type contract passed.\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"Checkout API/database integration passed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          },\n          \"unit@head-42\": {\n            \"passed\": true,\n            \"message\": \"Old head passed.\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"stale-evidence\",\n      \"title\": \"Type result belongs to old head\",\n      \"description\": \"A reported green type result names head-42, not the candidate.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": true,\n            \"message\": \"Checkout unit tests passed.\"\n          },\n          \"types\": {\n            \"passed\": true,\n            \"message\": \"Stale type report.\",\n            \"revision\": \"head-42\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"Checkout API/database integration passed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"missing-check\",\n      \"title\": \"Type result is unavailable\",\n      \"description\": \"Missing required evidence must not authorize integration.\",\n      \"workshop\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"Lint passed.\"\n          },\n          \"unit\": {\n            \"passed\": true,\n            \"message\": \"Checkout unit tests passed.\"\n          },\n          \"types\": {\n            \"passed\": false,\n            \"message\": \"Required type-check evidence was not produced.\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"Checkout API/database integration passed.\",\n            \"runtime\": \"24\",\n            \"service\": \"postgres\"\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "merge",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "types",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "merged": "candidate-43"
+          },
+          "absent": []
+        }
+      },
+      {
+        "id": "unit-failure",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "failed",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "merge"
+            }
+          ]
+        }
+      },
+      {
+        "id": "stale-evidence",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "merge",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": []
+        }
+      },
+      {
+        "id": "missing-check",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "types",
+              "outcome": "failed",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "merge"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

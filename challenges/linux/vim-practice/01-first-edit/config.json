@@ -1,0 +1,51 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/app.conf": {
+      "type": "file",
+      "content": "enabled=false\nport=8080\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "vim",
+      "cat"
+    ],
+    "expectedFs": {
+      "/home/dev/app.conf": {
+        "type": "file",
+        "contentEquals": "enabled=true\nport=8080\n"
+      }
+    },
+    "expectedVim": [
+      {
+        "label": "Make Your First Edit",
+        "path": "/home/dev/app.conf",
+        "actions": [
+          "insert",
+          "write"
+        ],
+        "savedContentEquals": "enabled=true\nport=8080\n",
+        "edited": true
+      }
+    ],
+    "expectedResults": [
+      {
+        "label": "saved file inspection",
+        "commands": [
+          "cat"
+        ],
+        "stdoutEquals": "enabled=true\nport=8080\n",
+        "exitCode": 0
+      }
+    ]
+  }
+}

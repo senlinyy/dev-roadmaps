@@ -1,0 +1,141 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "mainline",
+      "type": "single",
+      "scenario": "Two developers changed the checkout calculation independently. Each reports passing laptop tests, but their branches have not been checked against the latest mainline. The team proposes allowing direct pushes to save review time. Which approach best protects integration?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Require relevant automated checks and review before merging the combined change."
+        },
+        {
+          "id": "b",
+          "text": "Accept laptop results and run shared checks only after a release fails."
+        },
+        {
+          "id": "c",
+          "text": "Keep the branches isolated until release day so they cannot conflict sooner."
+        },
+        {
+          "id": "d",
+          "text": "Require a successful package build but make correctness tests advisory."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Shared integration needs reproducible checks and controlled merging. Laptop results miss combined changes; long-lived isolation postpones feedback; packaging alone does not establish correctness. Branch protection can enforce the chosen required checks. [Official reference](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)."
+    },
+    {
+      "id": "lock-mismatch",
+      "type": "single",
+      "scenario": "A pull request changes a dependency declaration but leaves its committed lockfile unchanged. The clean worker rejects installation before tests start. A teammate suggests switching CI to an installer that updates the lock automatically. What should the team do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Retry the unchanged workflow until a compatible version happens to resolve."
+        },
+        {
+          "id": "b",
+          "text": "Remove the lockfile so every worker independently selects dependencies."
+        },
+        {
+          "id": "c",
+          "text": "Update and review the lock during development, then retain frozen installation in CI."
+        },
+        {
+          "id": "d",
+          "text": "Mark installation optional because the unit tests remain required."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "The mismatch is useful evidence of an inconsistent change. Repair and review the dependency record before CI validates it. Retrying, deleting the lock, or continuing without a valid installation hides the problem rather than reproducing the intended dependency graph. [Official reference](https://docs.npmjs.com/cli/commands/npm-ci/)."
+    },
+    {
+      "id": "flaky-signal",
+      "type": "single",
+      "scenario": "The same commit passes a worker test on its third run. Investigation shows the test sleeps for one second before checking an asynchronous result; busy workers sometimes need longer. Which response repairs the CI signal?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Increase retries and consider the first eventual pass sufficient evidence."
+        },
+        {
+          "id": "b",
+          "text": "Wait for the actual result with a bounded timeout, then investigate genuine failures."
+        },
+        {
+          "id": "c",
+          "text": "Remove the test from required CI without assigning an owner or return date."
+        },
+        {
+          "id": "d",
+          "text": "Run the test only on an idle developer laptop before merging."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The test should synchronize with an observable condition, not an assumed delay. Retries can hide the race, unmanaged removal loses coverage, and a special laptop avoids the shared environment instead of making the signal reliable. [Official reference](https://sre.google/sre-book/testing-reliability/)."
+    },
+    {
+      "id": "frequent-integration",
+      "type": "single",
+      "scenario": "A checkout redesign has remained on a branch for six weeks. Mainline has changed its pricing interface twice, and integration now produces many failures at once. Which working pattern would have reduced this risk?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep the branch private and perform one comprehensive review at release time."
+        },
+        {
+          "id": "b",
+          "text": "Increase packaging speed while leaving the integration schedule unchanged."
+        },
+        {
+          "id": "c",
+          "text": "Merge everything immediately and rely on production metrics to find mistakes."
+        },
+        {
+          "id": "d",
+          "text": "Integrate smaller reviewed changes frequently with checks against shared mainline."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Small, frequently integrated changes narrow the interval in which assumptions diverge and make failures easier to attribute. A late large review, faster packaging alone, or unchecked merging does not provide that feedback loop. [Official reference](https://sre.google/sre-book/release-engineering/)."
+    },
+    {
+      "id": "required-evidence",
+      "type": "multiple",
+      "scenario": "The dashboard is green, but its only job installs dependencies and builds a package. The checkout unit-test command was removed last week, and lint is currently optional. Which two review comments identify actual gaps in the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Packaging success does not show that checkout behavior was tested."
+        },
+        {
+          "id": "b",
+          "text": "A successful install means the removed tests would also have passed."
+        },
+        {
+          "id": "c",
+          "text": "The required lint and test checks must be executed and enforced before downstream work."
+        },
+        {
+          "id": "d",
+          "text": "A test result from the previous commit supplies the missing evidence for this change."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "A run can establish only what it executed. Installation supplies tools, not correctness evidence; visual presentation cannot replace checks. Required validation should control downstream work rather than merely appear in a release checklist. [Official reference](https://docs.github.com/en/actions/get-started/understand-github-actions)."
+    }
+  ]
+}

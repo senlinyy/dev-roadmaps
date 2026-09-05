@@ -1,7 +1,7 @@
 ---
 title: "Workload Identities, Service Principals, And Managed Identities"
-description: "Understand how Azure workloads prove identity with app registrations, service principals, managed identities, workload identity federation, tokens, RBAC, and runtime evidence."
-overview: "Azure workload access is about giving software its own caller identity instead of shipping long-lived secrets. This article follows the Orders API and its deployment pipeline through service principals, managed identities, workload identity federation, Azure SDK credential choices, RBAC role assignments, and the evidence teams use when runtime access fails."
+description: "Separate workload identity, authentication credentials, and permissions, then choose managed identity or federation and diagnose the actual caller behind an access request."
+overview: "Software needs its own identity to call other services. Follow a web application, invoice-processing Functions, and deployment automation through Entra objects, managed identity lifecycles, token requests, federation, permissions, and practical access failures."
 tags: ["azure", "microsoft-entra-id", "managed-identity", "service-principal", "workload-identity", "rbac"]
 order: 3
 id: article-cloud-providers-azure-identity-security-managed-identities-and-workload-access
@@ -29,13 +29,11 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-In the previous article, we looked at **Azure RBAC** as the place where Azure connects a known caller to a role at a scope. That gave us the authorization side. Now we need to spend a full article on the software callers themselves, because production systems have more than human users. APIs call Key Vault. Background workers write blobs. Deployment pipelines update Container Apps. Monitoring jobs read logs. Those callers need identity too.
+A web application asks Storage to read `customer.json`. Storage cannot accept the application's claim that it should be trusted without evidence. It needs to establish which software is calling and whether that caller may read the file.
 
-The Orders team runs `ca-orders-api-prod`, an Azure Container Apps workload that reads database credentials from `kv-devpolaris-prod` and writes invoice exports to Blob Storage. The same team also has a GitHub Actions workflow that deploys new revisions. Both pieces are software, but they have different jobs. The running API needs runtime access to Key Vault and Storage. The pipeline needs deployment access to update Azure resources.
+Using a developer's account can hide that problem during local testing. The application works while the developer is signed in, then fails after deployment because production uses a different identity—or has no suitable identity configured. Workload identity makes the software's caller explicit so its access can be managed separately from the person who wrote it.
 
-Those callers expose several layers that are easy to blur together. **Workload identity** is the broad category. An **app registration** holds identity configuration for software, while a **service principal** is the tenant-local principal that can receive access. A **managed identity** gives an Azure-hosted workload an Azure-managed caller identity. **Workload identity federation** lets external automation such as GitHub Actions obtain temporary access without storing a client secret.
-
-Keep these questions in view as you work through the lesson:
+These questions follow that identity from its directory record to the token and permission check used by the destination:
 
 1. **Why Do Workloads Need Their Own Identities?**
 2. **How Do App Registrations and Service Principals Represent Workloads?**
@@ -47,470 +45,396 @@ Keep these questions in view as you work through the lesson:
 8. **How Do You Debug the Full Identity Chain?**
 
 ## Why Do Workloads Need Their Own Identities?
-<!-- section-summary: One Orders system connects service principals, managed identities, workload identity federation, RBAC, and runtime evidence without merging their responsibilities. -->
+<!-- section-summary: Software needs a caller identity independent of its developers; identity, credential, and permission answer three separate questions. -->
 
-![Orders workload identity map showing GitHub Actions using a deployment service principal, the Container App using a managed identity, Azure RBAC gates, and evidence logs](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/orders-workload-identity-map.png)
+A **workload identity** represents software rather than a person. Microsoft Entra includes applications, service principals, and managed identities within this area. [The workload identity overview](https://learn.microsoft.com/en-us/entra/workload-id/workload-identities-overview) describes the category.
 
-*The map separates the two callers in the Orders system: the deployment pipeline uses a deployment identity, while the running API uses a managed identity, and both still pass through RBAC and evidence logs.*
+The security flow resembles a human sign-in in its broad structure. Alice proves her identity through a password, passkey, or MFA, obtains a token through Entra, and presents suitable evidence to Storage. Storage then evaluates the relevant access rules. Software uses a machine authentication mechanism instead of an interactive human method, but the destination still needs both authentication and authorization.
 
-The important thread is simple. **Identity gives software a caller name. RBAC gives that caller permission. Evidence proves which caller actually made the request.** If those three pieces blur together, teams end up with secrets in app settings, broad Contributor assignments, pipeline tests that prove the wrong identity, and production failures that feel random.
+Three separate concepts explain the relationship:
 
-The broad term is **workload identity**. App registrations, service principals, managed identities, and federation describe different ways to represent or authenticate those software callers.
-
-### Workload Identities
-<!-- section-summary: A workload identity is an identity for software, automation, or a running service that needs to authenticate without pretending to be a human. -->
-
-A **workload identity** is an identity used by software. The workload might be an API, a batch job, a container, a virtual machine script, a CI/CD workflow, an integration service, or a scheduled cleanup process. In Microsoft Entra ID, workload identities include applications, service principals, and managed identities.
-
-That definition matters because a readable audit trail points software actions at software identities. If `ca-orders-api-prod` reads a secret from Key Vault, the log should point at the Orders API identity. If GitHub Actions updates a production revision, the log should point at the deployment identity. If a cleanup job deletes old blobs, the log should point at the cleanup job. The caller name should match the system doing the work.
-
-For the Orders team, we can describe three different identity shapes:
-
-| Caller | Identity shape | Main job |
+| Concept | Question answered | Example |
 |---|---|---|
-| `orders-admin-web` | App registration plus service principal | Sign users in and call the Orders API |
-| `ca-orders-api-prod` | Managed identity | Read Key Vault secrets and write invoice blobs at runtime |
-| GitHub Actions deploy workflow | Service principal or user-assigned managed identity with federation | Deploy Azure resources without storing a client secret |
+| Identity | Which caller is this? | Application X |
+| Credential | How does the caller prove control of that identity? | A secret, certificate-based proof, federated assertion, or Azure-managed mechanism |
+| Permission | What may the established identity do? | Application X may read blobs in Storage account Y |
 
-The word **principal** means the thing that can receive access. A human user can be a principal. A group can be a principal. A service principal or managed identity can also be a principal. Azure RBAC uses that principal record when it decides whether the caller can perform an action at a scope.
+Identity, credential, and permission must remain distinct. Creating an identity does not automatically establish a credential on every computer, and proving an identity does not automatically grant a resource action. The three pieces cooperate rather than substituting for one another.
 
-The first production habit is to name the workload identity by job and environment. `mi-orders-api-prod` tells us this is a managed identity for the production Orders API. `spn-orders-deploy-prod` tells us this is a service principal for production deployment. Access still comes from role assignments, and good names make those assignments, reviews, and incident logs much easier to read.
+### Why a personal account is the wrong lifecycle for software
 
-Once the team gives software its own identity, the next question is why this is worth the trouble. The answer is usually a secret that has already spread farther than anyone planned.
+Consider application code that downloads a file:
 
-### The Problem
-<!-- section-summary: Long-lived application secrets create leak, rotation, ownership, and audit problems, so production teams move software access toward token-based workload identity. -->
-
-A **client secret** is a password-like value that an application can use with Microsoft Entra ID to request tokens. A **connection string** or **access key** is another kind of secret that lets software reach a service directly. These values are common because they are quick to set up. A developer can paste a value into an app setting, run a deployment, and make the first version of the app work.
-
-The problem arrives after the first version works. The same secret can appear in local `.env` files, CI variables, app settings, support tickets, shell history, build logs, screenshots, and old release notes. A leaked secret can keep working until the team rotates or deletes it. A secret with a long expiration date can outlive the person who created it, the pipeline that used it, and the environment where it first belonged.
-
-The Orders API carries a shape like this during an early prototype:
-
-```yaml
-ORDERS_KEY_VAULT_URL: https://kv-devpolaris-prod.vault.azure.net
-AZURE_TENANT_ID: tenant-devpolaris
-AZURE_CLIENT_ID: client-orders-api-prod
-AZURE_CLIENT_SECRET: copied-secret-value
+```python
+storage.download_blob("orders.json")
 ```
 
-This configuration tells the app how to authenticate as a software identity. The tenant ID names the directory. The client ID names the app identity. The client secret proves the app can use that identity. The vault URL names the target service. The code may be clean, but the runtime now carries a reusable password.
+This line illustrates the requested operation; the surrounding client setup determines which identity the request uses. If it runs as Alice, the application depends on Alice's account lifecycle and permissions. What happens when she leaves? What if her access is much broader than the application's needs? What happens when MFA is required, or when the job runs unattended at 03:00?
 
-Rotation is where this causes operational pain. The team has to create a new secret, update every place that stores it, deploy safely, verify the app is using the new value, and remove the old value. During an incident, the team has to ask where the old value was copied. If a pipeline uses the same secret as the running API, the logs are also harder to read because deployment and runtime activity can share one caller.
+A dedicated identity for OrderProcessor avoids expressing those software requirements through a person's account. Alice has a human user identity, while OrderProcessor has a workload identity. Calling it a user account for software can be a useful starting analogy, provided we remember that its implementation and authentication methods differ from those of a human account.
 
-Azure gives us several better paths. A service principal can use a certificate instead of a secret, which improves some handling but still creates a credential lifecycle. A managed identity lets Azure-hosted workloads request tokens without developers managing the underlying credential. Workload identity federation lets external automation exchange a trusted external token for a Microsoft Entra token. To understand those paths, we first need the app registration and service principal split.
+The separation also makes permissions easier to review. The team can ask what OrderProcessor needs rather than infer the answer from everything Alice is authorized to do. The same code may use different credential providers locally and in Azure, so its permissions need to be checked under the identity used in each environment.
+
+Before choosing how software authenticates, Azure needs a directory representation of the application. That introduces application objects and service principals.
 
 ## How Do App Registrations and Service Principals Represent Workloads?
-<!-- section-summary: An app registration describes software integration with Microsoft Entra ID, while a service principal is the tenant-local security principal that receives access. -->
+<!-- section-summary: An application object defines software, a service principal represents it in a tenant, and credentials prove control of that identity rather than defining its permissions. -->
 
-An **app registration** is the identity configuration for an application in Microsoft Entra ID. It describes how the software integrates with Microsoft sign-in and token flows. A registration can include the client ID, supported account types, redirect URIs, secrets or certificates, API permissions, exposed scopes, app roles, and token settings.
+An **app registration** creates the application's identity configuration in Entra. Its **application object** describes the application, while a **service principal** represents the application's security identity inside a particular tenant. The blueprint-and-instance analogy captures the difference: one describes the application definition, and the other is the tenant-local principal that can receive permission.
 
-A **service principal** is the tenant-local identity for that application. Microsoft describes the application object as the global application representation, and the service principal as the local representation inside a tenant. The service principal is the object that receives permissions, appears in enterprise application records, shows up in sign-in evidence, and participates in authorization decisions.
+For Contoso CRM, the registration can describe the application name, client ID, redirect URIs, supported account types, requested API permissions, certificates, and federated credentials. These settings define how the application participates in identity flows. The service principal is the concrete identity referred to when a permission system says to give Contoso CRM Reader access.
 
-For a single-tenant internal tool, the app registration and its service principal may both live in `devpolaris.com`. For a multitenant SaaS app, the application object lives in the vendor tenant, while each customer tenant gets its own service principal after consent. That lets each tenant manage its own assignments, consent records, and policies for the same application.
+[Microsoft's application-object documentation](https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals) explains the template and local-representation relationship. Keeping both objects visible is useful because different administrative operations target different layers.
 
-The Orders deployment identity has a record shape like this:
+### A definition can have several tenant-local instances
 
-```json
-{
-  "displayName": "spn-orders-deploy-prod",
-  "appId": "client-orders-deploy-prod",
-  "objectId": "principal-orders-deploy-prod",
-  "servicePrincipalType": "Application"
-}
+Suppose MyInvoiceApp is registered in tenant A with client ID `abc123`. Its service principal in that tenant has object ID `sp-789`. The application object answers which application is defined; the service principal answers which local directory security identity represents it.
+
+Creating an app registration normally also creates the corresponding service principal in its home tenant. A multitenant application makes the distinction even clearer: one vendor application definition can have a service principal in tenant A and a different service principal in tenant B. Each tenant manages its local identity and access relationship.
+
+This is why the phrase “instance of an application in a tenant” is useful. The definition can remain shared while the authorizable directory objects remain tenant-specific. A local permission assignment needs to identify the appropriate principal, not merely a familiar application display name.
+
+### Client ID and object ID identify different things
+
+The **application/client ID** identifies the application or workload in token-request configuration. The **service principal object ID**, also called its principal ID in relevant Azure interfaces, identifies the specific directory security principal commonly used when granting permissions.
+
+If one interface shows client ID `a1b2c3...` and another shows object ID `x7y8z9...`, those values are not interchangeable. They answer “which application?” and “which actual directory object?” respectively. Different APIs expose both because their operations refer to different objects in the model.
+
+Knowing a client ID is also not authentication proof. An arbitrary computer cannot claim to be OrderProcessor merely because it knows the application's identifier. Some mechanism must establish that the caller controls the identity being requested.
+
+### Secrets and certificates supply authentication evidence
+
+A traditional application can authenticate using a client ID plus a client secret, or a client ID plus a certificate/private-key arrangement. The client ID selects the application; the credential supplies proof of control. A client secret is conceptually similar to a machine password, though the protocol is not literally a human username/password login.
+
+A configuration might contain these placeholders:
+
+```text
+TENANT_ID=...
+CLIENT_ID=...
+CLIENT_SECRET=...
 ```
 
-The `appId` is also called the client ID. Code and token flows often use it. The `objectId` is the service principal object ID in this tenant. Azure RBAC role assignments use that principal ID when they grant access. A reviewer usually needs both fields because the client ID explains which app configuration is being used, while the object ID explains which tenant-local principal received the Azure role.
+The workload presents the required evidence to Entra. If authentication succeeds, Entra issues an access token for the target resource. The target receives that token rather than simply trusting the application's configured name.
 
-This is the place where portal names can confuse beginners. **App registrations** is where developers manage app configuration such as redirect URIs, credentials, API permissions, scopes, and app roles. **Enterprise applications** is where operators often inspect service principals, user assignment, consent, sign-in logs, and tenant-local application access. Both areas describe the same software story from different angles.
+The secret still needs storage. Source code is an inappropriate place for it; possible management locations include an environment variable, GitHub secret, Kubernetes Secret, Key Vault, or pipeline variable. Even with suitable storage, somebody must create, store, protect, rotate, replace, and monitor the credential's expiration.
 
-Service principals are useful, and they can still carry credentials. The Orders pipeline can authenticate as `spn-orders-deploy-prod` with a client secret or certificate. That gets us back to the credential problem, so the next section looks at when that is acceptable and where teams usually move next.
+Certificates improve some properties of authentication but still require credential lifecycle management, especially protection of private-key material. Managed identity and federation address this operational burden by changing how the workload obtains trusted authentication evidence.
 
-### Service Principal Credentials
-<!-- section-summary: Service principals can use secrets or certificates, but those credentials need owners, expiration, rotation, and a reason they still exist. -->
+### Unpack overloaded requests into separate operations
 
-A **service principal credential** is proof that software can use a service principal. The most familiar credential is a client secret. A certificate is another option. In both cases, the app presents credential material to Microsoft Entra ID, and Microsoft Entra ID can issue a token if the credential is valid and the token request matches the configured application.
+“Create a service principal for Terraform” often compresses four tasks: register an application, create or locate its service principal, configure an authentication method, and grant authorization. Completing one of those tasks does not imply the others are complete.
 
-This pattern still appears in production. A legacy deployment tool might only support a service principal secret. A third-party integration might need a client secret because managed identity or federation support is missing from the integration. A certificate might fit an internal automation service where certificate storage and rotation already have strong controls.
-
-For the Orders team, a service principal secret might appear in GitHub Actions like this:
-
-```yaml
-AZURE_CLIENT_ID: client-orders-deploy-prod
-AZURE_TENANT_ID: tenant-devpolaris
-AZURE_CLIENT_SECRET: stored-in-ci-secrets
-AZURE_SUBSCRIPTION_ID: sub-devpolaris-prod
-```
-
-This works, but it creates a maintenance promise. Someone owns the secret. Someone knows the expiration date. Someone can rotate it safely. Someone can revoke it during an incident. Someone can prove which environments had a copy. If the same secret supports several environments, the blast radius grows because one leaked value can affect more than one place.
-
-A cleaner service principal design has a narrow job and narrow access. `spn-orders-deploy-prod` should deploy Orders production resources. Runtime secret reads, local development scripts, and staging deployments should use their own identities when they are separate jobs. The service principal should receive only the Azure RBAC roles it needs, at the smallest useful scope, and its credential setup should match the risk of production deployment.
-
-Many teams now move CI/CD service principals from client secrets to **workload identity federation**. We will come back to that later in the article because the deployment pipeline is an external workload. First, we need the Azure-hosted runtime path, because the running Orders API has an even better option: managed identity.
+Similarly, saying that a managed identity has Contributor is shorthand for a role assignment associated with its backing principal ID. Portals and command-line tools can hide some of the object-model details, but understanding them makes it easier to locate a failed step instead of repeatedly recreating identities or adding roles.
 
 ## How Do Managed Identities Work?
-<!-- section-summary: A managed identity gives an Azure resource a Microsoft Entra workload identity whose credential lifecycle Azure manages. -->
+<!-- section-summary: A managed identity is a special service principal with Azure-managed credentials; choose system or user assignment by lifecycle and shared-permission boundaries. -->
 
-A **managed identity** is a Microsoft Entra workload identity that can be assigned to an Azure resource. The running code can request Microsoft Entra tokens through the Azure hosting environment, and Azure manages the underlying credential. Microsoft describes managed identities as a way for applications to obtain Microsoft Entra tokens without developers managing credentials.
+For a supported Azure workload, a **managed identity** lets Azure manage the authentication credential. Enabling it on an Azure Function creates an identity represented in Entra by a special service principal. The developer does not receive an identity password, store a client secret for it, or rotate that underlying credential.
 
-For the Orders API, this means `ca-orders-api-prod` can use `mi-orders-api-prod` when it needs to read `kv-devpolaris-prod` or write invoice blobs. The application code can drop `AZURE_CLIENT_SECRET`, the container image can avoid storage account keys, and the pipeline can stop pasting runtime secrets into app settings. The runtime asks Azure for a token, and Azure issues a token for the identity attached to the workload.
+[The managed identity overview](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview) describes credentials that Azure manages without exposing them to developers. This changes authentication management, not the target resource's authorization model.
 
+A managed identity is therefore a special service-principal type. Every managed identity has a backing service principal, but an ordinary service principal need not be a managed identity. Unlike ordinary application registrations, managed identities do not have a corresponding application object in the directory. That exception matters when searching for them in application-oriented administrative views.
 
-![Managed identity runtime path showing a Container App using a managed identity endpoint, Microsoft Entra token issuance, Azure RBAC, Key Vault, and Storage](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/managed-identity-runtime-path.png)
+### System-assigned identity follows the resource
 
-*This runtime path shows the part that changes when a team adopts managed identity: the app still requests a token and still needs RBAC, but the long-lived client secret leaves app settings.*
+Enable system-assigned managed identity on `payments-vm`, and Azure creates an identity tied to that VM. Its lifecycle follows the resource: enabling the identity establishes it, and deleting the VM removes it.
 
-Managed identities create a special service principal in Microsoft Entra ID. That detail connects this article back to the service principal section. A managed identity is still a principal that can receive Azure RBAC assignments and appear in sign-in evidence. The difference is ownership of the credential lifecycle. Azure owns the credential material behind the managed identity path, while the team owns the role assignments, attachment to resources, naming, and review process.
+This model fits an identity whose meaning is “this specific Azure resource.” For an InvoiceProcessor Function or InvoiceFunction, the identity can logically belong to that Function alone. If the resource is deleted and the workload no longer needs that identity, the coupled lifecycle expresses that relationship directly. [The managed identity glossary](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identities-glossary) defines the system-assigned model.
 
-The Orders team can inspect a user-assigned managed identity like this:
+### User-assigned identity exists independently
 
-```bash
-az identity show \
-  --name mi-orders-api-prod \
-  --resource-group rg-devpolaris-orders-prod
-```
+A **user-assigned managed identity** is its own Azure resource. An identity called `payments-reader` can be attached to Function A and Function B. Deleting Function A leaves `payments-reader` in existence because the identity does not belong exclusively to that Function's lifecycle.
 
-The useful fields are the name, client ID, principal ID, resource ID, location, and tags. The client ID helps application code choose the right user-assigned identity when several identities are available. The principal ID is the object ID Azure RBAC evaluates. The resource ID names the managed identity as an Azure resource.
+This is useful when one logical identity should survive resource recreation or when several resources intentionally require the same security identity. A blue deployment and green deployment can both use ProductionAppIdentity while the deployment resources change. [Managed identity best practices](https://learn.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/managed-identity-best-practice-recommendations) discuss the independent and reusable model.
 
-```json
-{
-  "name": "mi-orders-api-prod",
-  "clientId": "client-mi-orders-api-prod",
-  "principalId": "principal-mi-orders-api-prod",
-  "id": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod",
-  "tags": {
-    "service": "orders-api",
-    "env": "prod"
-  }
-}
-```
+Choose according to lifecycle and security boundaries. One resource, one identity, and one lifetime often support system assignment. A persistent identity across recreation or deliberate reuse supports user assignment. The names of the two options do not themselves describe which boundary the workload should use.
 
-This gives the Orders API a caller identity. Key Vault and Storage access still come from roles at those target services, and the app still has to run on a hosting platform that supports the managed identity type the team selected. That takes us to the two managed identity types.
+### Sharing identity also shares permission
 
-### System-Assigned And User-Assigned Identities
-<!-- section-summary: System-assigned identities belong to one Azure resource, while user-assigned identities are standalone resources that can attach to one or more workloads. -->
+If VM A, VM B, and VM C can all act as SharedIdentity, and that identity has Storage Contributor, each participating resource can potentially use that permission. Compromising any resource able to use the shared identity may therefore expose the permissions of the shared principal.
 
-A **system-assigned managed identity** is enabled directly on one Azure resource. Azure creates the identity for that resource, only that resource can use it to request tokens, and the identity lifecycle follows the resource lifecycle. If the resource is deleted, Azure deletes the system-assigned identity too.
+Reuse reduces some lifecycle complexity while increasing the number of workloads connected to the same authorization boundary. **Blast radius** describes the extent of possible impact from a compromise or mistake. Identity reuse must be reviewed in those terms, rather than treating fewer identity resources as automatically preferable.
 
-A **user-assigned managed identity** is a standalone Azure resource. The team creates it separately, then attaches it to one or more Azure resources. Its lifecycle is independent from any one compute resource, so the team has to delete it when it is no longer needed. The same user-assigned identity can be shared across resources when those resources should share the same caller and permissions.
+[Microsoft's identity recommendations](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identity-best-practice-recommendations) emphasize least privilege. The decision should establish both which resources use an identity and what that identity can access. Managing credentials for those resources does not make their shared access harmless.
 
-| Identity type | Plain-English shape | Orders example | Best fit |
-|---|---|---|---|
-| **System-assigned** | One identity attached to one resource | Identity on one `ca-orders-api-prod` app | One workload with simple lifecycle |
-| **User-assigned** | Standalone identity attached to one or more resources | `mi-orders-api-prod` attached to API revisions | Shared, preapproved, or stable workload identity |
-
-The Orders team chooses a user-assigned identity for production because the identity should stay stable while container revisions change. The team can create `mi-orders-api-prod`, grant it Key Vault and Storage permissions, attach it to the Container App, and keep the identity through future revision rollouts. That gives release reviewers a stable object to inspect even when the app image and revision name change.
-
-Sharing a user-assigned identity needs care. If the API only needs Blob read access and a background worker needs Blob write access, sharing one identity can give the API more power than its job requires. Separate identities often make least privilege clearer because each workload receives the roles for its own behavior. A shared identity fits when the workloads truly share the same job and the same access.
-
-There is also an operational reason user-assigned identities show up in larger systems. Fast creation and deletion of many system-assigned identities can create Microsoft Entra object churn and replication timing issues. A pre-created user-assigned identity can reduce that churn for workloads that recycle often. The choice still depends on the workload lifecycle, access shape, and review process, so platform teams treat user-assigned identity as a stable design option rather than a universal default.
-
-Now that the Orders API has an identity attached, the code has to use it. The next section moves from Azure resource setup into the application runtime.
+With an identity available, application code still has to request and send a token. Managed identity does not cause the source and destination services to skip the usual request-and-authorization flow.
 
 ## How Does Application Code Obtain and Use a Token?
-<!-- section-summary: Azure SDK credential classes let application code request tokens from the runtime identity instead of reading a stored client secret. -->
+<!-- section-summary: Application code asks a credential provider for a token and sends it to the destination; the actual selected identity may differ between local and Azure environments. -->
 
-Runtime code should use token-based authentication when the target Azure service supports Microsoft Entra authentication. In JavaScript and TypeScript applications, the Azure Identity library provides credential classes that can request tokens through local developer tools during development and through managed identity when the app runs in Azure.
+An Azure Function needing a blob should not have to embed its identity's client secret in source code. With a supported identity arrangement, the application can ask the environment's credential mechanism for a token.
 
-For a user-assigned managed identity in production, the Orders API can use `ManagedIdentityCredential` with the managed identity client ID. This makes the production code ask the Azure hosting environment for a token tied to `mi-orders-api-prod`.
+An Azure SDK pattern can look conceptually like this:
 
-```ts
-import { ManagedIdentityCredential } from "@azure/identity";
-import { SecretClient } from "@azure/keyvault-secrets";
+```python
+credential = DefaultAzureCredential()
 
-const credential = new ManagedIdentityCredential({
-  clientId: process.env.AZURE_CLIENT_ID
-});
-
-const vaultUrl = "https://kv-devpolaris-prod.vault.azure.net";
-const secrets = new SecretClient(vaultUrl, credential);
-
-const databasePassword = await secrets.getSecret("orders-db-password");
+client = BlobServiceClient(
+    account_url=...,
+    credential=credential
+)
 ```
 
-The code carries the vault URL and the managed identity client ID. The secret value for authentication is gone. The app still needs the `AZURE_CLIENT_ID` setting when a user-assigned identity is used, because the hosting resource might have more than one identity attached. That client ID is a public identifier used to choose the right managed identity.
+This fragment illustrates credential wiring rather than a complete runnable application. The account URL and surrounding SDK setup still need to be supplied. The architectural point is that the client receives a credential provider instead of a hardcoded client secret.
 
-Local development usually uses a different credential source. A developer running the Orders API on a laptop uses local developer credentials rather than the Container App managed identity. During development, `DefaultAzureCredential` can discover local developer credentials from tools such as Azure CLI or Visual Studio Code, depending on the developer environment and the configured SDK chain.
+The provider obtains an access token using an available authentication mechanism. The application then sends the token with the request to Storage, commonly as `Authorization: Bearer <token>`. The token placeholder is sensitive runtime evidence, not a string to hardcode or print indiscriminately.
 
-```ts
-import { DefaultAzureCredential, ManagedIdentityCredential } from "@azure/identity";
+### The target evaluates the token and its own permissions
 
-function createCredential() {
-  if (process.env.NODE_ENV === "production") {
-    return new ManagedIdentityCredential({
-      clientId: process.env.AZURE_CLIENT_ID
-    });
-  }
+The broad flow remains authentication followed by a resource request. The application authenticates through Azure/Entra, obtains an access token, then presents that token to Storage. Managed identity simplifies how the application authenticates; it does not merge all participating services into one implicit trust relationship.
 
-  return new DefaultAzureCredential();
-}
-```
+A simplified token identifies an issuer such as Microsoft Entra ID, a subject/principal such as OrderProcessor, an audience of Azure Storage, the Contoso tenant, and an expiration. Storage examines whether the token is valid, whether it is intended for Storage, which principal it represents, and whether that principal may perform the requested operation.
 
-This split keeps the production path explicit. Production uses the managed identity. Local development uses a developer sign-in path. A clean release test should still prove the production runtime identity works, because a local developer account with access to Key Vault says very little about the identity attached to `ca-orders-api-prod`.
+The **audience** identifies the intended resource. A token for another API does not become suitable merely because it came from the same identity provider. The **principal** identifies who received the token, which must match the identity whose permissions the operator expects the resource to use.
 
-The code can now request a token. The next step is authorization, because Key Vault and Storage still check whether that identity has the right role at the right scope.
+These details are useful when mentally expanding an application-to-database arrow. The application obtains a token as some identity, receives it, sends it, and the database or service authorizes that identity. The important diagnostic question is which identity the application actually uses now, rather than which identity the deployment designer intended it to use.
+
+### Local success can exercise a different identity
+
+`DefaultAzureCredential` illustrates this difference. On a developer's laptop, the available credential can come from a developer login and represent Alice. Deployed in Azure, the same application can use managed identity and represent InvoiceFunctionIdentity.
+
+If Alice has broad access in the local environment while the managed identity has no suitable role in production, the same source code can work locally and fail after deployment. Local and production runtime identities are different, so the authorization evidence from one environment does not prove the other is configured correctly.
+
+The example is not a reason to abandon SDK credential abstractions. It is a reason to identify the credential provider and resulting principal when testing them. A successful client call demonstrates that the identity actually selected for that call had access under those conditions; it does not establish that every possible identity selected by the same code will have access.
+
+### Select among available identities deliberately
+
+An App Service can have a system-assigned principal S and a user-assigned principal U. If U has Key Vault Secrets User but the SDK authenticates as S, authentication can succeed while vault authorization fails.
+
+Recording the non-secret client ID, principal/object ID, and tenant ID helps compare the caller that obtained the token with the principal that received permission. Those identifiers help locate a mismatch without exposing the token or secret itself. The next section explains the permission half of that comparison.
 
 ## Why Does a Managed Identity Still Need Permission?
-<!-- section-summary: Managed identity proves the workload caller, and Azure RBAC or service-specific authorization still grants what that caller can do. -->
+<!-- section-summary: Enabling identity supplies a caller, not access; authorization must match the actual principal, operation, target scope, and destination's permission model. -->
 
-Enabling a managed identity gives the workload a caller identity. **Authorization still comes from Azure RBAC or the target service access model.** This is the most important production distinction in the whole article. Identity answers who the app is. Permission answers what that known app can do.
+Turning Managed Identity on establishes a workload identity. It does not automatically grant access to Azure resources. A token proving that the caller is InvoiceFunction still leaves Storage with a separate question: may InvoiceFunction read this blob?
 
-The Orders API needs to read secret values from `kv-devpolaris-prod`. If the vault uses Azure RBAC for its data plane, the managed identity needs a role such as **Key Vault Secrets User** at the vault scope. That role allows reading secret contents on vaults using the Azure RBAC permission model. The same API might need **Storage Blob Data Contributor** at a storage account or container scope to write invoice exports.
+Azure RBAC commonly expresses the answer as a **principal**, a **role**, and a **scope**. The principal is who receives access, the role lists allowed actions, and the scope is where those actions apply. For InvoiceFunction, Storage Blob Data Reader at the intended invoices storage scope can supply the required read access.
 
-```bash
-az role assignment create \
-  --assignee principal-mi-orders-api-prod \
-  --role "Key Vault Secrets User" \
-  --scope /subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-prod
-```
+The conceptual combination is who, can do what, and where. A shorthand path such as `/subscriptions/.../storageAccounts/invoices` expresses the intended target in a diagram, while a real assignment needs the actual applicable Azure resource scope. The target boundary must be verified rather than inferred from a friendly name.
 
-That command has the same RBAC shape from the previous article. The principal is `principal-mi-orders-api-prod`. The role is `Key Vault Secrets User`. The scope is the production vault. The result is one access grant for one workload identity at one target.
+### Identity and authorization can change independently
 
-The useful output is the assignment record. The reviewer should save the principal ID, role name, and vault scope together because those three fields prove the exact secret-read grant.
+App A can use Identity A while App B uses Identity B, with neither identity initially having permissions. Grant Identity A Blob Data Reader on Storage, and A can now read while B remains unauthorized. Both identities existed before the role assignment; the assignment changed authorization, not their existence.
 
-```json
-{
-  "principalId": "principal-mi-orders-api-prod",
-  "principalType": "ServicePrincipal",
-  "roleDefinitionName": "Key Vault Secrets User",
-  "scope": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-prod"
-}
-```
+The reverse separation matters too. Creating an RBAC assignment for a principal does not provide a workload with credentials to authenticate as it. The workload needs both a working authentication mechanism and permission for the operation it intends to perform.
 
-Blob access is a separate grant because the target service and operation are different:
+This explains two very different failure modes: the application may fail to acquire an appropriate token, or it may acquire one successfully and then be denied by the destination. Treating both as “managed identity is broken” obscures the distinction that determines the next check.
 
-```bash
-az role assignment create \
-  --assignee principal-mi-orders-api-prod \
-  --role "Storage Blob Data Contributor" \
-  --scope /subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports
-```
+### Scope and operation must match the destination
 
-A matching output should point at the storage account or container scope, not the whole subscription. That difference matters because blob write access at subscription scope would cover every storage account under that subscription.
+Azure RBAC's management hierarchy runs from management group to subscription to resource group to resource. A permission reaches the applicable descendants of its assignment scope. Blob Data Reader on StorageAccount1 does not establish blob read access on StorageAccount2.
 
-```json
-{
-  "principalId": "principal-mi-orders-api-prod",
-  "principalType": "ServicePrincipal",
-  "roleDefinitionName": "Storage Blob Data Contributor",
-  "scope": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
-}
-```
+Do not ask only whether an identity has a familiar role somewhere. Ask whether that principal has the required role at a scope covering this exact target. The role's name and its assignment location work together to define the access.
 
-A successful Key Vault read proves one access path: secret read at the vault. A blob write needs its own role assignment at the storage scope. One identity can have several role assignments, and each assignment has its own reason. This is why access review should list identity, role, scope, and purpose for every target.
+Also distinguish **control-plane** operations from **data-plane** operations. Creating or configuring a storage account is management work. Reading, writing, or deleting blobs is work on the service's data. A resource-management role such as Storage Account Contributor should not be treated as automatic proof of the blob data permission the application needs.
 
-Broad roles deserve special attention. Granting Contributor at a resource group might make a blocked workload move again, but the app may receive permission to update many resources it never needs to touch. Runtime identities usually deserve data roles or narrow custom roles. A workload that reads one secret and writes one blob container should receive permissions shaped around those two jobs, with broader management power reserved for reviewed production reasons.
+Storage Blob Data Reader is an example of a role aimed at reading blob data. The correct question is which exact operation is being attempted and which authorization system controls that operation. The distinction is especially important when a deployment identity can configure a resource but the running application cannot read its contents.
 
-The runtime path is now clear: Azure-hosted workload, managed identity, token request, RBAC at target services. The deployment path is different because GitHub Actions runs outside Azure. That takes us to workload identity federation.
+### Some APIs use different permission systems
+
+Workload identities can call more than Azure Resource Manager and Azure services using Azure RBAC. Other targets may evaluate OAuth scopes, application permissions, app roles, database permissions, ACLs, or custom authorization. An ACL is an access-control list expressing allowed access to its protected object.
+
+Microsoft Graph, for example, has its own application and delegated permission model. It would be inaccurate to say that every workload identity receives all permissions through Azure RBAC. Entra supplies identity evidence; the target API determines what that identity may do using its own model.
+
+That rule holds regardless of how the workload authenticated. For software running outside Azure, federation offers another authentication mechanism while leaving the target's authorization responsibility intact.
 
 ## How Does Workload Identity Federation Replace Shared Secrets?
-<!-- section-summary: Workload identity federation lets trusted external workloads exchange external IdP tokens for Microsoft Entra access tokens without storing client secrets. -->
+<!-- section-summary: Federation exchanges a trusted external workload assertion for an Entra token, validating issuer, subject, audience, and signature instead of depending on a stored Azure client secret. -->
 
+A GitHub Actions runner needs to deploy to Azure but is not itself an Azure resource with ordinary managed identity naturally available. A traditional setup creates an Azure service principal, issues a client secret, and stores it in GitHub as something like `AZURE_CLIENT_SECRET`.
 
-For the Orders deployment pipeline, GitHub Actions can request an OIDC token from GitHub. Microsoft Entra ID can trust that token only when a configured federated identity credential matches the issuer, subject, and audience. After the match succeeds, Microsoft Entra ID issues an access token for the configured application or user-assigned managed identity. Azure RBAC then decides what that deployment identity can do.
+That allows authentication, but it also creates a long-lived credential to store and maintain. Whoever obtains the secret may be able to impersonate the identity while the credential remains usable. Improving secret storage helps, yet the system still depends on protecting possession of that secret.
 
-![Workload identity federation flow showing GitHub Actions receiving an OIDC token, matching issuer subject and audience in Microsoft Entra ID, receiving an access token, and deploying through RBAC](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/workload-identity-federation.png)
+**Workload identity federation** uses an external identity provider's signed assertion instead. GitHub authenticates the workload and issues a token describing its repository, workflow, or environment context. Entra is configured to trust only the intended issuer and matching claims for an application registration or user-assigned managed identity. [Microsoft's federation overview](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation) explains this secretless trust relationship.
 
-*Federation replaces a stored Azure client secret with a short-lived external token exchange, so the review shifts to the issuer, subject, audience, deployment identity, and RBAC scope.*
+### Define the trust narrowly
 
-The **issuer** names the external identity provider, such as GitHub's OIDC issuer. The **subject** narrows which workload is trusted, such as one repository, branch, tag, pull request, or environment pattern. The **audience** names the intended token exchange target, commonly `api://AzureADTokenExchange` for Azure token exchange scenarios. These fields must match the token sent by the external identity provider.
+For a production GitHub environment, the relationship can be configured as follows:
 
-A simplified federated credential shape for the Orders production deploy might look like this:
-
-```json
-{
-  "name": "github-orders-prod",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:devpolaris/orders-api:environment:production",
-  "audiences": [
-    "api://AzureADTokenExchange"
-  ]
-}
+```text
+Issuer: https://token.actions.githubusercontent.com
+Subject: repo:contoso/orders:environment:production
+Audience: api://AzureADTokenExchange
 ```
 
-That credential says which GitHub workload Microsoft Entra ID should trust for this identity. The Azure RBAC assignment still belongs to the deployment identity. The repository rule and environment protection decide whether GitHub can issue the matching token. Microsoft Entra ID checks the federated credential. Azure RBAC checks the deployment action and scope.
+The **issuer** identifies the token-producing authority. The **subject** identifies the particular workload context the trust accepts. The **audience** identifies the token exchange for which the assertion is intended. Matching these values limits which external assertions Entra should accept for the configured identity.
 
-In a real setup, the federated credential is created on the application or user-assigned managed identity that the pipeline will use. For an application-backed service principal, the command points at the app registration object and passes the issuer, subject, and audience from a small JSON file.
+The workflow presents its GitHub OIDC token. OIDC is the identity protocol through which the provider issues this evidence. Entra verifies the signature, issuer, audience, and subject, then issues an Azure access token when the configured trust requirements are satisfied.
 
-```bash
-az ad app federated-credential create \
-  --id client-orders-deploy-prod \
-  --parameters github-orders-prod-credential.json
+```mermaid
+flowchart LR
+  G[GitHub Actions workload] --> O[GitHub signed OIDC assertion]
+  O --> E[Entra validates configured trust]
+  E --> T[Azure access token]
+  T --> R[Azure resource authorization]
+  class G,O,E,T,R neutral
 ```
 
-The output should echo the trust values. A reviewer can compare `issuer` with the external provider, `subject` with the exact repository and environment, and `audiences` with the Azure token exchange audience.
+The trust is now “GitHub attests that this is the expected workload, and Entra accepts that assertion under this configuration.” GitHub does not need to store an Azure client password for that relationship.
 
-```json
-{
-  "name": "github-orders-prod",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:devpolaris/orders-api:environment:production",
-  "audiences": [
-    "api://AzureADTokenExchange"
-  ]
-}
-```
+### Understand what changed and what did not
 
-This gives the Orders team a secretless CI/CD path. The GitHub workflow can use OIDC token exchange for this flow, so review moves to the federated credential, GitHub environment protections, the deployment identity, and Azure RBAC assignments. The long-lived client secret leaves the workflow, which reduces the places the team has to inspect during a deployment credential incident.
+Secret-based authentication depends primarily on who possesses the Azure client secret. Federated authentication depends on a trusted issuer, expected subject, expected audience, signature verification, and a short-lived assertion. This removes the stored Azure secret from the pipeline's credential inventory.
 
-Now we have two software callers in the same system. The running app uses managed identity. The deployment pipeline uses a federated deployment identity. The next section separates those identities because many production incidents happen when teams test one caller and ship another.
+The external trust configuration still matters. A mismatched subject or issuer can prevent authentication, while an overly broad trust would accept a broader set of workloads than intended. Federation changes the proof of identity; it does not eliminate the need to define exactly which identity a workload may assume.
+
+Nor does federation grant permission by itself. The resulting principal still needs the appropriate Azure or API authorization for the requested action. This keeps federation within the same identity–credential–permission model as managed identity and certificate-based authentication.
+
+A simplified selection process is to use managed identity for a suitable supported Azure runtime, and otherwise use an application/service-principal arrangement with federation where an external provider can supply the required trusted assertion. Secrets or certificates remain possible authentication methods where that arrangement is necessary, with their credential lifecycle work made explicit.
 
 ## Why Must Runtime and Pipeline Identities Stay Separate?
-<!-- section-summary: The identity that deploys a workload is different from the identity the workload uses after it starts, and both need separate evidence. -->
+<!-- section-summary: Deployment automation and running application code are different actors with different management and data permissions, so separate identities limit privilege sharing. -->
 
-The **pipeline identity** deploys or updates Azure resources. The **runtime identity** is the identity the running workload uses after deployment. These identities usually need different roles because their jobs are different. The pipeline might update Container Apps revisions and app settings. The runtime API might read secrets and write blobs. Each identity path needs its own release evidence.
+Consider GitHub Actions deploying an Azure Function that later reads secrets from Key Vault. The pipeline and Function are separate actors. One changes Azure resources; the other runs application code and accesses its dependencies.
 
-The Orders release has two callers:
+The pipeline may need Contributor or other deployment permissions on an application resource group. The Function may need only Key Vault Secrets User on a vault. Those roles correspond to different jobs and should generally be assigned to different identities.
 
-| Job | Caller | Useful permissions |
-|---|---|---|
-| Deploy new production revision | `spn-orders-deploy-prod` through GitHub federation | Update Container Apps revision, read deployment state |
-| Read secrets and write invoice blobs at runtime | `mi-orders-api-prod` attached to `ca-orders-api-prod` | Key Vault secret read, Blob data write |
+### Shared identity transfers deployment privileges to runtime
 
-A common failure can come from a good pipeline check. The deployment workflow reads a Key Vault secret before release and succeeds. The new production revision starts, handles traffic, and then fails with `Forbidden` when it reads the same secret. The pipeline proved the pipeline identity could read the secret. The runtime failure points at the managed identity attached to the app.
+Suppose one identity serves both the pipeline and the application. The pipeline requires broad enough permissions to deploy infrastructure, while the runtime may only need Storage Blob Data Reader. If the application is compromised, the attacker may be able to use the shared identity's deployment privileges to modify infrastructure.
 
-The release record should carry both identities. It should show which identity deployed the resources and which identity the running app will use. It should also show the target role assignments for each identity. That makes rollback and incident response more precise because identity changes are part of release state, just like image tags, configuration, routes, and secret references.
+A separate DeploymentIdentity with Contributor on the app resource group and RuntimeIdentity with blob-read access on Storage prevents that automatic sharing of authorization. The runtime's identity remains limited to the data access its work requires, rather than inheriting the permission necessary to deploy its own environment.
 
-This separation also protects production. The deployment identity can focus on deployment actions while the app reads secrets at runtime through managed identity. The runtime identity can focus on service-to-service calls instead of role assignment creation or Container Apps revision updates. Each caller gets the power for its own job, and the logs point at the system that made each request.
+This is the same principle used for independent workloads: each security boundary receives its own identity and the minimum required access. The distinction should be visible even if the same team owns both the pipeline and the application.
 
-Once the two callers are separate, troubleshooting needs concrete evidence. The next section turns a runtime failure into a small set of checks.
+### Follow two trust chains in one deployment
+
+An API deployment can use GitHub OIDC with a federated credential on a deployment service principal. Entra exchanges the expected GitHub assertion for an Azure token, and the deployment principal uses Contributor on the App Resource Group to deploy App Service.
+
+At runtime, App Service uses a managed identity represented by its own service principal. It obtains a token intended for Key Vault and receives only the appropriate Key Vault Secrets User access. The runtime does not reuse the GitHub deployment credential or service principal to fetch the application's secret.
+
+```mermaid
+flowchart TD
+  subgraph deployment[Deployment]
+    G[GitHub Actions] --> F[Federated deployment identity]
+    F --> C[Contributor on app resource group]
+    C --> A[Deploy App Service]
+  end
+  subgraph runtime[Runtime]
+    APP[Running App Service] --> M[Managed runtime identity]
+    M --> K[Key Vault Secrets User on vault]
+    K --> S[Read required secret]
+  end
+  class G,F,C,A,APP,M,K,S neutral
+```
+
+There are two trust chains because there are two callers. The deployment chain starts with the external workflow's assertion. The runtime chain starts with Azure's managed identity mechanism. Both reach Entra-issued tokens and target authorization, but their principal IDs, required audiences, and permissions differ.
+
+### Management work and data work reinforce the separation
+
+Creating App Service, updating a Function, deploying ARM/Bicep, and setting configuration are generally management-plane tasks. A pipeline identity commonly acts against Azure Resource Manager for those operations.
+
+The runtime instead reads or writes data through Storage, SQL, or Key Vault. Its authorization may use data roles or the target's own permission model. Separating identities lets access reviews follow those responsibilities without having to explain why application code carries infrastructure-deployment authority.
+
+The distinction also clarifies testing. A successful deployment proves that the deployment caller could perform deployment operations. It does not prove that the running app's separate identity can read a blob or a secret. Runtime verification must exercise the runtime identity itself.
 
 ## How Do You Debug the Full Identity Chain?
-<!-- section-summary: Inspect the attached identity, principal ID, target role assignments, token path, and denied action to clarify a runtime identity failure. -->
+<!-- section-summary: Work forward from code and credential selection to token audience, actual principal, operation, authorization model, role, and scope before changing access. -->
 
-**Failure evidence** is the set of records that proves which workload identity was used, which role assignments existed, and which target service denied or allowed the request. For managed identity problems, the useful evidence usually comes from the hosting resource identity, the managed identity object, Azure RBAC role assignments, target service logs, and Microsoft Entra sign-in logs.
+When an application reports access denied, reconstruct the request before changing IAM settings. **IAM** refers broadly to identity and access management. Randomly adding roles can hide the original mismatch while granting more access than the application requires.
 
-The first evidence record is the running app. The Orders team can inspect the identity attached to the Container App and confirm which caller the deployed revision can actually use:
+For an InvoiceFunction-to-Storage call, identify the software, its intended InvoiceFunctionManagedIdentity, the Azure-managed authentication mechanism, Entra as token issuer, Storage as intended audience, the principal Storage actually sees, Storage Blob Data Reader as the required permission, and the storage-account or container scope where it applies.
 
-```bash
-az containerapp identity show \
-  --name ca-orders-api-prod \
-  --resource-group rg-devpolaris-orders-prod
-```
+These are eight separate observations in one chain. A failure can occur before token acquisition, during token validation, or while evaluating the action at its scope. Knowing the last successful stage narrows the next investigation.
 
-The useful output should connect the running app to `mi-orders-api-prod` and show the client ID or principal ID. An app with no attached identity lacks the managed identity token path. An app with a different attached identity points the team toward a role assignment mismatch.
+### Distinguish authentication from authorization failures
 
-```json
-{
-  "type": "UserAssigned",
-  "userAssignedIdentities": {
-    "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod": {
-      "clientId": "client-mi-orders-api-prod",
-      "principalId": "principal-mi-orders-api-prod"
-    }
-  }
-}
-```
+An **authentication failure** prevents the application from obtaining or using valid identity evidence. Possible causes include the wrong client ID, expired secret, invalid certificate, incorrect tenant, federated subject mismatch, wrong issuer, or unavailable managed identity mechanism.
 
-The next evidence record is the managed identity object itself:
+An **authorization failure** occurs when identity evidence succeeds but the destination denies the requested action. Causes include a missing RBAC assignment, wrong role, role at the wrong scope, authenticating as a different resource's identity, wrong API permission, or permission-propagation delay.
 
-```bash
-az identity show \
-  --name mi-orders-api-prod \
-  --resource-group rg-devpolaris-orders-prod
-```
+The distinction prevents an unproductive response such as adding a role when the client cannot obtain a token, or replacing credentials when the token is valid but the principal lacks access. The remedy must address the failed stage.
 
-This confirms the client ID, principal ID, resource ID, location, and tags for the identity. The principal ID is the value the RBAC check uses, so the next step is listing assignments for that principal:
+### Treat HTTP status as a lead, not absolute proof
 
-```bash
-az role assignment list \
-  --assignee principal-mi-orders-api-prod \
-  --all
-```
+`401 Unauthorized` often points to a missing, invalid, or expired token, or a token with an incorrect audience. `403 Forbidden` often indicates that the caller is known but lacks permission for the operation.
 
-A useful output for the Key Vault path has the identity, the Key Vault role, and the vault scope in one place:
+Those are useful first diagnostic directions, not universal guarantees for every API. For a 403, begin by checking principal, role, scope, and operation. For a 401, investigate token presence and validity along with the resource for which it was issued. Then use the destination's actual error evidence to confirm the interpretation.
 
-```json
-[
-  {
-    "principalName": "mi-orders-api-prod",
-    "principalType": "ServicePrincipal",
-    "roleDefinitionName": "Key Vault Secrets User",
-    "scope": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-prod"
-  }
-]
-```
+### Compare expected and observed identities
 
-The target service matters too. Key Vault has a control plane and a data plane. Managing the vault resource and reading a secret value are different operations. A role that lets a person view the vault resource gives control-plane visibility, while secret content reads need an appropriate Key Vault data role at a suitable scope when the vault uses Azure RBAC on the data plane.
+The system-assigned S versus user-assigned U example is a common pattern: U received Key Vault Secrets User, but the SDK selected S. Both are valid identities, so authentication can work while the required role applies to the wrong principal.
 
-The strongest troubleshooting sentence sounds like this: **the running Container App has `mi-orders-api-prod` attached, that identity has principal ID `principal-mi-orders-api-prod`, and that principal has `Key Vault Secrets User` at the `kv-devpolaris-prod` scope.** If the request still fails after that, the team can look at propagation timing, vault permission model, network access, secret name, token audience, SDK configuration, and target service logs.
+Likewise, `DefaultAzureCredential` can select Alice's developer login locally and InvoiceFunctionIdentity in production. Local access may succeed because Alice has broader permissions, while production has no applicable runtime assignment. Compare actual client, principal, and tenant IDs instead of assuming the environment selected the intended caller.
 
-HTTP status codes help place the failure. A `401 Unauthorized` response usually points toward authentication: no token, an expired token, the wrong audience, or a credential chain that selected the wrong identity. A `403 Forbidden` response usually means the service recognized the caller but denied the requested operation because of RBAC, a service permission model, a condition, or another policy. Network timeouts and DNS failures happen before either authorization result, so they belong to the connectivity path.
+Next compare the assignment target. The correct principal and role on StorageAccount1 do not authorize the same action on StorageAccount2. Finally compare operation types: permission to manage a storage-account resource is not equivalent to permission to read its blobs. These checks explain many failures without widening access.
 
-This is a compact debugging algorithm: identify the running workload, read its attached identity, compare client and principal IDs, prove how the SDK obtains a token, inspect the token audience, list role assignments at the target and parent scopes, verify network reachability, and read the target service log for the exact denied action. Each step eliminates one class of explanation.
+### Use a repeatable investigation sequence
 
-This evidence gives the team a repeatable path. The final section brings the whole article back together so the Orders design can be read as one system.
+1. Identify the code that made the failing request.
+2. Identify the credential provider it actually used.
+3. Confirm the tenant against which it authenticated.
+4. Record the non-secret client and principal identifiers that obtained the token.
+5. Determine whether token acquisition succeeded.
+6. Confirm the audience or resource for which the token was issued.
+7. Identify the exact operation attempted at the destination.
+8. Determine which authorization mechanism controls that operation.
+9. Inspect the role or permission held by the actual principal.
+10. Verify the scope to which that permission applies.
 
-### Putting It All Together
-<!-- section-summary: A clean Azure workload identity design separates software callers, removes unnecessary long-lived secrets, grants narrow RBAC, and keeps evidence for each access path. -->
+The sequence moves from executing software to identity evidence to permission. It avoids treating “the app has an identity” or “the identity has a role” as a complete explanation. Each statement needs the actual environment, target, and operation to establish whether it is relevant to the failed request.
 
-Workload identity has a simple idea behind it: software should have its own caller identity. The Orders API gets its own runtime identity, the deployment pipeline gets its own deployment identity, and a background worker can get a separate identity when it needs different access. Each production job gets a principal that matches the work it performs.
+### Keep the relationships together
 
-Service principals give software a tenant-local identity that can receive permissions and appear in evidence. App registrations describe how software integrates with Microsoft Entra ID. Service principal secrets and certificates can still work, but they create ownership, rotation, and leak questions. Managed identities improve the Azure-hosted runtime path because Azure manages the underlying credential and the workload can request tokens through its hosting environment.
+Ordinary workload identity commonly begins with an app registration and application object, then a tenant-local service principal using a secret, certificate, or federated assertion. A supported Azure workload can instead use a managed identity represented directly by a special service principal with Azure-managed credentials.
 
-The Orders production shape now has clean boundaries:
+External assertions can come from GitHub, Kubernetes, or another supported identity-provider arrangement. The shared outcome is authentication through Entra, an access token for a target, and authorization by that target's RBAC or permission system. The target then allows or denies the request.
 
-| Access path | Identity | Authentication path | Authorization path |
-|---|---|---|---|
-| GitHub Actions deploys a revision | `spn-orders-deploy-prod` | Workload identity federation from GitHub OIDC | Azure RBAC deploy role at Container App or resource group scope |
-| Orders API reads database password | `mi-orders-api-prod` | Managed identity token from Azure runtime | `Key Vault Secrets User` at vault scope |
-| Orders API writes invoice exports | `mi-orders-api-prod` | Managed identity token from Azure runtime | `Storage Blob Data Contributor` at storage scope |
+| Term | Relationship to remember |
+|---|---|
+| Workload identity | Identity belonging to software |
+| App registration/application object | Definition of the application's identity configuration |
+| Service principal | Tenant-local security principal |
+| Credential | Proof used to authenticate as that identity |
+| Managed identity | Special service principal whose credentials Azure manages |
+| System-assigned identity | Lifecycle tied to one Azure resource |
+| User-assigned identity | Independent reusable identity resource |
+| Federation | Trust in another provider's short-lived assertion |
+| Authorization | The target's permission decision for the established principal |
+| Pipeline/runtime identities | Separate callers serving deployment and application work |
 
-The design removes the shipped secret from the app. It separates runtime access from deployment access. It keeps RBAC assignments narrow enough to review. It gives incident responders names, principal IDs, roles, scopes, and logs that match the actual callers.
-
-The important habit is to keep asking four plain questions. **Which workload is calling? Which identity does it use? How does it get a token? What role lets that identity touch the target resource?** Those four questions turn workload identity from a portal mystery into a production access story the team can test, monitor, and review.
-
-![Azure workload identity checklist summarizing the workload caller, chosen identity, token path, role and scope, and evidence records](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/azure-workload-identity-checklist.png)
-
-*The checklist turns the article into one repeatable review path: name the software job, attach the right identity, prove the token path, grant the narrow role, and keep evidence for the request.*
-
-### What's Next
-
-Now we have the workload identity pieces: app registrations, service principals, managed identities, workload identity federation, RBAC assignments, and runtime evidence. The next step is putting those pieces into one complete production setup where the whole access path can be built, tested, and reviewed together.
-
-In **Practical: Set Up Azure Identity And Access For A Startup**, we take the Orders scenario from zero to launch. We create the team groups, set the production subscription and resource group boundary, protect sign-in with Conditional Access, use PIM for privileged changes, register the support dashboard, attach managed identities, grant Key Vault and Storage roles, connect Azure DevOps with workload identity federation, and rehearse the evidence the team keeps before launch.
-
----
+The final check is always the same: can this workload authenticate as the principal it intends to use, and is that principal authorized for this particular operation here? Keeping those questions separate makes the directory terminology and the failure evidence much easier to interpret.
 
 ## Check Your Answers
 
 :::expand[Why Do Workloads Need Their Own Identities?]{kind="recap"}
-This article follows one Orders system so service principals, managed identities, workload identity federation, RBAC, and runtime evidence stay connected. A workload identity is an identity for software, automation, or a running service that needs to authenticate without pretending to be a human. Long-lived application secrets create leak, rotation, ownership, and audit problems, so production teams move software access toward token-based workload identity.
+Software must run independently of a developer's account, permissions, and interactive sign-in. Identity names the caller, a credential proves control of that identity, and permission defines what the established caller may do.
 :::
 
 :::expand[How Do App Registrations and Service Principals Represent Workloads?]{kind="recap"}
-An app registration describes software integration with Microsoft Entra ID, while a service principal is the tenant-local security principal that receives access. Service principals can use secrets or certificates, but those credentials need owners, expiration, rotation, and a reason they still exist.
+The application object defines the application; its service principal is a tenant-local authorizable identity. Client IDs and object/principal IDs identify different layers. Secrets, certificates, and federated assertions are authentication mechanisms, separate from role assignments.
 :::
 
 :::expand[How Do Managed Identities Work?]{kind="recap"}
-A managed identity gives an Azure resource a Microsoft Entra workload identity whose credential lifecycle Azure manages. System-assigned identities belong to one Azure resource, while user-assigned identities are standalone resources that can attach to one or more workloads.
+Azure manages credentials for a special service principal without a corresponding ordinary application object. System assignment follows one resource's lifecycle; user assignment is independent and reusable. Shared identity also shares permissions and the associated blast radius.
 :::
 
 :::expand[How Does Application Code Obtain and Use a Token?]{kind="recap"}
-Azure SDK credential classes let application code request tokens from the runtime identity instead of reading a stored client secret.
+A credential provider obtains a target-specific token, and application code sends it to the resource for validation and authorization. The selected identity may differ between a developer login and managed identity, or between multiple identities attached to one runtime.
 :::
 
 :::expand[Why Does a Managed Identity Still Need Permission?]{kind="recap"}
-Managed identity proves the workload caller, and Azure RBAC or service-specific authorization still grants what that caller can do.
+Identity establishment grants no resource access by itself. Permission must match the actual principal, operation, and scope. Data and management roles differ, and some APIs use scopes, app roles, database permissions, or other models instead of Azure RBAC.
 :::
 
 :::expand[How Does Workload Identity Federation Replace Shared Secrets?]{kind="recap"}
-Workload identity federation lets trusted external workloads exchange external IdP tokens for Microsoft Entra access tokens without storing client secrets.
+An external provider issues a signed workload assertion. Entra checks the configured issuer, subject, audience, and signature before issuing an Azure token. This removes the stored Azure client secret while retaining explicit trust configuration and target authorization.
 :::
 
 :::expand[Why Must Runtime and Pipeline Identities Stay Separate?]{kind="recap"}
-The identity that deploys a workload is different from the identity the workload uses after it starts, and both need separate evidence.
+Deployment automation commonly needs management permissions while runtime code needs narrower data access. Separate identities prevent application compromise from automatically exposing deployment privileges and ensure runtime tests exercise the runtime caller.
 :::
 
 :::expand[How Do You Debug the Full Identity Chain?]{kind="recap"}
-Inspecting the attached identity, principal ID, target role assignments, token path, and denied action clarifies runtime identity failures. A clean Azure workload identity design separates software callers, removes unnecessary long-lived secrets, grants narrow RBAC, and keeps evidence for each access path.
+Identify code, credential provider, tenant, actual principal, token acquisition, audience, operation, permission model, role, and scope. Use 401/403 as diagnostic leads, then confirm the failed stage through evidence rather than adding broad access.
 :::
 
 ## References
 
-- [What are managed identities for Azure resources?](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview)
-- [Application and service principal objects in Microsoft Entra ID](https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals)
-- [Workload identity federation concepts](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation)
-- [Authenticate Azure-hosted JavaScript apps to Azure resources using a user-assigned managed identity](https://learn.microsoft.com/en-us/azure/developer/javascript/sdk/authentication/user-assigned-managed-identity)
-- [Provide access to Key Vault keys, certificates, and secrets with Azure role-based access control](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide)
-- [Managed identity best practice recommendations](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identity-best-practice-recommendations)
+- [Workload identities overview](https://learn.microsoft.com/en-us/entra/workload-id/workload-identities-overview)
+- [Application objects and service principals](https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals)
+- [Managed identities overview](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview)
+- [Managed identities glossary](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identities-glossary)
+- [Managed identity recommendations](https://learn.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/managed-identity-best-practice-recommendations)
+- [Managed identity security and lifecycle practices](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identity-best-practice-recommendations)
+- [Workload identity federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation)

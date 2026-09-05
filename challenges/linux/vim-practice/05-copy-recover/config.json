@@ -1,0 +1,54 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/targets.conf": {
+      "type": "file",
+      "content": "# probe targets\nprimary=api.internal\nhealth=/ready\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "vim",
+      "cat"
+    ],
+    "expectedFs": {
+      "/home/dev/targets.conf": {
+        "type": "file",
+        "contentEquals": "# probe targets\nprimary=api.internal\nprimary=api.internal\nhealth=/ready\n"
+      }
+    },
+    "expectedVim": [
+      {
+        "label": "Copy and Recover",
+        "path": "/home/dev/targets.conf",
+        "actions": [
+          "yank",
+          "put",
+          "undo",
+          "redo",
+          "write"
+        ],
+        "savedContentEquals": "# probe targets\nprimary=api.internal\nprimary=api.internal\nhealth=/ready\n",
+        "edited": true
+      }
+    ],
+    "expectedResults": [
+      {
+        "label": "saved file inspection",
+        "commands": [
+          "cat"
+        ],
+        "stdoutEquals": "# probe targets\nprimary=api.internal\nprimary=api.internal\nhealth=/ready\n",
+        "exitCode": 0
+      }
+    ]
+  }
+}

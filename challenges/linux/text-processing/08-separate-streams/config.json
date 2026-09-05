@@ -1,0 +1,66 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/ready.txt": {
+      "type": "file",
+      "content": "orders-2026-08-25.csv\npayments-2026-08-25.csv\n"
+    },
+    "/home/dev/output.log": {
+      "type": "file",
+      "content": "stale output\n"
+    },
+    "/home/dev/errors.log": {
+      "type": "file",
+      "content": "stale diagnostic\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "cat",
+      "tee"
+    ],
+    "expectedResults": [
+      {
+        "label": "visible combined data and diagnostic",
+        "commands": [
+          "cat",
+          "tee"
+        ],
+        "stdoutEquals": "orders-2026-08-25.csv\npayments-2026-08-25.csv\ncat: missing.txt: No such file or directory\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/ready.txt": {
+        "type": "file",
+        "contentEquals": "orders-2026-08-25.csv\npayments-2026-08-25.csv\n"
+      },
+      "/home/dev/output.log": {
+        "type": "file",
+        "contentEquals": "orders-2026-08-25.csv\npayments-2026-08-25.csv\norders-2026-08-25.csv\npayments-2026-08-25.csv\n"
+      },
+      "/home/dev/errors.log": {
+        "type": "file",
+        "contentEquals": "cat: missing.txt: No such file or directory\ncat: missing.txt: No such file or directory\n"
+      },
+      "/home/dev/combined.log": {
+        "type": "file",
+        "contentEquals": "orders-2026-08-25.csv\npayments-2026-08-25.csv\ncat: missing.txt: No such file or directory\n"
+      },
+      "/home/dev/missing.txt": {
+        "type": "file",
+        "exists": false
+      }
+    }
+  }
+}

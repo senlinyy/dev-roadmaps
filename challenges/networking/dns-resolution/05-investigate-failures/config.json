@@ -1,0 +1,233 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/etc/resolv.conf": {
+      "type": "file",
+      "content": "nameserver 10.20.0.53\n",
+      "mode": 420
+    }
+  },
+  "commandModules": [
+    "linux-system",
+    "networking"
+  ],
+  "system": {
+    "services": [],
+    "processes": {
+      "entries": []
+    },
+    "network": {
+      "interfaces": [
+        {
+          "name": "lo",
+          "index": 1,
+          "mac": "00:00:00:00:00:00",
+          "mtu": 65536,
+          "up": true,
+          "carrier": true,
+          "addresses": [
+            "127.0.0.1/8"
+          ]
+        },
+        {
+          "name": "eth0",
+          "index": 2,
+          "mac": "52:54:00:20:00:10",
+          "mtu": 1500,
+          "up": true,
+          "carrier": true,
+          "addresses": [
+            "10.20.0.10/24"
+          ]
+        }
+      ],
+      "routes": [
+        {
+          "prefix": "0.0.0.0/0",
+          "via": "10.20.0.1",
+          "dev": "eth0",
+          "src": "10.20.0.10"
+        }
+      ],
+      "neighbors": [
+        {
+          "address": "10.20.0.1",
+          "dev": "eth0",
+          "mac": "52:54:00:20:00:01",
+          "state": "REACHABLE"
+        }
+      ],
+      "resolver": "10.20.0.53",
+      "dnsScenario": {
+        "servers": [
+          {
+            "address": "10.20.0.53",
+            "name": "corp-resolver.example.com",
+            "recursive": true,
+            "view": [
+              "public"
+            ],
+            "failures": [
+              {
+                "name": "app.example.com",
+                "status": "SERVFAIL"
+              }
+            ]
+          },
+          {
+            "address": "1.1.1.1",
+            "name": "public-resolver.example",
+            "recursive": true,
+            "view": [
+              "public"
+            ]
+          },
+          {
+            "address": "192.0.2.53",
+            "name": "ns1.example.com",
+            "recursive": false
+          }
+        ],
+        "zones": [
+          {
+            "id": "public",
+            "name": "example.com",
+            "server": "192.0.2.53",
+            "negativeTtl": 60,
+            "records": [
+              {
+                "name": "example.com",
+                "type": "SOA",
+                "value": "ns1.example.com. hostmaster.example.com. 2026090401 3600 600 86400 60",
+                "ttl": 300
+              },
+              {
+                "name": "example.com",
+                "type": "NS",
+                "value": "ns1.example.com.",
+                "ttl": 300
+              },
+              {
+                "name": "ns1.example.com",
+                "type": "A",
+                "value": "192.0.2.53",
+                "ttl": 300
+              },
+              {
+                "name": "app.example.com",
+                "type": "A",
+                "value": "203.0.113.25",
+                "ttl": 300
+              },
+              {
+                "name": "app.example.com",
+                "type": "AAAA",
+                "value": "2001:db8:10::25",
+                "ttl": 300
+              },
+              {
+                "name": "www.example.com",
+                "type": "CNAME",
+                "value": "app.example.com.",
+                "ttl": 300
+              },
+              {
+                "name": "mail.example.com",
+                "type": "MX",
+                "value": "10 mx.example.com.",
+                "ttl": 300
+              },
+              {
+                "name": "new.example.com",
+                "type": "A",
+                "value": "203.0.113.25",
+                "ttl": 300
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": [],
+    "requireCommands": [
+      "dig"
+    ],
+    "expectedNetwork": {
+      "readOnly": true,
+      "observations": [
+        {
+          "kind": "dns",
+          "target": "missing.example.com",
+          "queryType": "A",
+          "resolver": "10.20.0.53",
+          "full": true,
+          "outcome": "NXDOMAIN",
+          "label": "Inspect the full A response for missing.example.com from 10.20.0.53.",
+          "contains": [
+            "IN SOA"
+          ]
+        },
+        {
+          "kind": "dns",
+          "target": "mail.example.com",
+          "queryType": "A",
+          "resolver": "10.20.0.53",
+          "full": true,
+          "outcome": "NOERROR",
+          "label": "Inspect the full A response for mail.example.com from 10.20.0.53.",
+          "contains": [
+            "IN SOA"
+          ]
+        },
+        {
+          "kind": "dns",
+          "target": "app.example.com",
+          "queryType": "A",
+          "resolver": "10.20.0.53",
+          "full": true,
+          "outcome": "SERVFAIL",
+          "label": "Inspect the full A response for app.example.com from 10.20.0.53."
+        },
+        {
+          "kind": "dns",
+          "target": "mail.example.com",
+          "queryType": "MX",
+          "resolver": "10.20.0.53",
+          "full": true,
+          "outcome": "NOERROR",
+          "label": "Inspect the full MX response for mail.example.com from 10.20.0.53.",
+          "contains": [
+            "IN MX 10 mx.example.com."
+          ]
+        },
+        {
+          "kind": "dns",
+          "target": "app.example.com",
+          "queryType": "A",
+          "resolver": "192.0.2.53",
+          "full": true,
+          "outcome": "NOERROR",
+          "label": "Inspect the full A response for app.example.com from 192.0.2.53.",
+          "authoritative": true,
+          "contains": [
+            "IN A 203.0.113.25"
+          ]
+        }
+      ]
+    }
+  }
+}
+

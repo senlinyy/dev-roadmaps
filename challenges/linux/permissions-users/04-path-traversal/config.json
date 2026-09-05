@@ -1,0 +1,38 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/dev": { "type": "dir", "mode": 488, "owner": "dev", "group": "dev" },
+    "/srv": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/srv/web": { "type": "dir", "mode": 448, "owner": "root", "group": "root" },
+    "/srv/web/config.env": { "type": "file", "content": "PORT=8080\n", "mode": 416, "owner": "root", "group": "web" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "dev", "uid": 1000, "primaryGroup": "dev", "gid": 1000 },
+      { "name": "app", "uid": 998, "primaryGroup": "app", "gid": 998, "supplementaryGroups": ["web"] }
+    ],
+    "sessionGroups": ["dev"],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["test", "namei", "chgrp", "chmod"],
+    "forbidCommandPatterns": ["chmod\\s+(?:0?777|a\\+rwx)"],
+    "minCommandCount": 5,
+    "expectedFs": {
+      "/srv/web": { "type": "dir", "modeEquals": 488, "ownerEquals": "root", "groupEquals": "web" },
+      "/srv/web/config.env": { "type": "file", "modeEquals": 416, "ownerEquals": "root", "groupEquals": "web" }
+    },
+    "expectedPermissions": {
+      "access": [
+        { "user": "app", "path": "/srv/web/config.env", "operation": "read", "allowed": true }
+      ],
+      "diagnostics": ["denied:app:read:/srv/web/config.env"]
+    }
+  }
+}

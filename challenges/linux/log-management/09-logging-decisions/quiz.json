@@ -1,0 +1,277 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "source-boundary",
+      "type": "single",
+      "scenario": "Users receive 502 responses. Nginx access logs show the requests, and its error log says `connect() failed (111: Connection refused)` for `127.0.0.1:3000` at 10:21:13. Which next check best follows that evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Validate the public DNS records because an unhealthy upstream can result from the public hostname resolving incorrectly."
+        },
+        {
+          "id": "b",
+          "text": "Inspect the application service journal around 10:21:13 for exits, restarts, and startup failures."
+        },
+        {
+          "id": "c",
+          "text": "Increase Nginx upstream timeouts because refused connections usually indicate slow response generation."
+        },
+        {
+          "id": "d",
+          "text": "Count all HTTP errors from the previous week before checking whether the backend was running."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The request reached Nginx, and the refusal concerns its local upstream. The application journal is the next layer. DNS is not implicated by a local address, timeouts do not repair an absent listener, and a week-long count delays the targeted availability check. [Journal queries](https://man7.org/linux/man-pages/man1/journalctl.1.html)."
+    },
+    {
+      "id": "severity-context",
+      "type": "single",
+      "scenario": "A warning-level journal query shows a dependency timeout for a checkout request. A broader query shows that the same request ID retried and returned 200 one second later. How should the incident view represent this?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep the timeout as the final outcome because warning records have higher evidentiary weight than informational records."
+        },
+        {
+          "id": "b",
+          "text": "Exclude the timeout from the investigation because the final status was successful."
+        },
+        {
+          "id": "c",
+          "text": "Record a timeout followed by successful recovery, then assess the latency and customer impact."
+        },
+        {
+          "id": "d",
+          "text": "Enable debug logging fleet-wide before using either record in the timeline."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Severity narrows a stream; it does not override a later correlated outcome. Both failure and recovery matter. Dropping either loses context, and broad debug logging adds risk without resolving this already-supported timeline. [Priority filtering](https://man7.org/linux/man-pages/man1/journalctl.1.html)."
+    },
+    {
+      "id": "pid-and-boot",
+      "type": "single",
+      "scenario": "Today’s app journal records `status=9/KILL` for PID 1842. A search across all boots finds an OOM entry for PID 1842 from yesterday. What additional evidence is needed before calling today’s exit an OOM kill?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A matching current-boot kernel entry at today’s exit time, correlated with the affected process."
+        },
+        {
+          "id": "b",
+          "text": "A matching process name in yesterday’s kernel entry, regardless of the boot or timestamp."
+        },
+        {
+          "id": "c",
+          "text": "A current 502 access-log record, since that response identifies the kernel’s reason for termination."
+        },
+        {
+          "id": "d",
+          "text": "A successful service restart, since recovery confirms that the original failure was memory pressure."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "PIDs can recur, and KILL alone does not establish its cause. Correlate time, boot, and process with current kernel evidence. The process name, client-facing status, and later recovery cannot substitute for that evidence. [Boot and field filtering](https://man7.org/linux/man-pages/man1/journalctl.1.html)."
+    },
+    {
+      "id": "correlation-schema",
+      "type": "multiple",
+      "scenario": "During a busy second, the proxy logs 50 requests, including one failure. The app emits JSON, but half its records call the correlation field `requestId` and half use `request_id`; one release also logs an authorization header. Which two review changes best preserve useful, safe correlation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Standardize the correlation field and retain explicit timestamps, route, status, and duration."
+        },
+        {
+          "id": "b",
+          "text": "Use the timestamp alone as the request identity so schema differences stop affecting joins."
+        },
+        {
+          "id": "c",
+          "text": "Keep the authorization value only on error records so successful requests cannot leak it."
+        },
+        {
+          "id": "d",
+          "text": "Remove credentials at the logging source while retaining non-secret diagnostic fields."
+        }
+      ],
+      "correct": [
+        "a",
+        "d"
+      ],
+      "explanation": "A stable request field distinguishes simultaneous requests, and safe context supports investigation. Time alone can collide. Credentials remain sensitive at any severity and should not be used for correlation. [Structured journal fields](https://www.freedesktop.org/software/systemd/man/latest/systemd.journal-fields.html)."
+    },
+    {
+      "id": "debug-vs-force",
+      "type": "single",
+      "scenario": "A repaired rotation rule passes `logrotate -d`. The active log has the same inode and size, and no new archive appeared. An engineer reports that the rotation test failed. What is the best response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Re-run debug mode as root because the unchanged inode means the first run lacked permission to rotate."
+        },
+        {
+          "id": "b",
+          "text": "Restart Nginx so the validated debug operation can finish its queued rotation."
+        },
+        {
+          "id": "c",
+          "text": "Remove the active log to make the next debug run detect that rotation is due."
+        },
+        {
+          "id": "d",
+          "text": "Explain that debug mode intentionally changes no files; perform an approved real rotation and verify it separately."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Debug mode validates and describes decisions without changing logs or rotation state. It does not queue work for Nginx. Removing evidence is not a validation step; a forced run is a separate real mutation that needs intentional scope. [Logrotate debug mode](https://man7.org/linux/man-pages/man8/logrotate.8.html)."
+    },
+    {
+      "id": "rotation-ownership",
+      "type": "single",
+      "scenario": "Immediately after rotation, a replacement Nginx log appears as root-owned mode 0600. The master then receives USR1; ownership changes to the worker user and fresh request records arrive. What should the review conclude?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Set the log to mode 0666 because the initial ownership proves the worker will eventually lose access."
+        },
+        {
+          "id": "b",
+          "text": "The reopen sequence is functioning; evaluate post-reopen ownership and writes before changing a working policy."
+        },
+        {
+          "id": "c",
+          "text": "Restart the worker after every rotation because the master cannot manage worker log descriptors."
+        },
+        {
+          "id": "d",
+          "text": "Remove the reopen hook because successful ownership changes show that file creation alone was sufficient."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Nginx’s master reopens logs and assigns ownership for its workers on USR1. The initial snapshot is not proof of failure. World-write access is unnecessary, routine restart is disruptive, and removing the hook ignores the mechanism that made new writes work. [Nginx reopening](https://nginx.org/en/docs/control.html#logs)."
+    },
+    {
+      "id": "retention-boundaries",
+      "type": "single",
+      "scenario": "Nginx archives remain bounded by `rotate 14`, but `/var/log/journal` keeps growing on a small VM. Which change targets the uncontrolled storage without confusing the two logging systems?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Reduce Nginx retention to one copy because logrotate applies its archive count to every log directory."
+        },
+        {
+          "id": "b",
+          "text": "Apply file renaming rules directly to journal data files while journald is running."
+        },
+        {
+          "id": "c",
+          "text": "Set journald storage and free-space limits, with an intentional retention window separate from Nginx rotation."
+        },
+        {
+          "id": "d",
+          "text": "Move both log directories into the application directory so they share its normal cleanup job."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Journal retention has its own controls, including SystemMaxUse, SystemKeepFree, and MaxRetentionSec. A Nginx rule does not govern journal storage, and arbitrary renaming or unrelated cleanup risks corrupting or losing evidence. [Journald retention](https://www.freedesktop.org/software/systemd/man/latest/journald.conf.html)."
+    },
+    {
+      "id": "shipping-proof",
+      "type": "single",
+      "scenario": "A logger test marker appears in the local journal. Rsyslog is active, but its journal reports a suspended output action and a growing queue. A teammate says the marker proves central delivery. Which assessment is best supported?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Local acceptance is proven; central receipt still needs collector-side confirmation while the forwarding failure is investigated."
+        },
+        {
+          "id": "b",
+          "text": "The active service proves delivery because rsyslog stops itself when an output destination is unavailable."
+        },
+        {
+          "id": "c",
+          "text": "The queue proves the collector received the marker because queue records are created only after acknowledgement."
+        },
+        {
+          "id": "d",
+          "text": "Switching to UDP proves delivery more directly by removing the TCP connection failure from the path."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Local emission and process liveness do not prove destination receipt. A suspended output can buffer records while the process runs. A queue is pending work, not proof of acceptance, and changing transport does not create an end-to-end receipt. [Rsyslog queues](https://www.rsyslog.com/doc/concepts/queues.html)."
+    },
+    {
+      "id": "secret-response",
+      "type": "multiple",
+      "scenario": "An application patch stops new bearer tokens from being logged, but yesterday’s archive and the central store still contain an exposed credential. Which two actions address the remaining demonstrated risk?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat the logging patch as complete remediation because retained records do not execute credentials."
+        },
+        {
+          "id": "b",
+          "text": "Rotate the exposed credential so its leaked value is no longer usable."
+        },
+        {
+          "id": "c",
+          "text": "Restrict and review access to retained copies, then handle sensitive evidence under incident and retention policy."
+        },
+        {
+          "id": "d",
+          "text": "Raise the log severity threshold so the credential in old records is no longer searchable."
+        }
+      ],
+      "correct": [
+        "b",
+        "c"
+      ],
+      "explanation": "Stopping the source prevents further leakage; rotating the secret and handling stored copies address what already escaped. Filtering future severity cannot remove old secrets, and passive records can still expose a usable credential. Preserve appropriate incident evidence while restricting access."
+    },
+    {
+      "id": "timeline-clock",
+      "type": "single",
+      "scenario": "For one request ID, Nginx records 10:21:13 with an explicit UTC offset. The application records 10:18:13 without a timezone, while central ingestion shows 10:23:02. Which approach avoids an unsupported causal timeline?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use ingestion time as the event time because central systems receive every producer’s messages in causal order."
+        },
+        {
+          "id": "b",
+          "text": "Subtract three minutes from all application records without checking host configuration."
+        },
+        {
+          "id": "c",
+          "text": "Treat the request ID as sufficient ordering information and omit timestamps from the investigation."
+        },
+        {
+          "id": "d",
+          "text": "Verify host clock synchronization and timezone handling, and distinguish event timestamps from delayed ingestion."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Correlation identifies the request, not the clock accuracy or order of receipt. Verify clocks and unambiguous timestamps before applying an offset or claiming causality. Shipping buffers can delay ingestion, so arrival time is not necessarily event time."
+    }
+  ]
+}

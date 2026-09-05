@@ -1,0 +1,277 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "load-io",
+      "type": "single",
+      "scenario": "A two-vCPU host has load averages of 8.2, 7.8, and 6.9. During slow requests, repeated vmstat reports show:\n\n```text\nr b us sy id wa st\n1 8  7  3 40 50  0\n```\n\nSeveral application processes are in D state. Which investigation should lead?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Profile application CPU because the load is four times the CPU count."
+        },
+        {
+          "id": "b",
+          "text": "Investigate storage waits and blocked tasks before adding CPU capacity."
+        },
+        {
+          "id": "c",
+          "text": "Reduce the worker memory limit because the queue proves RAM exhaustion."
+        },
+        {
+          "id": "d",
+          "text": "Increase worker concurrency so waiting tasks can use the idle CPUs."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Blocked tasks, D state, and I/O wait point toward storage. Load also counts uninterruptible tasks, so high load does not prove CPU saturation. These counters do not establish a memory shortage, and more workers can add blocked work without fixing storage. [vmstat manual](https://man7.org/linux/man-pages/man8/vmstat.8.html)."
+    },
+    {
+      "id": "single-core",
+      "type": "single",
+      "scenario": "An eight-vCPU VM reports 15% aggregate CPU while one request path is slow. mpstat shows one CPU near 100% busy and the others mostly idle; one application process reports about 100% CPU. What is the most useful next step?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Double VM CPUs because the aggregate CPU percentage conceals a machine-wide capacity shortage."
+        },
+        {
+          "id": "b",
+          "text": "Add workers immediately because each process should stay below 100% CPU."
+        },
+        {
+          "id": "c",
+          "text": "Investigate whether the hot path is serialized or single-threaded before choosing a capacity change."
+        },
+        {
+          "id": "d",
+          "text": "Increase swap because idle CPUs indicate the application cannot obtain RAM."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Per-CPU evidence identifies a constrained execution path rather than exhaustion of all CPUs. One CPU can account for about 100% process CPU. More cores or workers help only if the work can parallelize; these observations provide no evidence of memory pressure. [mpstat manual](https://man7.org/linux/man-pages/man1/mpstat.1.html)."
+    },
+    {
+      "id": "memory-cache",
+      "type": "single",
+      "scenario": "A file-serving host has 8 GiB RAM, 256 MiB free, 4.5 GiB available, and a large page cache. Latency is normal and current swap rates are zero. An alert uses only the free column. Which response best fits the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Investigate the alert threshold and retain useful cache while watching availability and stalls."
+        },
+        {
+          "id": "b",
+          "text": "Drop caches now and judge recovery by the increase in completely free RAM."
+        },
+        {
+          "id": "c",
+          "text": "Restart the largest RSS process because low free memory already identifies the offender."
+        },
+        {
+          "id": "d",
+          "text": "Disable swap to force Linux to reclaim all of the cache before memory use grows."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Healthy availability and latency make a free-only alert misleading. Dropping cache discards useful data; restarting a process is not justified by these observations. Disabling swap changes recovery options without addressing an observed bottleneck. [free manual](https://man7.org/linux/man-pages/man1/free.1.html)."
+    },
+    {
+      "id": "swap-activity",
+      "type": "single",
+      "scenario": "During a slow request window, free reports 1 GiB of allocated swap. The first vmstat row has zero swap rates, but two five-second interval rows show sustained swap-in and swap-out. Memory PSI rises. Which evidence should guide current incident triage?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The first row, because a since-boot average smooths the incident's noisy measurements."
+        },
+        {
+          "id": "b",
+          "text": "The allocated swap total, because any used swap proves current thrashing."
+        },
+        {
+          "id": "c",
+          "text": "The CPU idle percentage alone, because spare CPU rules out resource contention."
+        },
+        {
+          "id": "d",
+          "text": "The interval swap movement and memory stalls, correlated with available memory and latency."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Current interval movement and stalls connect swapping to lost progress now. Since-boot averages can hide the incident; allocated swap may contain cold pages left from earlier activity. Idle CPU does not rule out tasks waiting on memory or storage. [vmstat manual](https://man7.org/linux/man-pages/man8/vmstat.8.html)."
+    },
+    {
+      "id": "virtual-rss-pss",
+      "type": "multiple",
+      "scenario": "Two worker processes each show 600 MiB RSS, including the same 200 MiB shared mapping. Each reports 500 MiB PSS and reserves 8 GiB of virtual space. Which two review comments are supported?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Adding their RSS values can count the shared mapping more than once."
+        },
+        {
+          "id": "b",
+          "text": "The combined virtual size proves that the workers consume 16 GiB of physical RAM."
+        },
+        {
+          "id": "c",
+          "text": "PSS apportions shared pages and gives a fairer combined process-memory estimate here."
+        },
+        {
+          "id": "d",
+          "text": "Every resident shared page must be copied into private memory before either process can use it."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "RSS can count shared pages in both processes, while PSS apportions the shared portion. Virtual size includes reserved and other nonresident address space and is not physical usage. A shared mapping does not inherently require private copies for reads. [Kernel proc documentation](https://docs.kernel.org/filesystems/proc.html)."
+    },
+    {
+      "id": "oom-scope",
+      "type": "single",
+      "scenario": "The host has 5 GiB available when orders.service fails. Its effective MemoryMax is 512 MiB. Kernel evidence includes:\n\n```text\noom-kill: constraint=CONSTRAINT_MEMCG,\noom_memcg=/system.slice/orders.service\nMemory cgroup out of memory: Killed process 1842 (node)\n```\n\nWhich conclusion is best supported?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The entire machine exhausted physical RAM despite its available-memory reading."
+        },
+        {
+          "id": "b",
+          "text": "The workload reached its own memory boundary; investigate its demand and policy before raising the limit."
+        },
+        {
+          "id": "c",
+          "text": "The killed process must have been leaking because the kernel selected it."
+        },
+        {
+          "id": "d",
+          "text": "The service's CPU quota caused Linux to reclaim its resident pages."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The memory-cgroup scope identifies a workload-local boundary. Host headroom does not prevent a constrained workload from reaching its limit. An OOM victim and one snapshot cannot establish a leak, and CPU quota is a separate resource control. [systemd resource controls](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html)."
+    },
+    {
+      "id": "leak-evidence",
+      "type": "single",
+      "scenario": "After a release, a service grows from 300 MiB to 900 MiB RSS during cache warm-up, then holds steady through several matched traffic cycles. Another service rises from 300 to 600 to 900 MiB after comparable cycles and does not return toward baseline. What should the investigation prioritize?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat both as leaks because either process now exceeds its initial RSS."
+        },
+        {
+          "id": "b",
+          "text": "Restart only the stable service because a flat line means the runtime cannot reclaim memory."
+        },
+        {
+          "id": "c",
+          "text": "Investigate retained growth in the second service while checking cache behavior and matched workload evidence for both."
+        },
+        {
+          "id": "d",
+          "text": "Increase both limits until the graphs flatten, then infer that the allocation pattern is healthy."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "A rising baseline across comparable cycles is stronger evidence for retained growth than warm-up followed by a plateau. Neither graph alone proves the allocation cause. Restarts erase useful evidence, and larger limits may delay failure without explaining growth. [Kernel proc documentation](https://docs.kernel.org/filesystems/proc.html)."
+    },
+    {
+      "id": "steal",
+      "type": "single",
+      "scenario": "A VM becomes slow without a release or traffic increase. Repeated samples show 35% steal time, little I/O wait, and no active swap; guest process rankings do not explain the missing CPU capacity. Where should you correlate evidence next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Provider or physical-host contention metrics for the same time window."
+        },
+        {
+          "id": "b",
+          "text": "The guest's largest virtual-memory reservation, treating VSZ as stolen physical memory."
+        },
+        {
+          "id": "c",
+          "text": "The application log alone, because all CPU accounting must belong to a guest process."
+        },
+        {
+          "id": "d",
+          "text": "The page cache size, because cached pages consume hypervisor scheduling time."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Steal time points toward CPU time unavailable to the guest due to hypervisor scheduling. Correlate with the host/provider layer. Virtual reservations, cache size, and application logs alone do not explain this accounting category. [mpstat manual](https://man7.org/linux/man-pages/man1/mpstat.1.html)."
+    },
+    {
+      "id": "intervention",
+      "type": "multiple",
+      "scenario": "During live traffic, a replayable export is the largest resident consumer. Available RAM is low and swap movement is sustained. The incident owner permits stopping the export but requires the API to remain up. Which two actions support a defensible recovery?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Restart the API first so the largest observed export remains available for later inspection."
+        },
+        {
+          "id": "b",
+          "text": "Capture current resource and process evidence before stopping the authorized export."
+        },
+        {
+          "id": "c",
+          "text": "Repeat availability and interval swap checks after the export exits, and verify the API is still running."
+        },
+        {
+          "id": "d",
+          "text": "Declare success as soon as the termination command returns zero, even if requests remain slow."
+        }
+      ],
+      "correct": [
+        "b",
+        "c"
+      ],
+      "explanation": "Before-and-after evidence tests whether the intervention addressed the pressure, and process verification protects the API. An API restart is outside this authorization and removes evidence. A successful command only proves acceptance of the action, not resource recovery. [Kernel pressure documentation](https://docs.kernel.org/accounting/psi.html)."
+    },
+    {
+      "id": "occupancy-pressure",
+      "type": "single",
+      "scenario": "Two similar hosts report the same memory utilization. One has healthy latency and negligible memory PSI; the other has rising memory PSI, major faults, and slow requests. What does the difference suggest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The utilization metric is necessarily incorrect on one host because equal occupancy requires equal performance."
+        },
+        {
+          "id": "b",
+          "text": "The second host needs more CPU because major faults describe invalid application instructions."
+        },
+        {
+          "id": "c",
+          "text": "Similar occupancy can conceal different reclaim and working-set behavior; investigate stalled progress and page movement on the second host."
+        },
+        {
+          "id": "d",
+          "text": "The first host should drop caches to match the second host's pressure and make the comparison fair."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Occupancy does not measure stalled progress. PSI and major faults add evidence of costly reclaim or storage-backed page access. Faults are memory-management events, not necessarily invalid instructions, and discarding healthy cache does not make the comparison more useful. [Kernel pressure documentation](https://docs.kernel.org/accounting/psi.html)."
+    }
+  ]
+}

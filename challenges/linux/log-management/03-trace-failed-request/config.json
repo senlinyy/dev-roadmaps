@@ -1,0 +1,147 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/var/log/nginx/access.log": {
+      "type": "file",
+      "content": "203.0.113.42 - - [01/Sep/2026:10:21:13 +0000] \"GET /api/items HTTP/1.1\" 502 157 \"-\" \"monitor/1.0\" request_id=req_8K9\n198.51.100.17 - - [01/Sep/2026:10:21:13 +0000] \"GET /health HTTP/1.1\" 200 18 \"-\" \"monitor/1.0\" request_id=req_health\n192.0.2.55 - - [01/Sep/2026:10:21:14 +0000] \"GET /catalog HTTP/1.1\" 200 512 \"-\" \"browser/1.0\" request_id=req_catalog\n203.0.113.42 - - [01/Sep/2026:10:22:02 +0000] \"GET /api/items HTTP/1.1\" 200 218 \"-\" \"monitor/1.0\" request_id=req_retry\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    },
+    "/var/log/nginx/error.log": {
+      "type": "file",
+      "content": "2026/09/01 10:21:13 [error] 913#913: *44 upstream prematurely closed connection while reading response header from upstream, request: \"GET /api/items HTTP/1.1\", upstream: \"http://127.0.0.1:3000/api/items\", request_id=req_8K9\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    },
+    "/var/log/app/app.jsonl": {
+      "type": "file",
+      "content": "{\"time\":\"2026-09-01T10:21:13Z\",\"level\":\"error\",\"request_id\":\"req_8K9\",\"path\":\"/api/items\",\"error\":\"dependency_reset\",\"dependency\":\"inventory-db\"}\n{\"time\":\"2026-09-01T10:21:13Z\",\"level\":\"info\",\"request_id\":\"req_health\",\"status\":200}\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "adm"
+        ]
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "www-data",
+        "uid": 33,
+        "primaryGroup": "www-data"
+      }
+    ],
+    "umask": 18
+  },
+  "system": {
+    "services": [],
+    "manager": {
+      "units": [
+        {
+          "name": "app.service"
+        }
+      ],
+      "epoch": "2026-09-01T10:30:00Z",
+      "journal": []
+    },
+    "logging": {}
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "awk",
+      "grep"
+    ],
+    "expectedLogging": {
+      "readOnly": true,
+      "queries": [],
+      "reads": [
+        {
+          "path": "/var/log/nginx/access.log",
+          "contains": [
+            "/api/items",
+            "502",
+            "req_8K9"
+          ],
+          "excludes": [
+            "req_health",
+            "req_catalog",
+            "req_retry"
+          ]
+        },
+        {
+          "path": "/var/log/nginx/error.log",
+          "contains": [
+            "req_8K9",
+            "upstream prematurely closed"
+          ]
+        },
+        {
+          "path": "/var/log/app/app.jsonl",
+          "contains": [
+            "req_8K9",
+            "dependency_reset",
+            "inventory-db"
+          ],
+          "excludes": [
+            "req_health"
+          ]
+        }
+      ]
+    },
+    "expectedResults": [
+      {
+        "label": "Status-code counts",
+        "commands": [
+          "awk"
+        ],
+        "stdoutEquals": "200 3\n502 1\n",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/var/log/nginx/access.log": {
+        "contentEquals": "203.0.113.42 - - [01/Sep/2026:10:21:13 +0000] \"GET /api/items HTTP/1.1\" 502 157 \"-\" \"monitor/1.0\" request_id=req_8K9\n198.51.100.17 - - [01/Sep/2026:10:21:13 +0000] \"GET /health HTTP/1.1\" 200 18 \"-\" \"monitor/1.0\" request_id=req_health\n192.0.2.55 - - [01/Sep/2026:10:21:14 +0000] \"GET /catalog HTTP/1.1\" 200 512 \"-\" \"browser/1.0\" request_id=req_catalog\n203.0.113.42 - - [01/Sep/2026:10:22:02 +0000] \"GET /api/items HTTP/1.1\" 200 218 \"-\" \"monitor/1.0\" request_id=req_retry\n"
+      },
+      "/var/log/nginx/error.log": {
+        "contentEquals": "2026/09/01 10:21:13 [error] 913#913: *44 upstream prematurely closed connection while reading response header from upstream, request: \"GET /api/items HTTP/1.1\", upstream: \"http://127.0.0.1:3000/api/items\", request_id=req_8K9\n"
+      },
+      "/var/log/app/app.jsonl": {
+        "contentEquals": "{\"time\":\"2026-09-01T10:21:13Z\",\"level\":\"error\",\"request_id\":\"req_8K9\",\"path\":\"/api/items\",\"error\":\"dependency_reset\",\"dependency\":\"inventory-db\"}\n{\"time\":\"2026-09-01T10:21:13Z\",\"level\":\"info\",\"request_id\":\"req_health\",\"status\":200}\n"
+      }
+    }
+  }
+}

@@ -1,29 +1,23 @@
-```yaml
-name: Preview Package
-on:
-  pull_request:
+### pipeline.yaml
 
+```yaml
+version: 1
 jobs:
   build:
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - checkout: true
       - run: npm ci
+      - run: npm run lint
+      - run: npm test
       - run: npm run build
-      - run: tar -czf checkout-api.tar.gz dist package.json package-lock.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: checkout-api-package
-          path: checkout-api.tar.gz
-
-  deploy-preview:
+      - upload: {name: checkout-app, path: dist/app.json}
+  smoke:
     needs: build
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: checkout-api-package
-      - run: ./scripts/deploy-preview.sh checkout-api.tar.gz
+      - download: {name: checkout-app, path: package/app.json}
+      - verify: package/app.json
 ```
 
-Jobs receive separate workspaces, so dependency order alone cannot move the package. Uploading and downloading the named artifact makes the preview deploy consume the exact output built earlier in the same run.
+The producer validates source, builds once, and uploads an immutable package. The dependency makes the consumer wait; the download—not that dependency—populates its workspace at package/app.json.
+
+The consumer needs no source checkout or dependency installation because it only verifies the received package. Compare the upload, download, and verification digests. Test failure blocks build, while build failure blocks upload and skips the consumer.

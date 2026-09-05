@@ -1,0 +1,247 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev"
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      }
+    ],
+    "umask": 18
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "mode": 493,
+      "owner": "dev",
+      "group": "dev"
+    },
+    "/var/lib/app": {
+      "type": "dir",
+      "mode": 493,
+      "owner": "app",
+      "group": "app"
+    },
+    "/var/lib/app/cache/expired/session-1.tmp": {
+      "type": "file",
+      "content": "expired=1\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/expired/session-2.tmp": {
+      "type": "file",
+      "content": "expired=2\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/expired/session-3.tmp": {
+      "type": "file",
+      "content": "expired=3\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/expired/session-4.tmp": {
+      "type": "file",
+      "content": "expired=4\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/expired/session-5.tmp": {
+      "type": "file",
+      "content": "expired=5\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/expired/session-6.tmp": {
+      "type": "file",
+      "content": "expired=6\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/expired/session-7.tmp": {
+      "type": "file",
+      "content": "expired=7\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/expired/session-8.tmp": {
+      "type": "file",
+      "content": "expired=8\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/expired/session-9.tmp": {
+      "type": "file",
+      "content": "expired=9\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/expired/session-10.tmp": {
+      "type": "file",
+      "content": "expired=10\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    },
+    "/var/lib/app/cache/active/current.tmp": {
+      "type": "file",
+      "content": "active session\n",
+      "mode": 420,
+      "owner": "root",
+      "group": "root"
+    }
+  },
+  "system": {
+    "services": [],
+    "processes": {
+      "entries": [
+        {
+          "pid": 100,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/bin/bash"
+          ],
+          "state": "S"
+        }
+      ]
+    },
+    "disks": [
+      {
+        "mountpoint": "/",
+        "device": "/dev/vda1",
+        "fstype": "ext4",
+        "bytes": 42949672960,
+        "inodes": 10000
+      },
+      {
+        "mountpoint": "/var/lib/app",
+        "device": "/dev/vdb1",
+        "fstype": "xfs",
+        "bytes": 107374182400,
+        "inodes": 15
+      }
+    ],
+    "storage": {
+      "devices": [
+        {
+          "path": "/dev/vda",
+          "majorMinor": "252,0",
+          "bytes": 42950721536
+        },
+        {
+          "path": "/dev/vda1",
+          "majorMinor": "252,1",
+          "parent": "/dev/vda",
+          "partition": 1,
+          "startBytes": 1048576,
+          "bytes": 42949672960,
+          "fstype": "ext4",
+          "uuid": "11111111-1111-4111-8111-111111111111"
+        },
+        {
+          "path": "/dev/vdb",
+          "majorMinor": "252,16",
+          "bytes": 107375230976
+        },
+        {
+          "path": "/dev/vdb1",
+          "majorMinor": "252,17",
+          "parent": "/dev/vdb",
+          "partition": 1,
+          "startBytes": 1048576,
+          "bytes": 107374182400,
+          "fstype": "xfs",
+          "uuid": "22222222-2222-4222-8222-222222222222"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/var/lib/app/cache/active/current.tmp": {
+        "exists": true,
+        "contentEquals": "active session\n"
+      }
+    },
+    "expectedStorage": {
+      "observations": [
+        {
+          "kind": "capacity",
+          "target": "/var/lib/app",
+          "label": "Check available bytes",
+          "beforeChange": true
+        },
+        {
+          "kind": "inodes",
+          "target": "/var/lib/app",
+          "label": "Check inode headroom",
+          "beforeChange": true
+        },
+        {
+          "kind": "find:one-fs",
+          "target": "/var/lib/app/cache",
+          "label": "Inspect the cache population",
+          "beforeChange": true,
+          "contains": [
+            "expired/session-",
+            "active/current.tmp"
+          ]
+        },
+        {
+          "kind": "inodes",
+          "target": "/var/lib/app",
+          "label": "Verify recovered inodes",
+          "fresh": true
+        }
+      ]
+    },
+    "forbidFsPrefixes": [
+      "/var/lib/app/cache/expired/"
+    ],
+    "expectedSystem": {
+      "storage": [
+        {
+          "path": "/var/lib/app",
+          "minFreeBytes": 1,
+          "minFreeInodes": 8
+        }
+      ]
+    },
+    "requireCommands": [
+      "df",
+      "find",
+      "rm"
+    ]
+  }
+}

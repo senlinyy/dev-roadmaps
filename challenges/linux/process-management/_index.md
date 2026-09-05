@@ -1,8 +1,8 @@
 ---
 title: "Process Management"
-description: "Explore the process tree through /proc, read live process data, decode signals, and diagnose a zombie process. Each step targets a section of the Process Management article."
+description: "Inspect process identity and ancestry, investigate live context, control signals and shell jobs, adjust maintenance priority, and remove a stray worker safely."
 articleId: article-devops-foundation-linux-system-admin-process-management
 difficulty: medium
 order: 6
-tags: [process, proc, pid, ppid, signals, zombie, grep, cat]
+tags: [processes, ps, proc, signals, jobs, priority]
 ---

@@ -1,0 +1,44 @@
+{
+  "cwd": "/home/deploy",
+  "env": { "USER": "deploy", "HOME": "/home/deploy" },
+  "fs": {
+    "/home": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/home/deploy": { "type": "dir", "mode": 488, "owner": "deploy", "group": "deploy" },
+    "/srv": { "type": "dir", "mode": 493, "owner": "root", "group": "root" },
+    "/srv/app": { "type": "dir", "mode": 448, "owner": "root", "group": "app" },
+    "/srv/app/releases": { "type": "dir", "mode": 1512, "owner": "root", "group": "app" },
+    "/srv/app/releases/42": { "type": "dir", "mode": 1528, "owner": "deploy", "group": "app" },
+    "/srv/app/releases/42/config.env": { "type": "file", "content": "DATABASE_URL=postgres://db/app\n", "mode": 416, "owner": "root", "group": "app" }
+  },
+  "commandModules": ["permissions"],
+  "permissions": {
+    "currentUser": "deploy",
+    "users": [
+      { "name": "root", "uid": 0, "primaryGroup": "root", "gid": 0 },
+      { "name": "deploy", "uid": 1003, "primaryGroup": "deploy", "gid": 1003, "supplementaryGroups": ["app"] },
+      { "name": "app", "uid": 998, "primaryGroup": "app", "gid": 998 }
+    ],
+    "sessionGroups": ["deploy", "app"],
+    "umask": 23
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": ["id", "namei", "getfacl", "test", "chmod", "touch"],
+    "forbidCommandPatterns": ["chmod\\s+(?:-R\\s+)?(?:0?777|a\\+rwx)"],
+    "minCommandCount": 7,
+    "expectedFs": {
+      "/srv/app": { "type": "dir", "modeEquals": 488, "ownerEquals": "root", "groupEquals": "app" },
+      "/srv/app/releases": { "type": "dir", "modeEquals": 1512, "ownerEquals": "root", "groupEquals": "app" },
+      "/srv/app/releases/42": { "type": "dir", "modeEquals": 1528, "ownerEquals": "deploy", "groupEquals": "app" },
+      "/srv/app/releases/42/config.env": { "type": "file", "modeEquals": 416, "ownerEquals": "root", "groupEquals": "app" },
+      "/srv/app/releases/42/deploy-proof": { "type": "file", "modeEquals": 416, "ownerEquals": "deploy", "groupEquals": "app" }
+    },
+    "expectedPermissions": {
+      "access": [
+        { "user": "app", "path": "/srv/app/releases/42/config.env", "operation": "read", "allowed": true },
+        { "user": "app", "path": "/srv/app/releases/42/config.env", "operation": "write", "allowed": false }
+      ],
+      "diagnostics": ["denied:app:read:/srv/app/releases/42/config.env"]
+    }
+  }
+}

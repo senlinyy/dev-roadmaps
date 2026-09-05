@@ -1,0 +1,277 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "role",
+      "type": "single",
+      "scenario": "Nginx accepts public HTTPS and forwards requests to an application on 127.0.0.1:9000. Which role is Nginx performing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "TLS-terminating reverse proxy"
+        },
+        {
+          "id": "b",
+          "text": "Authoritative DNS server"
+        },
+        {
+          "id": "c",
+          "text": "Database engine"
+        },
+        {
+          "id": "d",
+          "text": "IP router"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Nginx receives client requests, can terminate TLS, and proxies them to an upstream application. [Nginx proxy module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)."
+    },
+    {
+      "id": "server-selection",
+      "type": "single",
+      "scenario": "Two server blocks listen on port 80. Requests for app.example.com hit the default block. What should be checked first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The application's SQL schema"
+        },
+        {
+          "id": "b",
+          "text": "The server_name values and the Host header"
+        },
+        {
+          "id": "c",
+          "text": "The client's ARP cache only"
+        },
+        {
+          "id": "d",
+          "text": "The upstream response body"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Nginx selects a virtual server using listen and server-name processing before it selects a location. [Request processing](https://nginx.org/en/docs/http/request_processing.html)."
+    },
+    {
+      "id": "location",
+      "type": "single",
+      "scenario": "Locations `/` and `/api/` both match `/api/orders`. Which ordinary prefix location is more specific?",
+      "options": [
+        {
+          "id": "a",
+          "text": "/"
+        },
+        {
+          "id": "b",
+          "text": "Both are ignored"
+        },
+        {
+          "id": "c",
+          "text": "/api/"
+        },
+        {
+          "id": "d",
+          "text": "The one written last always wins"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "For prefix locations, Nginx remembers the longest matching prefix before applying regex-location rules. [Core location directive](https://nginx.org/en/docs/http/ngx_http_core_module.html#location)."
+    },
+    {
+      "id": "spa",
+      "type": "single",
+      "scenario": "A static SPA loads at `/`, but refreshing `/settings` returns 404. Which pattern preserves real files and adds a client-side routing fallback?",
+      "options": [
+        {
+          "id": "a",
+          "text": "return 500;"
+        },
+        {
+          "id": "b",
+          "text": "proxy_pass without an upstream"
+        },
+        {
+          "id": "c",
+          "text": "Disable server_name"
+        },
+        {
+          "id": "d",
+          "text": "try_files $uri $uri/ /index.html;"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "`try_files` checks candidates in order and can internally redirect missing deep links to the SPA entry point. [try_files directive](https://nginx.org/en/docs/http/ngx_http_core_module.html#try_files)."
+    },
+    {
+      "id": "proxy-slash",
+      "type": "single",
+      "scenario": "A `/api/` location must remove that prefix before sending `/orders` upstream. Which proxy target does that?",
+      "options": [
+        {
+          "id": "a",
+          "text": "proxy_pass http://backend;"
+        },
+        {
+          "id": "b",
+          "text": "proxy_pass http://backend/;"
+        },
+        {
+          "id": "c",
+          "text": "return 301 /api/;"
+        },
+        {
+          "id": "d",
+          "text": "root /api/;"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "When `proxy_pass` includes a URI, the normalized matching location portion is replaced by that URI. The trailing slash therefore matters. [proxy_pass directive](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass)."
+    },
+    {
+      "id": "forwarded",
+      "type": "multiple",
+      "scenario": "An upstream must reconstruct the public request URL after TLS terminates at Nginx. Which two headers commonly preserve essential context?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Host"
+        },
+        {
+          "id": "b",
+          "text": "ETag"
+        },
+        {
+          "id": "c",
+          "text": "X-Forwarded-Proto"
+        },
+        {
+          "id": "d",
+          "text": "Accept-Ranges"
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Forwarding the original host and scheme gives the application the public request context it may need for routing and URL generation. [proxy_set_header](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)."
+    },
+    {
+      "id": "safe-reload",
+      "type": "single",
+      "scenario": "A production configuration file was edited. The current workers are still healthy. What should happen before reload?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Stop Nginx and delete the old file"
+        },
+        {
+          "id": "b",
+          "text": "Clear DNS caches"
+        },
+        {
+          "id": "c",
+          "text": "Run `nginx -t` against the saved configuration"
+        },
+        {
+          "id": "d",
+          "text": "Disable the firewall"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Testing catches syntax and supported configuration failures before asking the running service to adopt the candidate. [Nginx command-line parameters](https://nginx.org/en/docs/switches.html)."
+    },
+    {
+      "id": "upstream-502",
+      "type": "single",
+      "scenario": "Nginx returns 502 and its error log says connection refused while connecting to upstream. What should be checked next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The upstream address, port, listener, and service health"
+        },
+        {
+          "id": "b",
+          "text": "The client certificate SAN only"
+        },
+        {
+          "id": "c",
+          "text": "The browser cache only"
+        },
+        {
+          "id": "d",
+          "text": "The public DNS MX record"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A refused upstream connection means the proxy reached the network boundary but no accepting service handled that tuple. Inspect the configured target and listener. [Nginx proxy module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)."
+    },
+    {
+      "id": "load-balance",
+      "type": "multiple",
+      "scenario": "An upstream pool has three servers, but one consistently fails health checks. Which two actions are appropriate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Disable all client TLS verification"
+        },
+        {
+          "id": "b",
+          "text": "Inspect per-upstream failures and remove or mark the unhealthy member while repairing it"
+        },
+        {
+          "id": "c",
+          "text": "Point every request at the failed member"
+        },
+        {
+          "id": "d",
+          "text": "Keep enough healthy capacity before changing the pool"
+        }
+      ],
+      "correct": [
+        "b",
+        "d"
+      ],
+      "explanation": "Use upstream-specific evidence and preserve capacity while isolating a failed member. Unrelated TLS weakening and concentrating traffic on the failure increase risk. [Nginx upstream module](https://nginx.org/en/docs/http/ngx_http_upstream_module.html)."
+    },
+    {
+      "id": "websocket",
+      "type": "single",
+      "scenario": "Ordinary HTTP proxying works, but WebSocket upgrades fail. Which configuration area is specific to that protocol switch?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Forwarding Upgrade and Connection hop-by-hop headers with HTTP/1.1"
+        },
+        {
+          "id": "b",
+          "text": "Increasing the DNS SOA serial"
+        },
+        {
+          "id": "c",
+          "text": "Changing the subnet prefix"
+        },
+        {
+          "id": "d",
+          "text": "Disabling server_name"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "WebSocket proxying requires explicit handling of the protocol-upgrade headers because hop-by-hop headers are not forwarded automatically. [Nginx WebSocket proxying](https://nginx.org/en/docs/http/websocket.html)."
+    }
+  ]
+}

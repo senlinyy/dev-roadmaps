@@ -1,8 +1,8 @@
 ---
 title: "Web Servers & Reverse Proxies"
-description: "An on-call companion to the Nginx article: tour a real /etc/nginx/ tree, debug a SPA deep-link 404, fix a proxy_pass path bug, audit a load-balancer skew, and unblock a failed deploy."
+description: "Inspect the active edge, repair virtual-host selection, restore SPA fallback, correct proxy path rewriting, and preserve forwarded request context."
 articleId: article-devops-foundation-networking-nginx-reverse-proxy
 difficulty: medium
 order: 16
-tags: [nginx, reverse-proxy, upstream, load-balancing, virtual-host, postmortem, deploy]
+tags: [nginx, reverse-proxy, static-files, spa, virtual-host, headers, safe-reload]
 ---

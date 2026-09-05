@@ -1,0 +1,141 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "same-job",
+      "type": "single",
+      "scenario": "One job contains checkout, installation, lint, and tests as ordered steps on the same worker. A reviewer asks to reinstall project dependencies before each command because they are different steps. What is the appropriate response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Install before every command because each step necessarily gets a new worker."
+        },
+        {
+          "id": "b",
+          "text": "Prepare dependencies once in this job; another isolated job needs its own preparation."
+        },
+        {
+          "id": "c",
+          "text": "Move dependencies into a report artifact and remove project declarations."
+        },
+        {
+          "id": "d",
+          "text": "Depend on the developer laptop's installation to avoid worker setup."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Steps in this job share its workspace. Repeating installation before every check is unnecessary. Separate isolated jobs need explicit preparation or appropriate data transfer; neither a report nor a laptop installation supplies that contract. [Official reference](https://docs.github.com/en/actions/get-started/understand-github-actions)."
+    },
+    {
+      "id": "artifact-order",
+      "type": "single",
+      "scenario": "The packaging job writes a release bundle. A later job depends on it, but that job's fresh workspace contains no bundle. Which repair addresses both the scheduling and data requirements?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep the dependency, publish the bundle, and retrieve it in the consumer."
+        },
+        {
+          "id": "b",
+          "text": "Remove the dependency so both workers can search for the file at once."
+        },
+        {
+          "id": "c",
+          "text": "Give both jobs the same display name to make their files shared."
+        },
+        {
+          "id": "d",
+          "text": "Rebuild a different bundle downstream and treat it as the original output."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A dependency orders work; artifact publication and retrieval move outputs. Names do not create shared storage, concurrent execution does not transfer files, and a new build does not prove consumption of the original package. [Official reference](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-what-your-workflow-does/storing-and-sharing-data-from-a-workflow)."
+    },
+    {
+      "id": "cache-loss",
+      "type": "single",
+      "scenario": "A dependency cache is evicted overnight. The repository still contains its dependency declarations and reviewed lockfile. What should a correctly designed workflow do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Deploy the previous cached package without validating the current checkout."
+        },
+        {
+          "id": "b",
+          "text": "Treat cache absence as evidence that the source change is unsafe."
+        },
+        {
+          "id": "c",
+          "text": "Reconstruct the locked dependencies, accepting a slower run."
+        },
+        {
+          "id": "d",
+          "text": "Resolve a new dependency graph and overwrite the committed lock."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "A disposable dependency cache accelerates reconstruction; it should not determine logical correctness. Its loss neither invalidates source nor authorizes a new dependency graph or reuse of an unrelated release package. [Official reference](https://docs.github.com/en/actions/concepts/workflows-and-actions/dependency-caching)."
+    },
+    {
+      "id": "failure-reports",
+      "type": "single",
+      "scenario": "A unit-test job fails, and its report-publication operation is skipped with the downstream success-only work. Engineers can see the red status but not the assertion failures. What should change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Suppress the failure so the normal success path can publish reports."
+        },
+        {
+          "id": "b",
+          "text": "Store only successful reports because failed results cannot inform debugging."
+        },
+        {
+          "id": "c",
+          "text": "Make deployment run despite failure so its logs replace the missing report."
+        },
+        {
+          "id": "d",
+          "text": "Publish diagnostic reports on failure while keeping release work blocked."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Failure evidence is valuable precisely when tests fail. Publication can have its own completion behavior without converting failure into success or relaxing release gates. Deployment logs are not a replacement for the test report. [Official reference](https://www.jenkins.io/doc/book/pipeline/syntax/#post)."
+    },
+    {
+      "id": "retain-or-cache",
+      "type": "multiple",
+      "scenario": "The team has four outputs: downloaded dependency archives, a tested release binary, a coverage report needed for review, and regenerable intermediate compilation files. Which two need artifact-style retention for the stated purpose?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The tested release binary that downstream deployment must consume."
+        },
+        {
+          "id": "b",
+          "text": "Downloaded archives used only to avoid fetching locked dependencies again."
+        },
+        {
+          "id": "c",
+          "text": "The coverage report that reviewers must inspect after the run."
+        },
+        {
+          "id": "d",
+          "text": "Intermediate files whose loss merely makes compilation slower."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "The release binary and review report are outputs/evidence to retain or transfer. The other two are regenerable acceleration data. A cache should not become the sole record of the release or its review evidence. [Official reference](https://docs.github.com/en/actions/concepts/workflows-and-actions/dependency-caching)."
+    }
+  ]
+}

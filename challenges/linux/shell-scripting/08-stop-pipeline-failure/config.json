@@ -1,0 +1,27 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/publish.sh": { "type": "file", "mode": 493, "content": "#!/usr/bin/env bash\nfalse | true\ntouch /home/dev/release.published\nprintf \"published\\n\"\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": ["vim", "./publish.sh"],
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/publish.sh",
+        "invocation": "direct",
+        "args": [],
+        "exitCode": 1
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/publish.sh": {
+        "type": "file",
+        "contentMatches": "set\\s+-[^\\n]*e[^\\n]*u[^\\n]*o\\s+pipefail"
+      },
+      "/home/dev/release.published": { "type": "file", "exists": false }
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/transfers.log": {
+      "type": "file",
+      "content": "alice 150\nbob 100\ncarol 90\nalice 75\ndana 210\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "head",
+      "awk"
+    ],
+    "expectedResults": [
+      {
+        "label": "transfer sample",
+        "commands": [
+          "head"
+        ],
+        "stdoutEquals": "alice 150\nbob 100\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "strictly over-threshold transfers",
+        "commands": [
+          "awk"
+        ],
+        "stdoutEquals": "alice 150\ndana 210\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "whole-file record and usage totals",
+        "commands": [
+          "awk"
+        ],
+        "stdoutEquals": "records=5 total_mb=625\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "per-user totals in name order",
+        "commands": [
+          "sort"
+        ],
+        "stdoutEquals": "alice 225\nbob 100\ncarol 90\ndana 210\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/transfers.log": {
+        "type": "file",
+        "contentEquals": "alice 150\nbob 100\ncarol 90\nalice 75\ndana 210\n"
+      }
+    }
+  }
+}

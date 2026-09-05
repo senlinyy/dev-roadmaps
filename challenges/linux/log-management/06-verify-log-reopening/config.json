@@ -1,0 +1,189 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/etc/logrotate.d/nginx": {
+      "type": "file",
+      "content": "/var/log/nginx/*.log {\n    daily\n    rotate 14\n    missingok\n    compress\n    delaycompress\n    notifempty\n    create 0640 www-data adm\n    sharedscripts\n}\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    },
+    "/run/nginx.pid": {
+      "type": "file",
+      "content": "913\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    },
+    "/var/log/nginx/access.log": {
+      "type": "file",
+      "content": "203.0.113.42 - - [01/Sep/2026:10:29:00 +0000] \"GET /catalog HTTP/1.1\" 200 512 \"-\" \"browser/1.0\"\n",
+      "owner": "www-data",
+      "group": "adm",
+      "mode": 416
+    },
+    "/var/log/nginx/access.log.1": {
+      "type": "file",
+      "content": "retained previous-day requests\n",
+      "owner": "www-data",
+      "group": "adm",
+      "mode": 416
+    },
+    "/var/log/nginx/error.log": {
+      "type": "file",
+      "content": "2026/09/01 10:29:00 [warn] upstream response buffered\n",
+      "owner": "www-data",
+      "group": "adm",
+      "mode": 416
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "adm"
+        ]
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "www-data",
+        "uid": 33,
+        "primaryGroup": "www-data"
+      }
+    ],
+    "umask": 18
+  },
+  "system": {
+    "services": [
+      {
+        "name": "nginx",
+        "user": "root",
+        "command": "/usr/sbin/nginx",
+        "pid": 913,
+        "active": true,
+        "logs": [
+          "nginx master running"
+        ]
+      }
+    ],
+    "logging": {
+      "rotation": {
+        "configPath": "/etc/logrotate.d/nginx",
+        "paths": [
+          "/var/log/nginx/access.log",
+          "/var/log/nginx/error.log"
+        ],
+        "masterPid": 913,
+        "workerUser": "www-data"
+      },
+      "writers": [
+        {
+          "path": "/var/log/nginx/access.log",
+          "pid": 913,
+          "line": "203.0.113.42 - - [01/Sep/2026:10:30:05 +0000] \"GET /health HTTP/1.1\" 200 18 \"-\" \"lab-probe/1.0\""
+        },
+        {
+          "path": "/var/log/nginx/error.log",
+          "pid": 913,
+          "line": "2026/09/01 10:30:05 [warn] lab probe upstream response buffered"
+        }
+      ]
+    },
+    "processes": {
+      "entries": [
+        {
+          "pid": 913,
+          "ppid": 1,
+          "user": "root",
+          "argv": [
+            "/usr/sbin/nginx"
+          ],
+          "fd": {
+            "7": "/var/log/nginx/access.log",
+            "8": "/var/log/nginx/error.log"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "cat",
+      "logrotate",
+      "kill",
+      "ls"
+    ],
+    "expectedLogging": {
+      "minClock": 5,
+      "inspectedInodes": ["/var/log/nginx/access.log", "/var/log/nginx/error.log"],
+      "rotations": 1,
+      "verifiedWrites": [
+        "/var/log/nginx/access.log",
+        "/var/log/nginx/error.log"
+      ]
+    },
+    "expectedProcesses": [
+      {
+        "pid": 913,
+        "label": "Nginx master",
+        "untouched": true,
+        "state": "S"
+      }
+    ],
+    "expectedFs": {
+      "/var/log/nginx/access.log": {
+        "modeEquals": 416,
+        "ownerEquals": "www-data",
+        "groupEquals": "adm"
+      },
+      "/var/log/nginx/error.log": {
+        "modeEquals": 416,
+        "ownerEquals": "www-data",
+        "groupEquals": "adm"
+      },
+      "/var/log/nginx/access.log.1": {
+        "contentEquals": "203.0.113.42 - - [01/Sep/2026:10:29:00 +0000] \"GET /catalog HTTP/1.1\" 200 512 \"-\" \"browser/1.0\"\n"
+      },
+      "/var/log/nginx/error.log.1": {
+        "contentEquals": "2026/09/01 10:29:00 [warn] upstream response buffered\n"
+      },
+      "/var/log/nginx/access.log.2.gz": {
+        "exists": true
+      },
+      "/etc/logrotate.d/nginx": {
+        "contentEquals": "/var/log/nginx/*.log {\n    daily\n    rotate 14\n    missingok\n    compress\n    delaycompress\n    notifempty\n    create 0640 www-data adm\n    sharedscripts\n}\n"
+      },
+      "/run/nginx.pid": {
+        "contentEquals": "913\n"
+      }
+    }
+  }
+}

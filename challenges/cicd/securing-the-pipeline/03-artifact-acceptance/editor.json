@@ -1,0 +1,366 @@
+{
+  "language": "yaml",
+  "activeFile": "pipeline.yaml",
+  "files": [
+    {
+      "filename": "pipeline.yaml",
+      "initialValue": "version: 2\njobs:\n  build:\n    needs: []\n    steps:\n      -\n        checkout:\n          ref: \"candidate\"\n      -\n        setup:\n          runtime: \"24\"\n      -\n        install:\n          mode: \"locked\"\n      -\n        check:\n          name: \"lint\"\n      -\n        check:\n          name: \"unit\"\n      -\n        build:\n          artifact: \"app\"\n      -\n        upload:\n          artifact: \"app\"\n  release:\n    needs:\n      - \"build\"\n    steps:\n      -\n        download:\n          artifact: \"app\"\n      -\n        deploy:\n          artifact: \"app\"\n          environment: \"production\"\n"
+    },
+    {
+      "filename": "acceptance.yaml",
+      "initialValue": "builders:\n  - \"trusted-ci\"\n  - \"manual-upload\"\nsource: \"candidate-43\"\nsignature: false\ninventory: false\nbindDigest: false\n"
+    },
+    {
+      "filename": "release.yaml",
+      "initialValue": "accepted: false\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "readOnly": true,
+      "initialValue": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    },\n    \"trust\": {\n      \"source\": \"candidate-43\",\n      \"builder\": \"trusted-ci\",\n      \"signature\": true,\n      \"inventory\": true\n    },\n    \"environments\": {\n      \"production\": {\n        \"config\": {},\n        \"secretRefs\": [],\n        \"readyAfter\": 3,\n        \"healthy\": true,\n        \"replicas\": 4,\n        \"schema\": \"v1\",\n        \"previous\": \"previous\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"trusted\",\n      \"title\": \"Trusted artifact\",\n      \"description\": \"All required evidence describes the built candidate.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"builder\",\n      \"title\": \"Untrusted builder\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"candidate-43\",\n          \"builder\": \"manual-upload\",\n          \"signature\": true,\n          \"inventory\": true\n        }\n      }\n    },\n    {\n      \"id\": \"source\",\n      \"title\": \"Wrong source\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"unreviewed-commit\",\n          \"builder\": \"trusted-ci\",\n          \"signature\": true,\n          \"inventory\": true\n        }\n      }\n    },\n    {\n      \"id\": \"signature\",\n      \"title\": \"Signature verification fails\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"candidate-43\",\n          \"builder\": \"trusted-ci\",\n          \"signature\": false,\n          \"inventory\": true\n        }\n      }\n    },\n    {\n      \"id\": \"inventory\",\n      \"title\": \"Inventory missing\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"candidate-43\",\n          \"builder\": \"trusted-ci\",\n          \"signature\": true,\n          \"inventory\": false\n        }\n      }\n    },\n    {\n      \"id\": \"replaced\",\n      \"title\": \"Evidence names different bytes\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"candidate-43\",\n          \"builder\": \"trusted-ci\",\n          \"signature\": true,\n          \"inventory\": true,\n          \"evidenceArtifact\": \"different-digest\"\n        }\n      }\n    }\n  ]\n}\n"
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "pipeline.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "workshop": {
+      "candidate": "candidate-43",
+      "head": "head-42",
+      "now": 1000,
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "Lint passed."
+        },
+        "unit": {
+          "passed": true,
+          "message": "Checkout unit tests passed."
+        },
+        "types": {
+          "passed": true,
+          "message": "Type contract passed."
+        },
+        "integration": {
+          "passed": true,
+          "message": "Checkout API/database integration passed.",
+          "runtime": "24",
+          "service": "postgres"
+        }
+      },
+      "pools": {
+        "public": {
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "trusted": false,
+          "network": []
+        },
+        "release": {
+          "os": [
+            "linux"
+          ],
+          "trusted": true,
+          "network": [
+            "production"
+          ]
+        },
+        "linux-only": {
+          "os": [
+            "linux"
+          ],
+          "trusted": false,
+          "network": []
+        }
+      },
+      "services": {
+        "postgres": {
+          "image": "postgres-17",
+          "readyAfter": 3,
+          "healthy": true
+        },
+        "app": {
+          "image": "checkout-test",
+          "readyAfter": 2,
+          "healthy": true
+        }
+      },
+      "trust": {
+        "source": "candidate-43",
+        "builder": "trusted-ci",
+        "signature": true,
+        "inventory": true
+      },
+      "environments": {
+        "production": {
+          "config": {},
+          "secretRefs": [],
+          "readyAfter": 3,
+          "healthy": true,
+          "replicas": 4,
+          "schema": "v1",
+          "previous": "previous"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "trusted",
+        "title": "Trusted artifact",
+        "description": "All required evidence describes the built candidate.",
+        "workshop": {}
+      },
+      {
+        "id": "builder",
+        "title": "Untrusted builder",
+        "description": "Artifact acceptance must reject this evidence mismatch.",
+        "workshop": {
+          "trust": {
+            "source": "candidate-43",
+            "builder": "manual-upload",
+            "signature": true,
+            "inventory": true
+          }
+        }
+      },
+      {
+        "id": "source",
+        "title": "Wrong source",
+        "description": "Artifact acceptance must reject this evidence mismatch.",
+        "workshop": {
+          "trust": {
+            "source": "unreviewed-commit",
+            "builder": "trusted-ci",
+            "signature": true,
+            "inventory": true
+          }
+        }
+      },
+      {
+        "id": "signature",
+        "title": "Signature verification fails",
+        "description": "Artifact acceptance must reject this evidence mismatch.",
+        "workshop": {
+          "trust": {
+            "source": "candidate-43",
+            "builder": "trusted-ci",
+            "signature": false,
+            "inventory": true
+          }
+        }
+      },
+      {
+        "id": "inventory",
+        "title": "Inventory missing",
+        "description": "Artifact acceptance must reject this evidence mismatch.",
+        "workshop": {
+          "trust": {
+            "source": "candidate-43",
+            "builder": "trusted-ci",
+            "signature": true,
+            "inventory": false
+          }
+        }
+      },
+      {
+        "id": "replaced",
+        "title": "Evidence names different bytes",
+        "description": "Artifact acceptance must reject this evidence mismatch.",
+        "workshop": {
+          "trust": {
+            "source": "candidate-43",
+            "builder": "trusted-ci",
+            "signature": true,
+            "inventory": true,
+            "evidenceArtifact": "different-digest"
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    },\n    \"trust\": {\n      \"source\": \"candidate-43\",\n      \"builder\": \"trusted-ci\",\n      \"signature\": true,\n      \"inventory\": true\n    },\n    \"environments\": {\n      \"production\": {\n        \"config\": {},\n        \"secretRefs\": [],\n        \"readyAfter\": 3,\n        \"healthy\": true,\n        \"replicas\": 4,\n        \"schema\": \"v1\",\n        \"previous\": \"previous\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"trusted\",\n      \"title\": \"Trusted artifact\",\n      \"description\": \"All required evidence describes the built candidate.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"builder\",\n      \"title\": \"Untrusted builder\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"candidate-43\",\n          \"builder\": \"manual-upload\",\n          \"signature\": true,\n          \"inventory\": true\n        }\n      }\n    },\n    {\n      \"id\": \"source\",\n      \"title\": \"Wrong source\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"unreviewed-commit\",\n          \"builder\": \"trusted-ci\",\n          \"signature\": true,\n          \"inventory\": true\n        }\n      }\n    },\n    {\n      \"id\": \"signature\",\n      \"title\": \"Signature verification fails\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"candidate-43\",\n          \"builder\": \"trusted-ci\",\n          \"signature\": false,\n          \"inventory\": true\n        }\n      }\n    },\n    {\n      \"id\": \"inventory\",\n      \"title\": \"Inventory missing\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"candidate-43\",\n          \"builder\": \"trusted-ci\",\n          \"signature\": true,\n          \"inventory\": false\n        }\n      }\n    },\n    {\n      \"id\": \"replaced\",\n      \"title\": \"Evidence names different bytes\",\n      \"description\": \"Artifact acceptance must reject this evidence mismatch.\",\n      \"workshop\": {\n        \"trust\": {\n          \"source\": \"candidate-43\",\n          \"builder\": \"trusted-ci\",\n          \"signature\": true,\n          \"inventory\": true,\n          \"evidenceArtifact\": \"different-digest\"\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "trusted",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "attest",
+              "subject": "app",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "accept",
+              "subject": "app",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "deploy",
+              "subject": "app",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "buildCount": 1,
+            "inventory": [
+              "eslint@9.0.0",
+              "vitest@3.0.0",
+              "vite@6.0.0"
+            ]
+          },
+          "absent": []
+        }
+      },
+      {
+        "id": "builder",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "accept",
+              "subject": "app",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ]
+        }
+      },
+      {
+        "id": "source",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "accept",
+              "subject": "app",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ]
+        }
+      },
+      {
+        "id": "signature",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "accept",
+              "subject": "app",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ]
+        }
+      },
+      {
+        "id": "inventory",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "accept",
+              "subject": "app",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ]
+        }
+      },
+      {
+        "id": "replaced",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "accept",
+              "subject": "app",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

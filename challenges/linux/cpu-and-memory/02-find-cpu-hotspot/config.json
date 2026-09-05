@@ -1,0 +1,222 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev"
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      }
+    ],
+    "umask": 18
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "mode": 493,
+      "owner": "dev",
+      "group": "dev"
+    }
+  },
+  "system": {
+    "services": [],
+    "processes": {
+      "entries": [
+        {
+          "pid": 100,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/bin/bash"
+          ],
+          "state": "S",
+          "rss": 4096,
+          "vsz": 262144,
+          "tty": "pts/0"
+        },
+        {
+          "pid": 640,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/node",
+            "/srv/orders/render.js"
+          ],
+          "state": "R",
+          "rss": 262144,
+          "vsz": 262144,
+          "cpu": 99
+        },
+        {
+          "pid": 720,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/python3",
+            "/srv/metrics/collector.py"
+          ],
+          "state": "S",
+          "rss": 32768,
+          "vsz": 262144,
+          "cpu": 3
+        }
+      ]
+    },
+    "resources": {
+      "uptime": 86400,
+      "samples": [
+        {
+          "at": 0,
+          "load": [
+            1.4,
+            1.3,
+            1.1
+          ],
+          "cpus": [
+            {
+              "us": 96,
+              "sy": 3,
+              "id": 1,
+              "wa": 0,
+              "st": 0
+            },
+            {
+              "us": 4,
+              "sy": 2,
+              "id": 94,
+              "wa": 0,
+              "st": 0
+            },
+            {
+              "us": 4,
+              "sy": 2,
+              "id": 94,
+              "wa": 0,
+              "st": 0
+            },
+            {
+              "us": 4,
+              "sy": 2,
+              "id": 94,
+              "wa": 0,
+              "st": 0
+            }
+          ],
+          "memory": {
+            "total": 8388608,
+            "free": 262144,
+            "available": 4718592,
+            "buffers": 65536,
+            "cached": 4194304,
+            "reclaimable": 262144,
+            "unreclaimable": 131072,
+            "shared": 32768,
+            "swapTotal": 2097152,
+            "swapFree": 1835008,
+            "dirty": 8192,
+            "writeback": 0
+          },
+          "activity": {
+            "si": 0,
+            "so": 0,
+            "bi": 12,
+            "bo": 40,
+            "interrupts": 1200,
+            "switches": 2400
+          }
+        }
+      ],
+      "boot": {
+        "cpus": [
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          },
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          },
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          },
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          }
+        ],
+        "activity": {
+          "si": 0,
+          "so": 0,
+          "bi": 12,
+          "bo": 40,
+          "interrupts": 1200,
+          "switches": 2400
+        }
+      }
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCwd": "/home/dev",
+    "expectedResources": {
+      "readOnly": true,
+      "observations": [
+        {
+          "kind": "top",
+          "label": "Inspect the host and process snapshot"
+        },
+        {
+          "kind": "cpu:per-core",
+          "label": "Sample every CPU",
+          "minInterval": 5
+        }
+      ]
+    },
+    "expectedProcesses": [
+      {
+        "pid": 640,
+        "label": "Busy rendering process",
+        "inspectedFields": [
+          "pid",
+          "user",
+          "%cpu",
+          "cmd"
+        ],
+        "sortedBy": "-%cpu",
+        "untouched": true
+      }
+    ]
+  }
+}

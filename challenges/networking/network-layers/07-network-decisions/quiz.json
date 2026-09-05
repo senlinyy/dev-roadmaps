@@ -1,0 +1,277 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "endpoint-scope",
+      "type": "single",
+      "scenario": "A worker reaches `https://app.example.com/health` and gets HTTP 503 after certificate verification succeeds. A teammate wants to replace its default route. Which next check best follows the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Inspect the responding proxy's upstream health and correlate its request ID with backend logs."
+        },
+        {
+          "id": "b",
+          "text": "Flush the worker's neighbor cache before collecting application evidence."
+        },
+        {
+          "id": "c",
+          "text": "Increase the TCP connect timeout to give the TLS exchange more time."
+        },
+        {
+          "id": "d",
+          "text": "Change to a different DNS resolver before investigating the responding service."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The request reached an HTTP-speaking component over verified TLS. Correlate its upstream evidence next. Neighbor, resolver, and connection-timeout changes do not address the observed 503 without additional evidence. [HTTP semantics](https://www.rfc-editor.org/rfc/rfc9110.html)."
+    },
+    {
+      "id": "next-hop",
+      "type": "single",
+      "scenario": "A host selects `203.0.113.25 via 10.20.0.1 dev eth0 src 10.20.0.10`. Its neighbor table has a reachable MAC for `10.20.0.1` but no entry for `203.0.113.25`. What should the first outgoing Ethernet frame use?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The remote server's MAC, learned by querying the DNS resolver."
+        },
+        {
+          "id": "b",
+          "text": "The gateway's MAC, while the IP destination remains 203.0.113.25."
+        },
+        {
+          "id": "c",
+          "text": "The gateway's IP as both the Ethernet destination and final IP destination."
+        },
+        {
+          "id": "d",
+          "text": "A broadcast MAC until the remote server creates a local neighbor entry."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The link header addresses the local next hop; IP still addresses the remote destination. DNS does not supply its Ethernet MAC, routing does not replace the final IP with the gateway, and remote unicast delivery does not require broadcasting to the server. NAT, if present later, is a separate transformation. [Internet host requirements](https://www.rfc-editor.org/rfc/rfc1122.html)."
+    },
+    {
+      "id": "handshake-proof",
+      "type": "single",
+      "scenario": "A capture on the client interface shows SYN, SYN-ACK, ACK, then 517 bytes of TCP payload to port 443. The customer still cannot load the page. What has been established?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The application accepted the requested operation, so only browser rendering remains."
+        },
+        {
+          "id": "b",
+          "text": "The server certificate was trusted because its port accepted the connection."
+        },
+        {
+          "id": "c",
+          "text": "The sampled TCP handshake completed; TLS validation and HTTP outcome still need evidence."
+        },
+        {
+          "id": "d",
+          "text": "The backend application is healthy because the public listener acknowledged data."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "The handshake establishes the sampled transport conversation, not certificate trust, authorization, HTTP success, or a proxy's backend health. The following payload can be TLS handshake data; a TCP capture without decryption does not expose the protected request. [TCP specification](https://www.rfc-editor.org/rfc/rfc9293.html)."
+    },
+    {
+      "id": "syn-only",
+      "type": "multiple",
+      "scenario": "A client capture shows three SYNs to `203.0.113.25:8443` with no reply. A separate request to port 443 works. Which two next actions are justified?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Compare forward-path filtering and the return route for the failing endpoint tuple."
+        },
+        {
+          "id": "b",
+          "text": "Renew the certificate selected on port 8443 before checking whether transport completes."
+        },
+        {
+          "id": "c",
+          "text": "Inspect whether the destination has the intended listener and whether its capture sees the SYNs."
+        },
+        {
+          "id": "d",
+          "text": "Treat successful port 443 traffic as proof that filtering on port 8443 is correct."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Different ports can follow different listener and policy outcomes. Captures and endpoint inspection can narrow whether requests or replies are missing. TLS renewal is premature without a completed transport handshake; port 443 success does not clear port 8443. [TCP specification](https://www.rfc-editor.org/rfc/rfc9293.html)."
+    },
+    {
+      "id": "listener-binding",
+      "type": "single",
+      "scenario": "The app host shows:\n\n```text\nLISTEN 0 128 127.0.0.1:9000 0.0.0.0:*\n```\n\nA localhost probe succeeds, while a probe to the host's interface address on the same port is refused. What should be reviewed first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The default gateway used for the localhost test."
+        },
+        {
+          "id": "b",
+          "text": "The TTL of the application's public DNS record."
+        },
+        {
+          "id": "c",
+          "text": "The upstream proxy timeout for requests after connection establishment."
+        },
+        {
+          "id": "d",
+          "text": "The application bind-address requirement and whether direct interface access is intended."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The socket accepts connections only on loopback. Review the intended exposure before rebinding or adding a proxy; do not expose an internal service automatically. DNS, an external gateway, and a later proxy timeout do not explain the shown local binding. [Socket inspection](https://man7.org/linux/man-pages/man8/ss.8.html)."
+    },
+    {
+      "id": "tls-boundary",
+      "type": "single",
+      "scenario": "DNS returns the expected address and a TCP probe to port 443 succeeds. The HTTPS client reports a certificate name mismatch for `payments.example.com`. What is the best next check?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Compare the certificate selected for that hostname with its SANs and the intended TLS endpoint."
+        },
+        {
+          "id": "b",
+          "text": "Increase SYN retry counts because the failure is intermittent between hostnames."
+        },
+        {
+          "id": "c",
+          "text": "Replace the default route with a host route to the same IP."
+        },
+        {
+          "id": "d",
+          "text": "Disable certificate verification permanently because TCP connectivity is confirmed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Inspect hostname selection and certificate identity. Transport success does not authenticate a server. Retry and routing changes do not repair the mismatch; bypassing verification would remove the protection that detected it. [curl TLS verification](https://curl.se/docs/sslcerts.html)."
+    },
+    {
+      "id": "state-context",
+      "type": "single",
+      "scenario": "After a traffic burst, a host has many TIME-WAIT sockets. Current requests are healthy and connection latency is unchanged. Which response best fits the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Restart the application immediately to remove the failed handshakes."
+        },
+        {
+          "id": "b",
+          "text": "Correlate connection churn and port availability before treating the normal closing state as a fault."
+        },
+        {
+          "id": "c",
+          "text": "Treat the sockets as proof that peers closed but the local application leaked every descriptor."
+        },
+        {
+          "id": "d",
+          "text": "Open additional firewall ports to let the old connections finish their TLS handshakes."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "TIME-WAIT is a normal post-close TCP state. Its count needs workload and port-pressure context. It is not an incomplete handshake or the CLOSE-WAIT condition, and opening unrelated ports does not address it. [TCP states](https://www.rfc-editor.org/rfc/rfc9293.html)."
+    },
+    {
+      "id": "visibility",
+      "type": "multiple",
+      "scenario": "A security review covers two controls: a TCP forwarding balancer that does not terminate TLS, and an HTTPS reverse proxy that does. The team wants `/payments` routed separately and authorization enforced for refunds. Which two comments are justified?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A TCP forwarding balancer can route by the encrypted HTTP path if it already knows port 443."
+        },
+        {
+          "id": "b",
+          "text": "Successful TLS authentication is sufficient evidence that the caller may issue a refund."
+        },
+        {
+          "id": "c",
+          "text": "The terminating reverse proxy can inspect the HTTP path and choose an appropriate upstream."
+        },
+        {
+          "id": "d",
+          "text": "Application authorization remains a separate decision even when transport and TLS succeed."
+        }
+      ],
+      "correct": [
+        "c",
+        "d"
+      ],
+      "explanation": "HTTP path routing requires visibility into HTTP, which the terminating proxy has. The non-terminating TCP balancer sees transport-level information, not protected paths. TLS and reachability do not grant permission for a business operation. [HTTP semantics](https://www.rfc-editor.org/rfc/rfc9110.html)."
+    },
+    {
+      "id": "mtu-evidence",
+      "type": "single",
+      "scenario": "Through a new tunnel, small requests work but larger HTTPS transfers stall. DNS, basic connection tests, and listener checks succeed. What investigation is most useful next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Increase every application timeout before examining packets."
+        },
+        {
+          "id": "b",
+          "text": "Change DNS because successful small requests may be served from a cache."
+        },
+        {
+          "id": "c",
+          "text": "Compare effective MTU, retransmissions, and path-MTU control messages across the tunnel."
+        },
+        {
+          "id": "d",
+          "text": "Restart the listener because successful handshakes rule out a lower-layer cause."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "The size-dependent symptom makes MTU and packet evidence useful next checks. It is not conclusive proof of MTU failure, but the tunnel adds relevant overhead. Blanket timeout increases, DNS changes, or restarts would skip that evidence. The article explains how link/IP limits can surface as TLS or HTTP stalls."
+    },
+    {
+      "id": "observer-protocol",
+      "type": "single",
+      "scenario": "An application container uses HTTP/3. An investigator finds no TCP port 443 connection in the host's socket listing and captures no service-address traffic on its external interface, which carries an overlay. What is the best next observation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Inspect UDP and the application's network namespace, comparing inner and outer capture points."
+        },
+        {
+          "id": "b",
+          "text": "Switch the application to HTTP/1.1 because the missing TCP socket proves a failed QUIC connection."
+        },
+        {
+          "id": "c",
+          "text": "Create a host TCP listener on port 443 so the container's current protocol can receive traffic."
+        },
+        {
+          "id": "d",
+          "text": "Flush the host's DNS cache because an external capture should show the inner address unchanged."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "HTTP/3 uses QUIC over UDP, and containers can have separate socket and routing views. Overlay captures can show outer rather than inner addresses. A missing host TCP socket does not establish QUIC failure; adding a listener or flushing DNS does not fix an observer/protocol mismatch."
+    }
+  ]
+}

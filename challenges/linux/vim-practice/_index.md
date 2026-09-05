@@ -1,9 +1,8 @@
 ---
-title: "Vim Practice"
-description: "Hands-on practice with Vim: open and save files, navigate efficiently, edit with delete/copy/paste, and search and replace. Each step seeds realistic files for you to work with."
+title: "Vim Essentials"
+description: "Eight terminal challenges covering modes, safe saves and quits, navigation, precise edits, recovery, search, confirmed substitution, and a validated configuration repair."
 articleId: article-devops-foundation-linux-linux-basics-vim-essentials
 difficulty: easy
-practiceOnly: true
 order: 2
-tags: [vim, editor, navigation, editing, search]
+tags: [vim, modes, navigation, editing, search, configuration]
 ---

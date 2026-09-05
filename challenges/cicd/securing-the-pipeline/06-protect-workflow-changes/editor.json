@@ -1,0 +1,345 @@
+{
+  "language": "yaml",
+  "activeFile": "pipeline.yaml",
+  "files": [
+    {
+      "filename": "pipeline.yaml",
+      "initialValue": "version: 2\njobs:\n  integrate:\n    needs: []\n    steps:\n      -\n        merge:\n          policy: \"merge-policy.yaml\"\n"
+    },
+    {
+      "filename": "review-policy.yaml",
+      "initialValue": "protectedPaths: []\nowners: []\nindependent: false\nminReviews: 0\nchecks: []\n"
+    },
+    {
+      "filename": "merge-policy.yaml",
+      "initialValue": "checks: []\ncurrent: false\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "readOnly": true,
+      "initialValue": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    },\n    \"change\": {\n      \"author\": \"developer\",\n      \"files\": [\n        \"src/app.js\"\n      ],\n      \"reviewers\": [\n        \"peer\"\n      ],\n      \"checks\": {\n        \"unit\": true,\n        \"workflow-policy\": true\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"application\",\n      \"title\": \"Ordinary application change\",\n      \"description\": \"Independent peer review and required checks are available.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"workflow\",\n      \"title\": \"Approved workflow change\",\n      \"description\": \"A platform reviewer approves the sensitive file.\",\n      \"workshop\": {\n        \"change\": {\n          \"author\": \"developer\",\n          \"files\": [\n            \"pipeline.yaml\"\n          ],\n          \"reviewers\": [\n            \"platform-team\"\n          ],\n          \"checks\": {\n            \"unit\": true,\n            \"workflow-policy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"wrong-owner\",\n      \"title\": \"Wrong reviewer\",\n      \"description\": \"A peer without pipeline ownership reviews a deployment change.\",\n      \"workshop\": {\n        \"change\": {\n          \"author\": \"developer\",\n          \"files\": [\n            \"deploy/release.yaml\"\n          ],\n          \"reviewers\": [\n            \"peer\"\n          ],\n          \"checks\": {\n            \"unit\": true,\n            \"workflow-policy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"self-review\",\n      \"title\": \"Author approves own change\",\n      \"description\": \"Even an owner cannot independently review their own proposal.\",\n      \"workshop\": {\n        \"change\": {\n          \"author\": \"platform-team\",\n          \"files\": [\n            \".ci/identity.yaml\"\n          ],\n          \"reviewers\": [\n            \"platform-team\"\n          ],\n          \"checks\": {\n            \"unit\": true,\n            \"workflow-policy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"disabled-check\",\n      \"title\": \"Required safeguard fails\",\n      \"description\": \"A workflow edit fails the policy check.\",\n      \"workshop\": {\n        \"change\": {\n          \"author\": \"developer\",\n          \"files\": [\n            \"pipeline.yaml\"\n          ],\n          \"reviewers\": [\n            \"platform-team\"\n          ],\n          \"checks\": {\n            \"unit\": true,\n            \"workflow-policy\": false\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "pipeline.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "workshop": {
+      "candidate": "candidate-43",
+      "head": "head-42",
+      "now": 1000,
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "Lint passed."
+        },
+        "unit": {
+          "passed": true,
+          "message": "Checkout unit tests passed."
+        },
+        "types": {
+          "passed": true,
+          "message": "Type contract passed."
+        },
+        "integration": {
+          "passed": true,
+          "message": "Checkout API/database integration passed.",
+          "runtime": "24",
+          "service": "postgres"
+        }
+      },
+      "pools": {
+        "public": {
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "trusted": false,
+          "network": []
+        },
+        "release": {
+          "os": [
+            "linux"
+          ],
+          "trusted": true,
+          "network": [
+            "production"
+          ]
+        },
+        "linux-only": {
+          "os": [
+            "linux"
+          ],
+          "trusted": false,
+          "network": []
+        }
+      },
+      "services": {
+        "postgres": {
+          "image": "postgres-17",
+          "readyAfter": 3,
+          "healthy": true
+        },
+        "app": {
+          "image": "checkout-test",
+          "readyAfter": 2,
+          "healthy": true
+        }
+      },
+      "change": {
+        "author": "developer",
+        "files": [
+          "src/app.js"
+        ],
+        "reviewers": [
+          "peer"
+        ],
+        "checks": {
+          "unit": true,
+          "workflow-policy": true
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "application",
+        "title": "Ordinary application change",
+        "description": "Independent peer review and required checks are available.",
+        "workshop": {}
+      },
+      {
+        "id": "workflow",
+        "title": "Approved workflow change",
+        "description": "A platform reviewer approves the sensitive file.",
+        "workshop": {
+          "change": {
+            "author": "developer",
+            "files": [
+              "pipeline.yaml"
+            ],
+            "reviewers": [
+              "platform-team"
+            ],
+            "checks": {
+              "unit": true,
+              "workflow-policy": true
+            }
+          }
+        }
+      },
+      {
+        "id": "wrong-owner",
+        "title": "Wrong reviewer",
+        "description": "A peer without pipeline ownership reviews a deployment change.",
+        "workshop": {
+          "change": {
+            "author": "developer",
+            "files": [
+              "deploy/release.yaml"
+            ],
+            "reviewers": [
+              "peer"
+            ],
+            "checks": {
+              "unit": true,
+              "workflow-policy": true
+            }
+          }
+        }
+      },
+      {
+        "id": "self-review",
+        "title": "Author approves own change",
+        "description": "Even an owner cannot independently review their own proposal.",
+        "workshop": {
+          "change": {
+            "author": "platform-team",
+            "files": [
+              ".ci/identity.yaml"
+            ],
+            "reviewers": [
+              "platform-team"
+            ],
+            "checks": {
+              "unit": true,
+              "workflow-policy": true
+            }
+          }
+        }
+      },
+      {
+        "id": "disabled-check",
+        "title": "Required safeguard fails",
+        "description": "A workflow edit fails the policy check.",
+        "workshop": {
+          "change": {
+            "author": "developer",
+            "files": [
+              "pipeline.yaml"
+            ],
+            "reviewers": [
+              "platform-team"
+            ],
+            "checks": {
+              "unit": true,
+              "workflow-policy": false
+            }
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    },\n    \"change\": {\n      \"author\": \"developer\",\n      \"files\": [\n        \"src/app.js\"\n      ],\n      \"reviewers\": [\n        \"peer\"\n      ],\n      \"checks\": {\n        \"unit\": true,\n        \"workflow-policy\": true\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"application\",\n      \"title\": \"Ordinary application change\",\n      \"description\": \"Independent peer review and required checks are available.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"workflow\",\n      \"title\": \"Approved workflow change\",\n      \"description\": \"A platform reviewer approves the sensitive file.\",\n      \"workshop\": {\n        \"change\": {\n          \"author\": \"developer\",\n          \"files\": [\n            \"pipeline.yaml\"\n          ],\n          \"reviewers\": [\n            \"platform-team\"\n          ],\n          \"checks\": {\n            \"unit\": true,\n            \"workflow-policy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"wrong-owner\",\n      \"title\": \"Wrong reviewer\",\n      \"description\": \"A peer without pipeline ownership reviews a deployment change.\",\n      \"workshop\": {\n        \"change\": {\n          \"author\": \"developer\",\n          \"files\": [\n            \"deploy/release.yaml\"\n          ],\n          \"reviewers\": [\n            \"peer\"\n          ],\n          \"checks\": {\n            \"unit\": true,\n            \"workflow-policy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"self-review\",\n      \"title\": \"Author approves own change\",\n      \"description\": \"Even an owner cannot independently review their own proposal.\",\n      \"workshop\": {\n        \"change\": {\n          \"author\": \"platform-team\",\n          \"files\": [\n            \".ci/identity.yaml\"\n          ],\n          \"reviewers\": [\n            \"platform-team\"\n          ],\n          \"checks\": {\n            \"unit\": true,\n            \"workflow-policy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"disabled-check\",\n      \"title\": \"Required safeguard fails\",\n      \"description\": \"A workflow edit fails the policy check.\",\n      \"workshop\": {\n        \"change\": {\n          \"author\": \"developer\",\n          \"files\": [\n            \"pipeline.yaml\"\n          ],\n          \"reviewers\": [\n            \"platform-team\"\n          ],\n          \"checks\": {\n            \"unit\": true,\n            \"workflow-policy\": false\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "application",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "review",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "merge",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "reviewed": true,
+            "sensitive": false,
+            "merged": "candidate-43"
+          },
+          "absent": []
+        }
+      },
+      {
+        "id": "workflow",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "review",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "merge",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "reviewed": true,
+            "sensitive": true
+          },
+          "absent": []
+        }
+      },
+      {
+        "id": "wrong-owner",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "review",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "merge"
+            }
+          ]
+        }
+      },
+      {
+        "id": "self-review",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "review",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "merge"
+            }
+          ]
+        }
+      },
+      {
+        "id": "disabled-check",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "review",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "merge"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,172 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/tmp": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 1023
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "packages",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "alice",
+        "uid": 1001,
+        "primaryGroup": "alice",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "bob",
+        "uid": 1002,
+        "primaryGroup": "bob",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "myapp",
+        "uid": 2000,
+        "primaryGroup": "myapp"
+      },
+      {
+        "name": "api",
+        "uid": 2001,
+        "primaryGroup": "api"
+      },
+      {
+        "name": "logwriter",
+        "uid": 2002,
+        "primaryGroup": "logwriter"
+      }
+    ],
+    "sessionGroups": [
+      "dev",
+      "team"
+    ],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "package-state",
+    "requireCommands": [
+      "apt-cache",
+      "apt-mark"
+    ],
+    "expectedPackages": {
+      "installed": {
+        "api-agent": "2.4.1"
+      },
+      "held": [
+        "api-agent"
+      ],
+      "enabledRepositories": [
+        "app-release"
+      ]
+    },
+    "expectedSystem": {
+      "diagnostics": [
+        "journal:api"
+      ],
+      "services": [
+        "api"
+      ]
+    },
+    "expectedResults": [
+      {
+        "label": "inspect installed and available versions",
+        "commands": [
+          "apt-cache"
+        ],
+        "stdoutEquals": "api-agent:\n  Installed: 2.5.0\n  Candidate: 2.5.0\n  Version table:\n *** 2.5.0 500\n        500 https://packages.example.test/releases\n     2.4.1 500\n        500 https://packages.example.test/releases\n",
+        "exitCode": 0
+      }
+    ]
+  },
+  "packages": {
+    "manager": "apt",
+    "indexFresh": true,
+    "repositories": [
+      {
+        "id": "app-release",
+        "name": "Application releases",
+        "family": "apt",
+        "url": "https://packages.example.test/releases",
+        "enabled": true,
+        "trusted": true
+      }
+    ],
+    "packages": [
+      {
+        "name": "api-agent",
+        "installedVersion": "2.5.0",
+        "candidateVersion": "2.5.0",
+        "availableVersions": [
+          "2.5.0",
+          "2.4.1"
+        ],
+        "repository": "app-release"
+      }
+    ]
+  },
+  "system": {
+    "services": [
+      {
+        "name": "api",
+        "user": "api",
+        "command": "/usr/local/bin/api",
+        "pid": 2400,
+        "active": false,
+        "logs": [
+          "api: api-agent 2.5.0 is incompatible; supported version 2.4.1"
+        ],
+        "package": {
+          "name": "api-agent",
+          "version": "2.4.1"
+        }
+      }
+    ]
+  }
+}

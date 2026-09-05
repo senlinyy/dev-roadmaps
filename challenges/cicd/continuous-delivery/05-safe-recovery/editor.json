@@ -1,0 +1,276 @@
+{
+  "language": "yaml",
+  "activeFile": "pipeline.yaml",
+  "files": [
+    {
+      "filename": "pipeline.yaml",
+      "initialValue": "version: 2\njobs:\n  recover:\n    needs: []\n    steps:\n      -\n        checkout:\n          ref: \"candidate\"\n      -\n        setup:\n          runtime: \"24\"\n      -\n        install:\n          mode: \"locked\"\n      -\n        build:\n          artifact: \"app\"\n      -\n        recover:\n          artifact: \"app\"\n          environment: \"production\"\n          policy: \"recovery.yaml\"\n"
+    },
+    {
+      "filename": "recovery.yaml",
+      "initialValue": "compatible: false\nverify: false\nidempotent: false\nattempts: 2\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "readOnly": true,
+      "initialValue": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    },\n    \"retained\": {\n      \"previous\": {\n        \"content\": \"checkout-service release 42 immutable package\",\n        \"schema\": [\n          \"v1\"\n        ],\n        \"healthy\": true,\n        \"source\": \"release-42\",\n        \"builder\": \"trusted-ci\",\n        \"signature\": true,\n        \"inventory\": [\n          \"checkout-core@1.0.0\"\n        ]\n      }\n    },\n    \"environments\": {\n      \"production\": {\n        \"config\": {},\n        \"secretRefs\": [],\n        \"readyAfter\": 3,\n        \"healthy\": true,\n        \"replicas\": 4,\n        \"schema\": \"v1\",\n        \"previous\": \"previous\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"compatible\",\n      \"title\": \"Known-good recovery\",\n      \"description\": \"The previous package supports schema v1.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"incompatible\",\n      \"title\": \"Schema changed incompatibly\",\n      \"description\": \"The old package cannot read schema v2.\",\n      \"workshop\": {\n        \"environments\": {\n          \"production\": {\n            \"config\": {},\n            \"secretRefs\": [],\n            \"readyAfter\": 3,\n            \"healthy\": true,\n            \"replicas\": 4,\n            \"schema\": \"v2\",\n            \"previous\": \"previous\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"unhealthy\",\n      \"title\": \"Recovered package fails health\",\n      \"description\": \"A retained package is not automatically healthy now.\",\n      \"workshop\": {\n        \"retained\": {\n          \"previous\": {\n            \"content\": \"checkout-service release 42 immutable package\",\n            \"schema\": [\n              \"v1\"\n            ],\n            \"healthy\": false,\n            \"source\": \"release-42\",\n            \"builder\": \"trusted-ci\",\n            \"signature\": true,\n            \"inventory\": [\n              \"checkout-core@1.0.0\"\n            ]\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "pipeline.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "workshop": {
+      "candidate": "candidate-43",
+      "head": "head-42",
+      "now": 1000,
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "Lint passed."
+        },
+        "unit": {
+          "passed": true,
+          "message": "Checkout unit tests passed."
+        },
+        "types": {
+          "passed": true,
+          "message": "Type contract passed."
+        },
+        "integration": {
+          "passed": true,
+          "message": "Checkout API/database integration passed.",
+          "runtime": "24",
+          "service": "postgres"
+        }
+      },
+      "pools": {
+        "public": {
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "trusted": false,
+          "network": []
+        },
+        "release": {
+          "os": [
+            "linux"
+          ],
+          "trusted": true,
+          "network": [
+            "production"
+          ]
+        },
+        "linux-only": {
+          "os": [
+            "linux"
+          ],
+          "trusted": false,
+          "network": []
+        }
+      },
+      "services": {
+        "postgres": {
+          "image": "postgres-17",
+          "readyAfter": 3,
+          "healthy": true
+        },
+        "app": {
+          "image": "checkout-test",
+          "readyAfter": 2,
+          "healthy": true
+        }
+      },
+      "retained": {
+        "previous": {
+          "content": "checkout-service release 42 immutable package",
+          "schema": [
+            "v1"
+          ],
+          "healthy": true,
+          "source": "release-42",
+          "builder": "trusted-ci",
+          "signature": true,
+          "inventory": [
+            "checkout-core@1.0.0"
+          ]
+        }
+      },
+      "environments": {
+        "production": {
+          "config": {},
+          "secretRefs": [],
+          "readyAfter": 3,
+          "healthy": true,
+          "replicas": 4,
+          "schema": "v1",
+          "previous": "previous"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "compatible",
+        "title": "Known-good recovery",
+        "description": "The previous package supports schema v1.",
+        "workshop": {}
+      },
+      {
+        "id": "incompatible",
+        "title": "Schema changed incompatibly",
+        "description": "The old package cannot read schema v2.",
+        "workshop": {
+          "environments": {
+            "production": {
+              "config": {},
+              "secretRefs": [],
+              "readyAfter": 3,
+              "healthy": true,
+              "replicas": 4,
+              "schema": "v2",
+              "previous": "previous"
+            }
+          }
+        }
+      },
+      {
+        "id": "unhealthy",
+        "title": "Recovered package fails health",
+        "description": "A retained package is not automatically healthy now.",
+        "workshop": {
+          "retained": {
+            "previous": {
+              "content": "checkout-service release 42 immutable package",
+              "schema": [
+                "v1"
+              ],
+              "healthy": false,
+              "source": "release-42",
+              "builder": "trusted-ci",
+              "signature": true,
+              "inventory": [
+                "checkout-core@1.0.0"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"candidate\": \"candidate-43\",\n    \"head\": \"head-42\",\n    \"now\": 1000,\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"Lint passed.\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"Checkout unit tests passed.\"\n      },\n      \"types\": {\n        \"passed\": true,\n        \"message\": \"Type contract passed.\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"Checkout API/database integration passed.\",\n        \"runtime\": \"24\",\n        \"service\": \"postgres\"\n      }\n    },\n    \"pools\": {\n      \"public\": {\n        \"os\": [\n          \"linux\",\n          \"windows\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      },\n      \"release\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": true,\n        \"network\": [\n          \"production\"\n        ]\n      },\n      \"linux-only\": {\n        \"os\": [\n          \"linux\"\n        ],\n        \"trusted\": false,\n        \"network\": []\n      }\n    },\n    \"services\": {\n      \"postgres\": {\n        \"image\": \"postgres-17\",\n        \"readyAfter\": 3,\n        \"healthy\": true\n      },\n      \"app\": {\n        \"image\": \"checkout-test\",\n        \"readyAfter\": 2,\n        \"healthy\": true\n      }\n    },\n    \"retained\": {\n      \"previous\": {\n        \"content\": \"checkout-service release 42 immutable package\",\n        \"schema\": [\n          \"v1\"\n        ],\n        \"healthy\": true,\n        \"source\": \"release-42\",\n        \"builder\": \"trusted-ci\",\n        \"signature\": true,\n        \"inventory\": [\n          \"checkout-core@1.0.0\"\n        ]\n      }\n    },\n    \"environments\": {\n      \"production\": {\n        \"config\": {},\n        \"secretRefs\": [],\n        \"readyAfter\": 3,\n        \"healthy\": true,\n        \"replicas\": 4,\n        \"schema\": \"v1\",\n        \"previous\": \"previous\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"compatible\",\n      \"title\": \"Known-good recovery\",\n      \"description\": \"The previous package supports schema v1.\",\n      \"workshop\": {}\n    },\n    {\n      \"id\": \"incompatible\",\n      \"title\": \"Schema changed incompatibly\",\n      \"description\": \"The old package cannot read schema v2.\",\n      \"workshop\": {\n        \"environments\": {\n          \"production\": {\n            \"config\": {},\n            \"secretRefs\": [],\n            \"readyAfter\": 3,\n            \"healthy\": true,\n            \"replicas\": 4,\n            \"schema\": \"v2\",\n            \"previous\": \"previous\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"unhealthy\",\n      \"title\": \"Recovered package fails health\",\n      \"description\": \"A retained package is not automatically healthy now.\",\n      \"workshop\": {\n        \"retained\": {\n          \"previous\": {\n            \"content\": \"checkout-service release 42 immutable package\",\n            \"schema\": [\n              \"v1\"\n            ],\n            \"healthy\": false,\n            \"source\": \"release-42\",\n            \"builder\": \"trusted-ci\",\n            \"signature\": true,\n            \"inventory\": [\n              \"checkout-core@1.0.0\"\n            ]\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "compatible",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "download",
+              "subject": "previous",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "recover",
+              "subject": "previous",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "buildCount": 0,
+            "recovery.artifact": "previous",
+            "recovery.transitions": 1,
+            "recovery.attempts": 2,
+            "recovery.verified": true
+          },
+          "absent": [
+            {
+              "action": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "incompatible",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "recover",
+              "subject": "previous",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "buildCount": 0
+          },
+          "absent": [
+            {
+              "action": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "unhealthy",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "recover",
+              "subject": "previous",
+              "outcome": "failed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "buildCount": 0
+          },
+          "absent": [
+            {
+              "action": "build"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

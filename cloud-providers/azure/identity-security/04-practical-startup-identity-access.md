@@ -1,7 +1,7 @@
 ---
 title: "Practical: Set Up Azure Identity And Access For A Startup"
-description: "Build a startup-style Azure identity setup from zero to launch: tenant, subscriptions, groups, Conditional Access, PIM, app registration, managed identities, RBAC, Key Vault, Azure DevOps federation, and launch evidence."
-overview: "This article is written as a direct production walkthrough. We set up Azure identity and access for a startup Orders platform, using real names, real scopes, real commands, and launch evidence. When the walkthrough uses a tutorial shortcut, we call it out and explain the production-grade version."
+description: "Design a small startup's identity and access boundaries for people, applications, and Azure DevOps, then verify both allowed and denied operations before launch."
+overview: "Start with an access workbook for two founders, four engineers, and two support staff. Separate directory administration, Azure management, application use, and data access; protect human sign-in; configure distinct runtime and deployment identities; and rehearse the resulting boundaries."
 tags: ["azure", "microsoft-entra-id", "azure-rbac", "managed-identity", "conditional-access", "key-vault", "azure-devops", "security"]
 order: 4
 id: article-cloud-providers-azure-identity-security-practical-startup-identity-access
@@ -27,41 +27,11 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-Imagine we are the Azure DevOps engineer at DevPolaris, a startup launching its first production Orders platform. We are presenting the production identity setup to the company, but we are also building it step by step. The goal is simple: by the end, everyone can see who signs in, which identity each app uses, what each identity can touch, and what evidence proves it.
+For a small startup, giving everyone Owner can seem like the fastest way to get work done. It also means that one compromised engineer account may expose production infrastructure, data, secrets, permissions, and deployment control at once.
 
-Here is the production shape. We have one Microsoft Entra tenant, one non-production subscription, one production subscription, one production resource group, a support dashboard, an API, a worker, a Key Vault, a Storage account, and an Azure DevOps pipeline.
+A useful first setup needs only a few deliberate boundaries. Engineers need room to experiment, support needs its dashboard, runtime applications need their data, and the deployment pipeline needs to update the application. Those are different jobs, so they should not all inherit the same access.
 
-```yaml
-company: DevPolaris
-tenant: devpolaris.com
-product: Orders
-launch_environment: production
-
-subscriptions:
-  nonprod: sub-devpolaris-nonprod
-  prod: sub-devpolaris-prod
-
-production_resource_group: rg-orders-prod
-location: uksouth
-
-applications:
-  orders-admin-web:
-    host: app-orders-admin-prod
-    purpose: internal support dashboard
-  orders-api:
-    host: ca-orders-api-prod
-    purpose: customer order API
-  orders-worker:
-    host: ca-orders-worker-prod
-    purpose: invoice export worker
-
-production_targets:
-  key_vault: kv-orders-prod
-  export_storage: stordersprodexports
-  deployment_service_connection: sc-orders-prod-deploy
-```
-
-Keep these questions in view as you work through the lesson:
+We will first identify the actors and required actions, then connect them to authentication and permissions and test that the boundaries hold:
 
 1. **What Identity Architecture Is the Startup Building?**
 2. **Why Should You Write an Access Workbook First?**
@@ -73,845 +43,387 @@ Keep these questions in view as you work through the lesson:
 8. **How Do You Rehearse and Verify the Identity Design?**
 
 ## What Identity Architecture Is the Startup Building?
-<!-- section-summary: We start with the exact startup system, tenant, subscriptions, apps, identities, and production resources we will configure during the walkthrough. -->
+<!-- section-summary: Separate human, runtime, and deployment actors, and distinguish directory administration, Azure management, data access, and application access before assigning roles. -->
 
-The rule for the whole walkthrough is this: **every production action needs a caller, a role, a scope, and evidence**. A support engineer opening the dashboard has a caller, a sign-in control, an app assignment, and a sign-in log. The API reading a secret has a caller, a Key Vault role, a vault scope, and a role assignment. The pipeline deploying production has a caller, a deployment role, a resource group scope, and an activity log.
+The startup has two founders, four engineers, and two support employees. Its Azure environment includes Production and Non-production subscriptions, a Support Dashboard, a Public API, a Background Worker, Azure SQL or Storage, and Key Vault. Azure DevOps Pipelines deploys the software.
 
-![DevPolaris Orders production access board](/content-assets/articles/article-cloud-providers-azure-identity-security-practical-startup-identity-access/production-access-board.png)
+The goal is a small access system that limits the impact of a compromised developer account, application, or pipeline. **Blast radius** is the set of resources and operations potentially exposed by that compromise. Limiting it requires understanding which actors genuinely need which capabilities.
 
-*The production board keeps the setup concrete: identities live in `devpolaris.com`, Azure resources live in subscriptions, and access connects a caller to a role at a scope.*
+Begin with four questions for every relationship: who is acting, what they are trying to do, where they may do it, and how they prove their identity. The final question concerns authentication; the action and target questions concern authorization. Keeping both visible prevents a successful login or an enabled managed identity from being mistaken for a complete access design.
 
-We also keep Microsoft guidance in mind while we build. Azure RBAC guidance says to grant only the access needed for the job, assign roles to groups where possible, use narrow scopes, and use PIM for privileged access. Key Vault guidance recommends a vault per application per environment with roles assigned at the vault scope. Managed identity guidance recommends user-assigned identities for many app scenarios because their lifecycle is separate from the compute resource. Those rules shape the tutorial.
+### Distinguish four access planes
+
+An **access plane** here means a category of protected operations. It is a way to separate decisions that otherwise all appear under the broad heading of IAM, or identity and access management.
+
+| Plane | Example work | Relevant authorization |
+|---|---|---|
+| Entra administration | Create users and applications, change Conditional Access, reset authentication methods, assign directory roles | Entra roles such as Global Administrator, Application Administrator, and Conditional Access Administrator |
+| Azure resource management | Create App Service, restart a Function, delete a VM, configure Storage, deploy infrastructure | Azure RBAC roles such as Reader, Contributor, and Owner |
+| Service data access | Read blobs, retrieve vault secrets, receive messages, query a database | Data roles, SQL permissions, and other service-specific rules |
+| Application access | Use the support dashboard and its features | Entra authentication plus appropriate application assignment and app roles |
+
+For data work, examples include Storage Blob Data Reader, Key Vault Secrets User, Service Bus Data Receiver, and SQL permissions. These describe using a service's contents rather than creating or configuring the Azure resource itself.
+
+If Sarah visits `https://support.example.com`, the question of whether she may use the dashboard is an application authorization question. Giving her Azure Reader or Contributor is not normally the appropriate way to answer it. Conversely, a dashboard administrator does not automatically need to administer the App Service resource.
+
+### Keep three groups of actors separate
+
+Human identities receive the Azure and application access appropriate to their work. Runtime identities receive the data and service access required by the running application. The deployment identity receives permission to change the infrastructure it deploys.
+
+This division prevents a convenient but dangerous “everyone is Owner everywhere” arrangement. It also gives the startup a clear way to discuss additions. If a new worker needs another queue, the change belongs to that worker's runtime permission set; it does not require widening every engineer's or pipeline's access.
+
+Before implementing those relationships, write them down. An access workbook makes the intended boundary concrete enough to review and later compare with reality.
 
 ## Why Should You Write an Access Workbook First?
-<!-- section-summary: Before creating Azure permissions, we write a small access workbook that names the real callers, resources, owners, permissions, scopes, and evidence. -->
+<!-- section-summary: Record actor, identity, required action, target, and permission before implementation so each assignment has a specific reason and can later be verified. -->
 
-We start with a file called `orders-production-access.yml`. This is the first artifact because production access should have a written shape before it is stored as a portal setting. The file stays small. It names the people, groups, software identities, resources, reasons, and evidence we expect to see later.
+An **access workbook** is a simple matrix of actors and the permissions their jobs require. It does not need to introduce a large governance process. Its value is making assumptions visible before a portal role assignment turns them into production access.
 
-The first page is human access. We use groups because a startup changes quickly. New support engineers join, engineers move teams, contractors leave, and direct user assignments become cleanup work. Microsoft Azure RBAC guidance also recommends assigning roles to groups where possible.
+| Actor | Identity | Required task | Target | Intended permission |
+|---|---|---|---|---|
+| Engineers | Entra group | Build and test infrastructure | Non-production subscription | Contributor |
+| Engineers | Entra group | Inspect production | Production subscription | Reader |
+| Founders/platform administrators | Entra group | Emergency production administration | Required production scope | Limited privileged/JIT access |
+| Support | Entra group | Use the support dashboard | Support application | Support application role |
+| API | Managed identity | Read required secrets | Production Key Vault | Key Vault Secrets User |
+| Worker | Managed identity | Receive queue work | Service Bus | Data Receiver permission |
+| Pipeline | Federated workload identity | Deploy App Service | Production app resource group | Contributor |
 
-```yaml
-human_access:
-  grp-orders-support:
-    owner: maya@devpolaris.com
-    members_for_launch:
-      - maya@devpolaris.com
-      - nina@devpolaris.com
-    needs:
-      - sign in to orders-admin-web
-    optional_needs:
-      - read Orders production health during incidents
-    evidence:
-      - enterprise application assignment
-      - Conditional Access sign-in result
-      - group membership export
+**Just-in-time**, or JIT, access means making privileged access available when needed rather than leaving it continuously active, where that capability is available in the chosen setup. The workbook records the requirement without confusing it with ordinary day-to-day access.
 
-  grp-orders-engineers:
-    owner: ava@devpolaris.com
-    members_for_launch:
-      - ava@devpolaris.com
-      - liam@devpolaris.com
-      - tom@devpolaris.com
-    needs:
-      - read production resources
-      - read application logs
-      - inspect deployment state
-    evidence:
-      - Azure RBAC assignment list
-      - group membership export
+The rows force useful questions. Does support need Azure portal access, or just the dashboard? Does the API need Contributor, or only a secret-read permission? Does the pipeline need Owner, or only application deployment authority? Do engineers require production writes by default?
 
-  grp-platform-admins:
-    owner: priya@devpolaris.com
-    members_for_launch:
-      - tom@devpolaris.com
-      - priya@devpolaris.com
-    needs:
-      - eligible admin access for production changes
-    evidence:
-      - PIM eligible assignment
-      - PIM activation history
-```
+Often the narrower answer is sufficient. The point is to decide based on the task rather than grant a broad role and hope to reduce it later. [Microsoft's RBAC best practices](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices) recommend required-only access, group-based human assignments, narrow privileged scope, and limited subscription Owners.
 
-Notice the support group's `optional_needs`. In this tutorial, we may give support leads limited Reader access to production resource health so they can help during incidents. In a real production environment, you should only grant that if the support workflow actually needs Azure portal visibility. Many support teams only need the application dashboard and incident status page.
+### Describe the reason, not only the role name
 
-The second page is software access. We separate runtime identity from deployment identity because those jobs are different. The API reads secrets and writes export files. The pipeline deploys resources. If one identity does both jobs, logs become harder to review and permissions become too broad.
+“API has Key Vault Secrets User” is incomplete without identifying the vault and the reason for the access. “The production API retrieves its required secrets from the production vault” explains the relationship and makes a different or broader assignment easier to spot.
 
-```yaml
-software_access:
-  orders-admin-web:
-    identity_type: app_registration
-    signs_in: DevPolaris employees
-    allowed_group: grp-orders-support
-    evidence:
-      - app registration
-      - enterprise application assignment
-      - sign-in log
+The workbook should therefore preserve actor, task, target, and permission together. A role that was reasonable for one target may be excessive at subscription scope. Likewise, an identity suitable for a deployment task may be inappropriate for runtime access even when both belong to the same application team.
 
-  mi-orders-api-prod:
-    identity_type: user_assigned_managed_identity
-    attached_to: ca-orders-api-prod
-    needs:
-      - read orders-db-password from kv-orders-prod
-      - write invoice exports to stordersprodexports
-    evidence:
-      - managed identity resource
-      - Container App identity attachment
-      - role assignment list
-
-  mi-orders-worker-prod:
-    identity_type: user_assigned_managed_identity
-    attached_to: ca-orders-worker-prod
-    needs:
-      - write invoice export blobs
-    evidence:
-      - managed identity resource
-      - Container App identity attachment
-      - role assignment list
-
-  spn-azdo-orders-deploy-prod:
-    identity_type: service_principal
-    used_by: sc-orders-prod-deploy
-    needs:
-      - deploy resources in rg-orders-prod
-    evidence:
-      - Azure DevOps service connection
-      - Azure RBAC assignment
-      - Azure activity log
-```
-
-This workbook changes the access conversation. A vague request like "the API needs Azure access" changes to "`mi-orders-api-prod` needs `Key Vault Secrets User` at `kv-orders-prod` because the API reads `orders-db-password` at runtime." That sentence has a caller, role, scope, and reason, so the team can approve it and test it.
-
-![0 to 1 Azure identity build sequence](/content-assets/articles/article-cloud-providers-azure-identity-security-practical-startup-identity-access/identity-build-sequence.png)
-
-*The build sequence is the runbook: create team groups, create the production boundary, protect sign-in, register the app, attach workload identity, grant RBAC, and rehearse evidence.*
-
-Now we can create the real group and resource boundary. This is the moment where the workbook starts turning into real Azure objects.
+This task-based view supports later verification. Each row can become a test of a required successful operation, and the boundaries between rows can become tests of denied operations. The workbook is both the design's starting point and the comparison target after implementation.
 
 ## How Do Groups and Azure Boundaries Limit Human Access?
-<!-- section-summary: We create Microsoft Entra security groups and the production Azure resource group so every later assignment points at a real team and a real scope. -->
+<!-- section-summary: Separate non-production and production subscriptions, assign human roles through meaningful groups, and reserve broad access-administration powers for a small privileged set. -->
 
-A **Microsoft Entra security group** is a named group of users that can receive app access and Azure role assignments. In plain English, it lets us attach access to a team through one shared object. We create one group for support access, one for engineering visibility, one for deployment approval, and one for people who can activate privileged admin work.
+One Entra tenant can support separate Non-production and Production subscriptions. The tenant supplies the common identity context; the subscriptions supply distinct administrative and governance boundaries.
 
-```bash
-az ad group create \
-  --display-name "grp-orders-support" \
-  --mail-nickname "grp-orders-support"
+Once practical, use a division such as `sub-startup-nonprod` and `sub-startup-prod` rather than relying only on `rg-dev` and `rg-prod` inside one undifferentiated startup subscription. [Azure landing-zone principles](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-principles) describe separating lifecycle environments to improve governance and reduce risk.
 
-az ad group create \
-  --display-name "grp-orders-engineers" \
-  --mail-nickname "grp-orders-engineers"
+This lets engineers have Contributor in Non-production and Reader in Production without requiring a long list of remembered exceptions. Subscription boundaries make the environment difference explicit before individual resource permissions are considered.
 
-az ad group create \
-  --display-name "grp-orders-deploy-approvers" \
-  --mail-nickname "grp-orders-deploy-approvers"
+### Create groups that represent real jobs
 
-az ad group create \
-  --display-name "grp-platform-admins" \
-  --mail-nickname "grp-platform-admins"
-```
+The four engineers are Alice, Ben, Carlos, and Deepa. Instead of four repeated Contributor assignments, put the relevant people in a non-production engineering group and assign the group. Onboarding adds the person to the appropriate group; offboarding removes the relevant membership rather than searching for scattered direct assignments.
 
-The output gives us stable object IDs. We save those IDs because display names are for humans, while object IDs are safer for automation and evidence.
+A small group structure can include:
 
-```json
-{
-  "displayName": "grp-orders-support",
-  "id": "group-orders-support-object-id",
-  "mailNickname": "grp-orders-support",
-  "securityEnabled": true
-}
-```
+- `grp-azure-nonprod-contributors`
+- `grp-azure-prod-readers`
+- `grp-azure-prod-operators`
+- `grp-support-dashboard-users`
+- `grp-support-dashboard-admins`
+- `grp-identity-admins`
 
-Then we add launch members. In a mature company this may come from HR-driven lifecycle automation or identity governance. For this walkthrough, we add the first members directly and record the initial membership in the launch evidence folder.
+An equivalent non-production engineering group might be named `grp-azure-nonprod-engineers`; the meaningful distinction is the security job it represents, not a mandatory spelling. Avoid creating 150 groups for an eight-person company. Create a group where it corresponds to a real population with a distinct access requirement.
 
-```bash
-az ad group member add \
-  --group "grp-orders-support" \
-  --member-id "user-maya-object-id"
+Azure RBAC supports users, groups, service principals, and managed identities. [Role-assignment guidance](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-steps) recommends group-based assignment for manageable human access. The startup can use that pattern without turning a small team into an elaborate hierarchy.
 
-az ad group member add \
-  --group "grp-orders-support" \
-  --member-id "user-nina-object-id"
-```
+### Give experimentation a different boundary from production change
 
-The add command is usually quiet, so we verify membership with a read command. This also gives the launch evidence pack a small record that shows the support group has the expected people before the dashboard is opened.
+Non-production Contributor access lets engineers create resources, deploy, restart services, modify configuration, and remove non-production resources. Production Reader supplies the relevant resource visibility for inspection of health, configuration, metrics, and deployments without routine production modification.
 
-```bash
-az ad group member list \
-  --group "grp-orders-support" \
-  --query "[].{displayName:displayName, userPrincipalName:userPrincipalName, id:id}"
-```
+These choices support fast experimentation in the environment intended for it and controlled changes in production. Production operator or administrator access can remain a separate requirement rather than an accidental side effect of engineering membership.
 
-The output should contain only the launch support users. If an old contractor or a platform admin appears here, the dashboard assignment would grant more access than the workbook intended.
+Remember that the applicable permissions still depend on the role definition and target service. Reader is an Azure resource role, not universal permission to read all production data. Keeping application and data planes separate prevents the production-inspection role from being interpreted as broad customer-data access.
 
-```json
-[
-  {
-    "displayName": "Maya Chen",
-    "userPrincipalName": "maya@devpolaris.com",
-    "id": "user-maya-object-id"
-  },
-  {
-    "displayName": "Nina Patel",
-    "userPrincipalName": "nina@devpolaris.com",
-    "id": "user-nina-object-id"
-  }
-]
-```
+### Keep Owner rare and deliberate
 
-Now we create the production Azure boundary. An **Azure subscription** holds Azure resources and billing. A **resource group** is a smaller container for related resources. Azure RBAC can assign roles at management group, subscription, resource group, or resource scope, and the scope matters because it controls how far the permission reaches.
+Contributor generally permits resource management without general Azure RBAC access administration. Owner combines resource management with permission management. If an attacker obtains Owner, it may be able to change applications, create resources, change access, and grant another identity permission, creating a way to retain access.
 
-```bash
-az account set --subscription sub-devpolaris-prod
+The referenced RBAC guidance recommends no more than three subscription Owners and narrow scope for privileged administrator roles. An eight-person company does not need eight subscription Owners simply because everyone knows each other or occasionally works on production.
 
-az group create \
-  --name rg-orders-prod \
-  --location uksouth \
-  --tags product=orders environment=prod owner=platform
-```
-
-The output gives us the real scope string. We copy it into the workbook because later RBAC commands should use this exact production boundary.
-
-```json
-{
-  "id": "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod",
-  "location": "uksouth",
-  "name": "rg-orders-prod",
-  "tags": {
-    "environment": "prod",
-    "owner": "platform",
-    "product": "orders"
-  }
-}
-```
-
-This is where the production standard matters. Azure RBAC guidance says to grant least privilege and use narrow scopes. If `grp-orders-engineers` gets Reader at the whole production subscription, engineers can see every resource in that subscription. If the group gets Reader at `rg-orders-prod`, engineers can see the Orders production resources only. For this tutorial, the Orders resource group is the working scope.
-
-The groups and resource boundary are ready. Now we protect sign-in before granting useful access.
+The small privileged group should have only the roles and scopes its responsibilities require. This limits the effect of a compromised account and makes changes to the permission system easier to distinguish from ordinary engineering work. Those privileged identities also need stronger protection during sign-in.
 
 ## How Should You Protect Human Sign-In?
-<!-- section-summary: We add Conditional Access, emergency accounts, and PIM so human access uses MFA, device checks, recovery accounts, and time-bound privileged activation. -->
+<!-- section-summary: Require MFA, strengthen privileged authentication, and maintain monitored, tested emergency accounts so policy mistakes do not lock out recovery. -->
 
-**Conditional Access** is Microsoft Entra ID's sign-in policy system. It can use signals such as user, group, application, device, location, and risk to require MFA, require a compliant device, block risky paths, or allow a session after controls pass. We use it before production launch because app assignment alone leaves the sign-in path too weak.
+Careful RBAC assignments do not protect the intended boundary if an attacker can use a stolen password to impersonate the person holding them. Authentication must establish that the caller controls the expected identity, while authorization limits what that identity may do afterward.
 
-We start from a policy worksheet before opening the policy editor. Microsoft recommends planning Conditional Access with test users or groups and report-only mode, then reviewing sign-in logs before broad enforcement.
+Require MFA as a baseline. For small tenants without more advanced Conditional Access licensing, **Security Defaults** provides baseline identity protection, including MFA registration and protection for privileged activities while blocking several weaker authentication paths. [The Security Defaults documentation](https://learn.microsoft.com/en-us/entra/fundamentals/security-defaults) describes that baseline.
 
-```yaml
-conditional_access_launch:
-  require_mfa_for_azure_management:
-    users: all employees
-    exclude:
-      - breakglass-1@devpolaris.com
-      - breakglass-2@devpolaris.com
-    target: Microsoft Azure Management
-    control: require MFA
-    rollout: report-only for 3 days, then enabled
+Where Conditional Access is used, express requirements in terms of caller, context, and resource: for example, Azure administration requires strong MFA. The policy defines the authentication condition rather than granting an Azure management role. [Microsoft's MFA guidance](https://learn.microsoft.com/en-us/entra/identity/conditional-access/policy-all-users-mfa-strength) recommends broad MFA protection.
 
-  require_managed_device_for_orders_admin:
-    users: grp-orders-support
-    target: orders-admin-web
-    controls:
-      - require MFA
-      - require compliant device
-    rollout: test with Maya and Nina first
+### Give privileged accounts stronger authentication
 
-  block_legacy_authentication:
-    users: all employees
-    target: legacy client apps
-    control: block
-    rollout: report-only, review sign-in logs, then enabled
-```
+An ordinary account may use email, Slack or Teams, and support tools. A highly privileged identity can potentially alter the cloud environment and its access rules. The authentication protection should reflect that difference in impact.
 
-We also create emergency access accounts. Microsoft guidance recommends two or more emergency accounts so the organization can recover access if normal administrator sign-in or role activation breaks. These accounts should be cloud-only, monitored, protected with strong authentication, and reserved for emergency use.
+For privileged administrators, prefer phishing-resistant approaches such as FIDO2/passkeys, security keys, Windows Hello for Business, or certificate-based authentication where possible. The objective is to avoid relying entirely on passwords plus second factors that are easily phished. [The administrator MFA guidance](https://learn.microsoft.com/en-us/entra/identity/conditional-access/policy-admin-phish-resistant-mfa) explains this recommendation.
 
-```yaml
-emergency_access:
-  accounts:
-    - breakglass-1@devpolaris.com
-    - breakglass-2@devpolaris.com
-  controls:
-    - excluded from Conditional Access
-    - monitored with immediate sign-in alerts
-    - protected with phishing-resistant authentication where available
-    - credentials stored through the emergency access process
-    - reviewed after every use
-```
+The access workbook and authentication design should agree. If an account can change directory policy or production permissions, treat it as privileged even if the same person also performs ordinary engineering work. The person's job title alone does not describe the account's power.
 
-Next we configure privileged access. **Privileged Identity Management**, usually called **PIM**, gives eligible, time-bound access to privileged Microsoft Entra roles and Azure resource roles. A user can activate a role for a limited duration, satisfy MFA, provide a reason, and leave an activation record.
+### Preserve an emergency recovery path
 
-```yaml
-pim_launch_plan:
-  tom@devpolaris.com:
-    eligible_roles:
-      - User Access Administrator at sub-devpolaris-prod
-      - Key Vault Data Access Administrator at kv-orders-prod
-    maximum_duration: 1 hour
-    approval: priya@devpolaris.com
+A policy mistake can block the very administrators who would fix it. For example, a Conditional Access configuration that blocks everyone can create a tenant lockout. A recovery design needs an authorized path that does not depend on the same failed normal sign-in arrangement.
 
-  priya@devpolaris.com:
-    eligible_roles:
-      - Conditional Access Administrator
-      - Privileged Role Administrator
-    maximum_duration: 1 hour
-    approval: CTO
+Maintain at least two **emergency access**, or break-glass, accounts. The referenced guidance recommends cloud-only accounts that do not depend on external federation, monitoring their use, testing them regularly, and excluding them from Conditional Access policies that could prevent emergency sign-in. [Microsoft's emergency-access guidance](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/security-emergency-access) describes the model.
 
-  emergency_owner_access:
-    eligible_users:
-      - tom@devpolaris.com
-      - priya@devpolaris.com
-    role: Owner at sub-devpolaris-prod
-    maximum_duration: 30 minutes
-    approval: CTO
-```
+These accounts are for recovery rather than everyday administration. Their existence creates a responsibility to control who can use them, know how authentication works, and investigate their use. An untested account whose credentials nobody can locate is not an effective recovery path.
 
-For production, keep privileged roles rare and time-bound. Azure RBAC guidance specifically calls out PIM for just-in-time privileged access, narrow scopes for privileged administrator roles, and a low number of subscription owners. In this walkthrough, daily work happens through normal groups, while privileged changes go through PIM.
-
-Human sign-in and admin access now have controls. Next we connect the support dashboard to Microsoft Entra ID.
+The normal and emergency paths should therefore be separately understood. Normal administration follows the normal administrator identities and policies. Emergency use follows a controlled procedure for restoring access when the normal path is unavailable. Later launch tests must verify this operational distinction, not just confirm that two accounts appear in the directory.
 
 ## How Does the Support Dashboard Use Entra ID?
-<!-- section-summary: We register the support dashboard, assign the support group, configure redirect URIs, and show how the app checks access after sign-in. -->
+<!-- section-summary: Centralize support authentication through Entra, restrict application assignment, and enforce support roles separately from Azure resource-administration permissions. -->
 
-An **app registration** is the Microsoft Entra record that describes how an application signs users in. It contains a client ID, redirect URIs, supported account type, app roles, scopes, and optional credentials. The related **service principal** is the tenant-local identity for that app, and it appears under Enterprise applications for assignment, consent, sign-in logs, and review.
+Suppose the dashboard at `support.example.com` currently maintains local passwords. Every support employee then has an Entra account and a separate dashboard credential. Offboarding requires disabling Entra and remembering the dashboard and every other separately managed application.
 
-We create an app registration called `orders-admin-web`. The app is single-tenant because only DevPolaris employees sign in. We enable assignment required on the Enterprise application and assign `grp-orders-support`.
+Using Entra as the dashboard's identity provider connects the application to the central identity lifecycle. Support staff authenticate through Entra and present the resulting identity information to the dashboard. The application no longer needs a separate employee password system for that relationship.
 
-```yaml
-app_registration:
-  display_name: orders-admin-web
-  supported_account_types: single_tenant
-  redirect_uris:
-    - https://orders-admin.devpolaris.com/auth/callback
-    - https://orders-admin-staging.devpolaris.com/auth/callback
-  enterprise_application:
-    assignment_required: true
-    assigned_groups:
-      - grp-orders-support
-```
+### Restrict application access after authentication
 
-The application receives the tenant, client, and redirect values through configuration. This is an interactive user sign-in flow, so this tutorial path uses tenant, client, and redirect configuration with no long-lived client secret.
+The tenant contains more than support: developers, founders, finance, and contractors may also have accounts. Successful Entra authentication establishes who Sarah is; it does not prove she belongs to the support population permitted to use the dashboard.
 
-```ini
-MICROSOFT_ENTRA_TENANT_ID=tenant-devpolaris
-MICROSOFT_ENTRA_CLIENT_ID=client-orders-admin-web
-MICROSOFT_ENTRA_REDIRECT_URI=https://orders-admin.devpolaris.com/auth/callback
-```
+Assign the appropriate support group to the application. For a compatible Entra enterprise application, **Assignment required** can restrict access to assigned users and groups. [Enterprise application properties](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/application-properties) document this setting.
 
-Now the app needs its own authorization check after Microsoft Entra ID signs the user in. For the tutorial, we show a group check because it is easy to see. In production, app roles can be cleaner for application authorization, especially with large group claims or business-focused roles such as `Orders.SupportAgent`.
+The distinction should be visible in testing. A finance employee may authenticate successfully because Entra knows the account, then be denied dashboard access because the application assignment is absent. That is the expected separation of authentication and authorization, not a sign-in failure.
 
-```ts
-type SignedInUser = {
-  objectId: string;
-  email: string;
-  groups: string[];
-};
+### Use App Service authentication where it fits
 
-const ORDERS_SUPPORT_GROUP_ID = "group-orders-support-object-id";
+If the dashboard runs on App Service, its built-in authentication and authorization features—often called **Easy Auth**—can handle much of the sign-in plumbing. A browser requests `GET /tickets`; App Service detects that it lacks the required sign-in, directs the browser to Entra, and receives the successful authentication result before supplying identity information and claims to the application.
 
-export function canOpenOrdersAdmin(user: SignedInUser): boolean {
-  return user.groups.includes(ORDERS_SUPPORT_GROUP_ID);
-}
-```
+This can reduce OAuth integration work for a small application. [The App Service authentication overview](https://learn.microsoft.com/en-gb/azure/app-service/overview-authentication-authorization) describes built-in support for App Service and Functions, including Entra as an identity provider.
 
-The support flow now looks like this. Maya opens `orders-admin-web`, Microsoft Entra ID requires MFA, Conditional Access checks her device, Enterprise applications confirms the support group assignment, and the dashboard checks access before showing customer orders. The evidence lives in sign-in logs, Enterprise application assignment, and application audit logs.
+The application still needs to interpret its access requirements. A platform's help with authentication does not decide which customer cases a support user may modify or whether exporting data is permitted.
 
-The human-facing app is ready. Now we set up the runtime apps.
+### Model support capabilities with application roles
+
+The dashboard can distinguish Support Reader, Support Agent, and Support Admin. Reader views customer cases, Agent modifies them, and Admin can export data or change settings. Application roles such as `Support.Reader`, `Support.Agent`, and `Support.Admin` express those differences.
+
+Assign people or groups to the appropriate app roles and enforce the corresponding operations. This is more precise than letting every authenticated user perform every action. A role name should describe a real capability distinction inside the dashboard.
+
+Azure RBAC remains separate. Azure Reader does not automatically make someone a dashboard user, and Support.Admin does not imply permission to administer the App Service resource. The dashboard has two relevant identities to consider: the human using its interface and the runtime software accessing its backend resources. The next section addresses the latter.
 
 ## How Do Runtime Applications Receive Production Access?
-<!-- section-summary: We create user-assigned managed identities for the API and worker so Azure can issue runtime tokens through Azure-managed identity paths. -->
+<!-- section-summary: Give API, worker, and dashboard separate managed identities and narrow data permissions, selecting identity lifecycle to match the supported runtime arrangement. -->
 
-A **managed identity** is a Microsoft Entra identity attached to an Azure resource. The running workload asks Azure for a token through the hosting environment, and Azure manages the credential behind that path. Microsoft describes managed identities as a way for Azure resources to access services that support Microsoft Entra authentication while Azure handles the credential lifecycle.
+The Public API calls Key Vault and Storage. The Worker calls Service Bus and Storage. The dashboard backend may need database or application-specific read access. These runtime calls should use explicit application identities rather than credentials copied from a developer or a broad shared deployment identity.
 
-We use user-assigned managed identities for the API and worker. A **user-assigned managed identity** is its own Azure resource, so its lifecycle is separate from the compute resource. Microsoft managed identity guidance says user-assigned identities are more efficient across a broader range of scenarios, especially when you want separate identity administration and resource creation.
+A configuration containing `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` introduces a secret that must be generated, stored, protected, rotated, and monitored. For a supported Azure runtime, managed identity removes the application team's need to handle that identity's underlying credential.
 
-```bash
-az identity create \
-  --name mi-orders-api-prod \
-  --resource-group rg-orders-prod \
-  --location uksouth \
-  --tags product=orders environment=prod owner=platform
-```
+Azure still needs authorization assignments for the resulting principal. [The managed identity recommendations](https://learn.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/managed-identity-best-practice-recommendations) describe credential management and lifecycle choices; enabling identity does not independently grant access to a vault, queue, or storage target.
 
-The output gives us two important values. The `clientId` helps application code select this managed identity. The `principalId` receives Azure RBAC assignments.
+### Give each application its own permission boundary
 
-```json
-{
-  "name": "mi-orders-api-prod",
-  "clientId": "client-mi-orders-api-prod",
-  "principalId": "principal-mi-orders-api-prod",
-  "id": "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod"
-}
-```
+Use distinct runtime identities such as `mi-api-prod`, `mi-worker-prod`, and `mi-support-prod`. Their names help describe the actors, while their actual principal IDs establish which directory objects receive access.
 
-We record both managed identities in the workbook. Keeping client IDs and principal IDs next to the workload names makes later RBAC checks much easier to follow.
+If the worker is compromised, its access should be limited to consuming its queue and writing its required results. It should not also receive API-only secrets, dashboard administration, or infrastructure-deployment permissions simply because all components share one application estate.
 
-```yaml
-managed_identities:
-  mi-orders-api-prod:
-    client_id: client-mi-orders-api-prod
-    principal_id: principal-mi-orders-api-prod
-    attached_to: ca-orders-api-prod
-    job: read Key Vault secret and write export blobs
+The identity boundary therefore carries a permission and blast-radius boundary. Sharing one identity among the API, worker, and dashboard would also share its combined permissions, undermining the separation the access workbook intended.
 
-  mi-orders-worker-prod:
-    client_id: client-mi-orders-worker-prod
-    principal_id: principal-mi-orders-worker-prod
-    attached_to: ca-orders-worker-prod
-    job: write invoice export blobs
-```
+### Choose lifecycle before sharing an identity
 
-Then we attach the API identity to the Container App. This creates the runtime token path.
+A simple `api-prod` resource can use system-assigned managed identity when the identity should follow that resource's lifetime. Deleting the app removes the associated identity. This is a straightforward fit when one resource and one identity should be managed together.
 
-```bash
-az containerapp identity assign \
-  --name ca-orders-api-prod \
-  --resource-group rg-orders-prod \
-  --user-assigned "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod"
-```
+A user-assigned identity exists independently and can be attached to blue and green API deployments. That can fit a logical production identity that must survive application recreation or be intentionally used by more than one deployment resource.
 
-The output should show the Container App identity block with the user-assigned identity resource ID. This proves the runtime can ask Azure for a token as `mi-orders-api-prod`; it still says nothing about Key Vault or Storage permission yet.
+The early-stage decision can stay simple: use the resource-coupled model for a straightforward one-resource lifetime; consider the independent model when recreation or deliberate reuse requires it. Reuse should be an explicit requirement, because resources sharing the identity also share the principal's permissions.
 
-```json
-{
-  "type": "UserAssigned",
-  "userAssignedIdentities": {
-    "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod": {
-      "clientId": "client-mi-orders-api-prod",
-      "principalId": "principal-mi-orders-api-prod"
-    }
-  }
-}
-```
+### Grant data access rather than general production administration
 
-The application code uses the Azure SDK credential chain. In production, `AZURE_CLIENT_ID` selects `mi-orders-api-prod`. The code carries the vault URL and identity client ID, while Azure provides the credential path.
+If the API retrieves secrets, assign its managed identity Key Vault Secrets User at the required production vault. That expresses the intended job. Owner at the Production subscription would instead give the application broad production-administration power.
 
-```ts
-import { DefaultAzureCredential } from "@azure/identity";
-import { SecretClient } from "@azure/keyvault-secrets";
+Similarly, reading blobs requires a data-access role such as Storage Blob Data Reader, not merely a management role named Storage Account Contributor. Ask whether the workload needs to manage the resource or use its data. Runtime work usually needs the latter, while creating and configuring resources belongs to deployment or administration.
 
-const credential = new DefaultAzureCredential({
-  managedIdentityClientId: process.env.AZURE_CLIENT_ID,
-});
+| Runtime principal | Permission | Intended target |
+|---|---|---|
+| `mi-api-prod` | Key Vault Secrets User | `kv-prod` |
+| `mi-api-prod` | Storage Blob Data Reader | `customer-data` |
+| `mi-worker-prod` | Service Bus Data Receiver | Orders queue |
+| `mi-worker-prod` | Storage Blob Data Contributor | `processed-orders` |
+| `mi-support-prod` | Database/application-specific read access | Required dashboard backend |
 
-const secrets = new SecretClient(
-  "https://kv-orders-prod.vault.azure.net",
-  credential
-);
-
-const databasePassword = await secrets.getSecret("orders-db-password");
-```
-
-At this point the API has identity, but it still needs authorization. Microsoft Entra ID can issue a token for `mi-orders-api-prod`; Azure RBAC decides whether that identity can read the Key Vault secret or write blobs.
-
-### Grant Production Permissions
-<!-- section-summary: We grant Azure RBAC roles at the Key Vault and Storage scopes, keep tutorial shortcuts explicit, and store remaining secrets in a per-app production vault. -->
-
-**Azure RBAC** is Azure's authorization system for Azure resources. A role assignment connects a **principal**, a **role**, and a **scope**. The principal is the caller, the role is the permission bundle, and the scope is where the permission applies. For production, Microsoft guidance says to grant least privilege and use narrow scopes.
-
-Here are the runtime role assignments we create. The API and worker get separate rows because each runtime job needs its own evidence.
-
-```yaml
-api_runtime_rbac:
-  - principal: mi-orders-api-prod
-    principal_id: principal-mi-orders-api-prod
-    role: Key Vault Secrets User
-    scope: /subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.KeyVault/vaults/kv-orders-prod
-    reason: API reads orders-db-password at runtime
-
-  - principal: mi-orders-api-prod
-    principal_id: principal-mi-orders-api-prod
-    role: Storage Blob Data Contributor
-    scope: /subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports
-    reason: API writes invoice export files
-
-worker_runtime_rbac:
-  - principal: mi-orders-worker-prod
-    principal_id: principal-mi-orders-worker-prod
-    role: Storage Blob Data Contributor
-    scope: /subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports
-    reason: worker writes invoice export files
-```
-
-We create the Key Vault assignment for the API identity. This is the permission that lets the runtime read the database password from the production vault.
-
-```bash
-az role assignment create \
-  --assignee-object-id principal-mi-orders-api-prod \
-  --assignee-principal-type ServicePrincipal \
-  --role "Key Vault Secrets User" \
-  --scope "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.KeyVault/vaults/kv-orders-prod"
-```
-
-The output is evidence. We keep the principal, role, and scope together so the launch reviewer can compare it with the workbook.
-
-```json
-{
-  "principalId": "principal-mi-orders-api-prod",
-  "principalType": "ServicePrincipal",
-  "roleDefinitionName": "Key Vault Secrets User",
-  "scope": "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.KeyVault/vaults/kv-orders-prod"
-}
-```
-
-Then we create the Storage assignment. This covers blob writes, which is a different production action from reading a secret value.
-
-```bash
-az role assignment create \
-  --assignee-object-id principal-mi-orders-api-prod \
-  --assignee-principal-type ServicePrincipal \
-  --role "Storage Blob Data Contributor" \
-  --scope "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
-```
-
-The output should point at the storage account scope. The API should not receive this role at subscription scope unless the workload truly writes across many storage accounts.
-
-```json
-{
-  "principalId": "principal-mi-orders-api-prod",
-  "principalType": "ServicePrincipal",
-  "roleDefinitionName": "Storage Blob Data Contributor",
-  "scope": "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
-}
-```
-
-For production automation, use role IDs because Microsoft notes that role names can change. We show role names in the tutorial so the permission is readable, and the production script should resolve or pin the role definition ID.
-
-Now we create the vault. **Azure Key Vault** stores secrets, keys, and certificates. Key Vault guidance recommends a vault per application per environment, with roles assigned at the vault scope. We follow that pattern with `kv-orders-prod`.
-
-```bash
-az keyvault create \
-  --name kv-orders-prod \
-  --resource-group rg-orders-prod \
-  --location uksouth \
-  --enable-rbac-authorization true \
-  --tags product=orders environment=prod owner=platform
-```
-
-The useful output proves the vault uses Azure RBAC authorization. If `enableRbacAuthorization` is false, the later RBAC data-role assignments will not control secret access the way this walkthrough expects.
-
-```json
-{
-  "name": "kv-orders-prod",
-  "resourceGroup": "rg-orders-prod",
-  "properties": {
-    "enableRbacAuthorization": true,
-    "vaultUri": "https://kv-orders-prod.vault.azure.net/"
-  },
-  "tags": {
-    "environment": "prod",
-    "owner": "platform",
-    "product": "orders"
-  }
-}
-```
-
-Key Vault has a **control plane** and a **data plane**. The control plane manages the vault resource. The data plane reads and writes secrets, keys, and certificates. Microsoft documents that `Key Vault Contributor` manages the vault resource and grants no access to secret contents, while data roles such as `Key Vault Secrets User` cover secret value access when the vault uses Azure RBAC.
-
-```yaml
-key_vault_access:
-  vault: kv-orders-prod
-
-  runtime_secret_read:
-    principal: mi-orders-api-prod
-    role: Key Vault Secrets User
-    reason: read database password at runtime
-
-  vault_metadata_read:
-    principal: grp-orders-engineers
-    role: Key Vault Reader
-    reason: inspect vault and secret metadata during incidents
-
-  data_access_admin:
-    principal: priya@devpolaris.com
-    role: Key Vault Data Access Administrator
-    path: activate through PIM
-    reason: manage Key Vault data-plane role assignments during approved work
-```
-
-Then we set the first secret. In a real production environment, the value should come from a controlled handoff or secret provisioning process. In this tutorial, we hide the value and show the command shape.
-
-```bash
-az keyvault secret set \
-  --vault-name kv-orders-prod \
-  --name orders-db-password \
-  --value "hidden-in-demo"
-```
-
-The useful output is metadata. The secret value stays out of screenshots, tickets, and launch notes.
-
-```json
-{
-  "id": "https://kv-orders-prod.vault.azure.net/secrets/orders-db-password/version-id",
-  "name": "orders-db-password",
-  "attributes": {
-    "enabled": true
-  }
-}
-```
-
-The runtime side now has identity, permission, and a target secret. The final production caller is Azure DevOps.
+These runtime identities do not need Owner, broad Contributor, or User Access Administrator for the stated jobs. The deployment identity has a different responsibility and should be designed separately rather than adding its permissions to this table.
 
 ## How Should Azure DevOps Deploy Without a Stored Secret?
-<!-- section-summary: We connect Azure DevOps through workload identity federation, scope deployment access to the production resource group, and call out the tutorial bootstrap role. -->
+<!-- section-summary: Use federated Azure DevOps service-connection authentication with a separate deployment identity, narrow deployment scope, and controlled handling of privileged IAM changes. -->
 
-An **Azure DevOps service connection** lets a pipeline authenticate to Azure. We create an Azure Resource Manager service connection named `sc-orders-prod-deploy`. The service connection uses **workload identity federation**, which lets Azure DevOps exchange trusted pipeline identity proof for a Microsoft Entra token. Azure DevOps documentation recommends workload identity federation for app registration connections, and it removes the stored service principal secret from the pipeline setup.
+The pipeline is another workload. It should authenticate as its own deployment identity rather than as Alice performing a deployment. The authentication question is how Azure DevOps proves that it is the expected caller for that identity.
 
-```yaml
-azure_devops_service_connection:
-  name: sc-orders-prod-deploy
-  type: Azure Resource Manager
-  authentication: workload identity federation
-  service_principal: spn-azdo-orders-deploy-prod
-  subscription: sub-devpolaris-prod
-  deployment_scope: rg-orders-prod
+Historically, a service principal and client secret supplied that proof, with the Azure secret stored inside Azure DevOps. **Workload identity federation** replaces the stored Azure password with a short-lived signed assertion and an explicit trust relationship. [Microsoft's service-connection guidance](https://learn.microsoft.com/en-us/azure/devops/pipelines/library/connect-to-azure?view=azure-devops) recommends federation for new Azure Resource Manager service connections and describes support through an app registration or managed identity.
+
+### Follow the federation exchange
+
+Azure DevOps supplies an assertion about the pipeline or service-connection identity. Entra validates it against the configured trust and issues an Azure access token. The pipeline then presents that token for its deployment operations.
+
+The assertion is evidence issued for the external workload, rather than an Azure client secret stored indefinitely in the pipeline system. The trust configuration identifies which asserted workload Entra accepts. The resulting token still represents a principal whose Azure permissions must be assigned deliberately.
+
+Federation therefore changes authentication while preserving the authorization questions from the workbook. Successful token exchange does not decide whether the pipeline should change one App Service, an entire resource group, or the subscription's access rules.
+
+### Separate deployment and runtime identities
+
+Use a deployment identity such as `sp-prod-deployment` and a different runtime identity such as `mi-api-prod`. The first changes application infrastructure; the second reads the API's required data or secrets after deployment.
+
+If the production deployment modifies only `rg-prod-app`, Contributor on that group is a narrower fit than Owner across the subscription. A compromised pipeline can still affect the application resources within its authorized scope, but it should not automatically gain every resource, every permission, or every subscription.
+
+This is least privilege for automation. The relevant boundary is the job, not the fact that pipeline and API belong to the same application. Using one identity for convenience would merge their permissions and let runtime compromise expose deployment authority.
+
+### Keep privileged IAM changes outside ordinary releases
+
+A deployment identity with Contributor plus the ability to create arbitrary role assignments can potentially grant an attacker powerful access. The ability to grant permission deserves a different level of control from ordinary application deployment.
+
+A small startup can separate a normal pipeline with Contributor on the application resource group from a rare, controlled bootstrap/IAM process that manages role assignments. **Bootstrap** here means the initial or privileged setup needed to establish identities and access, rather than routine application delivery.
+
+That split lets normal releases deploy code and resource configuration without controlling who can access Production. If an infrastructure change also requires a new permission relationship, handle that relationship through the designated privileged process instead of silently expanding the ordinary pipeline.
+
+```mermaid
+flowchart TD
+  H[Engineer groups] --> N[Contributor in non-production]
+  H --> P[Reader in production]
+  S[Support group] --> D[Assigned dashboard access]
+  A[Azure DevOps] --> F[Federated deployment identity]
+  F --> G[Contributor on production app group]
+  API[API managed identity] --> K[Required Key Vault and Storage data]
+  W[Worker managed identity] --> Q[Required queue and processed results]
+  class H,N,P,S,D,A,F,G,API,K,W,Q neutral
 ```
 
-For this tutorial, we show a common bootstrap choice: `Contributor` at the Orders production resource group. The scope stays at `rg-orders-prod`, which confines the bootstrap assignment to the Orders production resources. The production version should move to a custom deployment role after the team knows the exact deployment operations, because Azure RBAC guidance recommends least privilege and explicit permissions for custom roles.
-
-```bash
-az role assignment create \
-  --assignee-object-id principal-spn-azdo-orders-deploy-prod \
-  --assignee-principal-type ServicePrincipal \
-  --role "Contributor" \
-  --scope "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod"
-```
-
-The output should name the deployment service principal and the resource group scope. This row belongs in the evidence pack because it proves the pipeline can deploy Orders resources without receiving subscription-wide access.
-
-```json
-{
-  "principalId": "principal-spn-azdo-orders-deploy-prod",
-  "principalType": "ServicePrincipal",
-  "roleDefinitionName": "Contributor",
-  "scope": "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod"
-}
-```
-
-The pipeline references the service connection by name. Azure DevOps handles the federated token exchange behind the task.
-
-```yaml
-trigger:
-  branches:
-    include:
-      - main
-
-stages:
-  - stage: DeployProduction
-    displayName: Deploy Orders Production
-    jobs:
-      - deployment: deploy_orders_prod
-        environment: orders-prod
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - task: AzureCLI@2
-                  displayName: Deploy Bicep
-                  inputs:
-                    azureSubscription: sc-orders-prod-deploy
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      az deployment group create \
-                        --resource-group rg-orders-prod \
-                        --template-file infra/main.bicep \
-                        --parameters environment=prod
-```
-
-Now deployment has its own caller. Runtime API access comes from `mi-orders-api-prod`. Deployment access comes from `spn-azdo-orders-deploy-prod`. Human support access comes from Maya through `grp-orders-support`. The activity log can tell those jobs apart.
+The final arrangement has separate human, deployment, and runtime paths. Limited administrators use strong authentication and JIT where available; engineers use the non-production and production groups; support uses application assignment; the pipeline uses federation; and each runtime receives its own data permissions. The next task is proving that the actual configuration matches those boundaries.
 
 ## How Do You Rehearse and Verify the Identity Design?
-<!-- section-summary: We prove each access path with sign-in logs, app assignments, identity attachment, RBAC output, pipeline evidence, activity logs, and one intentional failure. -->
+<!-- section-summary: Test allowed and denied operations for every actor, verify offboarding and emergency recovery, and reconcile observed principal/role/scope evidence with the access workbook. -->
 
-The launch rehearsal is where the team proves the setup. We take each access path, run the check, show expected output, and store the evidence. This keeps the walkthrough close to a company presentation because we are testing the actual production paths the team will use.
+A launch rehearsal should ask more than whether IAM settings were created. It should demonstrate that required actions succeed and that operations outside each actor's job are denied. That second half is how the startup verifies isolation rather than merely showing that broad access can make the application run.
 
-The first test is support dashboard sign-in. Maya signs in from a company laptop. The expected result is a chain of evidence.
+Use controlled rehearsal targets and a safe test environment for destructive-denial cases. A permission mistake could cause a supposedly forbidden delete to succeed, so valuable production data should not be used as the test fixture. This keeps the rehearsal focused on proving the boundary without creating an avoidable outage.
 
-```yaml
-test: support_dashboard_sign_in
-caller: maya@devpolaris.com
-group: grp-orders-support
-device: compliant company laptop
-expected_result:
-  - MFA required
-  - compliant device accepted
-  - orders-admin-web opens
-  - application confirms support access
-evidence:
-  - Microsoft Entra sign-in log
-  - Conditional Access result
-  - Enterprise application assignment
-  - application audit log with Maya's object ID
-```
+### Rehearse ordinary human access
 
-The second test is API identity attachment. We confirm the Container App has `mi-orders-api-prod` attached.
+Sign in as an ordinary engineer, not an administrator standing in for one. The engineer should create and deploy resources in Non-production and inspect Production. Production modification and Production RBAC changes should fail under the intended baseline access.
 
-```bash
-az containerapp identity show \
-  --name ca-orders-api-prod \
-  --resource-group rg-orders-prod
-```
+Sign in as a support employee. The employee should reach the dashboard and permitted customer information, but should not change the API through the Azure portal or read Key Vault directly. This demonstrates that application access and cloud administration remain separate.
 
-The output should show the user-assigned identity, client ID, and principal ID from the workbook. Those fields prove that the running app uses the intended workload identity.
+Finally, use an ordinary employee outside support, such as someone in finance. Entra authentication may succeed, but `support.example.com` should deny application access if that employee is not assigned. That verifies that recognizing a company account does not automatically grant dashboard use.
 
-```json
-{
-  "userAssignedIdentities": {
-    "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod": {
-      "clientId": "client-mi-orders-api-prod",
-      "principalId": "principal-mi-orders-api-prod"
-    }
-  }
-}
-```
+| Caller | Expected success | Expected denial |
+|---|---|---|
+| Ordinary engineer | Create/deploy in non-production; inspect production | Modify production; change production RBAC |
+| Support employee | Use dashboard; view permitted data | Modify API infrastructure; directly read Key Vault |
+| Unassigned finance employee | Authenticate through Entra | Use support dashboard |
 
-The third test is API authorization. We list role assignments for the managed identity principal.
+If an engineer unexpectedly modifies Production, investigate the applicable direct, group, and inherited assignments. The test result is evidence that the effective access differs from the workbook, even if the intended Reader assignment itself exists.
 
-```bash
-az role assignment list \
-  --assignee principal-mi-orders-api-prod \
-  --all \
-  --query "[].{role:roleDefinitionName, scope:scope}"
-```
+### Test runtime identities separately
 
-The output should show the two runtime roles. Those rows prove that the managed identity can read the vault secret and write export blobs.
+Run the API using its actual production-style runtime identity. It should read required Key Vault secrets and required storage data. It should be denied deletion of Key Vault, VM creation, reading an unrelated storage account, and changing Azure RBAC.
 
-```json
-[
-  {
-    "role": "Key Vault Secrets User",
-    "scope": "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.KeyVault/vaults/kv-orders-prod"
-  },
-  {
-    "role": "Storage Blob Data Contributor",
-    "scope": "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
-  }
-]
-```
+Run the worker under its own identity. It should consume the orders queue and write processed results. It should not read API-only secrets, manage App Service, or access the support database. The test should answer what a caller holding the worker identity could do, rather than assuming the identity is isolated because it has a different name.
 
-The fourth test is pipeline deployment. The pipeline should authenticate through the service connection, deploy to `rg-orders-prod`, and leave Azure activity evidence under `spn-azdo-orders-deploy-prod`.
+These checks distinguish the runtime principals from the deployment identity and from a developer login. Testing through an administrator's credentials could make every required call succeed while proving nothing about the application's configured permissions.
 
-```yaml
-test: production_pipeline_deploy
-caller: spn-azdo-orders-deploy-prod
-service_connection: sc-orders-prod-deploy
-expected_result:
-  - pipeline authenticates through workload identity federation
-  - deployment updates rg-orders-prod
-  - Azure activity log names the deployment service principal
-evidence:
-  - Azure DevOps run
-  - deployment operation output
-  - Azure activity log
-```
+### Test pipeline reach as well as deployment success
 
-The fifth test is an intentional failure in non-production. We remove `Storage Blob Data Contributor` from a test managed identity and run the export job. The expected failure should name an authorization problem for the identity and the blob write action. This gives engineers a safe way to practice reading production access failures.
+The Azure DevOps pipeline should build, deploy, and update the application. It should not modify an unrelated production resource group or grant itself Owner. Direct customer-database access should ideally remain outside its deployment job as well.
 
-```yaml
-failure_drill:
-  caller: mi-orders-api-test
-  missing_role: Storage Blob Data Contributor
-  expected_error: authorization failure on blob write
-  lesson:
-    - identity attachment and RBAC assignment are both required
-    - RBAC assignment must match the target action and scope
-    - logs should point to the workload identity that made the request
-```
+A successful release shows that the deployment path works. The denied operations show that its power stops at the intended boundary. Both are needed to establish that the service connection is useful without being universal Production access.
 
-The sixth test rehearses offboarding. Disable a non-production employee account or remove it from the Orders groups, then confirm that it can no longer open the support dashboard, activate eligible production access, or reach Azure resources through inherited group assignments. Existing sessions and token lifetimes mean the team should test both a fresh sign-in and the organization's session-revocation process. The expected result is loss of access with audit evidence naming the account and group change.
+If an access-changing operation is required for controlled bootstrap, rehearse it as that separate privileged process. Do not use its success to justify equivalent permission on the normal release identity.
 
-This test matters because a launch-day membership export proves only one moment. A real identity system must remove access when a person changes teams or leaves the company. The owner of the group, the HR or identity lifecycle signal, the maximum removal time, and the evidence record all belong in the access workbook.
+### Rehearse employee departure
 
-The launch evidence folder now has real records. We keep this list small enough that the team can collect it during every release review.
+Model Alice leaving the company by disabling or removing her Entra identity through the intended offboarding process. Verify the resulting access behavior in Azure, the support dashboard, and Azure DevOps. Check whether any separate shared passwords still provide a path that bypasses the intended identity lifecycle.
 
-```yaml
-launch_evidence_pack:
-  - group membership export for Orders groups
-  - Conditional Access sign-in result for Maya
-  - Enterprise application assignment for orders-admin-web
-  - PIM activation test for production access administration
-  - managed identity attachment output for ca-orders-api-prod
-  - role assignment list for mi-orders-api-prod
-  - Key Vault secret read test from the API
-  - Azure DevOps production deployment run
-  - Azure activity log showing spn-azdo-orders-deploy-prod
-  - non-production failure drill notes
-```
+The desired result is that a terminated employee no longer has access to those systems. Central identity supplies one lifecycle across participating applications, but the rehearsal should inspect actual behavior rather than assuming every integration reacts exactly as expected without verification.
 
-This rehearsal is the practical heart of the setup. We can explain who made each production request, which role allowed it, which scope contained it, and which evidence proves it.
+This test is particularly useful for finding the old local dashboard account or shared credential that survived a migration to Entra sign-in. The workbook's human-access rows should describe all remaining paths that matter, not only the newly configured ones.
 
-### The Final Walkthrough
-<!-- section-summary: The final picture ties the production setup together as three access paths: support engineer, runtime API, and deployment pipeline. -->
+### Prove emergency access operationally
 
-Now we can walk through one normal production day. Maya signs in to `orders-admin-web` from a managed laptop. Microsoft Entra ID requires MFA and checks the device. Enterprise application assignment allows `grp-orders-support`, and the dashboard checks support access before showing customer orders.
+Simulate normal administrator sign-in being unavailable and follow the authorized emergency procedure. Someone must know where the credentials are, who can use them, how authentication works, and what to do after entering the tenant.
 
-The Orders API runs as `ca-orders-api-prod` with `mi-orders-api-prod` attached. The code asks Azure for a token using the managed identity client ID. Key Vault accepts the token because Azure RBAC grants `Key Vault Secrets User` at `kv-orders-prod`. Storage accepts invoice export writes because Azure RBAC grants `Storage Blob Data Contributor` at `stordersprodexports`.
+The referenced emergency-access guidance recommends regular validation, at least every 90 days. A working account plus a practiced procedure is the recovery capability; a document saying that emergency access exists is insufficient by itself.
 
-Azure DevOps deploys through `sc-orders-prod-deploy`. The service connection uses workload identity federation, and the Azure request comes from `spn-azdo-orders-deploy-prod`. The role assignment gives that service principal deployment access at `rg-orders-prod`. The activity log names the pipeline identity, so a reviewer can separate deployment activity from runtime API activity and human support activity.
+Monitor emergency-account use so an unexpected sign-in receives attention. Regular testing should remain distinguishable from ordinary daily administration, because these identities are reserved for a failure of the normal access path.
 
-![Three production access paths](/content-assets/articles/article-cloud-providers-azure-identity-security-practical-startup-identity-access/production-access-paths.png)
+### Diagnose failures without broadening permission blindly
 
-*The final production view separates the three daily paths: support engineers sign in through Conditional Access, the API uses managed identity for Key Vault and Storage, and Azure DevOps deploys through a federated service connection.*
+An API-to-Key-Vault 403 suggests authentication may have succeeded while authorization failed. Confirm which managed identity the API actually used, which principal ID received the assignment, which role was assigned, which vault was called, and which scope the assignment covers.
 
-Privileged access sits outside daily work. If we need to change a production role assignment, we activate User Access Administrator through PIM, give a reason, receive approval, make the change, and leave activation evidence. If a Conditional Access policy blocks normal administration, emergency accounts give the company a monitored recovery path.
+Do not respond by escalating from Contributor to Owner until the call works. That can conceal the missing or mismatched permission while creating a much larger security boundary than the application requires.
 
-The final review table stays short because the setup is testable. Each question points to one place the team can inspect during onboarding, incident response, or audit review.
+Instead, express the missing relationship precisely: `mi-api-prod` needs Key Vault Secrets User at `kv-startup-prod`, if that is the actual required vault. The principal, operation set, and exact target should explain the correction. A valid authentication event and a similarly named role on another principal are not equivalent evidence.
 
-| Production question | Where the answer lives |
-|---|---|
-| Who can use the support dashboard? | Enterprise application assignment and `grp-orders-support` membership |
-| Which sign-in controls protected the session? | Conditional Access sign-in log |
-| Which identity does the API use? | Container App identity attachment for `mi-orders-api-prod` |
-| Who can read secret values? | Key Vault data-plane RBAC assignments |
-| Who writes export blobs? | Storage Blob Data Contributor assignments |
-| Who deploys production? | Azure DevOps service connection and Azure activity log |
-| Who can grant access? | PIM eligible assignments and activation history |
-| What happens during lockout? | Emergency account process and sign-in alerts |
+### Reconcile the workbook with the deployed configuration
 
-This is the full 0-to-1 identity setup. We created named groups, a production scope, sign-in controls, emergency access, time-bound admin access, a support app registration, managed identities, Key Vault data roles, a federated deployment service connection, and launch evidence. The setup still fits a startup, and it follows the production direction Microsoft recommends: least privilege, group-based assignments, narrow scopes, managed identities, PIM, and tested Conditional Access rollout.
+After setup and rehearsal, update the initial matrix to show the principals and scopes that actually exist:
 
----
+| Principal | Type | Role/access | Scope |
+|---|---|---|---|
+| `grp-nonprod-engineers` | Human group | Contributor | Non-production subscription |
+| `grp-prod-readers` | Human group | Reader | Production subscription |
+| `grp-support-users` | Human group | Support application access | Support dashboard |
+| `mi-api-prod` | Managed identity | Key Vault Secrets User | Production Key Vault |
+| `mi-api-prod` | Managed identity | Storage Blob Data Reader | Customer storage |
+| `mi-worker-prod` | Managed identity | Service Bus Data Receiver | Orders queue |
+| `sp-prod-deployment` | Workload identity | Contributor | Production app resource group |
+
+The short names in this final example serve the same security jobs as the longer group names introduced earlier. In a real workbook, choose the actual created names and IDs rather than keeping both as competing inventories. The required evidence is the deployed principal and assignment, not conformity to one illustrative naming style.
+
+When someone later asks why a role exists, the task and target should provide the answer. “It was already there” leaves an unexplained permission in the security boundary. Keeping the workbook current prevents the initial clear design from disappearing into accumulated exceptions.
+
+### Keep the first iteration small
+
+The complete initial setup remains modest: one Entra tenant, MFA for everyone, stronger phishing-resistant administrator authentication where possible, two emergency accounts, and separate non-production and production subscriptions.
+
+Engineers receive non-production Contributor and production Reader. Support receives dashboard access without Azure administration by default. A small privileged group receives only required administration. The dashboard uses Entra authentication, required assignment, and appropriate support roles.
+
+The API, worker, and dashboard backend use their own managed identities with required data permissions. Azure DevOps uses federation with a separate deployment identity scoped to its deployment job. Avoid runtime Azure client secrets where managed identity works and avoid an Azure DevOps service-principal secret where federation works.
+
+Each change of trust boundary deserves an explicit identity decision: developer, support employee, privileged administrator, pipeline, production API, and background worker are different actors. Security comes from matching those actors to appropriate authentication and narrowly scoped permission, then proving the resulting behavior—not from enabling the largest possible set of IAM features.
 
 ## Check Your Answers
 
 :::expand[What Identity Architecture Is the Startup Building?]{kind="recap"}
-We start with the exact startup system, tenant, subscriptions, apps, identities, and production resources we will configure during the walkthrough.
+Separate human, deployment, and runtime actors. Distinguish Entra administration, Azure resource management, service data, and application access. Every relationship should explain who acts, what it does, where it acts, and how identity is proved.
 :::
 
 :::expand[Why Should You Write an Access Workbook First?]{kind="recap"}
-Before creating Azure permissions, we write a small access workbook that names the real callers, resources, owners, permissions, scopes, and evidence.
+The workbook connects each actor to a required action, target, identity, and permission before roles are created. It exposes unnecessary portal, Contributor, Owner, or production-write assumptions and later provides the expected results for verification.
 :::
 
 :::expand[How Do Groups and Azure Boundaries Limit Human Access?]{kind="recap"}
-We create Microsoft Entra security groups and the production Azure resource group so every later assignment points at a real team and a real scope.
+Separate production from non-production and assign human access through groups representing real jobs. Engineers can experiment in non-production while inspecting production. Keep Owner and other access-administration powers narrow and limited to a small privileged set.
 :::
 
 :::expand[How Should You Protect Human Sign-In?]{kind="recap"}
-We add Conditional Access, emergency accounts, and PIM so human access uses MFA, device checks, recovery accounts, and time-bound privileged activation.
+Require MFA, use appropriate Security Defaults or Conditional Access, and strengthen privileged authentication. Maintain at least two cloud-only emergency accounts with controlled access, monitoring, suitable policy exclusions, and regular recovery tests.
 :::
 
 :::expand[How Does the Support Dashboard Use Entra ID?]{kind="recap"}
-We register the support dashboard, assign the support group, configure redirect URIs, and show how the app checks access after sign-in.
+Use Entra as identity provider, require application assignment where supported, and enforce Support.Reader, Support.Agent, or Support.Admin capabilities. App Service authentication can handle sign-in plumbing, but dashboard permission remains distinct from Azure resource roles.
 :::
 
 :::expand[How Do Runtime Applications Receive Production Access?]{kind="recap"}
-We create user-assigned managed identities for the API and worker so Azure can issue runtime tokens through Azure-managed identity paths. We grant Azure RBAC roles at the Key Vault and Storage scopes, keep tutorial shortcuts explicit, and store remaining secrets in a per-app production vault.
+Use separate managed identities for API, worker, and dashboard. Select lifecycle by resource coupling or intentional reuse, then grant only required vault, storage, messaging, or database access. Runtime data access should not imply broad infrastructure administration.
 :::
 
 :::expand[How Should Azure DevOps Deploy Without a Stored Secret?]{kind="recap"}
-We connect Azure DevOps through workload identity federation, scope deployment access to the production resource group, and call out the tutorial bootstrap role.
+Use a federated ARM service connection with explicit trust and a separate deployment identity. Scope deployment permission to the required application resources, and keep privileged bootstrap/IAM changes outside ordinary releases when those powers are unnecessary.
 :::
 
 :::expand[How Do You Rehearse and Verify the Identity Design?]{kind="recap"}
-We prove each access path with sign-in logs, app assignments, identity attachment, RBAC output, pipeline evidence, activity logs, and one intentional failure. The final picture ties the production setup together as three access paths: support engineer, runtime API, and deployment pipeline.
+Test both successful and denied actions under every actual caller, including engineers, support, unassigned employees, API, worker, and pipeline. Rehearse offboarding and emergency recovery, diagnose exact principal/role/scope failures, and reconcile the workbook with observed configuration.
 :::
 
 ## References
 
-- [Best practices for Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices)
-- [Understand Azure role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments)
-- [Plan a Conditional Access deployment](https://learn.microsoft.com/en-us/entra/identity/conditional-access/plan-conditional-access)
-- [Manage emergency access accounts in Microsoft Entra ID](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/security-emergency-access)
-- [Start using Privileged Identity Management](https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-getting-started)
-- [Managed identity best practice recommendations](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identity-best-practice-recommendations)
-- [Provide access to Key Vault with Azure RBAC](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide)
-- [Troubleshoot Azure Resource Manager service connections](https://learn.microsoft.com/en-us/azure/devops/pipelines/release/azure-rm-endpoint?view=azure-devops)
-- [Automate Azure Resource Manager service connections with workload identity](https://learn.microsoft.com/en-us/azure/devops/pipelines/release/automate-service-connections?view=azure-devops)
+- [Azure RBAC best practices](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices)
+- [Azure landing-zone design principles](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-principles)
+- [Steps to assign an Azure role](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-steps)
+- [Security Defaults](https://learn.microsoft.com/en-us/entra/fundamentals/security-defaults)
+- [Require MFA for all users](https://learn.microsoft.com/en-us/entra/identity/conditional-access/policy-all-users-mfa-strength)
+- [Phishing-resistant MFA for administrators](https://learn.microsoft.com/en-us/entra/identity/conditional-access/policy-admin-phish-resistant-mfa)
+- [Emergency access accounts](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/security-emergency-access)
+- [Enterprise application properties](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/application-properties)
+- [App Service authentication and authorization](https://learn.microsoft.com/en-gb/azure/app-service/overview-authentication-authorization)
+- [Managed identity recommendations](https://learn.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/managed-identity-best-practice-recommendations)
+- [Azure DevOps ARM service connections](https://learn.microsoft.com/en-us/azure/devops/pipelines/library/connect-to-azure?view=azure-devops)

@@ -1,0 +1,51 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/var/log/orders/clients.log": {
+      "type": "file",
+      "content": "192.0.2.10 GET /orders 200\n192.0.2.20 GET /orders 200\n192.0.2.30 GET /orders 200\n192.0.2.40 GET /orders 200\n192.0.2.50 GET /orders 200\n192.0.2.60 GET /orders 200\n192.0.2.70 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.20 GET /orders 200\n192.0.2.30 GET /orders 200\n192.0.2.40 GET /orders 200\n192.0.2.50 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.20 GET /orders 200\n192.0.2.30 GET /orders 200\n192.0.2.40 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.20 GET /orders 200\n192.0.2.30 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "head",
+      "sort",
+      "uniq"
+    ],
+    "expectedResults": [
+      {
+        "label": "client-log sample",
+        "commands": [
+          "head"
+        ],
+        "stdoutEquals": "192.0.2.10 GET /orders 200\n192.0.2.20 GET /orders 200\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "five clients with deterministic tie ordering",
+        "commands": [
+          "sort"
+        ],
+        "stdoutEquals": "12 192.0.2.10\n4 192.0.2.20\n4 192.0.2.30\n3 192.0.2.40\n2 192.0.2.50\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/var/log/orders/clients.log": {
+        "type": "file",
+        "contentEquals": "192.0.2.10 GET /orders 200\n192.0.2.20 GET /orders 200\n192.0.2.30 GET /orders 200\n192.0.2.40 GET /orders 200\n192.0.2.50 GET /orders 200\n192.0.2.60 GET /orders 200\n192.0.2.70 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.20 GET /orders 200\n192.0.2.30 GET /orders 200\n192.0.2.40 GET /orders 200\n192.0.2.50 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.20 GET /orders 200\n192.0.2.30 GET /orders 200\n192.0.2.40 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.20 GET /orders 200\n192.0.2.30 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n192.0.2.10 GET /orders 200\n"
+      }
+    }
+  }
+}

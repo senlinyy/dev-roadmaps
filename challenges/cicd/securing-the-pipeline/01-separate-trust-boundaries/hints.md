@@ -1,1 +1,9 @@
-Job-level permissions override the default token scope and make the trust boundary visible. The privileged job should be downstream of validation and restricted to the trusted branch.
+Identify which object each report examines and when that object exists.
+
+---
+
+Ordering the security job is not enough if release jobs still bypass it or a report layer is never evaluated.
+
+---
+
+Place each scan after its required input, gate deployment on the image result, and retain staging verification as production's dependency.

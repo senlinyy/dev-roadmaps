@@ -1,0 +1,277 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "cidr-capacity",
+      "type": "single",
+      "scenario": "A team needs at least 50 IPv4 addresses in one subnet, including infrastructure reservations. Which prefix is the smallest candidate with at least 64 total addresses?",
+      "options": [
+        {
+          "id": "a",
+          "text": "/27"
+        },
+        {
+          "id": "b",
+          "text": "/26"
+        },
+        {
+          "id": "c",
+          "text": "/25"
+        },
+        {
+          "id": "d",
+          "text": "/24"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "A /26 leaves 6 host bits and therefore 64 total addresses. Provider reservations can reduce usable capacity, so planning must distinguish total from usable addresses. [RFC 4632](https://www.rfc-editor.org/rfc/rfc4632.html)."
+    },
+    {
+      "id": "same-subnet",
+      "type": "single",
+      "scenario": "A host is 10.20.4.10/24 and must send to 10.20.4.80. Its default gateway is healthy. What should it normally do first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Send the packet to its default gateway"
+        },
+        {
+          "id": "b",
+          "text": "Resolve the destination as an on-link neighbor"
+        },
+        {
+          "id": "c",
+          "text": "Translate the source through NAT"
+        },
+        {
+          "id": "d",
+          "text": "Query DNS for the destination MAC"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Both addresses are in 10.20.4.0/24, so the destination is on-link. Neighbor discovery supplies the link-layer address; DNS and NAT solve different problems. [RFC 1122](https://www.rfc-editor.org/rfc/rfc1122.html)."
+    },
+    {
+      "id": "longest-prefix",
+      "type": "single",
+      "scenario": "Routes for 10.0.0.0/8, 10.40.0.0/16, and 0.0.0.0/0 all exist. Their metrics differ. Which route handles 10.40.8.9?",
+      "options": [
+        {
+          "id": "a",
+          "text": "0.0.0.0/0"
+        },
+        {
+          "id": "b",
+          "text": "198.51.100.0/24"
+        },
+        {
+          "id": "c",
+          "text": "10.40.0.0/16"
+        },
+        {
+          "id": "d",
+          "text": "Whichever route was added first"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Routing chooses the most specific matching prefix, so /16 wins over /8 and /0. [RFC 1812](https://www.rfc-editor.org/rfc/rfc1812.html)."
+    },
+    {
+      "id": "private-space",
+      "type": "multiple",
+      "scenario": "A platform team is choosing IPv4 space for internal-only application subnets. Which two ranges are private-use space defined by RFC 1918?",
+      "options": [
+        {
+          "id": "a",
+          "text": "10.0.0.0/8"
+        },
+        {
+          "id": "b",
+          "text": "10.0.0.0/8"
+        },
+        {
+          "id": "c",
+          "text": "224.0.0.0/4"
+        },
+        {
+          "id": "d",
+          "text": "172.16.0.0/12"
+        }
+      ],
+      "correct": [
+        "b",
+        "d"
+      ],
+      "explanation": "10.0.0.0/8 and 172.16.0.0/12 are private-use ranges. 198.51.100.0/24 is documentation space and 224.0.0.0/4 is multicast. [RFC 1918](https://www.rfc-editor.org/rfc/rfc1918.html)."
+    },
+    {
+      "id": "nat-boundary",
+      "type": "single",
+      "scenario": "A private worker reaches a public API through source NAT. Which statement best describes the change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The worker's route table becomes public"
+        },
+        {
+          "id": "b",
+          "text": "A translator rewrites address information at a boundary"
+        },
+        {
+          "id": "c",
+          "text": "DNS replaces the private address permanently"
+        },
+        {
+          "id": "d",
+          "text": "The subnet prefix is extended across the internet"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "NAT rewrites address and often port information at a translation boundary. It does not make private routes globally routable or turn DNS into a routing mechanism. [RFC 3022](https://www.rfc-editor.org/rfc/rfc3022.html)."
+    },
+    {
+      "id": "overlap",
+      "type": "single",
+      "scenario": "Two networks that must be peered both use 10.30.0.0/16. Each already has active workloads. What is the core routing problem?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The duplicate prefix makes remote route selection ambiguous"
+        },
+        {
+          "id": "b",
+          "text": "Private addresses cannot cross any router"
+        },
+        {
+          "id": "c",
+          "text": "The /16 prefix has too few addresses for peering"
+        },
+        {
+          "id": "d",
+          "text": "Peering requires public DNS records"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Overlapping address space makes the same destination prefix mean different networks. Renumbering or an explicit translation design is needed. [RFC 1918](https://www.rfc-editor.org/rfc/rfc1918.html)."
+    },
+    {
+      "id": "subnet-growth",
+      "type": "single",
+      "scenario": "A /28 application subnet is nearly exhausted and autoscaling needs twenty more interfaces. What should be reviewed first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The DNS TTL of the application hostname"
+        },
+        {
+          "id": "b",
+          "text": "TCP keepalive on existing instances"
+        },
+        {
+          "id": "c",
+          "text": "The default gateway MAC address"
+        },
+        {
+          "id": "d",
+          "text": "Address capacity and a non-overlapping larger or additional subnet plan"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The constraint is address capacity. Plan a larger or additional non-overlapping allocation while accounting for platform reservations and growth. [RFC 4632](https://www.rfc-editor.org/rfc/rfc4632.html)."
+    },
+    {
+      "id": "return-path",
+      "type": "single",
+      "scenario": "A server capture sees client SYN packets, but the server has no route back to the client subnet. Which symptom is most likely?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The client times out because replies cannot be routed back"
+        },
+        {
+          "id": "b",
+          "text": "TLS reports an expired certificate"
+        },
+        {
+          "id": "c",
+          "text": "DNS returns NXDOMAIN"
+        },
+        {
+          "id": "d",
+          "text": "The listener changes to UDP"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Inbound arrival proves only the forward path. Without a return route, response packets cannot reach the client and the connection commonly times out. [RFC 1122](https://www.rfc-editor.org/rfc/rfc1122.html)."
+    },
+    {
+      "id": "ipv6-scope",
+      "type": "multiple",
+      "scenario": "A dual-stack host has fe80::10/64 and 2001:db8:20::10/64. Both appear on one interface. Which two interpretations are correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "fe80::10 is link-local and needs an interface context when ambiguity exists"
+        },
+        {
+          "id": "b",
+          "text": "Both addresses are IPv4 private space"
+        },
+        {
+          "id": "c",
+          "text": "2001:db8:20::10 has global unicast scope in this documentation scenario"
+        },
+        {
+          "id": "d",
+          "text": "Having IPv6 automatically bypasses firewall policy"
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "FE80::/10 is link-local. 2001:db8::/32 is reserved for documentation but demonstrates global-unicast addressing structure. IPv6 still requires deliberate filtering. [RFC 4291](https://www.rfc-editor.org/rfc/rfc4291.html), [RFC 3849](https://www.rfc-editor.org/rfc/rfc3849.html)."
+    },
+    {
+      "id": "dual-stack-failure",
+      "type": "single",
+      "scenario": "A hostname has A and AAAA records, but only IPv4 succeeds. The TLS name is identical on both paths. What is the best next check?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Inspect IPv6 address, route, neighbor, and policy evidence separately from IPv4"
+        },
+        {
+          "id": "b",
+          "text": "Delete the A record immediately"
+        },
+        {
+          "id": "c",
+          "text": "Assume the certificate cannot support IPv6"
+        },
+        {
+          "id": "d",
+          "text": "Increase the IPv4 subnet size"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The two address families have separate addressing, routing, neighbor discovery, and filtering paths. Diagnose the failing IPv6 path rather than assuming DNS presence proves connectivity. [RFC 8200](https://www.rfc-editor.org/rfc/rfc8200.html)."
+    }
+  ]
+}

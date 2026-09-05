@@ -1,0 +1,69 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/var/log/orders/app.log": {
+      "type": "file",
+      "content": "14:00:00 INFO orders started\n14:00:01 INFO error budget loaded\n14:00:02 ERROR upstream timeout\n14:00:03 INFO retry queued\n14:00:04 error payment refused\n14:00:05 INFO request_id=reqX42 health check\n14:00:06 INFO request started\n14:00:07 Error request_id=req.42 database unavailable\n14:00:08 INFO retry scheduled\n14:00:09 INFO request recovered\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "head",
+      "tail",
+      "grep"
+    ],
+    "expectedResults": [
+      {
+        "label": "first two source records",
+        "commands": [
+          "head"
+        ],
+        "stdoutEquals": "14:00:00 INFO orders started\n14:00:01 INFO error budget loaded\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "last two source records",
+        "commands": [
+          "tail"
+        ],
+        "stdoutEquals": "14:00:08 INFO retry scheduled\n14:00:09 INFO request recovered\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "numbered error-severity records",
+        "commands": [
+          "grep"
+        ],
+        "stdoutEquals": "3:14:00:02 ERROR upstream timeout\n5:14:00:04 error payment refused\n8:14:00:07 Error request_id=req.42 database unavailable\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "literal request with one line of context on either side",
+        "commands": [
+          "grep"
+        ],
+        "stdoutEquals": "7-14:00:06 INFO request started\n8:14:00:07 Error request_id=req.42 database unavailable\n9-14:00:08 INFO retry scheduled\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/var/log/orders/app.log": {
+        "type": "file",
+        "contentEquals": "14:00:00 INFO orders started\n14:00:01 INFO error budget loaded\n14:00:02 ERROR upstream timeout\n14:00:03 INFO retry queued\n14:00:04 error payment refused\n14:00:05 INFO request_id=reqX42 health check\n14:00:06 INFO request started\n14:00:07 Error request_id=req.42 database unavailable\n14:00:08 INFO retry scheduled\n14:00:09 INFO request recovered\n"
+      }
+    }
+  }
+}

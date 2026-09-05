@@ -1,0 +1,209 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/tmp": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 1023
+    },
+    "/var": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/var/log": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/var/log/logwriter": {
+      "type": "dir",
+      "owner": "logwriter",
+      "group": "logwriter",
+      "mode": 493
+    },
+    "/var/log/logwriter/current.log": {
+      "type": "file",
+      "content": "logging continues\n",
+      "owner": "logwriter",
+      "group": "logwriter",
+      "mode": 416
+    },
+    "/srv": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/data": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/data/orders.db": {
+      "type": "file",
+      "content": "orders database: retain\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 384,
+      "size": 100000000
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "alice",
+        "uid": 1001,
+        "primaryGroup": "alice",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "bob",
+        "uid": 1002,
+        "primaryGroup": "bob",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "myapp",
+        "uid": 2000,
+        "primaryGroup": "myapp"
+      },
+      {
+        "name": "api",
+        "uid": 2001,
+        "primaryGroup": "api"
+      },
+      {
+        "name": "logwriter",
+        "uid": 2002,
+        "primaryGroup": "logwriter"
+      }
+    ],
+    "sessionGroups": [
+      "dev",
+      "team"
+    ],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "du",
+      "ps"
+    ],
+    "expectedFs": {
+      "/srv/data/orders.db": {
+        "type": "file",
+        "sizeEquals": 100000000,
+        "contentEquals": "orders database: retain\n",
+        "modeEquals": 384,
+        "ownerEquals": "root",
+        "groupEquals": "root"
+      },
+      "/var/log/logwriter/current.log": {
+        "type": "file",
+        "contentEquals": "logging continues\n",
+        "modeEquals": 416,
+        "ownerEquals": "logwriter",
+        "groupEquals": "logwriter"
+      }
+    },
+    "expectedSystem": {
+      "diagnostics": [
+        "disk:blocks:/",
+        "disk:inodes:/",
+        "open-files:deleted",
+        "open-files:clear"
+      ],
+      "services": [
+        "logwriter"
+      ],
+      "noDeletedOpenFiles": true,
+      "storage": [
+        {
+          "path": "/",
+          "minFreeBytes": 500000000,
+          "minFreeInodes": 1000
+        }
+      ]
+    }
+  },
+  "system": {
+    "services": [
+      {
+        "name": "logwriter",
+        "user": "logwriter",
+        "command": "/usr/local/bin/logwriter",
+        "pid": 2400,
+        "active": true,
+        "logs": [
+          "logwriter: log rotation completed; still writing to the old descriptor"
+        ]
+      }
+    ],
+    "disks": [
+      {
+        "mountpoint": "/",
+        "device": "/dev/vda1",
+        "bytes": 1073741824,
+        "inodes": 100000
+      }
+    ],
+    "openFiles": [
+      {
+        "service": "logwriter",
+        "path": "/var/log/logwriter/access.log",
+        "inode": 900000,
+        "size": 970000000
+      }
+    ]
+  }
+}

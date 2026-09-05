@@ -1,0 +1,277 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "status-boundary",
+      "type": "single",
+      "scenario": "A verbose request verifies TLS and receives HTTP 503 with an edge request ID. What has the evidence established?",
+      "options": [
+        {
+          "id": "a",
+          "text": "An HTTP component returned service unavailability"
+        },
+        {
+          "id": "b",
+          "text": "DNS failed before connection"
+        },
+        {
+          "id": "c",
+          "text": "The certificate was expired"
+        },
+        {
+          "id": "d",
+          "text": "The TCP route is missing"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "An HTTP status is application-layer evidence after transport and, for HTTPS, TLS. Correlate the responding component and request ID with upstream evidence. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html)."
+    },
+    {
+      "id": "method-safety",
+      "type": "single",
+      "scenario": "A retry system may automatically repeat a request after a connection interruption. Which method is defined as safe and idempotent for retrieving a resource?",
+      "options": [
+        {
+          "id": "a",
+          "text": "POST"
+        },
+        {
+          "id": "b",
+          "text": "GET"
+        },
+        {
+          "id": "c",
+          "text": "PATCH"
+        },
+        {
+          "id": "d",
+          "text": "CONNECT"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "GET is a safe retrieval method and is idempotent. POST and PATCH can change state; CONNECT establishes a tunnel. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-methods)."
+    },
+    {
+      "id": "redirect",
+      "type": "single",
+      "scenario": "A monitor requests HTTP and records 308 with a Location header, while browsers work. What should the monitor do to test the final resource?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat every 3xx as DNS failure"
+        },
+        {
+          "id": "b",
+          "text": "Disable TLS verification"
+        },
+        {
+          "id": "c",
+          "text": "Follow the redirect and record both the redirect and final status"
+        },
+        {
+          "id": "d",
+          "text": "Change the server route"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "A redirect instructs the client to use another URI. Following it tests the final endpoint while retaining the original redirection evidence. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-redirection-3xx)."
+    },
+    {
+      "id": "cert-checks",
+      "type": "multiple",
+      "scenario": "A client verifies an HTTPS server certificate. TCP has already connected to a shared endpoint. Which two identity and trust checks are essential?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The HTTP response is always 200"
+        },
+        {
+          "id": "b",
+          "text": "The requested hostname matches a certificate identity"
+        },
+        {
+          "id": "c",
+          "text": "The server uses port 443"
+        },
+        {
+          "id": "d",
+          "text": "The chain reaches a trusted issuer and is within its validity interval"
+        }
+      ],
+      "correct": [
+        "b",
+        "d"
+      ],
+      "explanation": "Certificate verification checks identity, trust chain, and validity. A port number and later HTTP status do not authenticate the peer. [RFC 6125](https://www.rfc-editor.org/rfc/rfc6125.html), [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280.html)."
+    },
+    {
+      "id": "sni",
+      "type": "single",
+      "scenario": "Several domains share one IP and port. The wrong certificate appears only when a legacy probe omits the hostname during TLS setup. Which mechanism is missing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "ETag"
+        },
+        {
+          "id": "b",
+          "text": "CORS"
+        },
+        {
+          "id": "c",
+          "text": "NAT"
+        },
+        {
+          "id": "d",
+          "text": "SNI"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Server Name Indication carries the intended hostname during TLS negotiation so a shared endpoint can select the right certificate. [RFC 6066](https://www.rfc-editor.org/rfc/rfc6066.html)."
+    },
+    {
+      "id": "alpn",
+      "type": "single",
+      "scenario": "A TLS trace says the server accepted h2. Certificate verification also succeeded. What did ALPN negotiate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The DNS resolver"
+        },
+        {
+          "id": "b",
+          "text": "The certificate issuer"
+        },
+        {
+          "id": "c",
+          "text": "The application protocol used inside the protected connection"
+        },
+        {
+          "id": "d",
+          "text": "The IP route"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "ALPN lets peers select an application protocol such as HTTP/2 during TLS. It does not choose DNS, routing, or certificate trust. [RFC 7301](https://www.rfc-editor.org/rfc/rfc7301.html)."
+    },
+    {
+      "id": "conditional",
+      "type": "single",
+      "scenario": "A cached representation has ETag \"release-42\". The client sends If-None-Match with that value and receives 304. What should it do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat the response as a missing route"
+        },
+        {
+          "id": "b",
+          "text": "Reuse the cached representation because it is still valid"
+        },
+        {
+          "id": "c",
+          "text": "Delete the resource"
+        },
+        {
+          "id": "d",
+          "text": "Repeat without TLS"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "304 indicates that the selected representation has not changed for the supplied validator, so the client can reuse its cached body. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-304-not-modified)."
+    },
+    {
+      "id": "cookie-security",
+      "type": "multiple",
+      "scenario": "A session cookie should travel only over HTTPS and should not be readable through browser JavaScript. Which two attributes address those requirements?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Secure"
+        },
+        {
+          "id": "b",
+          "text": "ETag"
+        },
+        {
+          "id": "c",
+          "text": "HttpOnly"
+        },
+        {
+          "id": "d",
+          "text": "Location"
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Secure limits cookie transmission to secure channels, and HttpOnly restricts non-HTTP APIs such as script access. [RFC 6265](https://www.rfc-editor.org/rfc/rfc6265.html)."
+    },
+    {
+      "id": "cors",
+      "type": "single",
+      "scenario": "A browser blocks a cross-origin API response, but curl receives HTTP 200. Which boundary should be inspected?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The API's CORS response policy for the browser origin"
+        },
+        {
+          "id": "b",
+          "text": "The host default route only"
+        },
+        {
+          "id": "c",
+          "text": "The TCP listener only"
+        },
+        {
+          "id": "d",
+          "text": "The certificate expiry only"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "CORS is enforced by browsers using response headers and request origin context. A successful curl response does not prove the browser policy permits access. [Fetch standard](https://fetch.spec.whatwg.org/)."
+    },
+    {
+      "id": "termination",
+      "type": "single",
+      "scenario": "The browser-to-proxy TLS handshake succeeds, but proxy logs show its upstream TLS verification fails. What does the browser success prove?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Only the client-facing TLS boundary succeeded"
+        },
+        {
+          "id": "b",
+          "text": "Every internal TLS hop succeeded"
+        },
+        {
+          "id": "c",
+          "text": "The upstream returned HTTP 200"
+        },
+        {
+          "id": "d",
+          "text": "The backend certificate is trusted by the proxy"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "TLS can terminate and begin again at separate hops. Evidence from one boundary does not establish trust or success at the next. [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446.html)."
+    }
+  ]
+}

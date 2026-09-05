@@ -1,91 +1,115 @@
 {
   "language": "yaml",
-  "filename": ".github/workflows/release.yml",
-  "completionProfile": "github-actions",
-  "initialValue": "name: Release\non:\n  workflow_dispatch:\n\njobs:\n  deploy-staging:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: docker build -t registry.example.com/booking-api:staging .\n      - run: ./deploy.sh staging registry.example.com/booking-api:staging\n\n  deploy-production:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: docker build -t registry.example.com/booking-api:production .\n      - run: ./deploy.sh production registry.example.com/booking-api:production\n",
-  "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
-      {
-        "path": [
-          "on",
-          "workflow_dispatch",
-          "inputs",
-          "image_digest",
-          "required"
-        ],
-        "equals": true,
-        "label": "required image digest input"
+  "activeFile": "pipeline.yaml",
+  "files": [
+    {
+      "filename": "pipeline.yaml",
+      "initialValue": "# Production must receive the exact package that passed staging.\nversion: 1\njobs:\n  staging:\n    steps:\n      - checkout: true\n      - run: npm ci\n      - run: npm run build\n      - deploy: {environment: staging, path: dist/app.json}\n      - verify: dist/app.json\n  production:\n    steps:\n      - checkout: true\n      - run: npm ci\n      - run: npm run build\n      - deploy: {environment: production, path: dist/app.json}\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 1,
+    "filename": "pipeline.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint fixture passed: no lint errors."
       },
-      {
-        "path": [
-          "on",
-          "workflow_dispatch",
-          "inputs",
-          "image_digest",
-          "type"
-        ],
-        "equals": "string",
-        "label": "digest input type"
+      "test": {
+        "passed": true,
+        "message": "Test fixture passed: checkout totals match expected results."
       },
-      {
-        "path": [
-          "jobs",
-          "deploy-staging",
-          "steps"
-        ],
-        "containsObject": {
-          "run": "./deploy.sh staging registry.example.com/booking-api@${{ inputs.image_digest }}"
-        },
-        "label": "staging immutable deployment"
-      },
-      {
-        "path": [
-          "jobs",
-          "deploy-production",
-          "needs"
-        ],
-        "equals": "deploy-staging",
-        "label": "production waits for staging"
-      },
-      {
-        "path": [
-          "jobs",
-          "deploy-production",
-          "environment"
-        ],
-        "equals": "production",
-        "label": "protected production environment"
-      },
-      {
-        "path": [
-          "jobs",
-          "deploy-production",
-          "steps"
-        ],
-        "containsObject": {
-          "run": "./deploy.sh production registry.example.com/booking-api@${{ inputs.image_digest }}"
-        },
-        "label": "production promotes identical digest"
-      },
-      {
-        "path": [
-          "jobs",
-          "deploy-staging",
-          "steps"
-        ],
-        "maxItems": 1,
-        "label": "staging performs deployment only"
-      },
-      {
-        "path": [
-          "jobs",
-          "deploy-production",
-          "steps"
-        ],
-        "maxItems": 1,
-        "label": "production performs deployment only"
+      "build": {
+        "passed": true,
+        "message": "Build fixture passed: packaged the checkout application."
       }
-    ]
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "title": "Healthy change",
+        "description": "All authored checks pass. Complete the full required workflow."
+      },
+      {
+        "id": "test-failure",
+        "title": "Unit-test failure",
+        "description": "An authored checkout-total test fails. Packaging must not proceed.",
+        "checks": {
+          "test": {
+            "passed": false,
+            "message": "checkoutTotal: expected 12, received 10 (authored unit-test fixture)."
+          }
+        }
+      },
+      {
+        "id": "staging-failure",
+        "title": "Staging check fails",
+        "description": "Unit tests pass, but the deployed package fails its smoke check. Production must stay blocked.",
+        "verification": {
+          "passed": false,
+          "message": "Staging smoke fixture failed: checkout health request returned 503."
+        }
+      }
+    ],
+    "verification": {
+      "passed": true,
+      "message": "Staging smoke fixture passed: checkout endpoint is healthy."
+    }
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "checks": [
+      "lint",
+      "test",
+      "build"
+    ],
+    "lockedInstalls": true,
+    "buildAfterChecks": [
+      "lint",
+      "test"
+    ],
+    "cases": [
+      {
+        "id": "healthy"
+      },
+      {
+        "id": "test-failure",
+        "failure": "test",
+        "forbid": [
+          "build",
+          "upload",
+          "verify",
+          "deploy"
+        ]
+      },
+      {
+        "id": "staging-failure",
+        "failure": "verify",
+        "productionBlocked": true
+      }
+    ],
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n"
+    },
+    "singleBuild": true,
+    "transferredArtifact": true,
+    "promotion": true
   }
 }

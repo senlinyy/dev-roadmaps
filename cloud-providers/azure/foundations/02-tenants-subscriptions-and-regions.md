@@ -1,7 +1,7 @@
 ---
 title: "Tenants, Subscriptions, and Regions"
-description: "Understand the first Azure placement decisions: tenant, subscription, resource group, scope, region, and availability-zone shape for a real workload."
-overview: "This opening Azure foundations article follows one Orders API from first placement question to production-ready Azure coordinates. You will connect Microsoft Entra tenants, Azure subscriptions, resource groups, scope inheritance, regions, and availability zones as one practical deployment story."
+description: "Separate Azure identity, administration, and physical placement, then use tenants, subscriptions, resource groups, scopes, regions, and zones to plan a workload."
+overview: "Before Azure runs a workload, it needs to know who owns its identities, how its resources should be managed, and where they should run. Follow those three questions through Contoso and payments examples, including scope inheritance, lifecycle boundaries, regional placement, and zone failures."
 tags: ["azure", "tenants", "subscriptions", "regions", "zones"]
 order: 1
 id: article-cloud-providers-azure-foundations-tenants-and-subscriptions
@@ -36,13 +36,11 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-For this first Azure foundations article, the story is one app: `orders-api-prod`. The Orders API receives checkout requests, reads secrets from Key Vault, writes order events to Storage, and talks to a database that keeps customer purchase history. Before the team creates a single resource, they need to decide where the workload belongs.
+Before you create a virtual machine, Azure needs more than its size. Which organization does the person creating it belong to? Which part of that organization owns the resource and its cost? Where should the machine run? What should happen if the datacenter supporting it fails?
 
-Azure placement has several layers, and each layer answers a different production question. A **tenant** answers which identity directory the company trusts. A **subscription** answers which billing, quota, access, and governance boundary owns the resources. A **resource group** answers which resources share a lifecycle. A **scope** answers where permissions and policies apply. A **region** answers which geographic Azure location hosts the service. An **availability zone** answers how the workload survives a failure inside one supported region.
+Azure uses different concepts to answer those questions. The confusing part is that several appear on the same deployment screen, even though they describe different things. A resource group has a location, for example, but that location does not force every resource in the group to run there. Understanding why makes the rest of the model much easier to use.
 
-The Orders API gives us a concrete target for each layer. The table below names the placement choice and the part of Azure behavior that choice controls.
-
-Keep these questions in view as you work through the lesson:
+We will separate identity, administration, and physical placement, then bring them together in a payments deployment:
 
 1. **What Coordinates Does Azure Give Every Workload?**
 2. **What Is a Microsoft Entra Tenant?**
@@ -54,361 +52,266 @@ Keep these questions in view as you work through the lesson:
 8. **How Do You Review a Workload’s Placement?**
 
 ## What Coordinates Does Azure Give Every Workload?
-<!-- section-summary: The first Azure placement story connects identity, billing, lifecycle, governance, geography, and failure boundaries before the Orders API gets deployed. -->
+<!-- section-summary: Identity, administrative ownership, and physical placement are separate coordinates, so a resource's subscription does not determine its region. -->
 
-| Layer | Orders choice | What the choice controls |
-|---|---|---|
-| **Tenant** | `devpolaris.com` Microsoft Entra tenant | Users, groups, app identities, managed identities, sign-in policy, and identity logs |
-| **Subscription** | `sub-orders-prod` | Billing, quotas, Azure RBAC assignments, Azure Policy, resource provider registration, and production isolation |
-| **Resource groups** | `rg-orders-app-prod-uksouth` and `rg-orders-data-prod-uksouth` | Lifecycle boundaries for app resources and long-lived data resources |
-| **Scope** | Management group, subscription, resource group, or resource | Where Azure RBAC roles, Azure Policy, and other management controls take effect |
-| **Region** | `uksouth` | Geographic placement, latency, data residency, service availability, and regional quota |
-| **Availability zones** | Zone-redundant app and data choices where supported | Protection from a zone-level facility, power, cooling, or network failure |
+A cloud platform needs to identify callers, organize resources, apply controls, and place work on infrastructure. Azure gives each of these jobs a name. Start with the question each name answers rather than trying to memorize the names in isolation.
 
-![Azure placement ladder showing tenant, subscription, resource groups, scope, region, and availability zones connected to the Orders API](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/placement-ladder.png)
+| Question Azure must answer | Concept used |
+|---|---|
+| Which organization or identity directory does this caller belong to? | Tenant |
+| Which major administrative and commercial boundary owns these resources? | Subscription |
+| Which related resources should be managed together? | Resource group |
+| Where should a permission or governance rule apply? | Scope |
+| In which geographic area should this workload run? | Region |
+| Which independent failure location inside that region should it use? | Availability zone |
 
-*The placement ladder keeps each early Azure decision tied to the same workload instead of treating tenant, subscription, region, and zones as separate vocabulary lists.*
+These questions form three sets of coordinates. The **identity coordinate** identifies the directory containing the caller. The **administrative coordinate** identifies who manages a resource and which governance applies to it. The **physical coordinate** describes the infrastructure location supporting the workload.
 
-This placement story matters because many Azure mistakes start with a resource created in the wrong home. A developer runs a CLI command while the active subscription points at production. A staging database lands in the same resource group as production data. A team chooses a region before checking service availability. A zone-redundant design copies zone numbers across subscriptions before anyone checks the physical mapping.
+```mermaid
+flowchart LR
+  subgraph identity[Identity]
+    T[Microsoft Entra tenant] --> U[People and application identities]
+  end
+  subgraph administration[Administration]
+    M[Management group] --> S[Subscription] --> G[Resource group] --> R[Resource]
+  end
+  subgraph placement[Physical placement]
+    GEO[Geography] --> REG[Region] --> Z[Availability zone] --> D[Datacenter infrastructure]
+  end
+  class T,U,M,S,G,R,GEO,REG,Z,D neutral
+```
 
-This ladder is useful because it gives the team an order for the conversation. We start with the tenant because every Azure resource operation needs a trusted identity. Then we move into subscriptions, resource groups, scopes, regions, zones, and a final placement review that the team can repeat before Bicep, Terraform, the Azure CLI, or the portal creates anything.
+The administrative hierarchy and the physical hierarchy are independent. That distinction is the central model for this article. Placing a resource in a subscription answers an ownership question; selecting its region answers a deployment-location question. Neither choice supplies the other automatically.
+
+Consider a `Production` subscription and `payments-prod` resource group. One VM runs in UK South, zone 1. A second VM runs in UK South, zone 2. Storage uses a zone-redundant configuration in UK South, while backup resources use another region. All of these resources can belong to the same administrative group even though their placement differs.
+
+The subscription itself does not occupy UK South, and a region is not a container inside the resource group. Each resource has its own placement characteristics. This distinction also explains why viewing resources grouped by region in a portal does not change their administrative hierarchy. The view is showing a shared property, not introducing another governance level.
+
+The identity coordinate comes first because Azure needs to identify the people and software acting on those resources. Once that identity boundary is clear, the subscription and resource group can describe the resources those callers manage.
 
 ## What Is a Microsoft Entra Tenant?
-<!-- section-summary: A Microsoft Entra tenant is the organization's identity directory, and Azure subscriptions trust one tenant to authenticate users, groups, applications, and workload identities. -->
+<!-- section-summary: A tenant holds an organization's identity objects; several subscriptions can trust that same tenant while keeping separate resource boundaries. -->
 
-A **Microsoft Entra tenant** is an isolated cloud identity directory for an organization. You will still hear the older name, Azure Active Directory or Azure AD, because years of screenshots, scripts, and blog posts use it. In current Microsoft naming, Microsoft Entra ID is the identity service, and a tenant is one organization's directory inside that service.
+A **Microsoft Entra tenant** is an organization's identity and security boundary. It provides the directory in which Azure can identify people, groups, applications, and managed identities. A directory is the collection of identity records and their associated settings; it gives a caller's name a specific organizational context.
 
-The tenant stores the identity objects the Orders team uses every day. Maya's user account lives there. The `grp-orders-platform` and `grp-orders-support` groups live there. The deployment pipeline can have a service principal there. The managed identity attached to `orders-api-prod` also appears there as a service principal that Azure manages for the workload.
+Suppose Contoso begins using Microsoft cloud services. It needs records for Alice and Bob, groups such as Finance-Team and Developers, application identities, managed identities, authentication rules, Conditional Access settings, and enterprise applications. Those records and settings belong in the Contoso tenant.
 
-The tenant gives Azure the answer to the question "who is calling?" When Maya opens the Azure portal, Microsoft Entra ID authenticates her. When the deployment pipeline calls Azure Resource Manager, Microsoft Entra ID issues the token for that software caller. When the running API asks Key Vault for a secret through managed identity, Microsoft Entra ID issues the token for that workload identity.
+Conditional Access is part of this identity setting: it concerns the conditions under which access is allowed. The important point here is where that policy belongs. It belongs with the identity system, alongside the people and applications to which it applies, rather than with a geographic region.
 
-An **Azure subscription** trusts one Microsoft Entra tenant for identity. Microsoft documents this as a trust relationship: each subscription trusts a single tenant, and one tenant can be trusted by many subscriptions. For DevPolaris, that means `sub-orders-dev`, `sub-orders-staging`, `sub-orders-prod`, and `sub-platform-shared` can all trust the same `devpolaris.com` tenant.
+When Alice signs in, Azure needs to know which directory her identity comes from. A username by itself does not express the full organizational boundary. “Alice in the Contoso tenant” supplies that missing context. The tenant therefore provides the identity universe in which the account, its groups, and relevant identity settings make sense.
 
-That trust relationship gives the company one identity home across several Azure environments. The same employee account can receive Reader access in production and Contributor access in development. The same platform group can own shared networking subscriptions. The same identity logs can help the security team trace who signed in, which app requested a token, and which workload identity called Azure.
+Contoso can have Development, Testing, Production, and Security subscriptions while continuing to use this single directory. Alice does not require four independent identities simply because the organization has four subscriptions. Her identity can remain in Contoso's tenant while resource administration is divided across those subscriptions.
 
-Tenant choices become serious during mergers, spinouts, vendor access, and directory migrations. If a subscription changes the tenant it trusts, the resources stay in their Azure regions, while role assignments, service principals, managed identities, Key Vault access, and automation need careful review. The trusted identity directory changed, so the access records that point at old directory objects may need replacement.
+The relationship is a trust relationship: each subscription trusts one Microsoft Entra tenant at a time for authentication, and a tenant can be associated with multiple subscriptions. Authentication means establishing who the caller is. Whether that known caller may perform a particular resource operation is a separate permissions question. The subscription's trust in a tenant does not, by itself, give every person in the tenant administrative access. [Microsoft's resource management overview](https://learn.microsoft.com/en-us/azure/active-directory/fundamentals/secure-with-azure-ad-resource-management) describes this tenant–subscription relationship.
 
-So the tenant names the people and software. The next layer gives those known callers a production resource boundary to work inside, and that boundary is the subscription.
+That separation matters when reading an Azure diagram. A tenant represents identity and security context. A subscription represents a resource, governance, and commercial boundary. If a diagram puts subscriptions beneath a tenant, it is showing which directory they trust; it is not showing separate datacenters or requiring a new employee account for every environment.
+
+With one identity system serving several environments, the next question is why those environments need separate subscriptions at all.
 
 ## Why Do Azure Subscriptions Exist?
-<!-- section-summary: An Azure subscription is the main production boundary for billing, quota, resource ownership, Azure RBAC, Azure Policy, and environment isolation. -->
+<!-- section-summary: Subscriptions divide resources by administration, cost accountability, quotas, policies, ownership, environment, and acceptable blast radius. -->
 
-An **Azure subscription** is the container where Azure resources, billing records, quotas, access assignments, policies, and provider registrations meet. It is the first place most engineers feel Azure as an operating system for cloud work. If the tenant answers who the caller is, the subscription answers which Azure resource estate that caller is trying to manage.
+A **subscription** is a billing and management container for Azure resources and resource groups. It supplies a major boundary for administration and resource consumption. In practical terms, it helps an organization decide which collection of resources belongs under the same ownership, spending, and governance arrangement.
 
+Imagine Contoso's planned estate: 100 development VMs, 50 test databases, 200 production services, security monitoring, and experiments. Azure could place everything within one broad administrative collection. The difficulty would come when the organization needed to separate who administers it, who accounts for its cost, which quotas and limits apply, and which policies protect production.
 
-For the Orders team, one shared subscription would create messy operations. Development load tests could consume quota needed by production. A broad Contributor assignment for a test environment could accidentally reach production resources. Monthly cost reports would mix experiments, staging, and real customer traffic into the same bill. Production policy rules would slow down harmless development experiments, while loose development rules would put production at risk.
+These concerns often overlap. Production and development may have different administrators and rules. Security monitoring may have distinct ownership. Experiments may need a limited blast radius—the range of resources or activities that could be affected by a mistake. Subscription boundaries give the organization a way to make those larger distinctions explicit.
 
-The team uses separate subscriptions because subscriptions make several boundaries visible. Each boundary gives production its own operating space instead of mixing release traffic, experiments, access, and bills together.
+A simple arrangement is one Contoso tenant with Production, Development, and Sandbox subscriptions. Another arrangement divides Production, NonProduction, Security, and Sandbox. Either is an organizational choice rather than a universal template. The useful rule is to create subscriptions around major governance, ownership, environment, cost, or isolation boundaries, rather than creating one for every individual resource.
 
-- **Access boundary**: Azure RBAC roles can apply at the subscription. A platform group can manage development while production access stays with a smaller on-call group.
-- **Cost boundary**: Azure usage rolls up by subscription, so finance can see production Orders spend instead of filtering every test resource by name.
-- **Quota boundary**: Many service quotas apply per subscription and per region. Virtual machine vCPU quota, for example, has regional and VM-family quota checks inside the active subscription.
-- **Policy boundary**: Azure Policy can deny or audit deployments at the subscription. Production can require approved regions, required tags, private network settings, or specific SKUs.
-- **Provider boundary**: Resource providers such as `Microsoft.KeyVault`, `Microsoft.ContainerService`, and `Microsoft.Storage` register in the subscription before those resource types can be deployed.
+Keeping everything in one subscription can still work. For example, Contoso could organize production, development, finance, security, experiments, customer A, and customer B within that subscription. The tradeoff is that all those concerns share the same major boundary. Separating subscriptions provides stronger administrative isolation when their requirements differ enough to justify it.
 
-This is why production usually gets its own subscription. `sub-orders-prod` carries the production bill, production quota, production provider registrations, production policies, and production role assignments. `sub-orders-dev` can stay looser, cheaper, and easier to reset.
+### Why a subscription can span regions
 
-The Azure CLI also has an active subscription context. That context matters because `az group create`, `az deployment sub create`, and many other commands target the selected subscription unless you pass a subscription explicitly. A safe deployment starts by checking the active account:
+The subscription answers an administrative question, so its contents can run in several geographic locations. An example Production subscription contains a VM and database in UK South, a backup vault in West Europe, and another VM in East US. The subscription remains the same throughout; the resource locations differ.
 
-```bash
-az account show \
-  --query "{name:name, subscriptionId:id, tenantId:tenantId}" \
-  --output json
-```
+The distinction can be stated precisely: the subscription identifies the resource's administrative ownership, while the resource's `location` describes its physical or service placement. Choosing Production as the subscription does not choose UK South as the region. Choosing UK South does not decide which department pays for or administers the resource.
 
-The output should name the subscription and tenant the team expected. In this example, the CLI is pointing at the production Orders subscription and the DevPolaris tenant:
-
-```json
-{
-  "name": "sub-orders-prod",
-  "subscriptionId": "88888888-4444-4444-4444-121212121212",
-  "tenantId": "11111111-2222-3333-4444-555555555555"
-}
-```
-
-If the CLI points at the wrong subscription, the team changes the active context before creating resources. That small pause matters because the next deployment command will follow the selected subscription:
-
-```bash
-az account set --subscription "sub-orders-prod"
-```
-
-That simple check prevents a very real class of Azure mistakes. The command after `az account set` might create a resource group, deploy an app, assign a role, or delete a test stack. The active subscription decides which estate receives that change.
-
-A subscription is still too large for daily application lifecycle work. The Orders team needs a smaller container for the resources that deploy, update, and clean up together, and that is where resource groups enter the story.
+This is also why separating subscriptions should begin with governance needs rather than geographic names alone. Geography may influence the design, but it is one input to a broader ownership and isolation decision. The subscriptions then need an organizational structure above them when the estate grows, and smaller lifecycle boundaries inside them for daily application work.
 
 ## How Do Management Groups and Resource Groups Organize Resources?
-<!-- section-summary: A resource group is a flat lifecycle container inside a subscription, and teams use it to group resources that deploy, update, protect, and delete together. -->
+<!-- section-summary: Management groups organize subscriptions for shared governance, while resource groups collect resources with compatible management and deletion lifecycles. -->
 
-A **resource group** is a logical container for related Azure resources inside a subscription. Microsoft describes it as a container that holds related resources for an Azure solution, and the usual practice is to place resources with the same lifecycle into the same group. In beginner terms, a resource group is the box you use when a set of resources should move together during deployment and cleanup.
+Azure provides a layer above subscriptions and a layer below them because each solves a different scale problem. **Management groups** help apply governance across subscriptions. **Resource groups** help manage related resources within a subscription.
 
-Resource groups stay flat. A resource group contains resources, and each resource belongs to one resource group at a time. A group can contain a web app, a managed identity, a Key Vault, a storage account, a private endpoint, and diagnostic settings. The hierarchy stops at resources, which keeps lifecycle ownership simple once the team chooses good boundaries.
+### Applying governance across subscriptions
 
-For the Orders API, the app layer and the data layer have different lifecycles. The container app, app settings, managed identity assignment, and monitoring settings may change with every release. The database and storage account hold long-lived customer records and need stronger protection. The team can split them like this:
+Suppose an organization grows to 100 subscriptions, including 60 production subscriptions that must follow the same corporate security policy. Configuring the same rule independently 60 times creates repeated work and opportunities for inconsistency. A management group lets the organization collect those subscriptions under a shared governance parent.
 
-| Resource group | Example resources | Lifecycle idea |
-|---|---|---|
-| `rg-orders-app-prod-uksouth` | Container app, app environment, managed identity attachment, app diagnostics | Changes often with releases |
-| `rg-orders-data-prod-uksouth` | Database, storage account, Key Vault, private endpoints, backup settings | Changes carefully and survives app redeployments |
+An example hierarchy begins with a Root Management Group. A Platform branch contains Identity and Connectivity subscriptions. A Production branch contains Prod-App1, Prod-App2, and Prod-App3 subscriptions. A Sandbox branch contains Developer-A and Developer-B subscriptions. The grouping explains which subscriptions should share controls before any individual VM is considered.
 
-This split saves teams during ordinary operations. If a pipeline cleans up a preview or redeploys the app stack, it targets the app resource group. The database group stays separate, with stricter access, locks, backup checks, and slower change review. The resource group boundary turns "delete the app resources" into a much safer target than "delete everything with Orders in the name."
+Management groups do not normally contain the application VMs themselves. Their purpose is to organize subscriptions so governance can be applied at scale. The [Azure RBAC scope hierarchy](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview) places them above subscriptions for that reason.
 
-When you create a resource group, Azure asks for a location. The Orders team chooses the same region it expects for the app resources, then adds a few ownership tags that later cost and inventory tools can read:
+### Grouping resources that share a lifecycle
 
-```bash
-az group create \
-  --name "rg-orders-app-prod-uksouth" \
-  --location "uksouth" \
-  --tags service=orders-api env=prod team=commerce-platform
-```
+Inside a subscription, applications use VMs, disks, databases, virtual networks, load balancers, public IPs, Key Vaults, and storage accounts. A resource group collects related resources into a smaller management boundary. The useful criterion is their **lifecycle**: how they are created, changed, operated, and eventually deleted.
 
-That command creates the resource group in the active subscription, sets the group metadata location to `uksouth`, and writes the first ownership tags. After a create command, the Orders team reads the group back so the release notes contain proof instead of only the command that made the change:
+For an online shop, `rg-shop-prod` contains a web app, database, storage account, monitoring resources, and Key Vault. This can be a sensible grouping when those resources are managed together. Thinking of the group only as a folder misses the operational consequence: the group represents related management and lifecycle work.
 
-```bash
-az group show \
-  --name "rg-orders-app-prod-uksouth" \
-  --query "{name:name,location:location,tags:tags}" \
-  --output json
-```
+The Customer Portal example makes that consequence clearer. Its VM, database, storage, and monitoring may be created together, updated together, owned by one team, and deleted together. Their shared lifecycle supports using one resource group. A central network with a shared VNet, firewall, and VPN gateway must remain after the portal is removed. That separate lifetime supports placing the network elsewhere.
 
-The useful output is small:
+Grouping everything merely because it is production would hide this difference. Environment is one useful property, but the portal's deletion must not imply deleting infrastructure that other applications still need. [Azure Resource Manager's overview](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/overview) recommends placing resources with the same lifecycle together. A resource belongs to one resource group, and supported resources can later be moved between groups.
 
-```json
-{
-  "name": "rg-orders-app-prod-uksouth",
-  "location": "uksouth",
-  "tags": {
-    "env": "prod",
-    "service": "orders-api",
-    "team": "commerce-platform"
-  }
-}
-```
+### Understanding the resource group's location
 
-The resource group location is the region where Azure stores metadata about the group. The resources inside the group can live in other regions, and Microsoft recommends using the same location for the group and its resources unless the team has a reason to separate them. For the Orders team, `rg-orders-app-prod-uksouth` in `uksouth` keeps the group metadata close to the app resources it describes.
+Creating a resource group requires a location. For `rg-payments`, selecting UK South chooses where Azure stores the group's management metadata. Metadata is information describing the group; it is distinct from the workload running on resources within it.
 
-The tags in that command give the first hint of the next foundation article. Tags add queryable metadata such as `service`, `env`, and `team`. They help cost reports, inventories, and incident responders find ownership. This article cares about placement; the next article goes deeper into resource IDs, names, tags, and locks.
+That group can contain a VM in UK South, storage in UK South, and another resource in West Europe. The group's metadata location does not force the resource locations. A group named `rg-example` with metadata in UK South can therefore manage resources in more than one region. [Microsoft's resource group guidance](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/manage-resource-groups-portal) documents this separation.
 
-Now the Orders resources have a tenant, a subscription, and resource groups. The next question is where access and governance flow from, because Azure role assignments and policies use scopes that form a parent-child hierarchy.
+Management groups, subscriptions, resource groups, and resources now form an administrative hierarchy. The next step is understanding what follows that hierarchy: permissions and governance have a reach called scope.
 
 ## How Do Scope, RBAC, and Policy Work Together?
-<!-- section-summary: Azure scope is the hierarchy where role assignments and policies apply, with management groups, subscriptions, resource groups, and resources forming parent-child boundaries. -->
+<!-- section-summary: Scope determines which resources a control reaches; permissions inherit down the management hierarchy, while physical and network settings remain separate. -->
 
-A **scope** is the Azure boundary where a management rule applies. Azure RBAC uses scope to decide how widely a role assignment reaches. Azure Policy also uses scopes so governance rules can apply to a management group, subscription, resource group, or specific resource.
+**Scope** is the set of resources to which a control applies. If Alice manages only `VM-01`, a permission can concern that individual resource. If she manages the payments application, the appropriate scope might be `rg-payments`. If she administers the production platform, the required scope may be the Production subscription.
 
-The practical hierarchy looks like this for the Orders production estate. The management group gives the company a production-wide parent, and the subscription, resource groups, and resources get narrower as the tree moves downward.
+Azure Resource Manager has four standard scope levels, from widest to narrowest: management group, subscription, resource group, and resource. Permissions assigned at a higher level are inherited by the lower levels beneath it. This makes the location of a role assignment as important as the role itself.
 
-![Scope inheritance diagram showing Reader flowing from subscription to child scopes while app deployment Contributor stays limited to the app resource group](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/scope-inheritance.png)
+Consider a Production subscription containing `rg-payments` with `VM-A` and `DB-A`, and `rg-orders` with `VM-B` and `DB-B`. Assigning Alice an appropriate role at `rg-payments` reaches that group and its descendants. It does not give that assignment a reach into the sibling `rg-orders` group. Assigning the same role at the subscription instead reaches both groups and all four resources.
 
-*The scope diagram shows why the role name and the assignment location must be reviewed together.*
+The higher the assignment scope, the broader its effect. To review access, ask both what the role allows and which descendants the chosen scope contains. A role name alone does not describe the full extent of permission.
 
-**Management groups** sit above subscriptions. Large organizations use them to organize many subscriptions and apply shared governance. DevPolaris might place `sub-orders-prod`, `sub-payments-prod`, and `sub-platform-prod` under `mg-prod`, then apply production-wide policies there.
+### Different controls use the same hierarchy
 
-The subscription sits below that management group. A role assignment at `sub-orders-prod` can reach every resource group and resource in that subscription. A policy assignment at `sub-orders-prod` can evaluate new deployments across the whole subscription.
+**Azure RBAC**, or role-based access control, answers who may do what. For example, combine Alice, the Virtual Machine Contributor role, and `rg-payments`. Together, those three parts mean that Alice may perform the actions allowed by that role within the group and its descendants.
 
-Resource groups sit below the subscription. A role assignment at `rg-orders-app-prod-uksouth` reaches the app resources in that group. The deployment pipeline can receive Contributor on the app group while the database group remains outside that assignment.
+**Azure Policy** concerns permitted or required resource configurations. A policy attached to a Production management group might require deployments to use approved regions, affecting the subscriptions below that group. Policies assigned at subscription or resource-group scope likewise apply beneath those scopes. The two systems use the same administrative structure for different decisions: RBAC concerns the caller's allowed actions; Policy concerns resource configuration rules.
 
-Individual resources sit at the narrowest scope. A support tool might receive Key Vault Secrets User on one vault, or a monitoring identity might receive read access on one Application Insights component. Narrow resource scopes fit callers that need one target with tightly bounded access.
+This distinction explains why “I have permission” does not completely answer whether a proposed configuration fits organizational rules. The identity, allowed action, and configuration requirement are related checks, but each has its own job.
 
-Inheritance is the part that surprises new Azure users. If Maya receives Reader at the subscription, she can read child resource groups and many child resources. If the production policy denies public IP creation at `mg-prod`, child production subscriptions inherit that guardrail. If the Orders pipeline receives Contributor at the app resource group, it can change app resources in that group while the data group follows a different access path.
+### What the hierarchy does not supply
 
-Azure access reviews need both the scope and the role name. "Contributor" at one resource group may be a normal deployment permission. "Contributor" at a production subscription may grant far more reach than the job requires. The role and the scope together explain the actual power.
+A VM inside `rg-payments` does not inherit a region, VNet, subnet, availability zone, or IP address simply because it is beneath that group and subscription. Those settings describe placement or network relationships. Scope inheritance describes the reach of controls.
 
-The team can inspect role assignment evidence from the CLI by naming the scope directly. This gives reviewers a concrete list of principals, roles, and assignment locations for the app group:
+A region is therefore outside the ARM governance hierarchy. The structure is subscription, resource group, resource, with a location property on the resource. It is not subscription, UK South, resource group. Portal views that group items by location do not change this rule.
 
-```bash
-az role assignment list \
-  --scope "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-app-prod-uksouth" \
-  --output table
+An Azure resource ID makes the distinction visible:
+
+```text
+/subscriptions/1234/resourceGroups/rg-payments/providers/Microsoft.Compute/virtualMachines/api-01
 ```
 
-The output should show who received access and where Azure found the assignment. A shortened review table might look like this:
-
-```console
-Principal                         Role         Scope
---------------------------------  -----------  -------------------------------------------------------------
-grp-orders-release-pipeline       Contributor  /subscriptions/.../resourceGroups/rg-orders-app-prod-uksouth
-grp-orders-oncall                 Reader       /subscriptions/.../resourceGroups/rg-orders-app-prod-uksouth
-```
-
-At this point, the Orders team knows who can touch the work, where the resources live logically, and where governance flows from. The next placement decision moves from management structure into physical geography.
+This identifies a subscription, resource group, provider, resource type, and resource name. The provider is the Azure service namespace managing that resource type; here `Microsoft.Compute` manages `virtualMachines`. UK South and zone 2 are absent from this administrative path because they are placement characteristics. You must examine those characteristics separately to understand where the VM runs.
 
 ## How Do Regions Place Workloads?
-<!-- section-summary: An Azure region is the geographic placement choice for service latency, data residency, service availability, SKU availability, quota, and recovery planning. -->
+<!-- section-summary: Regions locate workloads on datacenter infrastructure; region selection must account for latency, residency, services, capacity, cost, and resilience. -->
 
-An **Azure region** is a geographic Azure location where Microsoft operates datacenter capacity and service endpoints. `uksouth`, `westeurope`, `eastus`, and `australiaeast` are programmatic region names you use in CLI commands, Bicep, Terraform, ARM templates, and resource IDs. The display name may say "UK South", while the deployment value is `uksouth`.
+A request to create a VM eventually requires physical computing hardware somewhere. An **Azure region** is the geographic deployment area that provides that infrastructure. UK South, West Europe, East US, Australia East, and Japan East are examples.
 
-The region decision affects real users. If most Orders customers live in the United Kingdom, `uksouth` gives the application a nearby Azure home. Browser requests travel a shorter network path, support engineers inspect resources in the expected geography, and data governance discussions start from a region that matches the business footprint.
+A region comprises one or more datacenters connected by high-capacity, fault-tolerant, low-latency networking. Regions sit within larger **geographies**, which are important when considering data-residency boundaries. The broad relationship is geography, then region, then supporting datacenter infrastructure. [Microsoft's region overview](https://learn.microsoft.com/en-ca/azure/reliability/regions-overview) explains those terms and selection considerations.
 
-The region also affects which Azure services, SKUs, and features the team can deploy. Azure expands constantly, and regions differ in available services, VM sizes, zone support, and capacity. A VM size, database tier, or zone-redundant feature that works in one region may fail validation in another region or in another subscription.
+Why distribute infrastructure geographically? A single giant global datacenter would introduce several problems. A London user communicating with a server thousands of kilometres away experiences added latency. Organizations may have legal or contractual limits on where data is stored or processed. A large geographic disaster could affect infrastructure concentrated in one location. Different places also offer different services and prices.
 
-The Orders team usually checks five region questions before committing to `uksouth`:
+These are practical design inputs, not just definitions. When selecting a region, consider:
 
-| Question | Orders example |
-|---|---|
-| **Where are the users?** | Checkout users and support staff mainly sit in the United Kingdom. |
-| **Where can the data live?** | Customer order records should stay in an approved geography. |
-| **Does the service exist there?** | The required compute, database, storage, Key Vault, and monitoring features must support `uksouth`. |
-| **Does this subscription have quota there?** | Production needs enough regional vCPU, database, and service quota before release week. |
-| **What recovery shape does the app need?** | The team decides between one region with zones, backup to a paired or secondary region, or active multi-region design. |
+- **Latency:** how far requests must travel between users, applications, and the infrastructure serving them.
+- **Data residency and regulation:** which locations satisfy the organization's requirements for storage and processing.
+- **Service availability:** whether the needed Azure services and features exist in the selected location.
+- **Capacity:** whether the region can support the intended deployment requirements.
+- **Cost:** how service and network pricing affect the design.
+- **Resilience:** which regional and availability-zone options support the required failure response.
 
-![Region and zone review board showing users and data, the uksouth region check, service support, quota, SKU availability, zone plan, and restore evidence](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/region-zone-review.png)
+A region choice should be evaluated against all of these together. Being geographically close to users is useful, but it does not establish that the needed service is available or that its resilience option fits the workload. Likewise, choosing a region for an approved geography does not automatically address what happens during an outage.
 
-*The region review turns a location choice into evidence: user geography, data requirements, service support, quota, SKU availability, zone design, and restore proof.*
-
-The CLI can show supported locations for the active subscription. The Orders team uses that output to confirm the deployment name, display name, region category, and paired region metadata for `uksouth`:
-
-```bash
-az account list-locations \
-  --query "[?name=='uksouth'].{name:name, displayName:displayName, category:metadata.regionCategory, pairedRegion:metadata.pairedRegion[0].name}" \
-  --output json
-```
-
-A typical result gives the deployment name and useful region metadata. The exact list changes as Azure regions evolve, so the team treats CLI output as current evidence:
-
-```json
-[
-  {
-    "name": "uksouth",
-    "displayName": "UK South",
-    "category": "Recommended",
-    "pairedRegion": "ukwest"
-  }
-]
-```
-
-That result still leaves service-specific work. For virtual machines, the team can check SKU availability before a template depends on a size that might fail during deployment:
-
-```bash
-az vm list-skus \
-  --location "uksouth" \
-  --size "Standard_D" \
-  --all \
-  --output table
-```
-
-The table can be large, so the team usually filters or searches it during review. A shortened result might look like this:
-
-```console
-ResourceType      Locations  Name              Zones  Restrictions
-----------------  ---------  ----------------  -----  ------------
-virtualMachines   uksouth    Standard_D2s_v5   1,2,3  None
-virtualMachines   uksouth    Standard_D4s_v5   1,2,3  None
-```
-
-If a deployment asks for a SKU outside the available set for that region, zone, or subscription, Azure can return an error such as `SkuNotAvailable`. That error usually means the requested size or service option is unavailable for that location, zone, or subscription. The fix may involve choosing another SKU, choosing another region or zone, or requesting quota where Azure supports a quota increase.
-
-Region pairs deserve a careful explanation. Microsoft pairs some Azure regions within the same geography, such as `uksouth` and `ukwest`, and newer regions may be nonpaired. Region pairs help some platform recovery and geo-replication scenarios, and some services use them for redundancy options. Application recovery still comes from the architecture the team configures: backups, database replicas, storage redundancy, DNS failover, deployment pipelines, runbooks, and tested restore steps.
-
-For many production systems, the first strong design is one good region with availability zones. That gives the Orders API low-latency regional placement and protection from a zone-level failure inside the region, which leads directly to the next layer.
+That brings us to a smaller failure boundary. UK South is a regional choice, but copies of an application within it can still share a local infrastructure dependency. Availability zones let the design address that dependency explicitly.
 
 ## How Do Availability Zones Limit Failure?
-<!-- section-summary: Availability zones are physically separate locations inside supported Azure regions, and teams use zonal or zone-redundant services to reduce facility-level failure risk. -->
+<!-- section-summary: Zones isolate local infrastructure failures within a region; zonal placement and zone redundancy require service-specific choices, and regional failures require another region. -->
 
-An **availability zone** is a physically separate location inside a supported Azure region. Microsoft describes zones as separate groups of datacenters with independent power, cooling, and networking. In an availability-zone-enabled region, the zones sit close enough for low-latency regional architecture and separate enough to reduce the chance that one local incident affects every copy of the workload.
+An **availability zone** is a separated group of datacenters within a region, with independent power, cooling, and networking infrastructure. The aim is enough separation that a failure in one zone does not prevent workloads in other zones from continuing. A region can contain multiple physical facilities, so treating the whole region as one giant datacenter hides useful failure boundaries.
 
-The Orders team can use zones in two common ways. A **zonal** resource pins something to a specific zone, such as a VM in zone `1`. A **zone-redundant** service spreads the service across zones for the team, such as a zone-redundant database or storage option where the service handles replication across multiple zones.
+Consider utility power loss, a cooling problem, a networking failure, a datacenter incident, or another local infrastructure fault. If every copy of the application depends on the same location, several instances may still share one point of failure. Compare API 1, API 2, and API 3 all running in zone 1 with one API instance in each of zones 1, 2, and 3. Distributing them reduces dependence on one zone.
 
-For a production API, the app layer might run multiple instances across zones, while the database uses a zone-redundant high-availability option if the chosen database service supports it in `uksouth`. If one zone has a power, cooling, or network issue, the team wants healthy app instances and data paths in remaining zones. That design protects against a facility-level problem while keeping the app in the same region.
+### Match redundancy to the failure boundary
 
-Zones are a service feature as much as a region feature. A region can support availability zones, and a specific Azure service still needs to support the zonal or zone-redundant mode the team wants. The Orders team checks the service documentation before assuming a resource can use zones.
+Failures have different reach. Server, rack, and component failures call for local infrastructure resiliency. Losing a zone calls for a multi-zone architecture. Losing an entire region requires a multi-region strategy. Three zones in UK South remain three locations within UK South; they do not provide a second region if UK South is unavailable.
 
-There is one Azure detail that matters for cross-subscription designs: zone numbers are logical inside a subscription. Logical zone `1` in `sub-orders-prod` can map to a different physical facility than logical zone `1` in another subscription. For one app inside one subscription, using zones `1`, `2`, and `3` works as expected. For cross-subscription placement, capacity reservation sharing, or recovery testing, teams should inspect physical zone mapping evidence rather than copying the same zone number across subscriptions.
+This separates high availability within a region from regional disaster recovery. Zone design addresses the first problem. A second-region strategy addresses the larger regional failure problem, with the replication, recovery, and operational decisions that entails.
 
-Availability zones also set the boundary between single-region resilience and multi-region recovery. Zones help with a local zone-level event inside a region. A broad regional incident needs a regional recovery plan: backups to another region, geo-replicated data, failover routing, tested infrastructure deployment, and a clear decision about how much complexity the business actually needs.
+### Zonal and zone-redundant services
 
-The Orders team now has all the coordinates. The final placement review ties tenant, subscription, resource group, scope, region, and zones into one short conversation before the deployment runs.
+With a **zonal** or pinned deployment, the engineer selects a zone for a resource. For example, VM-A is placed in zone 1, VM-B in zone 2, and VM-C in zone 3. The engineer is responsible for creating the redundant deployment arrangement.
+
+With a **zone-redundant** deployment, the service distributes or replicates its components across zones. The engineer selects that supported service capability instead of manually placing every underlying component. Different Azure services expose these models differently, so a region's zone support does not answer every service-specific deployment question. The [Well-Architected guidance](https://learn.microsoft.com/en-us/azure/well-architected/resiliency/regions-availability-zones) describes both models.
+
+### Logical zone numbers need subscription context
+
+Zone numbers are logical labels, not universal physical building addresses. Azure distinguishes physical zones from the logical zone numbers a subscription sees. Subscription A's zone 1 can map to a different physical zone from subscription B's zone 1. [The availability-zone overview](https://learn.microsoft.com/en-us/azure/reliability/availability-zones-overview) explains this logical-to-physical mapping.
+
+For ordinary placement within one subscription and region, think of zones 1, 2, and 3 as logical failure-domain labels. In a cross-subscription design, matching the number alone does not establish matching physical placement. This detail follows from the same larger principle: the label belongs to a particular context, so interpreting it requires that context.
 
 ## How Do You Review a Workload’s Placement?
-<!-- section-summary: A placement review turns tenant, subscription, resource group, scope, region, zone, quota, and recovery choices into a repeatable pre-deployment checklist. -->
+<!-- section-summary: Review identity, governance, lifecycle, geography, and failure isolation separately, then combine them into a complete workload placement design. -->
 
-A **placement review** is a short pre-deployment check that asks where the workload belongs and which evidence proves that choice. It is useful before a new workload launches, before a subscription split, before a region move, and before a production access change. The review keeps the team from discovering placement mistakes through bills, outages, access failures, or compliance reports later.
+Consider how Acme could put these choices together. Its tenant contains Alice, Bob, Carol, and Dave. Beneath the Root Management Group, Platform contains Identity and Connectivity subscriptions; Production contains Payments and Commerce subscriptions; NonProduction contains Dev and Test subscriptions.
 
-For the Orders API, the placement review sounds like a normal engineering conversation. The table keeps each decision tied to the evidence the team should keep for later audits and incidents.
+Within Payments, `rg-payments-app` holds VM-1, VM-2, and a load balancer. `rg-payments-data` holds the database and storage. VM-1 runs in UK South zone 1, VM-2 in UK South zone 2, and the database uses zone redundancy in UK South. Disaster-recovery resources use a second Azure region.
 
-| Decision | Orders answer | Evidence to keep |
+This describes three structures at once. The tenant identifies the organization's people and software. Management groups, subscriptions, and resource groups organize resources and control reach. Regions and zones describe placement and failure isolation. Keeping all three visible lets a reviewer answer a specific question without mistaking one kind of boundary for another.
+
+When asked to deploy a payments system, work through the following decisions in order:
+
+1. **Choose the tenant.** Identify the directory containing the people, applications, groups, and managed identities that will administer or access the environment.
+2. **Choose the management group and subscription.** Establish production or nonproduction status, cost ownership, applicable policies, required access boundaries, and acceptable blast radius.
+3. **Choose resource groups by lifecycle.** Consider deployment, ownership, operations, and deletion together. Separate resources that must survive the removal of another part of the system.
+4. **Choose the region.** Review users, latency, regulation, data residency, service availability, pricing, capacity, and resilience requirements.
+5. **Plan for a zone failure.** Identify which components are zonal, which support zone redundancy, and whether the application would continue operating after one zone is lost.
+6. **Plan for a regional failure where required.** Address the second region, replication, failover, traffic routing, backups, recovery objectives, and the procedures people will follow during recovery.
+
+The order moves from identity through governance and lifecycle to geography and failure isolation. It also exposes incomplete answers. “The system is in Production” still leaves its physical placement unknown. “It runs in UK South” still leaves ownership and regional recovery unanswered. “It uses three zones” still needs an explanation of which components use them and what happens when the whole region fails.
+
+| Concept | Boundary to remember | Common misunderstanding |
 |---|---|---|
-| **Tenant** | `devpolaris.com` | `az account show` output and identity design notes |
-| **Subscription** | `sub-orders-prod` | Active CLI context, subscription ID, budget owner, quota check |
-| **Resource groups** | App group and data group split | Deployment plan, tags, backup ownership, lock plan |
-| **Scope** | Pipeline Contributor only on the app group | Role assignment output and policy assignments |
-| **Region** | `uksouth` | Location query, service support, SKU availability, data requirement |
-| **Zones** | Zone-redundant where the service supports it | Service documentation, deployment settings, failure test notes |
-| **Recovery** | Single region with zones plus backups to an approved recovery target | Restore test notes and owner sign-off |
+| Tenant | Identity and security context | Treating it as a region |
+| Management group | Governance across subscriptions | Treating it as the application runtime |
+| Subscription | Major resource, governance, and consumption boundary | Treating it as a datacenter |
+| Resource group | Related management and lifecycle | Treating it as a physical location |
+| Scope | Reach of a control | Treating it as network connectivity |
+| Region | Geographic deployment area | Treating it as an RBAC container |
+| Availability zone | Failure isolation within a region | Treating it as a separate region |
 
-Different workloads deserve different placement shapes. A learning lab can use one subscription, one resource group, one low-cost region, and a simple single-zone or best-effort setup. A normal production API usually deserves a dedicated production subscription, separate app and data groups, approved policy, a nearby region, zone-aware service choices, and tested backups. A global revenue-critical system may need multiple regions, active traffic management, replicated data, and a much larger operations runbook.
-
-The team chooses the shape before resources drift. Azure gives a lot of freedom once the boundaries are clear: the same tenant can support many subscriptions, the same subscription can hold many resource groups, the same region can host many services, and the same availability-zone-enabled region can support zonal and zone-redundant designs for different parts of the workload.
-
-The placement review turns that freedom into a map the team can explain. If an incident starts at 2 a.m., the on-call engineer can see the tenant, subscription, resource group, scope, region, and zone plan, then work from a known design instead of hunting through portal pages.
-
-### Putting It All Together
-<!-- section-summary: Azure placement is practical when the team connects identity, resource ownership, governance, geography, and resilience as one deployment path. -->
-
-The Orders API now has a clear Azure home. The `devpolaris.com` Microsoft Entra tenant stores the people and software identities. The `sub-orders-prod` subscription owns the production resources, cost, quota, policies, and provider registrations. The app and data resource groups split release-heavy resources from long-lived state.
-
-Azure scopes explain how power flows through the hierarchy. Management groups can hold production-wide guardrails, the subscription can hold broad production controls, resource groups can hold deployment access, and individual resources can receive narrow assignments for special cases.
-
-The region gives the workload its geographic home. `uksouth` keeps the Orders API near its primary users and inside the approved data geography. The team still checks service support, SKU availability, quota, and recovery requirements because a region name alone never proves a complete production design.
-
-Availability zones add in-region resilience where the chosen services support them. The app can spread running capacity across zones, and the data layer can use zone-redundant options when available. If the business needs recovery from a full regional incident, the design grows into backups, replication, routing, and tested failover beyond the single-region zone plan.
-
-That is the first Azure foundation. Tenant, subscription, resource group, scope, region, and zone are the coordinates that keep a workload understandable. Every later Azure topic builds on those coordinates, because resources, networking, compute, identity, observability, and cost all need a known home.
-
-### What's Next
-
-After the Orders team knows where the workload belongs, the next job is naming and finding the exact things created there. The next article covers Azure resources, resource IDs, names, tags, and locks so alerts, bills, deployment plans, and access reviews point at the right object before anyone changes it.
-
----
+The most useful summary is also a practical way to explain a design to someone else: the tenant identifies whose directory is in use; subscriptions and resource groups explain administrative organization; regions and zones explain where the workload runs and which failures its placement addresses. Each answer adds information the other answers cannot provide.
 
 ## Check Your Answers
 
 :::expand[What Coordinates Does Azure Give Every Workload?]{kind="recap"}
-The first Azure placement story connects identity, billing, lifecycle, governance, geography, and failure boundaries before the Orders API gets deployed.
+Identity, administration, and physical placement are separate. The tenant supplies identity context; the management hierarchy organizes resources and controls; regions and zones describe infrastructure placement. A resource's subscription does not determine its region.
 :::
 
 :::expand[What Is a Microsoft Entra Tenant?]{kind="recap"}
-A Microsoft Entra tenant is the organization's identity directory, and Azure subscriptions trust one tenant to authenticate users, groups, applications, and workload identities.
+A tenant is the directory and identity boundary holding an organization's users, groups, applications, managed identities, and identity settings. A subscription trusts one tenant at a time, while one tenant can serve multiple subscriptions.
 :::
 
 :::expand[Why Do Azure Subscriptions Exist?]{kind="recap"}
-An Azure subscription is the main production boundary for billing, quota, resource ownership, Azure RBAC, Azure Policy, and environment isolation.
+Subscriptions establish major management and consumption boundaries for access, ownership, costs, quotas, policies, environments, and blast radius. Create them around meaningful organizational boundaries rather than individual resources. A subscription can contain resources in several regions.
 :::
 
 :::expand[How Do Management Groups and Resource Groups Organize Resources?]{kind="recap"}
-A resource group is a flat lifecycle container inside a subscription, and teams use it to group resources that deploy, update, protect, and delete together.
+Management groups collect subscriptions for shared governance. Resource groups collect related resources within a subscription, ideally with compatible lifecycles. The group's location stores management metadata and does not force the locations of its resources.
 :::
 
 :::expand[How Do Scope, RBAC, and Policy Work Together?]{kind="recap"}
-Azure scope is the hierarchy where role assignments and policies apply, with management groups, subscriptions, resource groups, and resources forming parent-child boundaries.
+Scope defines the resources a control reaches. RBAC governs who may perform actions; Policy governs permitted or required configurations. Higher-level permissions reach descendants, but resources do not inherit regions, subnets, zones, or addresses through that hierarchy.
 :::
 
 :::expand[How Do Regions Place Workloads?]{kind="recap"}
-An Azure region is the geographic placement choice for service latency, data residency, service availability, SKU availability, quota, and recovery planning.
+A region provides datacenter infrastructure within a geography. Select it by evaluating latency, residency, regulation, service availability, capacity, cost, and resilience. A geographic choice alone does not establish a complete availability design.
 :::
 
 :::expand[How Do Availability Zones Limit Failure?]{kind="recap"}
-Availability zones are physically separate locations inside supported Azure regions, and teams use zonal or zone-redundant services to reduce facility-level failure risk.
+Zones separate power, cooling, and networking failure domains within a region. Zonal resources require an explicit redundant arrangement; zone-redundant services distribute supported components. Logical zone labels are subscription-specific, and surviving a whole-region outage requires another region.
 :::
 
 :::expand[How Do You Review a Workload’s Placement?]{kind="recap"}
-A placement review turns tenant, subscription, resource group, scope, region, zone, quota, and recovery choices into a repeatable pre-deployment checklist. Azure placement is practical when the team connects identity, resource ownership, governance, geography, and resilience as one deployment path.
+Review the tenant, governance boundary, resource lifecycles, region, zone-failure response, and regional-recovery requirements. Keep identity, administration, and placement distinct while checking that the combined design answers all three kinds of question.
 :::
 
 ## References
 
-- [Associate or add an Azure subscription to your Microsoft Entra tenant](https://learn.microsoft.com/en-us/entra/fundamentals/how-subscriptions-associated-directory) - Documents the trust relationship between Azure subscriptions and Microsoft Entra tenants.
-- [Understand the billing and tenant relationship](https://learn.microsoft.com/en-us/azure/cost-management-billing/understand/understand-billing-tenant-relationship) - Explains how a subscription trusts a Microsoft Entra tenant and how tenants can relate to multiple subscriptions.
-- [Subscription considerations and recommendations](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-area/resource-org-subscriptions) - Describes subscriptions as boundaries for scale, quota, cost, governance, security, and identity controls.
-- [What are Azure management groups?](https://learn.microsoft.com/en-us/azure/governance/management-groups/overview) - Explains how management groups organize subscriptions for unified policy and access management.
-- [Understand scope for Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview) - Defines management group, subscription, resource group, and resource scopes and their parent-child inheritance.
-- [What is Azure Resource Manager?](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/overview) - Covers resource groups, resource provider routing, resource group deletion behavior, and resource group location recommendations.
-- [Manage Azure resource groups by using Azure CLI](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/manage-resource-groups-cli) - Documents resource group CLI workflows and explains that the resource group location stores metadata.
-- [Azure subscription and service limits, quotas, and constraints](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits) - Lists Azure subscription limits, quotas, and constraints across services.
-- [Increase regional vCPU quotas](https://learn.microsoft.com/en-us/azure/quotas/regional-quota-requests) - Explains regional vCPU quota checks per subscription and region.
-- [az account](https://learn.microsoft.com/en-us/cli/azure/account?view=azure-cli-latest) - Documents `az account show`, `az account set`, and `az account list-locations`.
-- [What are Azure regions?](https://learn.microsoft.com/en-us/azure/reliability/regions-overview) - Explains Azure regions, resiliency options, availability zones, and paired or nonpaired region considerations.
-- [List of Azure regions](https://learn.microsoft.com/en-us/azure/reliability/regions-list) - Lists region programmatic names, physical locations, availability zone support, and paired regions.
-- [SKU not available errors](https://learn.microsoft.com/en-us/azure/azure-resource-manager/troubleshooting/error-sku-not-available) - Explains deployment failures caused by unavailable service SKUs in a subscription's region or zones.
-- [What are Azure Availability Zones?](https://learn.microsoft.com/en-us/azure/reliability/availability-zones-overview) - Defines availability zones as physically separate locations inside supported Azure regions.
-- [Zonal resources and zone resiliency](https://learn.microsoft.com/en-us/azure/reliability/availability-zones-zonal-resource-resiliency) - Explains zonal and zone-redundant resources and cross-subscription zone mapping checks.
-- [Azure region pairs and nonpaired regions](https://learn.microsoft.com/en-us/azure/reliability/regions-paired) - Describes how Azure uses paired and nonpaired regions for platform recovery and service redundancy scenarios.
+- [Resource management fundamentals in Microsoft Entra ID](https://learn.microsoft.com/en-us/azure/active-directory/fundamentals/secure-with-azure-ad-resource-management)
+- [Understand scope for Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview)
+- [What is Azure Resource Manager?](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/overview)
+- [Manage resource groups through the Azure portal](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/manage-resource-groups-portal)
+- [What are Azure regions?](https://learn.microsoft.com/en-ca/azure/reliability/regions-overview)
+- [What are Azure Availability Zones?](https://learn.microsoft.com/en-us/azure/reliability/availability-zones-overview)
+- [Architecture strategies for using availability zones and regions](https://learn.microsoft.com/en-us/azure/well-architected/resiliency/regions-availability-zones)

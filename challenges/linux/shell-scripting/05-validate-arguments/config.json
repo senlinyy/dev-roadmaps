@@ -1,0 +1,34 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/promote.sh": { "type": "file", "mode": 493, "content": "#!/usr/bin/env bash\nlabel=$1\nprintf \"label=%s\\n\" $label\nfor target in $*; do\n  printf \"target=%s\\n\" $target\ndone\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": ["vim", "./promote.sh"],
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/promote.sh",
+        "invocation": "direct",
+        "args": ["release 42"],
+        "exitCode": 64,
+        "stdoutContains": ["usage: promote.sh LABEL TARGET..."]
+      },
+      {
+        "path": "/home/dev/promote.sh",
+        "invocation": "direct",
+        "args": ["release 42", "api blue", "worker green"],
+        "exitCode": 0,
+        "stdoutContains": ["label=release 42", "target=api blue", "target=worker green"]
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/promote.sh": {
+        "type": "file",
+        "contentMatches": "\\$#[\\s\\S]*exit\\s+64[\\s\\S]*shift[\\s\\S]*\"\\$@\""
+      }
+    }
+  }
+}

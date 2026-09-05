@@ -1,7 +1,7 @@
 ---
 title: "Azure Core Services Map"
-description: "Map an Azure application to the service families that carry traffic, run code, store state, protect access, publish evidence, release changes, and control cost."
-overview: "After the Azure boundary and resource identity articles, the service list can be read as a map of jobs. This article follows one Orders API through traffic, compute, state, access, signals, deployment, cost, and recovery."
+description: "Choose Azure services by the application jobs they perform: traffic, compute, state, messaging, access, signals, deployment, cost, and recovery."
+overview: "An online shop needs more than somewhere to run its API. Follow an Orders API to see why production introduces traffic routing, durable data, messaging, workload identity, telemetry, repeatable releases, cost decisions, and recovery. Compare services by those requirements rather than assembling a product catalogue."
 tags: ["azure", "services", "container-apps", "monitoring", "managed-identities"]
 order: 4
 id: article-cloud-providers-azure-foundations-core-services
@@ -26,13 +26,11 @@ aliases:
 9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-An **Azure core services map** is a small operating map for an application. It connects each important application job to the Azure service family that performs that job. The point is to stop treating Azure as a long product menu and start treating it as a set of cooperating parts around one real system.
+An online shop can start with a browser, an application process, and a local database. Moving it into production raises questions that this simple arrangement has not answered. How will customers reach the application? Where will their orders survive if the process crashes? What happens when payment processing is slow, and how will anyone find the cause?
 
-Imagine a junior engineer joining the on-call rotation for a production Orders API. On day one, the useful list is much smaller than the Azure catalog: where public traffic enters, where the code runs, where order data lives, which identity reads secrets, where logs land, where container images come from, who owns the resource group, how cost is tracked, and how the team restores data after a bad day.
+Those questions give Azure's services a purpose. You do not need to begin by memorizing every product. Start with the work the application must perform and the failures it must handle, then choose services that meet those requirements.
 
-Before we name services, picture the first production question. A customer clicks checkout and the Orders API returns `500`. The on-call engineer needs to know which part of the system owns the public route, which part runs the code, which part stores the order, which identity can read secrets, and which workspace has the evidence. The table below is a small map for that request path, not a list to memorize.
-
-Keep these questions in view as you work through the lesson:
+We will follow the shop's Orders API and the operational work around it through eight questions:
 
 1. **Why Should You Learn Azure Services by Job?**
 2. **How Does Traffic Enter an Azure Application?**
@@ -44,392 +42,503 @@ Keep these questions in view as you work through the lesson:
 8. **How Do You Debug With the Service Map?**
 
 ## Why Should You Learn Azure Services by Job?
-<!-- section-summary: An Azure core services map groups product names by the application job they perform, so traffic, runtime, state, access, signals, release, cost, and recovery each have a clear place. -->
+<!-- section-summary: Derive the production jobs first—traffic, compute, state, messaging, access, signals, and operations—then select services that satisfy those requirements. -->
 
-The request path gives the article its structure:
+A production application must receive traffic, execute code, preserve state, communicate between components, identify callers, control access, produce operational signals, deploy safely, account for cost, and recover from failure. Azure offers specialized capabilities for these recurring jobs. The [Azure Architecture Center](https://learn.microsoft.com/en-us/azure/architecture/guide/) likewise starts with workload requirements before technology choices.
 
-| Application job | Plain English question | Common Azure service families |
-|---|---|---|
-| **Traffic entry** | How does a browser or client reach the app? | Azure DNS, Azure Front Door, Application Gateway, API Management, runtime ingress |
-| **Compute runtime** | Where does the code receive CPU, memory, network, and scale behavior? | Azure Virtual Machines, App Service, Azure Container Apps, Azure Functions, AKS |
-| **Persistent state** | Where does data survive after containers restart or deployments replace code? | Azure SQL Database, Azure Blob Storage, Azure Cosmos DB, managed disks |
-| **Access and secrets** | Which workload identity can read which service or secret? | Microsoft Entra ID, managed identities, Azure RBAC, Azure Key Vault |
-| **Signals** | Where do logs, metrics, traces, and activity records go? | Azure Monitor, Log Analytics, Application Insights, diagnostic settings, Activity Log |
-| **Release path** | Where does the deployable artifact live, and which running version uses it? | Azure Container Registry, Container Apps revisions, App Service deployment slots |
-| **Cost ownership** | Which team, service, and environment created this spend? | Resource groups, tags, Cost Management, budgets |
-| **Recovery** | Which data and workloads can be restored after failure or deletion? | Azure Backup, database restore features, storage redundancy, soft delete |
+For an online shop, the API exposes operations such as these:
 
-This map should stay close to the system people operate today. A map with future services, unclear owners, and half-finished guesses looks impressive in a diagram tool, then causes pain during an incident. A useful first map is small, named, and tied to real resource IDs, tags, logs, and deployment records.
+```http
+POST /orders
+GET /orders/123
+PUT /orders/123/cancel
+```
 
-The rest of the article uses one application so the sections connect naturally. We will keep coming back to the same Orders API and follow the request path through the service families as one connected system.
+The API validates the customer, creates an order, charges payment, stores the order, and emits an `OrderCreated` event. On a laptop, a Python, Java, or .NET process talking to a local database may demonstrate that behavior. Production asks the same application to keep working under circumstances the laptop example does not address.
 
-### The Orders API
-<!-- section-summary: The example system is one production Orders API with a public entry path, managed container runtime, database, object storage, workload identity, vault, telemetry, image registry, tags, and recovery plan. -->
+For example, internet traffic must find the service even when more than one instance exists. Ten application instances must share durable order information. The API must authenticate to the database without scattering passwords through configuration. Payment processing may be temporarily unavailable. Someone needs to explain why order 123 took eight seconds, release version 2, handle a zone failure, and account for the bill.
 
-Our example application is `devpolaris-orders-api`, a regional checkout backend for a small ecommerce product. It accepts HTTPS requests, creates orders, stores receipts, writes logs, and runs in the production resource group `rg-devpolaris-orders-prod`. The team has tagged the group with `team=orders`, `env=prod`, `service=orders-api`, and `owner=backend` so billing, ownership, and incident review have real labels.
+These are the reasons behind the service categories. Each category should answer an actual requirement rather than appear merely because its icon is available.
 
-The first production version uses a deliberately small set of services. The API runs as a container in **Azure Container Apps**. The image comes from **Azure Container Registry**. Order records live in **Azure SQL Database**. Receipt PDFs and export files live in **Azure Blob Storage**. The runtime uses a **managed identity** to read secrets from **Azure Key Vault** and to access approved Azure resources through **Azure RBAC**. Logs and traces go to **Azure Monitor**, **Log Analytics**, and **Application Insights**.
+```mermaid
+flowchart TD
+  U[Users and clients] --> T[Traffic entry and routing]
+  T --> C[Compute runs application code]
+  C --> S[State preserves results]
+  C --> M[Messaging connects components]
+  C --> A[Access identifies and authorizes callers]
+  S --> O[Signals explain behavior]
+  M --> O
+  A --> O
+  O --> P[Operations deploy, control cost, and recover]
+  class U,T,C,S,M,A,O,P neutral
+```
 
-Here is the request path in one service map:
+The diagram groups responsibilities; it does not prescribe that every request must traverse every box in sequence. Some capabilities handle requests directly, while others observe or manage the system. We will make that distinction explicit after examining the individual jobs.
 
-![Orders API service map showing the customer browser, Azure DNS, public entry, Container Apps, state, access, signals, and operations services](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/orders-api-service-map.png)
-
-*This map shows how one request depends on traffic, compute, state, access, signals, and operational evidence around the same Orders API.*
-
-This image also shows why a service map is more than a traffic diagram. The request comes through public entry and compute, but the system depends on identity, secrets, database access, blob writes, image history, logs, tags, and recovery choices. The next sections walk through each row of the map with this same app in mind.
+The useful question for any service is, “What job does this perform for this application?” Answering it also makes omissions visible. An architecture can have compute and a database yet still lack a plan for delayed downstream work, investigation, or restoring lost data. A service map helps review those missing responsibilities before an incident exposes them.
 
 ## How Does Traffic Enter an Azure Application?
-<!-- section-summary: Traffic entry services handle DNS, TLS, routing, WAF, backend health, API policy, and public access before a request reaches the application runtime. -->
+<!-- section-summary: Match ingress to its scope and purpose: global HTTP entry, regional HTTP routing, network-level balancing, or API governance. -->
 
-**Traffic entry** is the part of the system that receives client requests before the code handles them. It includes DNS names, HTTPS certificates, routing rules, web application firewall policy, backend health checks, API quotas, and the final handoff to the runtime. In plain English, traffic entry answers, "How does a request for `orders.devpolaris.example` reach the Orders API in a controlled way?"
+When a customer requests `https://api.example.com/orders`, that public request must cross from the internet into the Azure workload. **Ingress** means this incoming traffic path. Azure offers several entry and routing services because sending traffic to an application involves different kinds of decisions.
 
-For the first release, a simple regional API might use the built-in HTTPS endpoint from App Service or Container Apps ingress. That can be a completely reasonable starting point for a small team because the runtime already gives the app a hostname, TLS support, and a direct backend target. The map should still name that choice clearly, because someone debugging a 502 needs to know where TLS terminates and where backend health gets checked.
+### Global HTTP entry with Front Door
 
-As the app grows, other entry services earn a place when their specific job appears:
+Suppose the Orders API runs in UK South, West Europe, and East US. A customer could connect directly to one deployment, but the architecture would still need to decide which region to use, how to respond when that region fails, where to terminate TLS, how to protect the public HTTP endpoints, and whether static content can be delivered nearer users.
 
-| Service | Beginner definition | Orders API example |
-|---|---|---|
-| **Azure DNS** | DNS hosting for names and records. It maps a friendly name to the service endpoint clients should reach. | `orders.devpolaris.example` points to the public entry endpoint for the API. |
-| **Azure Front Door** | A global edge entry service for HTTP and HTTPS apps. It can route through Microsoft's edge network, apply WAF rules, and send traffic to different origins. | The Orders team adds Front Door when customers in several regions need a global entry point and multi-region routing. |
-| **Application Gateway** | A regional layer 7 load balancer. It routes by HTTP host name or path, handles TLS, checks backend health, and can run WAF close to a virtual network boundary. | `/api/orders/*` goes to the Orders backend while `/api/inventory/*` goes to a different backend in the same region. |
-| **API Management** | An API gateway and API product layer. It applies policies such as quotas, subscriptions, token checks, transformations, and developer access. | Partner apps call Orders through a managed API product with request limits and versioned policies. |
-| **Runtime ingress** | The entry feature built into a hosting service such as Container Apps or App Service. It exposes the app directly through the runtime's supported endpoint. | The first release exposes the Container App through HTTPS ingress while the team proves product demand. |
+**Azure Front Door** provides a globally distributed HTTP entry point in front of application origins. An origin is the backend destination that serves the application or content. Customers in London, New York, and Tokyo can enter through Microsoft's global edge infrastructure, which routes HTTP(S) traffic toward the appropriate origin. The [API gateway architecture guidance](https://learn.microsoft.com/en-us/azure/architecture/microservices/design/gateway) places Front Door in this global entry role.
 
-The important habit is matching the entry service to the job. A hostname alone points toward DNS. Global edge routing and WAF point toward Front Door. Regional HTTP routing and private backend health point toward Application Gateway. API products, quotas, and caller policy point toward API Management. A small first release can stay on runtime ingress until one of those jobs is real.
+TLS termination is where the receiving component handles the encrypted HTTPS connection. Thinking about that job alongside regional routing explains why a public entry layer may need more capabilities than an IP address alone. The design question is whether this application needs a global public front door, not whether every web application should purchase every Azure networking service.
 
-Traffic connects naturally to compute because entry services hand accepted requests to a runtime. Once the request passes the public entry layer, Azure needs a place that can start the Orders API process, keep it healthy, scale it, and expose logs.
+### Regional HTTP routing with Application Gateway
+
+Inside one region, the application may need HTTP-aware decisions. Requests under `/orders/*` go to the Orders service, `/catalog/*` to Catalog, and `/images/*` to an image-serving pool. Choosing among those destinations requires examining HTTP information rather than only a destination IP and port.
+
+**Application Gateway** is a regional HTTP reverse proxy and load balancer. A reverse proxy receives a client's request and forwards it to an appropriate backend. It operates at layer 7, the application-protocol layer, so hostnames and URL paths can inform routing. It can also provide Web Application Firewall functionality. A WAF applies protection rules to web traffic. [The Application Gateway overview](https://learn.microsoft.com/en-us/azure/application-gateway/overview) explains these capabilities.
+
+The service's regional scope and HTTP awareness are the important distinctions here. Front Door addresses global public entry; Application Gateway addresses HTTP routing within a regional architecture. They can participate in the same design when both jobs are required.
+
+### Network-level distribution with Load Balancer
+
+Another workload may simply need traffic arriving at `10.1.2.4:443` distributed across VM1, VM2, and VM3. It does not need a routing decision based on `/orders`, `/images`, or `Host: api.example.com`.
+
+**Azure Load Balancer** serves this lower-level, network-distribution role. It operates below the HTTP-aware layer used by Application Gateway. Distinguishing the traffic layer avoids treating the two services as interchangeable names for a similar-looking diagram box.
+
+| Service | Main traffic job in this map |
+|---|---|
+| Front Door | Global HTTP entry and routing |
+| Application Gateway | Regional HTTP-aware routing and optional WAF |
+| Load Balancer | Regional network-level distribution |
+
+There is overlap in some architectures, but these products address different combinations of scope, protocol layer, and routing requirements. [Microsoft's load-balancing comparison](https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/load-balancing-overview) uses those distinctions to guide selection.
+
+### API rules with API Management
+
+Now suppose mobile apps, the website, partners, and internal systems all consume the Orders API. Partner A is allowed 1,000 requests per minute, while Partner B is allowed 100. Requests must carry a JWT token. An older path needs rewriting, API documentation must be published, usage must be measured, and versions v1 and v2 must coexist.
+
+These are **API governance** requirements: the rules and arrangements under which clients use an API. A JWT is a token format used to carry claims about a caller or request. Requiring and evaluating such a token is an access rule, while distributing packets across machines is a different job.
+
+**Azure API Management** provides a managed platform for publishing and managing APIs. It can apply authentication, rate limiting, restrictions, transformations, and other API policies before routing to the backend. Application Gateway asks where an HTTP request should go; API Management adds the rules under which the API request may proceed. Both roles are described in the [API gateway guidance](https://learn.microsoft.com/en-us/azure/architecture/microservices/design/gateway).
+
+### Add entry layers only when they have work to do
+
+A possible stack is Front Door for global routing and edge security, then Application Gateway for regional ingress and WAF, then API Management for API authentication, policy, and quotas, followed by the Orders API. That is a possible allocation of responsibilities, not a required deployment recipe.
+
+Every layer adds capability alongside cost, latency, configuration, failure modes, and operational burden. A team should be able to explain which requirement each layer satisfies. Where a simpler arrangement meets the requirements, additional layers do not improve the design merely by increasing the number of products involved.
+
+Once the request reaches the application, another service must supply the CPU, memory, operating system, and runtime that execute its code.
 
 ## Where Can Azure Run Application Code?
-<!-- section-summary: Compute services give application code CPU, memory, networking, lifecycle, scale behavior, and an ownership contract, from full virtual machine control to managed app and function runtimes. -->
+<!-- section-summary: Compute choices trade machine-level control against platform responsibility; choose by operating-system, container, Kubernetes, event, scaling, and team requirements. -->
 
-**Compute** is the runtime layer where code executes. It gives the app CPU, memory, process startup, network attachment, scale rules, and health behavior. A compute choice also decides the ownership contract between your team and Azure: how much operating system, container orchestration, patching, and scaling work your team accepts.
+**Compute** is the capacity and execution environment that run application code. A function such as `create_order(...)` ultimately executes using CPU and memory within an operating system and runtime. Azure's compute services offer different divisions of responsibility between the team and the platform.
 
-The Orders API is a containerized HTTP backend, so **Azure Container Apps** fits the first production version well. The team builds a Docker image, pushes it to Azure Container Registry, deploys it to Container Apps, and lets the platform manage much of the container hosting surface. The team still owns the application code, image contents, resource limits, ingress configuration, environment variables, identity assignment, and scale settings.
+The range includes infrastructure as a service, managed application platforms, containers, and serverless execution. These categories describe how much of the underlying environment the team chooses and operates. [Azure's compute design guidance](https://learn.microsoft.com/en-us/azure/architecture/solution-ideas/articles/compute-get-started) presents the choices along this spectrum.
 
-Azure offers several compute shapes, and each one gives a different amount of control:
+### Virtual Machines for guest-machine control
 
-| Compute service | What it is | Good fit |
-|---|---|---|
-| **Azure Virtual Machines** | Virtual servers where your team manages the guest operating system, patches, installed software, disks, and many scaling choices. | Legacy software, custom OS needs, specialized agents, or workloads that require server-level control. |
-| **Azure App Service** | Managed web app hosting for APIs, web apps, and mobile backends. Azure handles much of the infrastructure while your team configures app settings, scaling, slots, and runtime choices. | Standard web APIs and backend apps that fit a supported language/runtime model. |
-| **Azure Container Apps** | A serverless container platform for running containerized apps and jobs. It supports ingress, revisions, traffic splitting, managed environments, Dapr integration, and KEDA-based scale rules. | HTTP APIs, background workers, queue consumers, and microservices where the team wants containers while Azure manages much of the hosting platform. |
-| **Azure Functions** | Event-driven compute for small units of code triggered by HTTP, timers, queues, events, and other bindings. | Event handlers, scheduled jobs, queue processors, and workflows that fit function-style execution. |
-| **Azure Kubernetes Service** | Managed Kubernetes control plane with worker nodes, Kubernetes objects, cluster networking, ingress controllers, and platform extensions. | Teams that need Kubernetes APIs, custom controllers, service mesh patterns, cluster-level policies, or shared platform control. |
+**Azure Virtual Machines** provide substantial control over the guest machine. Azure operates the physical infrastructure and virtualization layer, while the guest environment contains the operating system, runtime, application, and its configuration.
 
-For `devpolaris-orders-api`, the service map can begin with Container Apps because the app is one containerized HTTP API with logs, database access, secrets, and a small on-call team. AKS is a serious option later when the team needs Kubernetes-level platform features, shared cluster networking, custom controllers, or deep multi-service orchestration. More control can be useful, and it also adds platform work that someone must operate.
+That control can be necessary for legacy applications, custom operating-system requirements, special agents, specific software dependencies, and lift-and-shift workloads. Lift-and-shift means moving an existing workload while retaining much of its existing machine-oriented arrangement. The reason to choose VMs is the control the workload needs, together with the team's ability to manage the resulting responsibilities.
 
-Choose compute from the workload contract rather than product popularity. A server-shaped dependency may need a VM. A normal HTTP application may fit App Service. An image-based service with revision traffic may fit Container Apps. Event-driven bounded work may fit Functions. A platform that genuinely needs Kubernetes APIs may fit AKS. The popular or most flexible service is not automatically the simplest service for this job.
+The tradeoff is direct: more control over the guest means more responsibility for the guest. A VM-hosted application involves networking, the machine, operating-system patching, runtime, web server, and application work. A service map should account for those jobs even if the architecture diagram uses just one VM icon.
 
-Container Apps has a few concepts worth naming because they show up during real incidents:
+### App Service for a managed web platform
 
-| Container Apps concept | Simple definition | Production example |
-|---|---|---|
-| **Managed environment** | The boundary where one or more container apps share networking, logging, Dapr settings, and platform configuration. | Orders and Inventory run in the same production environment so they can communicate through internal service names. |
-| **Ingress** | The Container Apps feature that exposes an app to public traffic, virtual network traffic, or other apps in the same environment. | Orders exposes HTTPS ingress on target port `8080`. |
-| **Revision** | An immutable version record for a container app template. Image, environment variable, resource, and scale changes can create new revisions. | `orders-api--v184` runs 100 percent of traffic after release, while an older revision remains available for rollback in multiple revision mode. |
-| **Scale rule** | A rule that tells the platform how many replicas to run based on HTTP traffic, CPU, memory, queues, or other KEDA-supported signals. | The API keeps one warm replica during business hours and scales out when HTTP concurrency rises. |
+If the Orders API is a .NET API, Node application, Java app, or Python web service and does not require control over an individual machine, **App Service** provides a higher-level hosting platform. The team supplies application code while Azure manages much of the hosting environment.
 
-Here is the kind of runtime evidence the team expects to retrieve from Azure CLI during review:
+Compared with a VM, the team gives up some machine-level control and takes on less infrastructure responsibility. That is the recurring managed-service tradeoff: choosing an abstraction that handles lower-level work can reduce operational burden when it meets the application's requirements. [Azure's design principles](https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/) encourage managed services where their capabilities fit.
 
-```bash
-az containerapp show \
-  --name devpolaris-orders-api \
-  --resource-group rg-devpolaris-orders-prod \
-  --query "{fqdn:properties.configuration.ingress.fqdn,targetPort:properties.configuration.ingress.targetPort,image:properties.template.containers[0].image,revisionMode:properties.configuration.activeRevisionsMode}" \
-  --output json
-```
+App Service bundles hosting, runtime-platform support, scaling features, deployment features, and monitoring integrations. A smaller number of boxes in an architecture diagram may therefore represent more platform-managed responsibilities rather than a less complete design.
 
-The output gives the runtime facts the team can compare with the release plan:
+### Container Apps for managed container execution
 
-```json
-{
-  "fqdn": "devpolaris-orders-api.orange-meadow.example.azurecontainerapps.io",
-  "image": "acrdevpolaris.azurecr.io/orders-api:1.8.4",
-  "revisionMode": "Multiple",
-  "targetPort": 8080
-}
-```
+The API may instead arrive as a container image, such as `orders-api:v42`. An image packages the application and its runtime contents for deployment. The team may need container deployment, autoscaling, revisions, HTTP ingress, jobs, and scale-to-zero behavior where appropriate, without taking on Kubernetes operation.
 
-That command asks Azure for the hostname, ingress target port, image reference, and revision mode. Those fields matter because many production failures hide in those small details. A container that listens on `3000` while ingress forwards to `8080` can produce gateway errors even though the resource exists. A revision pointing at the wrong image tag can keep old code running even though the release pipeline says it deployed.
+**Azure Container Apps** provides a managed container platform for that set of requirements. It handles much of the orchestration while exposing application-level features such as networking, revisions, ingress, jobs, and scaling. A revision represents a deployable application configuration/version within that platform model. [The Container Apps overview](https://learn.microsoft.com/en-gb/azure/container-apps/overview) describes these capabilities.
 
-Compute gives the Orders API a running process. The next question is where the application data goes after that process exits, scales in, crashes, or gets replaced by a new revision.
+This choice accounts for several jobs together: container compute, incoming traffic, scaling, revision management, and observability integration. The point is not that those jobs disappeared. The platform supplies them through a higher-level interface.
+
+### AKS for Kubernetes requirements
+
+**Azure Kubernetes Service**, or AKS, is relevant when the organization needs Kubernetes APIs and its ecosystem: Pods, Deployments, Services, Helm, operators, and custom controllers. These are Kubernetes ways to describe workloads, package applications, and automate platform behavior.
+
+The containers run through Kubernetes abstractions on AKS and Azure infrastructure. Kubernetes introduces substantial operational complexity, so using containers alone is not enough reason to select it. The decision should identify which Kubernetes capabilities the organization needs and whether those benefits justify operating that platform.
+
+This keeps the comparison with Container Apps useful. Both can run containers, but the required interface and operating responsibility differ. Choose based on the orchestration requirements, rather than treating a container image as an automatic commitment to Kubernetes.
+
+### Functions for event-triggered code
+
+Some work is naturally expressed as code that runs when something happens: generating a receipt, resizing an image, processing a queue message, running on a timer, or responding to an HTTP request. **Azure Functions** provides an event-driven programming model for this kind of execution.
+
+The developer describes code associated with a triggering event instead of primarily provisioning and operating an individual server. This is the meaning of **serverless** in this context. Servers still execute the code; the abstraction changes the developer's main unit of work and responsibility.
+
+Functions workloads can also run on Container Apps, combining the Functions programming model with Container Apps features. [Microsoft's Functions-on-Container-Apps overview](https://learn.microsoft.com/en-us/azure/container-apps/functions-overview) describes that supported combination.
+
+### Make the compute decision from requirements
+
+VMs, App Service, Container Apps, AKS, and Functions may all be capable of running some form of the Orders API. No one product is universally the best answer. Ask whether the workload requires operating-system control, uses containers, specifically needs Kubernetes, or is request-driven or event-driven.
+
+Also consider whether it should scale to zero, how predictable its load is, which networking features it requires, and how much platform complexity the team can operate. These questions connect a product decision to real constraints. Popularity alone cannot tell you who will manage the runtime or whether its operating model fits the application.
+
+Whatever executes the code, order information must survive beyond the life of one process. That introduces durable state and, separately, communication with work that can happen later.
 
 ## Where Do Data and Deferred Work Live?
-<!-- section-summary: State and messaging services keep data after runtimes restart and let work continue without forcing every component to finish in one synchronous request. -->
+<!-- section-summary: Durable storage preserves results beyond compute failure; databases, objects, and caches serve different data needs, while messaging decouples work across time. -->
 
-**State** is the data that must survive beyond one request or one running container. Cloud compute is replaceable by design. A new revision can replace old replicas, scaling can remove idle containers, and a failed host can disappear from the system. The Orders API needs state services because order records, receipts, export files, and audit data must remain after those runtime events.
+Suppose order 12345, with an amount of 49.99, exists only in the API process's RAM:
 
-Azure splits state services by data shape and access pattern. A relational order ledger behaves differently from a PDF receipt. A shopping cart document behaves differently from a virtual machine disk. The service map should name the data type and the service that owns it.
+```json
+{
+  "orderId": 12345,
+  "amount": 49.99
+}
+```
 
-| State need | Azure service | What it means in practice |
-|---|---|---|
-| **Relational transactions** | **Azure SQL Database** | Managed relational database for structured rows, SQL queries, indexes, constraints, transactions, backups, and high availability features. |
-| **Unstructured files** | **Azure Blob Storage** | Object storage for files such as receipts, images, CSV exports, raw logs, backups, and data lake objects. |
-| **Document or globally distributed NoSQL data** | **Azure Cosmos DB** | Fully managed database for document, key-value, and globally distributed app patterns where partitioning, latency, and scale are central design choices. |
-| **Attached block storage** | **Managed disks** | Durable disks attached to virtual machines for operating systems and VM-based workloads. |
-| **Reliable deferred work** | **Azure Service Bus** | Queues and topics that hold commands or messages until a consumer can process them, even when the consumer is temporarily unavailable. |
+If the process crashes, the order disappears. **State** is the information the system must remember, and **durable state** must outlive that process. Compute executes work; storage and databases preserve the results. Keeping those roles separate allows a failed application instance to be replaced while persistent data remains available.
 
-For `devpolaris-orders-api`, Azure SQL Database stores the core order tables. A checkout request creates an `orders` row, `order_items` rows, and a payment state record inside a transaction. A transaction means the database treats a group of changes as one unit: either the whole order commit succeeds, or the database rolls it back so the system avoids a half-written order.
+### Relational order data in Azure SQL Database
 
-Blob Storage stores receipt PDFs and export files. Those files can become large, and their main needs are object APIs, lifecycle controls, access tiers, and durable file storage. A blob has a storage account, container, and object name, such as `receipts/2026/06/order-10492.pdf`. The database can store the blob URL or object key while Blob Storage handles the file bytes.
+Orders have relationships. A customer has orders, each order contains order lines, and each line refers to a product. The system may need transactions, constraints, joins, relational queries, and strong consistency.
 
-Cosmos DB enters the conversation when the data behaves like high-scale document data. For example, a global shopping cart service might store one document per cart, partition by customer or cart ID, and serve low-latency reads from multiple regions. That is a different job from a relational order ledger that needs strong relational constraints and transactional reporting.
+A transaction groups related data work into a controlled unit, while constraints enforce rules on stored data and joins combine related records for a query. Those requirements make a relational service such as **Azure SQL Database** appropriate to consider. The Orders API might use tables for Orders, OrderLines, Customers, and Payments. [Microsoft's combined relational and NoSQL example](https://learn.microsoft.com/en-us/azure/architecture/databases/idea/combine-relational-nosql) discusses order-management and financial-style requirements where relational integrity matters.
 
-Managed disks belong mostly to VM-based designs. If the Orders team ran a legacy inventory daemon on a VM, the VM might need an OS disk and a data disk. For the Container Apps version, the app treats local container storage as temporary scratch space and sends durable data to Azure SQL Database or Blob Storage.
+The reason for the choice is the data behavior required by the system. Merely knowing that SQL Database exists does not establish whether every other kind of application data belongs there.
 
-Not every result should be produced while the user waits for one HTTP response. Suppose checkout succeeds and the system still needs to generate a receipt, update a warehouse system, and send a confirmation email. Making the checkout API call all three systems directly creates a chain in which one slow or unavailable dependency can delay the customer response. **Messaging** gives the application a durable handoff point. The API records the order, places a message on Azure Service Bus, and returns. Separate workers can then process the deferred jobs at their own pace.
+### Flexible distributed data in Cosmos DB
 
-Azure Service Bus supports **queues** for work normally handled by one competing consumer and **topics with subscriptions** when several consumers need their own copy of a published message. The message is not the business database; it is a durable instruction or notification moving between components. The order still belongs in Azure SQL Database, while a message such as `GenerateReceipt` tells a worker what to do next.
+A product catalogue can have a different shape. One product is a laptop with CPU and screen specifications, while another category has unrelated attributes:
 
-It also helps to distinguish a **command** from an **event**. A command asks a particular capability to perform work, such as `GenerateReceipt` or `ReserveInventory`. An event states that something already happened, such as `OrderPlaced`. Several consumers may react to the same event without the producer knowing each one. The names are design signals: commands express intent, while events report facts.
+```json
+{
+  "productId": "123",
+  "category": "laptop",
+  "specifications": {
+    "cpu": "...",
+    "screen": "..."
+  }
+}
+```
 
-Messaging creates new operating responsibilities. Consumers must tolerate retries because a message can be delivered more than once. Failed work needs a dead-letter path and a review process. Message age, queue depth, processing rate, and dead-letter count become runtime signals. The service map should therefore show the producer, the queue or topic, every consumer, and the durable state each consumer updates. That makes deferred work visible instead of hiding it behind the vague phrase "background processing."
+A workload requiring flexible schemas, high volume, global distribution, and low-latency access may point toward **Azure Cosmos DB**. A schema describes the data's structure; flexibility matters when records need different attributes rather than one rigid shared shape.
 
-Managed state and messaging still need ownership. Azure SQL Database removes much of the platform work around patching and availability, and the team still owns schema design, query shape, indexes, connection pooling, access policy, backup settings, restore tests, and data growth. Service Bus operates the broker, but the team still owns message contracts, retry behavior, duplicate handling, dead-letter processing, and capacity monitoring. A managed service reduces infrastructure chores; application and data responsibility stays with the team.
+SQL Database and Cosmos DB solve different data problems. The comparison is relational models, transactions, and queries versus distributed flexible application data and scale. It should not be reduced to SQL being old and Cosmos DB being modern. Microsoft's [polyglot persistence guidance](https://learn.microsoft.com/en-us/azure/architecture/databases/idea/combine-relational-nosql) illustrates using different stores for different needs.
 
-Now the runtime has somewhere to write data. The next problem is access. The Orders API needs to prove which workload is calling SQL, Blob Storage, and Key Vault, and Azure needs a way to allow only the right actions.
+### Objects and files in Storage
+
+Invoices, photographs, and exports—`invoice.pdf`, `photo.jpg`, and `export.csv`—are file or object data. Storing large binary objects inside relational order tables is often unnecessary. The database can retain order metadata while Blob Storage holds the files.
+
+For example, order 123 can record `customerId=456`, a total of £79, and an `invoiceBlob` reference to `invoices/123.pdf`. The database preserves the order's structured information and relationship to the invoice; object storage preserves the invoice content.
+
+Storage accounts provide a home for storage capabilities including blobs, files, queues, and related data. At this foundation level, the selection principle is the important part: match the shape and access pattern of the data to the storage mechanism, instead of forcing all state into one database technology.
+
+### Cached copies for performance
+
+If every request asks for the price of product ABC, repeatedly querying the authoritative database may be unnecessarily slow or expensive. A **cache** stores quickly accessible copies so the API can check the cache first and consult the database when needed.
+
+Azure Cache for Redis illustrates this performance-layer role: a cached value is not automatically the durable source of truth. The authoritative database and the cached copy have different responsibilities, even if both contain the same price for a time.
+
+### Separate order creation from slower downstream work
+
+Now consider a synchronous workflow that creates an order, charges payment, sends email, updates the warehouse, updates analytics, and only then responds to the customer. If email takes 20 seconds, the customer may wait those 20 seconds. If analytics fails, order creation may fail with it. These components are tightly coupled because one request waits for their work.
+
+Messaging can separate that work across time. The Orders API stores the order and publishes `OrderCreated`; email, warehouse, and analytics components react independently. The customer request no longer necessarily depends synchronously on every downstream service completing its work.
+
+```mermaid
+flowchart LR
+  A[Orders API stores order] --> E[Publish OrderCreated]
+  E --> EM[Email processing]
+  E --> W[Warehouse processing]
+  E --> AN[Analytics processing]
+  class A,E,EM,W,AN neutral
+```
+
+This is a communication decision, distinct from deciding where persistent order records live. A database remembers the order. Messaging coordinates information and work among components that can run at different times.
+
+### Choose the communication pattern
+
+**Azure Service Bus** fits reliable application messaging and queueing. A producer places a message in a durable queue, and a consumer processes it. If the consumer is temporarily unavailable, the message can wait until the consumer recovers. This is temporal decoupling: producer and consumer do not have to complete their work at the same moment.
+
+Also distinguish a **command** from an **event**. “Process order 123” asks for particular work. “Order 123 was created” reports a fact that has already occurred. Both move information, but they express different relationships between sender and receiver.
+
+Service Bus addresses application queues and messaging, **Event Grid** addresses event distribution and notification, and **Event Hubs** addresses high-throughput event and telemetry streams. Selecting among them starts with the communication pattern. Their shared ability to move information does not mean they are interchangeable services.
+
+Compute now has databases, storage, and messaging services to call. Those calls need an access design so the application can prove its identity and receive only the permissions it requires.
 
 ## How Do Identity, Permissions, and Secrets Protect the System?
-<!-- section-summary: Access connects a workload identity, Azure RBAC assignments, and Key Vault so running code can call approved services while keeping long-lived credentials out of the image. -->
+<!-- section-summary: Entra ID identifies callers, managed identity removes workload-managed credentials where supported, RBAC limits allowed actions, and Key Vault stores unavoidable sensitive material. -->
 
-**Access** is the set of identity and authorization decisions that decide what the running app can do. In Azure, the important pieces are **Microsoft Entra ID**, **managed identities**, **Azure RBAC**, and **Azure Key Vault**. Entra ID names the caller, managed identity gives an Azure resource a workload identity, RBAC grants actions at a scope, and Key Vault stores secrets, keys, and certificates.
+The Orders API may need Azure SQL, Storage, Key Vault, and Service Bus. A basic configuration could contain a database username and password, a storage key, and a Service Bus key:
 
-For the Orders API, the container app gets a managed identity named by Azure. That identity is the runtime caller. Instead of putting a storage key, database password, or Key Vault client secret in the image, the app asks the Azure platform for a short-lived token for its managed identity. Azure issues the token through Microsoft Entra ID, and the app uses that token when it calls Azure services that trust Entra authentication.
-
-The Key Vault read path looks like this:
-
-![Managed identity access path showing an Orders container asking the local identity endpoint, Microsoft Entra ID issuing a short-lived token, and Azure Key Vault checking RBAC before returning a secret](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/managed-identity-access-path.png)
-
-*The access path separates identity from authorization: the token proves the workload, and the vault permission decides what the workload can read.*
-
-There are two beginner-friendly ideas inside this flow. First, the managed identity belongs to the workload, so logs and access checks can point to the app identity and avoid a copied password. Second, Key Vault still checks authorization. A token proves the caller, and a role assignment or vault access rule decides whether that caller can read the secret.
-
-In a production review, the map should name the caller and the scope, for example:
-
-```bash
-az role assignment create \
-  --assignee "<managed-identity-principal-id>" \
-  --role "Key Vault Secrets User" \
-  --scope "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod"
+```text
+DB_USER=orders
+DB_PASSWORD=something-secret
+STORAGE_KEY=abcdef...
+SERVICE_BUS_KEY=xyz...
 ```
 
-That command shows the shape of the authorization record: one principal, one role, and one scope. A safer review also reads the assignment back:
+These are illustrative placeholders, not recommended credentials. The arrangement raises a management problem: secrets can be copied, expire, leak, enter Git, appear in environment files, be shared between systems, or simply be forgotten. Adding more credentials multiplies the work of keeping access controlled.
 
-```bash
-az role assignment list \
-  --assignee "<managed-identity-principal-id>" \
-  --scope "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod" \
-  --query "[].{principalId:principalId,role:roleDefinitionName,scope:scope}" \
-  --output json
-```
+It helps to separate three questions: who is making the request, what may that identity do, and which sensitive credentials still need storage. Identity, authorization, and secret management answer those questions respectively.
 
-```json
-[
-  {
-    "principalId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-    "role": "Key Vault Secrets User",
-    "scope": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod"
-  }
-]
-```
+### Identify both people and software
 
-If the app receives `403 Forbidden` from Key Vault, the team can check the managed identity principal ID, the assigned role, the vault scope, the vault network settings, and the exact secret operation being attempted. The map turns a vague phrase like "the app can read secrets" into reviewable facts.
+**Microsoft Entra ID** is Azure's main identity platform. Human identities and groups might include Alice, Bob, and Platform-Team. Software callers include the Orders API, a deployment pipeline, and an automation job. Each needs an identity context so the receiving service can establish which caller is involved.
 
-Access connects directly to signals because identity failures provide useful evidence only if someone can see them. The next row of the map collects the evidence that proves what the app, platform, and Azure control plane experienced.
+The question is the same for human and workload callers: who or what made this request? An application's identity is useful because its permissions should describe the application, rather than depending on a password copied from a person or shared with unrelated workloads.
+
+### Use managed identity where supported
+
+A **managed identity** gives a supported Azure workload an identity whose credentials Azure manages. The application can act as that identity, obtain a token through Microsoft Entra ID, and present it to an Azure service. A token supplies proof and claims used in the access process; it replaces the application's need to directly manage a reusable credential for that supported relationship.
+
+This changes the first question from where to hide a database password to whether that password can be avoided for the supported connection. The application still needs an identity and permission; Azure manages the credential side of that identity. [The managed identity overview](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview) explains the model.
+
+### Assign permission separately with RBAC
+
+Identifying the caller as the Orders API does not determine what the API may do. **Authorization** evaluates the allowed action. Azure RBAC expresses a resource permission using a principal, role, and scope.
+
+For example, combine the Orders API identity, `Storage Blob Data Reader`, and `invoice-storage`. The resulting access means the workload may read blobs within that storage scope. The identity is known, the role states the permitted operations, and the scope limits where they apply.
+
+This is **least privilege**: grant the access needed for the workload's task instead of treating a trusted identity as permission to do everything. The [Azure RBAC guidance for Key Vault access](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide) provides another example of applying resource permissions separately from identification.
+
+### Store unavoidable secrets in Key Vault
+
+Managed identity cannot eliminate every sensitive value. Third-party API keys, certificates, encryption keys, legacy passwords, and external-service credentials may still be required. **Azure Key Vault** provides storage and controlled access for that material.
+
+The Orders API can use its managed identity to access Key Vault and retrieve `payment-provider-api-key`. The workload authenticates without embedding an extra vault-access credential in its code, while the external payment provider's unavoidable key remains in the secret store. [Key Vault's basic concepts](https://learn.microsoft.com/en-us/azure/key-vault/general/basic-concepts) describe these roles and managed identity access.
+
+The resulting division is straightforward: Entra ID identifies the caller; managed identity supplies an Azure-managed workload identity; RBAC defines allowed actions and scope; Key Vault holds the keys, secrets, and certificates that remain necessary. These capabilities cooperate, but none substitutes for all the others.
+
+Even correctly configured access does not explain every failure. The running system must emit information that shows what it did and where a request failed or slowed down.
 
 ## Which Signals Explain Runtime Behavior?
-<!-- section-summary: Signals are the logs, metrics, traces, alerts, and activity records that leave the runtime and give operators evidence during normal operation and incidents. -->
+<!-- section-summary: Metrics show quantities over time, logs record events, and traces follow requests across dependencies; monitoring connects these signals to alerts and responses. -->
 
-**Signals** are the evidence a system emits while it runs. Logs explain events, metrics show numeric behavior over time, traces connect one request across components, and activity records show Azure control-plane changes. Those signals give the on-call engineer proof that the diagram matches the live system.
+When the API returns `500 Internal Server Error`, the response alone cannot explain the cause. **Telemetry** is the operational information emitted by the application and infrastructure. Three foundational forms—metrics, logs, and traces—answer different questions about behavior.
 
-In Azure, the main observability family is **Azure Monitor**. Azure Monitor includes metrics, logs, alerts, dashboards, Log Analytics, and Application Insights. **Log Analytics** stores and queries logs with Kusto Query Language, usually called KQL. **Application Insights** focuses on application telemetry such as requests, dependencies, exceptions, performance, and distributed traces.
+### Metrics show quantities and trends
 
-For the Orders API, signals should cover at least four paths:
+**Metrics** are numeric measurements over time. Examples include 1,425 requests per second, CPU utilization of 72%, an error rate of 2.3%, P95 latency of 620 milliseconds, and queue depth of 12,491.
 
-| Signal path | What it should answer | Example evidence |
-|---|---|---|
-| **Application logs** | What did the app code say happened? | Checkout validation errors, payment provider timeouts, request IDs, structured JSON logs. |
-| **Request telemetry** | Did the request reach the app, and how long did it take? | HTTP result codes, duration, route name, operation ID, dependency calls. |
-| **Platform metrics** | Did the runtime or dependency run out of capacity? | Replica count, CPU, memory, HTTP concurrency, SQL DTU or vCore metrics, storage latency. |
-| **Control-plane activity** | Who changed infrastructure or configuration? | Activity Log events for revision updates, role assignments, firewall changes, deleted resources. |
+P95 is the 95th-percentile latency: it summarizes the point below which 95% of the observed request latencies fall. Queue depth measures how much work is waiting. These definitions matter because each number describes a different aspect of the system; a high request count and a growing queue do not answer the same question.
 
-The map should name where those signals land. For example, `devpolaris-orders-api` sends application telemetry to an Application Insights resource connected to a Log Analytics workspace. The Container Apps environment also sends platform logs and metrics to Azure Monitor. Critical resources such as Key Vault, Azure SQL Database, and storage accounts can use diagnostic settings to send service logs to the same workspace.
+Metrics compress large amounts of activity into measurements that reveal abnormal behavior. An error-rate chart rising from around 2% toward 8%, for example, can reveal a change worth investigating without requiring a person to read every request record. The metric establishes the pattern; more detailed signals help explain it.
 
-Here is a small KQL query the team might use during a checkout incident:
+### Logs record what happened
 
-```kusto
-requests
-| where cloud_RoleName == "devpolaris-orders-api"
-| where timestamp > ago(30m)
-| project timestamp, operation_Id, name, resultCode, duration, success
-| order by timestamp desc
+**Logs** are discrete event records. They can hold error details, diagnostics, audit information, application events, and platform events. An order log can show a short sequence:
+
+```console
+14:03:21 CreateOrder order=123
+14:03:21 Calling PaymentService
+14:03:22 Payment declined code=51
+14:03:22 Order rejected
 ```
 
-This query asks Application Insights for recent request records from the Orders API. The useful field is `operation_Id`, because that ID can connect the request row to traces, dependency calls, exceptions, and custom logs from the same request. When failed public requests are missing from app telemetry, the evidence points back toward traffic entry or runtime ingress before the app code.
+The records connect a particular order to a payment attempt and a rejection. Where a metric reports that HTTP 500 responses increased, logs may identify an SQL connection timeout or another concrete cause. The detail complements the aggregate view rather than replacing it.
 
-Signals naturally connect to operations. Logs and metrics tell the team what happened after a deploy, cost records show what the system consumed, and backup or restore evidence proves the team can recover.
+### Traces follow a request through dependencies
+
+Requests can cross Front Door, the Orders API, a Payment API, a database, and Service Bus. **Distributed tracing** follows related work across those components so the team can understand where a request spent time.
+
+For a six-second checkout, a trace named `OrderRequest-abc` records these timings:
+
+| Trace component | Observed duration |
+|---|---|
+| Orders API request | 6.0 seconds |
+| Database work | 100 milliseconds |
+| Payment Service dependency | 5.6 seconds |
+| Service Bus work | 50 milliseconds |
+
+The broad complaint “checkout is slow” now has a specific lead: the payment dependency consumed 5.6 seconds. The table reports related observations; the overall request duration also includes work beyond the listed dependency timings. Tracing makes the cross-service relationship visible instead of leaving each service's records isolated.
+
+### Collect and investigate through Azure Monitor
+
+**Azure Monitor** is the broader observability platform bringing together logs, metrics, traces, events, alerts, and related telemetry. **Application Insights** focuses on application-performance monitoring and supports OpenTelemetry-based instrumentation. Instrumentation is the code or integration that emits the measurements and records used for observation. **Log Analytics** provides log and trace querying and analysis within this service map.
+
+For the Orders API, requests, dependencies, exceptions, traces, and metrics contribute application evidence. Azure resources and infrastructure contribute their own operational information. [Azure Monitor's overview](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/overview) and the [Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview) describe these complementary roles.
+
+### Turn collected data into a response
+
+Enabling logs alone does not establish effective monitoring. Monitoring is a feedback process: the system emits telemetry, collection makes it available, analysis identifies a condition, an alert reaches a person or automation, and that recipient responds. A terabyte of logs that nobody examines does not complete that process.
+
+For example, payment failures exceeding 5% can trigger the response. An alert notifies the on-call engineer, who uses a trace to identify payment-provider latency and chooses a mitigation. The metrics detect the condition, the trace narrows the cause, and the response addresses the operational problem.
+
+This connects observability to the wider task of running the application through change. Releases, cost growth, and failures all need deliberate operating procedures, not just a working first deployment.
 
 ## How Do Deployment, Cost, and Recovery Shape Operations?
-<!-- section-summary: Operations connect image origin, running versions, resource boundaries, tags, budgets, cost evidence, backups, and restore plans so the application remains manageable after launch. -->
+<!-- section-summary: Repeatable delivery, justified complexity, and failure-specific recovery are part of the architecture; high availability and backup protect against different problems. -->
 
-**Operations** are the habits and services that keep the system manageable after the first successful deploy. This row of the map answers questions such as: Where did this container image come from? Which revision is running it? Which resource group owns the app? Which tags connect spend to the team? Which backup or restore path protects the data?
+A working Front Door–API–SQL path is a starting point. Tomorrow may bring version 2, a security update, a traffic spike, a database failure, a cost increase, certificate rotation, a region outage, or a bad deployment. Architecture must account for these changes over the system's lifetime. [Azure's design principles](https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/) emphasize operations, evolution, redundancy, self-healing, and failure analysis.
 
-For deployments, the Orders API needs an artifact path and a runtime version path. **Azure Container Registry** stores the container images and related artifacts. **Container Apps revisions** record which image and template are running. If the app used App Service instead, **deployment slots** could hold staging and production versions for safer swaps.
+### Make infrastructure reproducible
 
-That release chain should be reviewable:
+Creating a VM, database, network, and firewall rule through portal clicks can produce a running environment. It does not by itself establish that the same environment can be recreated tomorrow. If the configuration exists only in someone's memory, recovery and review depend on that memory remaining correct and available.
 
-![Release and operations evidence showing source code, build pipeline, Azure Container Registry, Container Apps revision, production traffic, cost tags, release signals, and recovery path](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/release-operations-evidence.png)
+Infrastructure as Code keeps deployment configuration in reviewable files. ARM, Bicep, and Terraform support infrastructure deployment, with configuration stored in a Git repository. The language is a tool choice; the underlying requirement is that infrastructure configuration be reviewable and reproducible.
 
-*The release map keeps artifact history, running revision, traffic weight, cost ownership, signals, and recovery evidence in one operating view.*
+This also supports deliberate discussion of changes. A team can inspect the declared configuration rather than reconstructing every setting from recollection of earlier portal actions. The service map should account for that repeatability even though the deployment tool does not process a customer's order.
 
-If a release says it deployed version `1.8.4`, the team should be able to confirm that the image exists in ACR and that the active Container Apps revision references that exact tag or digest. A missing image tag points to the artifact path. A healthy image with a failing revision points to runtime configuration, identity, state, or code behavior.
+### Release application changes through a repeatable process
 
-For ownership and cost, the map should name the **resource group** and the core tags. The practice environment uses:
+The Orders API progresses from v1 to v2 to v3. A delivery pipeline can run commit, build, test, security checks, deploy, and verify as an explicit sequence. GitHub Actions and Azure DevOps are examples of tools that can automate that process.
 
-```bash
-az group show \
-  --name rg-devpolaris-orders-prod \
-  --query "{id:id,location:location,tags:tags}" \
-  --output json
+The important property is the repeatable sequence. Remembering the right portal clicks is fragile because the same change may need to be repeated by another person or during a stressful recovery. A pipeline makes the expected steps explicit, including verification after deployment rather than stopping at the deployment action.
+
+### Require each service to justify its cost and complexity
+
+Compare an architecture with two VMs and an SQL database to one containing Front Door, Application Gateway, API Management, AKS, Redis, Cosmos DB, SQL Database, Service Bus, Event Grid, Application Insights, a firewall, and three regions.
+
+The larger arrangement may satisfy important requirements. It may also solve problems the application does not have. Each added service brings some combination of direct spending, engineering complexity, support work, skills requirements, failure modes, telemetry, and configuration. These costs exist even when a diagram makes adding another box look effortless.
+
+Azure Cost Management and governance tools provide financial visibility. [Microsoft's management and governance guidance](https://learn.microsoft.com/en-us/azure/architecture/guide/management-governance/management-governance-start-here) includes cost alongside the operating foundation. Treating cost as part of design makes it possible to judge whether a service's benefit justifies its ongoing expense and operational effort.
+
+The practical rule is to make complexity earn its place. The smallest adequate solution is the one that meets the real requirements with an operating burden the team can sustain. It is not necessarily the solution with the fewest capabilities, because managed platforms may bundle several jobs.
+
+### Match recovery to the kind of failure
+
+Failure can affect an application instance, a zone, stored data, or an entire region. Those events require different responses:
+
+| Failure | Recovery or resilience work |
+|---|---|
+| Application instance stops | Restart or use other instances |
+| Availability zone fails | Use zone-redundant arrangements |
+| Data is corrupted or deleted | Restore from backups or service recovery features |
+| Region is unavailable | Use a cross-region design and disaster-recovery process |
+
+**Azure Backup** and **Azure Site Recovery**, together with service-specific backup and replication mechanisms, address parts of this operating layer. Their presence in the service map helps identify the recovery work that must be assigned somewhere; it does not make every mechanism appropriate for every failure.
+
+### Separate high availability from backup
+
+Suppose a database has replicas A, B, and C. Someone accidentally executes this destructive statement:
+
+```sql
+DELETE FROM Orders;
 ```
 
-The expected output should prove the production boundary:
+This is a failure example, not a command to run. Replication may faithfully reproduce the deletion on all three replicas. The database can remain available while the order data is gone.
 
-```json
-{
-  "id": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod",
-  "location": "eastus",
-  "tags": {
-    "team": "orders",
-    "env": "prod",
-    "service": "orders-api",
-    "owner": "backend"
-  }
-}
-```
+Replication protects availability against certain infrastructure failures. Backup protects recoverability in certain data-loss scenarios. The replica example explains why one cannot automatically substitute for the other. A production system may need both continued operation during infrastructure failure and a way to recover earlier data after a mistake.
 
-Those tags matter during cost review. If monthly spend doubles, the team can group Azure Cost Management data by subscription, resource group, tag, or service family before changing infrastructure. The first evidence might show extra Log Analytics ingestion, SQL scale-up, storage growth, runaway retries, or an accidentally duplicated environment.
-
-For recovery, the service map should list the data that needs restore behavior. Azure SQL Database has built-in backup and restore capabilities that depend on the selected service tier and configuration. Storage accounts can use redundancy, versioning, soft delete, and lifecycle policy depending on the workload. Azure Backup can protect supported workloads and centralize backup management for VMs, disks, files, and other scenarios. The key habit is a tested restore path with evidence from a real drill.
-
-At this point the map covers the live system. The final operating skill is using the same rows during an incident so the team moves through portal pages with a reason.
+The same reasoning applies to zone and regional planning. Zone redundancy addresses a failure inside a region. A whole-region outage requires the regional recovery design. Naming a reliability feature is only useful when the team can explain which failure it handles and how recovery will proceed.
 
 ## How Do You Debug With the Service Map?
-<!-- section-summary: Debugging with the service map means matching each symptom to the row that can explain it, then moving through traffic, compute, identity, state, signals, release, cost, and recovery with evidence. -->
+<!-- section-summary: Separate the customer request path from supporting operations, then investigate failures by traffic, compute, dependencies, state, messaging, access, signals, and recent changes. -->
 
-**Debugging with the map** means matching a symptom to the service family that can explain it. The team looks for evidence in the row closest to the symptom, then moves to the next row when the evidence points there. This keeps an incident review focused.
+A possible Orders architecture uses Front Door as public entry and App Service to host the API. The API uses Azure SQL for orders, Service Bus for messages, and Key Vault for unavoidable secrets. Microsoft Entra ID and managed identity support access, while Azure Monitor and Application Insights collect operational signals.
 
-Here are common symptoms for `devpolaris-orders-api`:
-
-| Symptom | First map row to inspect | Why that row comes first |
-|---|---|---|
-| `502 Bad Gateway` and missing app request logs | **Traffic entry** and **compute ingress** | The request may fail before the app receives it. Backend health, target port, active revision, and ingress settings matter first. |
-| New deploy still runs old behavior | **Release path** and **compute revision** | The image tag, ACR artifact, active revision, and traffic weight explain what code is actually running. |
-| Key Vault returns `Forbidden` | **Access** | The managed identity, RBAC role, scope, vault network settings, and requested secret operation decide the result. |
-| SQL connection times out | **State** and **network access** | The app may authenticate correctly while still failing reachability, firewall, private endpoint, route, or connection pool checks. |
-| Only receipt downloads fail | **Blob Storage** and **access** | The checkout database can be healthy while object path, container permissions, token expiry, or storage firewall settings fail. |
-| Cost doubles while the app stays healthy | **Operations and cost** | Tags, resource groups, service family cost, logs ingestion, database scale, and storage growth provide first evidence. |
-
-Let us walk one incident through the map. Users report `502 Bad Gateway` at `https://orders.devpolaris.example`. The support dashboard is missing the request IDs in Application Insights. Database CPU is normal, and recent SQL queries look healthy. That evidence points to traffic entry and runtime ingress before the app code.
-
-The first useful runtime check collects the active ingress and image fields:
-
-```bash
-az containerapp show \
-  --name devpolaris-orders-api \
-  --resource-group rg-devpolaris-orders-prod \
-  --query "{fqdn:properties.configuration.ingress.fqdn,targetPort:properties.configuration.ingress.targetPort,image:properties.template.containers[0].image,provisioningState:properties.provisioningState}" \
-  --output json
+```mermaid
+flowchart TD
+  I[Internet] --> F[Front Door]
+  F --> A[Orders API on App Service]
+  A --> SQL[Azure SQL: order state]
+  A --> SB[Service Bus: application messages]
+  A --> KV[Key Vault: required secrets]
+  MI[Entra ID and managed identity] --> A
+  A --> MON[Azure Monitor and Application Insights]
+  MON --> L[Logs and alerts]
+  class I,F,A,SQL,SB,KV,MI,MON,L neutral
 ```
 
-Suppose the command returns this:
+Outside the request path, GitHub Actions or Azure DevOps manages delivery, Cost Management provides spending visibility, and backup/recovery configuration supports recoverability. Bicep can define infrastructure, while the SQL backup and replication strategy addresses the chosen data-recovery requirements. These are possible decisions for the stated jobs, not a mandatory service combination.
 
-```json
-{
-  "fqdn": "devpolaris-orders-api.orange-meadow.example.azurecontainerapps.io",
-  "image": "acrdevpolaris.azurecr.io/orders-api:1.8.5",
-  "provisioningState": "Succeeded",
-  "targetPort": 8080
-}
-```
+### Separate application work from management work
 
-If the latest release changed the Node.js app to listen on `3000`, that mismatch explains why entry can reach the Container App surface while the backend remains unhealthy. The resolution belongs in compute configuration or app startup before SQL tuning or Key Vault permissions.
+When a customer calls `POST /orders`, the direct runtime path may be Front Door, Orders API, and SQL. RBAC, Policy, Monitor, Cost Management, the deployment pipeline, and backup still matter, but they do not all process every order as sequential application stages.
 
-Now imagine a different incident. The API logs show `Forbidden` when reading `sql-orders-connection` from Key Vault. Public traffic reaches the app, and the app starts normally. The map moves to access because the symptom names the vault. The team checks the managed identity on the container app, the role assignment on the vault, the role name, the scope, and any vault network restrictions. A missing `Key Vault Secrets User` assignment at the vault scope would explain the failure.
+The **request or data path** performs application work. The **management and operations path** makes the environment governable, observable, deployable, affordable, and recoverable. Drawing or discussing both paths prevents the mistake of treating every important Azure service as another synchronous dependency in the customer's request.
 
-The value of the map is calm sequencing. Traffic evidence can lead to compute. Compute logs can lead to access. Access can lead to state. State errors can lead back to network or secrets. The map gives the team a shared language for moving through the system with proof.
+This also helps during incidents. A delivery pipeline can explain a recent change without being the component currently executing checkout. Cost reports can show an unexpected operating pattern without being a request-routing service. The service's job tells you what evidence to ask it for.
 
-The categories are teaching labels, not hard product walls. Container Apps can provide compute, ingress, scaling, secrets integration, and observability hooks. Application Gateway combines traffic routing, TLS handling, health checks, and WAF behavior. Azure SQL combines state, availability, backup, identity, and network controls. Put each service in the row that explains its main job in this application, then draw the cross-row responsibilities it actually owns.
+### Investigate the failing job in order
 
-### Putting It All Together
-<!-- section-summary: A useful Azure core services map stays small, names current services and owners, follows one request path, includes evidence sources, and grows as new services take on real jobs. -->
+If customers cannot place orders, use the following sequence to narrow the problem rather than opening unrelated Azure resources at random.
 
-The Azure core services map is a way to make a production app readable. It turns a long list of product names into a small set of jobs around one workload: traffic entry, compute runtime, durable state, access, signals, release, cost, and recovery.
+1. **Check traffic.** Is DNS correct? Is Front Door healthy? Is TLS valid? Is the WAF blocking the request? Is regional ingress healthy? If `curl https://api.example.com` cannot establish a useful connection, investigating database queries may be premature.
+2. **Check compute.** If traffic reaches the application, determine whether the Orders API is running, whether instances are healthy, and whether CPU and memory are sufficient. Look for recent crashes, failed deployments, or autoscaling problems.
+3. **Check state and dependencies.** Can the application connect to SQL? Is the database healthy? Is a connection pool exhausted, a query deadlocked, or storage unavailable? A connection pool is the set of reusable database connections; exhausting it can stop application work even when the database service itself still runs.
+4. **Check messaging.** If synchronous order creation succeeds but downstream work does not, determine whether messages enter the queue, queue depth is growing, consumers are running, dead-letter messages exist, or retries are overwhelming the system. Dead-letter messages are messages set aside when normal processing cannot complete; they provide evidence about failed work.
+5. **Check access.** For `403 Forbidden`, `401 Unauthorized`, or credential-unavailable errors, identify the actual caller. Did it obtain a token? Does RBAC allow the action, at which scope, and can the workload access Key Vault?
+6. **Correlate signals.** Bring together logs, metrics, traces, dependency durations, exceptions, and deployment events. Azure Monitor supports assembling these kinds of telemetry for investigation.
+7. **Review changes.** Look for a new application deployment, Policy change, RBAC assignment, network rule, database migration, secret rotation, or scaling change. Compare when the failure started with what changed immediately before it.
 
-For `devpolaris-orders-api`, the first map can stay compact. Public entry handles DNS, HTTPS, routing, WAF, or API policy as needed. Container Apps runs the API from an image in Azure Container Registry. Azure SQL Database stores order records, and Blob Storage stores receipts and exports. A managed identity reads Key Vault through Azure RBAC. Azure Monitor, Log Analytics, and Application Insights store evidence. Resource groups and tags make ownership and cost visible. Backup and restore choices protect state.
+The shorter version follows the same reasoning: can traffic reach the system, is compute running, can it reach dependencies, is state healthy, are messages flowing, is authorization succeeding, what do signals show, and what changed? Each answer chooses the next useful investigation rather than assuming the whole Azure platform is one undifferentiated failure.
 
-The first version should describe the system people operate today. Extra services belong on the map when they perform a real current job. If the app later needs global edge routing, Front Door can join. If partner API quotas become important, API Management can join. If the team needs Kubernetes APIs and cluster-level control, AKS can join. Each addition should make operations clearer and give the diagram a real operating purpose.
+### Service categories are responsibilities, not hard walls
 
-This is the practical test for the map: during an incident, a new teammate should be able to answer where the request enters, where code runs, where state lives, which identity calls each dependency, where evidence lands, which artifact is running, who owns the resources, where cost appears, and how the data can be recovered. If the map answers those questions, it is doing useful work.
+Azure products overlap. Container Apps provides compute, ingress, autoscaling, secrets capabilities, and observability integration. Application Gateway combines routing, TLS termination, WAF, and load balancing. API Management combines gateway behavior, authentication, rate limiting, and observability features.
 
-![Azure core services checklist summarizing traffic entry, compute runtime, durable state, access, signals, release path, cost ownership, and recovery around devpolaris-orders-api](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/azure-core-services-checklist.png)
+The map therefore does not require a separate resource for every architectural job. A higher-level managed service can perform several jobs. App Service bundles hosting, runtime-platform work, scaling, deployment features, and monitoring integration; Container Apps bundles container execution, ingress, scaling, revisions, and observation integration. Fewer boxes can represent a higher-level abstraction rather than missing functionality.
 
-*Use this checklist as the quick scan before designing, deploying, or debugging a small Azure production service.*
+What matters is that every required job has a clear home and that the team understands the remaining responsibility. A platform can handle much of hosting while the team still chooses data behavior, access scope, telemetry, and the recovery requirements the application must meet.
 
----
+### Keep a compact service map
+
+| Job and first question | Services and roles from this article |
+|---|---|
+| Traffic: how does a request reach the right instance? | Front Door for global HTTP entry; Application Gateway for regional HTTP ingress/WAF; Load Balancer for network distribution; API Management for API rules |
+| Compute: where does code execute? | VMs for machine control; App Service for managed web/API hosting; Container Apps for managed containers; AKS for Kubernetes; Functions for event-driven code |
+| State: what survives compute failure? | SQL for relational/transactional data; Cosmos DB for distributed flexible data; Storage for blobs/files/objects; Redis-style caches for fast cached state |
+| Messaging: which work can proceed asynchronously? | Service Bus for application queues; Event Grid for notifications; Event Hubs for high-volume event streams |
+| Access: who calls, what may they do, and which secrets remain? | Entra ID for identity; managed identity for supported workloads; RBAC for permissions; Key Vault for keys, secrets, and certificates |
+| Signals: how will behavior be understood? | Azure Monitor, Application Insights, and Log Analytics for telemetry, application observation, and query/analysis |
+| Deployment: how will the system change safely? | ARM/Bicep/Terraform for infrastructure; GitHub Actions/Azure DevOps for repeatable delivery |
+| Cost: what does the design consume? | Cost Management for financial visibility |
+| Recovery: what happens to instances, zones, regions, or data? | Azure Backup, Site Recovery, and service-specific backup/replication arrangements |
+
+Given a blank page, begin with “customers must submit orders.” Derive the need for public entry, code execution, durable state, payment/email/warehouse decoupling, controlled service access, failure signals, safe releases, spending controls, and recovery. Only then map those requirements to products.
+
+One possible mapping is Front Door, App Service, Azure SQL, Service Bus, managed identity with RBAC and Key Vault, Azure Monitor with Application Insights, Bicep with GitHub Actions, and an SQL backup/replication strategy. Each choice remains a decision to justify. The value of the map is the reasoning that connects a service to a system requirement, which remains useful even as Azure's catalogue changes.
 
 ## Check Your Answers
 
 :::expand[Why Should You Learn Azure Services by Job?]{kind="recap"}
-An Azure core services map groups product names by the application job they perform, so traffic, runtime, state, access, signals, release, cost, and recovery each have a clear place. The example system is one production Orders API with a public entry path, managed container runtime, database, object storage, workload identity, vault, telemetry, image registry, tags, and recovery plan.
+Production creates recurring requirements for traffic, compute, state, messaging, access, signals, and operations. Starting with those jobs explains why a service belongs in the architecture and reveals responsibilities that a product list can overlook.
 :::
 
 :::expand[How Does Traffic Enter an Azure Application?]{kind="recap"}
-Traffic entry services handle DNS, TLS, routing, WAF, backend health, API policy, and public access before a request reaches the application runtime.
+Choose entry services by scope and purpose. Front Door handles global HTTP entry, Application Gateway regional HTTP routing, Load Balancer network-level distribution, and API Management API governance. Combine layers only when their capabilities justify added cost and complexity.
 :::
 
 :::expand[Where Can Azure Run Application Code?]{kind="recap"}
-Compute services give application code CPU, memory, networking, lifecycle, scale behavior, and an ownership contract, from full virtual machine control to managed app and function runtimes.
+VMs, App Service, Container Apps, AKS, and Functions offer different control and responsibility boundaries. Choose by operating-system needs, container packaging, Kubernetes requirements, request/event patterns, scaling, networking, and the team's operating capacity.
 :::
 
 :::expand[Where Do Data and Deferred Work Live?]{kind="recap"}
-State services keep business data after runtimes restart, and Azure separates relational records, object files, document data, and attached disk storage into different service families.
+Durable stores preserve information beyond process failure. SQL, Cosmos DB, object storage, and caches serve different data purposes. Messaging separates components across time; Service Bus, Event Grid, and Event Hubs address application messaging, notifications, and high-volume streams respectively.
 :::
 
 :::expand[How Do Identity, Permissions, and Secrets Protect the System?]{kind="recap"}
-Access connects a workload identity, Azure RBAC assignments, and Key Vault so running code can call approved services while keeping long-lived credentials out of the image.
+Entra ID identifies callers. Managed identity gives supported workloads Azure-managed credentials. RBAC assigns allowed actions at a scope. Key Vault stores unavoidable keys, certificates, and secrets. A known identity still requires a deliberate permission assignment.
 :::
 
 :::expand[Which Signals Explain Runtime Behavior?]{kind="recap"}
-Signals are the logs, metrics, traces, alerts, and activity records that leave the runtime and give operators evidence during normal operation and incidents.
+Metrics summarize quantities, logs record events, and traces connect work across dependencies. Azure Monitor and Application Insights collect and explain these signals, with Log Analytics for querying. Effective monitoring also requires analysis, alerts, and a response.
 :::
 
 :::expand[How Do Deployment, Cost, and Recovery Shape Operations?]{kind="recap"}
-Operations connect image origin, running versions, resource boundaries, tags, budgets, cost evidence, backups, and restore plans so the application remains manageable after launch.
+Use reviewable infrastructure and repeatable delivery, justify each service's financial and operating burden, and match recovery mechanisms to instance, zone, data, and regional failures. Replicas can copy an accidental deletion, so high availability does not replace backup.
 :::
 
 :::expand[How Do You Debug With the Service Map?]{kind="recap"}
-Debugging with the service map means matching each symptom to the row that can explain it, then moving through traffic, compute, identity, state, signals, release, cost, and recovery with evidence. A useful Azure core services map stays small, names current services and owners, follows one request path, includes evidence sources, and grows as new services take on real jobs.
+Separate runtime dependencies from management support. Check traffic, compute, data dependencies, messages, identity and permission, correlated telemetry, and recent changes. Services may perform several jobs; the requirement is that every needed responsibility is accounted for.
 :::
 
 ## References
 
-- [Azure DNS overview](https://learn.microsoft.com/en-us/azure/dns/dns-overview) - Official Azure DNS overview for hosting zones, records, public DNS, private DNS, and DNS-based traffic services.
-- [Azure Front Door overview](https://learn.microsoft.com/en-us/azure/frontdoor/front-door-overview) - Microsoft Learn guide for global HTTP/HTTPS edge delivery, routing, acceleration, and WAF scenarios.
-- [Application Gateway overview](https://learn.microsoft.com/en-us/azure/application-gateway/overview) - Official overview for regional layer 7 load balancing, HTTP routing, TLS handling, and backend health.
-- [Azure API Management key concepts](https://learn.microsoft.com/en-us/azure/api-management/api-management-key-concepts) - Official API Management concepts for API gateways, policies, products, versions, and developer access.
-- [Azure Container Apps overview](https://learn.microsoft.com/en-us/azure/container-apps/overview) - Official overview for managed container apps, revisions, ingress, environments, and scale behavior.
-- [Set scaling rules in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/scale-app) - Official scaling guide for KEDA-supported triggers, replicas, and scale settings.
-- [Ingress in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/ingress-overview) - Official ingress documentation for public, virtual network, and environment-level traffic exposure.
-- [Overview of Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/overview) - Official overview for managed web app, API, and backend hosting.
-- [Azure Functions overview](https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview) - Official overview for serverless event-driven compute.
-- [Overview of Azure virtual machines](https://learn.microsoft.com/en-us/azure/virtual-machines/overview) - Official virtual machine overview and responsibility notes.
-- [Azure SQL Database overview](https://learn.microsoft.com/en-us/azure/azure-sql/database/sql-database-paas-overview?view=azuresql) - Official overview for managed SQL Database platform capabilities.
-- [Introduction to Azure Blob Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blobs-introduction) - Official introduction to object storage for unstructured data.
-- [Azure Cosmos DB overview](https://learn.microsoft.com/en-us/azure/cosmos-db/overview) - Official overview for fully managed NoSQL and vector database scenarios.
-- [Managed identities for Azure resources](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview) - Official managed identity overview for credential-free workload authentication.
-- [Azure Key Vault basic concepts](https://learn.microsoft.com/en-us/azure/key-vault/general/basic-concepts) - Official Key Vault concepts for secrets, keys, certificates, vaults, and managed HSM pools.
-- [Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/overview) - Official Azure Monitor overview for metrics, logs, analysis, alerts, and troubleshooting.
-- [Azure Container Registry introduction](https://learn.microsoft.com/en-us/azure/container-registry/container-registry-intro) - Official introduction to managed private container registries and artifacts.
-- [Cost Management budgets](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/tutorial-acm-create-budgets) - Official tutorial for creating and reviewing Azure budgets.
-- [Azure Backup overview](https://learn.microsoft.com/en-us/azure/backup/backup-overview) - Official overview for Azure Backup data protection and recovery scenarios.
+- [Azure Application Architecture Fundamentals](https://learn.microsoft.com/en-us/azure/architecture/guide/)
+- [API gateways](https://learn.microsoft.com/en-us/azure/architecture/microservices/design/gateway)
+- [Application Gateway overview](https://learn.microsoft.com/en-us/azure/application-gateway/overview)
+- [Azure load-balancing options](https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/load-balancing-overview)
+- [Compute architecture design](https://learn.microsoft.com/en-us/azure/architecture/solution-ideas/articles/compute-get-started)
+- [Design principles for Azure applications](https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/)
+- [Container Apps overview](https://learn.microsoft.com/en-gb/azure/container-apps/overview)
+- [Functions on Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/functions-overview)
+- [Combine Cosmos DB and SQL Database](https://learn.microsoft.com/en-us/azure/architecture/databases/idea/combine-relational-nosql)
+- [Managed identities for Azure resources](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview)
+- [Key Vault permissions through Azure RBAC](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide)
+- [Key Vault basic concepts](https://learn.microsoft.com/en-us/azure/key-vault/general/basic-concepts)
+- [Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/overview)
+- [Application Insights and OpenTelemetry](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)
+- [Management and governance architecture](https://learn.microsoft.com/en-us/azure/architecture/guide/management-governance/management-governance-start-here)

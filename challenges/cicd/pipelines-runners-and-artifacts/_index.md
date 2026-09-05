@@ -1,8 +1,8 @@
 ---
 title: "Pipelines, Runners, and Artifacts"
-description: "Build one package, preserve it as a run artifact, and pass that exact output into a separate preview deployment job."
+description: "Build, transfer, and verify one package across isolated workers, then reason about job boundaries, caches, and retained evidence."
 articleId: article-cicd-fundamentals-pipelines-runners-and-artifacts
-difficulty: easy
-order: 0
-tags: ["cicd", "github-actions", "artifacts", "jobs", "promotion"]
+difficulty: medium
+order: 1
+tags: [cicd, pipelines, artifacts, runners, jobs]
 ---

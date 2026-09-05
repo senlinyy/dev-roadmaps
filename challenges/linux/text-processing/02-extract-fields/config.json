@@ -1,0 +1,59 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/exports/users.txt": {
+      "type": "file",
+      "content": "101|Alice Ng|London\n102|Bruno Costa|Lisbon\n103|Carla Martin|Paris\n104|Dina Ali|London\n105|Evan Cole|Dublin\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "head",
+      "cut"
+    ],
+    "expectedResults": [
+      {
+        "label": "first two export records",
+        "commands": [
+          "head"
+        ],
+        "stdoutEquals": "101|Alice Ng|London\n102|Bruno Costa|Lisbon\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "city column in source order",
+        "commands": [
+          "cut"
+        ],
+        "stdoutEquals": "London\nLisbon\nParis\nLondon\nDublin\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "ID and city projection",
+        "commands": [
+          "cut"
+        ],
+        "stdoutEquals": "101|London\n102|Lisbon\n103|Paris\n104|London\n105|Dublin\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/exports/users.txt": {
+        "type": "file",
+        "contentEquals": "101|Alice Ng|London\n102|Bruno Costa|Lisbon\n103|Carla Martin|Paris\n104|Dina Ali|London\n105|Evan Cole|Dublin\n"
+      }
+    }
+  }
+}

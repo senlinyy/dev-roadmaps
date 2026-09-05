@@ -1,0 +1,37 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/orders.conf": { "type": "file", "content": "port=8080\n" },
+    "/etc/payments.conf": { "type": "file", "content": "port=8081\n" },
+    "/run/orders.pid": { "type": "file", "content": "412\n" },
+    "/home/dev/health-check.sh": { "type": "file", "mode": 493, "content": "#!/usr/bin/env bash\nservice=$1\nprintf \"%s: healthy\\n\" $service\nexit 0\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": ["vim", "./health-check.sh"],
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/health-check.sh",
+        "invocation": "direct",
+        "args": ["orders", "/etc/orders.conf", "/run/orders.pid"],
+        "exitCode": 0,
+        "stdoutContains": ["orders: healthy"]
+      },
+      {
+        "path": "/home/dev/health-check.sh",
+        "invocation": "direct",
+        "args": ["payments", "/etc/payments.conf", "/run/payments.pid"],
+        "exitCode": 1,
+        "stdoutContains": ["payments: unhealthy"]
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/health-check.sh": {
+        "type": "file",
+        "contentMatches": "if\\s+\\[\\[\\s+-f[\\s\\S]*&&[\\s\\S]*\\[\\[\\s+-f[\\s\\S]*exit\\s+1"
+      }
+    }
+  }
+}

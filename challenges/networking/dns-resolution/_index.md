@@ -1,8 +1,8 @@
 ---
 title: "DNS Resolution"
-description: "Walk a saved dig +trace through the resolution chain, audit a zone file by record type, compare two dig outputs to spot a stale answer, and trace a stale-deploy outage to the missing TTL drop."
+description: "Query DNS records, trace delegation, compare resolver views, distinguish failure responses, observe cache expiry, and investigate an office-only outage."
 articleId: article-devops-foundation-networking-dns-resolution
 difficulty: medium
-order: 14
-tags: [dns, dig, ttl, cname, cache, grep, troubleshooting]
+order: 12
+tags: [dns, dig, ttl, cname, cache, troubleshooting]
 ---

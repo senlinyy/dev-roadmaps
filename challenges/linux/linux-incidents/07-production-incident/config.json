@@ -1,0 +1,223 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/tmp": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 1023
+    },
+    "/srv": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/api": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/api/config.json": {
+      "type": "file",
+      "content": "{\n  \"port\": 9090,\n  \"environment\": \"production\",\n  \"authentication\": true\n}\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 384
+    },
+    "/srv/api/check-config.sh": {
+      "type": "file",
+      "content": "#!/usr/bin/env bash\nset -euo pipefail\ncat /srv/api/config.json | grep '\"port\": 8080' > /dev/null\nprintf \"config-ok\\n\"\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "alice",
+        "uid": 1001,
+        "primaryGroup": "alice",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "bob",
+        "uid": 1002,
+        "primaryGroup": "bob",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "myapp",
+        "uid": 2000,
+        "primaryGroup": "myapp"
+      },
+      {
+        "name": "api",
+        "uid": 2001,
+        "primaryGroup": "api"
+      },
+      {
+        "name": "logwriter",
+        "uid": 2002,
+        "primaryGroup": "logwriter"
+      }
+    ],
+    "sessionGroups": [
+      "dev",
+      "team"
+    ],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "permission-state",
+    "requireCommands": [
+      "stat"
+    ],
+    "expectedFs": {
+      "/srv/api/config.json": {
+        "type": "file",
+        "modeEquals": 416,
+        "ownerEquals": "root",
+        "groupEquals": "api",
+        "contentMatches": "\"port\"\\s*:\\s*8080"
+      },
+      "/srv/api/check-config.sh": {
+        "type": "file",
+        "contentEquals": "#!/usr/bin/env bash\nset -euo pipefail\ncat /srv/api/config.json | grep '\"port\": 8080' > /dev/null\nprintf \"config-ok\\n\"\n",
+        "modeEquals": 493,
+        "ownerEquals": "root",
+        "groupEquals": "root"
+      }
+    },
+    "expectedPermissions": {
+      "access": [
+        {
+          "user": "api",
+          "path": "/srv/api/config.json",
+          "operation": "read",
+          "allowed": true
+        },
+        {
+          "user": "alice",
+          "path": "/srv/api/config.json",
+          "operation": "read",
+          "allowed": false
+        }
+      ]
+    },
+    "expectedScriptRuns": [
+      {
+        "path": "/srv/api/check-config.sh",
+        "args": [],
+        "exitCode": 1,
+        "currentContent": true,
+        "user": "api",
+        "anyRun": true
+      },
+      {
+        "path": "/srv/api/check-config.sh",
+        "args": [],
+        "exitCode": 0,
+        "stdoutContains": [
+          "config-ok"
+        ],
+        "currentContent": true,
+        "user": "api",
+        "anyRun": true
+      }
+    ],
+    "expectedSystem": {
+      "diagnostics": [
+        "disk:blocks:/",
+        "disk:inodes:/",
+        "status:api:failed",
+        "identity:api",
+        "journal:api"
+      ],
+      "services": [
+        "api"
+      ]
+    }
+  },
+  "system": {
+    "services": [
+      {
+        "name": "api",
+        "user": "api",
+        "command": "/usr/local/bin/api",
+        "pid": 2400,
+        "active": false,
+        "logs": [
+          "api: release-42 deployed",
+          "api: Permission denied reading /srv/api/config.json"
+        ],
+        "config": {
+          "path": "/srv/api/config.json",
+          "required": {
+            "port": 8080,
+            "environment": "production",
+            "authentication": true
+          }
+        },
+        "storage": {
+          "path": "/",
+          "minFreeBytes": 100000000
+        }
+      }
+    ],
+    "disks": [
+      {
+        "mountpoint": "/",
+        "device": "/dev/vda1",
+        "bytes": 1073741824,
+        "inodes": 100000
+      }
+    ]
+  }
+}

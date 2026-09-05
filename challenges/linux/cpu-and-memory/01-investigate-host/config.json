@@ -1,0 +1,271 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev"
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      }
+    ],
+    "umask": 18
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "mode": 493,
+      "owner": "dev",
+      "group": "dev"
+    }
+  },
+  "system": {
+    "services": [],
+    "processes": {
+      "entries": [
+        {
+          "pid": 100,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/bin/bash"
+          ],
+          "state": "S",
+          "rss": 4096,
+          "vsz": 262144,
+          "tty": "pts/0"
+        },
+        {
+          "pid": 410,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/python3",
+            "/srv/reports/worker-0.py"
+          ],
+          "state": "R",
+          "rss": 65536,
+          "vsz": 262144,
+          "cpu": 30
+        },
+        {
+          "pid": 411,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/python3",
+            "/srv/reports/worker-1.py"
+          ],
+          "state": "R",
+          "rss": 65536,
+          "vsz": 262144,
+          "cpu": 30
+        },
+        {
+          "pid": 412,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/python3",
+            "/srv/reports/worker-2.py"
+          ],
+          "state": "R",
+          "rss": 65536,
+          "vsz": 262144,
+          "cpu": 30
+        },
+        {
+          "pid": 413,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/python3",
+            "/srv/reports/worker-3.py"
+          ],
+          "state": "R",
+          "rss": 65536,
+          "vsz": 262144,
+          "cpu": 30
+        },
+        {
+          "pid": 414,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/python3",
+            "/srv/reports/worker-4.py"
+          ],
+          "state": "R",
+          "rss": 65536,
+          "vsz": 262144,
+          "cpu": 30
+        },
+        {
+          "pid": 415,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/python3",
+            "/srv/reports/worker-5.py"
+          ],
+          "state": "R",
+          "rss": 65536,
+          "vsz": 262144,
+          "cpu": 30
+        },
+        {
+          "pid": 520,
+          "ppid": 1,
+          "user": "dev",
+          "argv": [
+            "/usr/bin/postgres"
+          ],
+          "state": "D",
+          "rss": 65536,
+          "vsz": 262144,
+          "cpu": 0
+        }
+      ]
+    },
+    "resources": {
+      "uptime": 86400,
+      "samples": [
+        {
+          "at": 0,
+          "load": [
+            6.8,
+            4.2,
+            1.9
+          ],
+          "cpus": [
+            {
+              "us": 91,
+              "sy": 6,
+              "id": 3,
+              "wa": 0,
+              "st": 0
+            },
+            {
+              "us": 93,
+              "sy": 5,
+              "id": 2,
+              "wa": 0,
+              "st": 0
+            }
+          ],
+          "memory": {
+            "total": 8388608,
+            "free": 262144,
+            "available": 4718592,
+            "buffers": 65536,
+            "cached": 4194304,
+            "reclaimable": 262144,
+            "unreclaimable": 131072,
+            "shared": 32768,
+            "swapTotal": 2097152,
+            "swapFree": 1835008,
+            "dirty": 8192,
+            "writeback": 0
+          },
+          "activity": {
+            "si": 0,
+            "so": 0,
+            "bi": 12,
+            "bo": 40,
+            "interrupts": 1200,
+            "switches": 2400
+          }
+        }
+      ],
+      "boot": {
+        "cpus": [
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          },
+          {
+            "us": 10,
+            "sy": 3,
+            "id": 87,
+            "wa": 0,
+            "st": 0
+          }
+        ],
+        "activity": {
+          "si": 0,
+          "so": 0,
+          "bi": 12,
+          "bo": 40,
+          "interrupts": 1200,
+          "switches": 2400
+        }
+      }
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCwd": "/home/dev",
+    "expectedResources": {
+      "readOnly": true,
+      "observations": [
+        {
+          "kind": "uptime",
+          "label": "Inspect the load windows"
+        },
+        {
+          "kind": "capacity",
+          "label": "Inspect visible CPU capacity"
+        },
+        {
+          "kind": "vmstat:interval",
+          "label": "Collect current activity",
+          "count": 2,
+          "minInterval": 5
+        }
+      ]
+    },
+    "expectedProcesses": [
+      {
+        "pid": 410,
+        "label": "Runnable worker",
+        "inspectedFields": [
+          "stat",
+          "pid",
+          "cmd"
+        ],
+        "untouched": true
+      },
+      {
+        "pid": 520,
+        "label": "Blocked database process",
+        "inspectedFields": [
+          "stat",
+          "pid",
+          "cmd"
+        ],
+        "untouched": true
+      }
+    ]
+  }
+}

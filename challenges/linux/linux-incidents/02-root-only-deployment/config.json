@@ -1,0 +1,174 @@
+{
+  "cwd": "/home/alice",
+  "env": {
+    "USER": "alice",
+    "HOME": "/home/alice",
+    "PATH": "/usr/bin:/bin"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/tmp": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 1023
+    },
+    "/home/alice": {
+      "type": "dir",
+      "owner": "alice",
+      "group": "alice",
+      "mode": 493
+    },
+    "/opt": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/opt/release": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/opt/release/bin": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/opt/release/bin/deploy": {
+      "type": "file",
+      "content": "#!/usr/bin/env bash\nprintf \"deployment ready\\n\"\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    }
+  },
+  "commandModules": [
+    "permissions"
+  ],
+  "permissions": {
+    "currentUser": "alice",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "alice",
+        "uid": 1001,
+        "primaryGroup": "alice",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "bob",
+        "uid": 1002,
+        "primaryGroup": "bob",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "myapp",
+        "uid": 2000,
+        "primaryGroup": "myapp"
+      },
+      {
+        "name": "api",
+        "uid": 2001,
+        "primaryGroup": "api"
+      },
+      {
+        "name": "logwriter",
+        "uid": 2002,
+        "primaryGroup": "logwriter"
+      }
+    ],
+    "sessionGroups": [
+      "alice",
+      "team"
+    ],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "command",
+      "stat"
+    ],
+    "expectedResults": [
+      {
+        "label": "reproduce the missing command",
+        "commands": [
+          "deploy"
+        ],
+        "exitCode": 127,
+        "stderrContains": "command not found"
+      },
+      {
+        "label": "resolve the approved executable",
+        "commands": [
+          "command"
+        ],
+        "stdoutEquals": "/opt/release/bin/deploy\n",
+        "exitCode": 0
+      }
+    ],
+    "expectedScriptRuns": [
+      {
+        "path": "/opt/release/bin/deploy",
+        "invocation": "path",
+        "args": [],
+        "exitCode": 0,
+        "stdoutContains": [
+          "deployment ready"
+        ],
+        "user": "alice",
+        "pathEntries": ["/opt/release/bin", "/usr/bin", "/bin"]
+      }
+    ],
+    "expectedFs": {
+      "/opt/release/bin/deploy": {
+        "type": "file",
+        "contentEquals": "#!/usr/bin/env bash\nprintf \"deployment ready\\n\"\n",
+        "modeEquals": 493,
+        "ownerEquals": "root",
+        "groupEquals": "root"
+      }
+    },
+    "forbidCommands": [
+      "cp",
+      "mv",
+      "ln"
+    ]
+  }
+}

@@ -1,0 +1,242 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/etc": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/systemd": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/systemd/system": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/orders": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr/bin": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr/lib": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr/lib/systemd": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/usr/lib/systemd/system": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/orders": {
+      "type": "dir",
+      "owner": "app",
+      "group": "app",
+      "mode": 493
+    },
+    "/usr/bin/node": {
+      "type": "file",
+      "content": "Authored Node executable.\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/srv/orders/server.js": {
+      "type": "file",
+      "content": "console.log('orders application');\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    },
+    "/etc/orders/app.env": {
+      "type": "file",
+      "content": "NODE_ENV=production\nPORT=3000\nLOG_LEVEL=info\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 384
+    },
+    "/usr/lib/systemd/system/orders.service": {
+      "type": "file",
+      "content": "[Unit]\nDescription=Orders API\n\n[Service]\nType=simple\nUser=app\nGroup=app\nWorkingDirectory=/srv/orders\nEnvironmentFile=/etc/orders/app.env\nExecStart=/usr/bin/node /srv/orders/server.js\n\n[Install]\nWantedBy=multi-user.target\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 420
+    },
+    "/etc/systemd/system/orders.service.d": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/etc/orders/release.env": {
+      "type": "file",
+      "content": "NODE_ENV=production\nPORT=4000\nLOG_LEVEL=debug\nRELEASE=v2\n",
+      "owner": "root",
+      "group": "root",
+      "mode": 384
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev"
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "deploy",
+        "uid": 2001,
+        "primaryGroup": "app"
+      }
+    ],
+    "umask": 18
+  },
+  "system": {
+    "services": [],
+    "manager": {
+      "units": [
+        {
+          "name": "orders.service",
+          "state": "active",
+          "workload": {
+            "command": "/usr/bin/node /srv/orders/server.js",
+            "requiredEnv": {
+              "NODE_ENV": "production"
+            },
+            "readPaths": [
+              "server.js"
+            ],
+            "message": "Orders API initialized; listening on the configured port."
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "systemctl"
+    ],
+    "expectedUnits": [
+      {
+        "name": "orders.service",
+        "label": "Orders API",
+        "state": "active",
+        "currentDefinition": true,
+        "currentProcess": true,
+        "loaded": {
+          "Service.EnvironmentFile": "/etc/orders/release.env"
+        },
+        "process": {
+          "user": "app",
+          "env": {
+            "PORT": "4000",
+            "LOG_LEVEL": "debug",
+            "RELEASE": "v2"
+          }
+        },
+        "before": [
+          "cat"
+        ],
+        "properties": [
+          "EnvironmentFiles",
+          "MainPID"
+        ],
+        "readProcess": [
+          "environ"
+        ],
+        "loadedLists": {
+          "Service.EnvironmentFile": [
+            "/etc/orders/release.env"
+          ]
+        }
+      }
+    ],
+    "expectedFs": {
+      "/usr/lib/systemd/system/orders.service": {
+        "contentEquals": "[Unit]\nDescription=Orders API\n\n[Service]\nType=simple\nUser=app\nGroup=app\nWorkingDirectory=/srv/orders\nEnvironmentFile=/etc/orders/app.env\nExecStart=/usr/bin/node /srv/orders/server.js\n\n[Install]\nWantedBy=multi-user.target\n"
+      },
+      "/etc/systemd/system/orders.service.d/override.conf": {
+        "type": "file"
+      },
+      "/etc/orders/app.env": {
+        "contentEquals": "NODE_ENV=production\nPORT=3000\nLOG_LEVEL=info\n",
+        "modeEquals": 384
+      },
+      "/etc/orders/release.env": {
+        "contentEquals": "NODE_ENV=production\nPORT=4000\nLOG_LEVEL=debug\nRELEASE=v2\n",
+        "modeEquals": 384
+      }
+    }
+  }
+}

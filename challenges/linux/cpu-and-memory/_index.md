@@ -1,8 +1,8 @@
 ---
 title: "CPU & Memory"
-description: "Decode load averages, read memory stats from /proc/meminfo, triage with vmstat, and hunt OOM killer events in kernel logs. Each step targets a section of the CPU & Memory article."
+description: "Investigate CPU hotspots, memory availability, swap activity, OOM events, and safe recovery through eight terminal exercises and a scenario quiz."
 articleId: article-devops-foundation-linux-system-admin-cpu-memory
 difficulty: medium
 order: 8
-tags: [load-average, memory, proc, meminfo, vmstat, oom-killer, free, grep]
+tags: [cpu, memory, vmstat, proc, swap, oom, resource-pressure]
 ---

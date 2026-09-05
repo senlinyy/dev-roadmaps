@@ -1,0 +1,85 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/var/log/orders/incident.log": {
+      "type": "file",
+      "content": "13:59:59 192.0.2.90 GET /outside 500 180\n14:00:00 192.0.2.10 GET /checkout 500 180\n14:00:01 192.0.2.11 GET /docs/500 200 503\n14:02:10 192.0.2.10 POST /checkout 502 180\n14:03:00 192.0.2.20 GET /reports 503 180\n14:04:00 192.0.2.20 GET /health 200 500\n14:06:00 192.0.2.10 GET /checkout 500 180\n14:10:00 192.0.2.30 GET /reports 502 180\n14:14:59 192.0.2.10 POST /checkout 503 180\n14:15:00 192.0.2.90 GET /outside 500 180\n15:00:00 192.0.2.90 GET /outside 503 180\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "awk",
+      "sort",
+      "uniq",
+      "wc",
+      "head",
+      "tail"
+    ],
+    "expectedResults": [
+      {
+        "label": "number of failures inside the window",
+        "commands": [
+          "wc"
+        ],
+        "stdoutEquals": "6\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "top failing endpoint",
+        "commands": [
+          "sort"
+        ],
+        "stdoutEquals": "4 /checkout\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "top failing client",
+        "commands": [
+          "sort"
+        ],
+        "stdoutEquals": "4 192.0.2.10\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "first in-window error",
+        "commands": [
+          "head"
+        ],
+        "stdoutEquals": "14:00:00 192.0.2.10 GET /checkout 500 180\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      },
+      {
+        "label": "last in-window error",
+        "commands": [
+          "tail"
+        ],
+        "stdoutEquals": "14:14:59 192.0.2.10 POST /checkout 503 180\n",
+        "stderrEquals": "",
+        "exitCode": 0
+      }
+    ],
+    "expectedFs": {
+      "/var/log/orders/incident.log": {
+        "type": "file",
+        "contentEquals": "13:59:59 192.0.2.90 GET /outside 500 180\n14:00:00 192.0.2.10 GET /checkout 500 180\n14:00:01 192.0.2.11 GET /docs/500 200 503\n14:02:10 192.0.2.10 POST /checkout 502 180\n14:03:00 192.0.2.20 GET /reports 503 180\n14:04:00 192.0.2.20 GET /health 200 500\n14:06:00 192.0.2.10 GET /checkout 500 180\n14:10:00 192.0.2.30 GET /reports 502 180\n14:14:59 192.0.2.10 POST /checkout 503 180\n14:15:00 192.0.2.90 GET /outside 500 180\n15:00:00 192.0.2.90 GET /outside 503 180\n"
+      },
+      "/home/dev/incident-errors.log": {
+        "type": "file",
+        "contentEquals": "14:00:00 192.0.2.10 GET /checkout 500 180\n14:02:10 192.0.2.10 POST /checkout 502 180\n14:03:00 192.0.2.20 GET /reports 503 180\n14:06:00 192.0.2.10 GET /checkout 500 180\n14:10:00 192.0.2.30 GET /reports 502 180\n14:14:59 192.0.2.10 POST /checkout 503 180\n"
+      }
+    }
+  }
+}

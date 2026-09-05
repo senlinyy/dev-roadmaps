@@ -1,0 +1,214 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 493
+    },
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/tmp": {
+      "type": "dir",
+      "owner": "root",
+      "group": "root",
+      "mode": 1023
+    },
+    "/home/dev/deploy.sh": {
+      "type": "file",
+      "content": "#!/usr/bin/env bash\ntmp_dir=/tmp/deploy\nmkdir -p $tmp_dir\ncp $1 $tmp_dir/output.log\ngrep \"^SUCCESS \" $tmp_dir/output.log | tail -n 1\nprintf \"deployed\\n\"\nrm -rf $tmp_dir\n",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/home/dev/release build.log": {
+      "type": "file",
+      "content": "INFO building\nSUCCESS release-42\n",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 420
+    },
+    "/home/dev/failed.log": {
+      "type": "file",
+      "content": "ERROR build failed\n",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 420
+    },
+    "/tmp/deploy": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    },
+    "/tmp/deploy/keep.txt": {
+      "type": "file",
+      "content": "another job owns this directory\n",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 420
+    }
+  },
+  "commandModules": [
+    "permissions"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "alice",
+        "uid": 1001,
+        "primaryGroup": "alice",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "bob",
+        "uid": 1002,
+        "primaryGroup": "bob",
+        "supplementaryGroups": [
+          "team"
+        ]
+      },
+      {
+        "name": "myapp",
+        "uid": 2000,
+        "primaryGroup": "myapp"
+      },
+      {
+        "name": "api",
+        "uid": 2001,
+        "primaryGroup": "api"
+      },
+      {
+        "name": "logwriter",
+        "uid": 2002,
+        "primaryGroup": "logwriter"
+      }
+    ],
+    "sessionGroups": [
+      "dev",
+      "team"
+    ],
+    "umask": 18
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "vim"
+    ],
+    "forbidFsPrefixes": [
+      "/tmp/deploy."
+    ],
+    "expectedFs": {
+      "/home/dev/deploy.sh": {
+        "type": "file",
+        "modeEquals": 493,
+        "contentMatches": "mktemp\\s+-d[\\s\\S]*trap[^\\n]*EXIT",
+        "contentExcludes": "tmp_dir=/tmp/deploy\n"
+      },
+      "/tmp/deploy/keep.txt": {
+        "type": "file",
+        "contentEquals": "another job owns this directory\n",
+        "modeEquals": 420,
+        "ownerEquals": "dev",
+        "groupEquals": "dev"
+      },
+      "/home/dev/release build.log": {
+        "type": "file",
+        "contentEquals": "INFO building\nSUCCESS release-42\n",
+        "modeEquals": 420,
+        "ownerEquals": "dev",
+        "groupEquals": "dev"
+      },
+      "/home/dev/failed.log": {
+        "type": "file",
+        "contentEquals": "ERROR build failed\n",
+        "modeEquals": 420,
+        "ownerEquals": "dev",
+        "groupEquals": "dev"
+      }
+    },
+    "expectedScriptRuns": [
+      {
+        "path": "/home/dev/deploy.sh",
+        "args": [
+          "release build.log"
+        ],
+        "exitCode": 0,
+        "stdoutContains": [
+          "SUCCESS release-42",
+          "deployed"
+        ],
+        "currentContent": true,
+        "user": "dev"
+      },
+      {
+        "path": "/home/dev/deploy.sh",
+        "args": [
+          "failed.log"
+        ],
+        "exitCode": 1,
+        "currentContent": true,
+        "user": "dev",
+        "stdoutExcludes": [
+          "deployed"
+        ]
+      },
+      {
+        "path": "/home/dev/deploy.sh",
+        "args": [
+          "missing.log"
+        ],
+        "exitCode": 1,
+        "stderrContains": [
+          "No such file"
+        ],
+        "currentContent": true,
+        "user": "dev",
+        "stdoutExcludes": [
+          "deployed"
+        ]
+      }
+    ],
+    "expectedVim": [
+      {
+        "label": "save the repaired wrapper in Vim",
+        "path": "/home/dev/deploy.sh",
+        "edited": true,
+        "actions": [
+          "write"
+        ]
+      }
+    ]
+  }
+}

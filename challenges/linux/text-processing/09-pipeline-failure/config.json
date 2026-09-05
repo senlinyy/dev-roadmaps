@@ -1,0 +1,72 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev",
+    "LC_ALL": "C"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    },
+    "/home/dev/healthy.log": {
+      "type": "file",
+      "content": "INFO service ready\nINFO health check passed\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "cat",
+      "grep",
+      "wc",
+      "set"
+    ],
+    "expectedResults": [
+      {
+        "label": "default pipeline hides the failed input",
+        "commands": [
+          "cat",
+          "grep",
+          "wc"
+        ],
+        "stdoutEquals": "0\n",
+        "exitCode": 0,
+        "stderrContains": "missing.log: No such file or directory",
+        "pipefail": false
+      },
+      {
+        "label": "pipefail exposes the failed input",
+        "commands": [
+          "cat",
+          "grep",
+          "wc"
+        ],
+        "stdoutEquals": "0\n",
+        "exitCode": 1,
+        "stderrContains": "missing.log: No such file or directory",
+        "pipefail": true
+      },
+      {
+        "label": "ordinary quiet non-match has no diagnostic",
+        "commands": [
+          "grep"
+        ],
+        "stdoutEquals": "",
+        "stderrEquals": "",
+        "exitCode": 1,
+        "pipefail": true
+      }
+    ],
+    "expectedFs": {
+      "/home/dev/healthy.log": {
+        "type": "file",
+        "contentEquals": "INFO service ready\nINFO health check passed\n"
+      },
+      "/home/dev/missing.log": {
+        "type": "file",
+        "exists": false
+      }
+    }
+  }
+}

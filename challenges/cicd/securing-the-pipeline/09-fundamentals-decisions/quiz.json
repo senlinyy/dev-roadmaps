@@ -1,0 +1,141 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "runner-trust",
+      "type": "single",
+      "scenario": "Untrusted pull-request code runs on a persistent worker later reused by a privileged release job. Reviewers see no secrets in the PR job's environment and conclude the arrangement is safe. What is the missing concern?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A different job name automatically resets the host and removes the concern."
+        },
+        {
+          "id": "b",
+          "text": "Untrusted work can contaminate persistent worker state later consumed by privileged work."
+        },
+        {
+          "id": "c",
+          "text": "Only the repository branch name determines whether the worker remains trustworthy."
+        },
+        {
+          "id": "d",
+          "text": "Removing log output prevents all cross-job effects from untrusted execution."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The worker itself is a trust boundary. Persistent compromise can survive job boundaries even without secrets in the first job. Labels, branch names, and quieter logs do not establish isolation or cleanup. [Official reference](https://docs.github.com/en/actions/reference/security/secure-use)."
+    },
+    {
+      "id": "digest-provenance",
+      "type": "single",
+      "scenario": "A package's digest matches a registry entry and its checksum verifies. The team has no accepted statement connecting that package to its reviewed repository and approved builder. Which conclusion is justified?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The checksum proves the package contains only reviewed source."
+        },
+        {
+          "id": "b",
+          "text": "The registry entry proves the publishing identity was authorized."
+        },
+        {
+          "id": "c",
+          "text": "The package must be safe because corruption was not detected."
+        },
+        {
+          "id": "d",
+          "text": "Integrity is established against that digest, but trusted build provenance is still missing."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "A matching digest identifies bytes; it does not identify an authorized producer or prove a reviewed build path. Provenance and its verification supply different evidence from a checksum. [Official reference](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)."
+    },
+    {
+      "id": "masking",
+      "type": "single",
+      "scenario": "A job can execute contributor-controlled code while holding a production credential. The CI platform masks recognized secret values in displayed logs. Is that enough to protect the credential?",
+      "options": [
+        {
+          "id": "a",
+          "text": "No; restrict credential access and untrusted execution because log masking is only one defense."
+        },
+        {
+          "id": "b",
+          "text": "Yes; masked log output removes the credential from the process environment."
+        },
+        {
+          "id": "c",
+          "text": "Yes; a contributor cannot use a value that reviewers cannot read in the UI."
+        },
+        {
+          "id": "d",
+          "text": "No; the only useful change is making the logs completely private."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Masking affects log presentation, not arbitrary code's authority to use or transmit a credential. Isolation and least privilege address that boundary; private logs alone do not prevent misuse. [Official reference](https://docs.github.com/en/actions/reference/security/secure-use)."
+    },
+    {
+      "id": "missing-scan",
+      "type": "single",
+      "scenario": "A release requires a passing security report for its exact artifact. The scanner service is unavailable, and the workflow receives no report. Someone suggests treating the absence of findings as a pass. Which policy matches the requirement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Pass because an unavailable report contains zero reported findings."
+        },
+        {
+          "id": "b",
+          "text": "Reuse any older report that has the same application name."
+        },
+        {
+          "id": "c",
+          "text": "Block promotion and recover the required evidence or use an explicitly authorized exception process."
+        },
+        {
+          "id": "d",
+          "text": "Allow deployment now and make the next release wait for two reports."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Missing evidence is not a passing decision. The stated gate requires current artifact-bound evidence or a separately authorized exception. Names, deferred promises, and counting absent findings do not satisfy it. [Official reference](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)."
+    },
+    {
+      "id": "inventory-and-proof",
+      "type": "multiple",
+      "scenario": "A release review has an SBOM, a package digest, and a signed provenance statement from an approved build identity. Which two interpretations correctly distinguish these records?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The SBOM describes components and can help locate affected releases when a vulnerability is disclosed."
+        },
+        {
+          "id": "b",
+          "text": "The SBOM alone proves the runtime cannot contain an exploitable vulnerability."
+        },
+        {
+          "id": "c",
+          "text": "The verified provenance connects the identified artifact to claims about its build origin."
+        },
+        {
+          "id": "d",
+          "text": "A valid signature makes functional checks and release policy unnecessary."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Inventory and provenance answer different questions: what components are recorded and where the artifact came from. Neither establishes functional correctness or freedom from vulnerabilities, and signing does not replace release policy. [Official reference](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)."
+    }
+  ]
+}

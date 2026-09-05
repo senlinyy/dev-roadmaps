@@ -1,0 +1,154 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir",
+      "owner": "dev",
+      "group": "dev",
+      "mode": 493
+    }
+  },
+  "commandModules": [
+    "permissions",
+    "linux-system"
+  ],
+  "permissions": {
+    "currentUser": "dev",
+    "users": [
+      {
+        "name": "root",
+        "uid": 0,
+        "primaryGroup": "root"
+      },
+      {
+        "name": "dev",
+        "uid": 1000,
+        "primaryGroup": "dev",
+        "supplementaryGroups": [
+          "adm"
+        ]
+      },
+      {
+        "name": "app",
+        "uid": 2000,
+        "primaryGroup": "app"
+      },
+      {
+        "name": "www-data",
+        "uid": 33,
+        "primaryGroup": "www-data"
+      }
+    ],
+    "umask": 18
+  },
+  "system": {
+    "services": [],
+    "manager": {
+      "units": [
+        {
+          "name": "app.service"
+        }
+      ],
+      "epoch": "2026-09-01T10:30:00Z",
+      "journal": [
+        {
+          "unit": "app.service",
+          "at": -1800,
+          "boot": 0,
+          "priority": 3,
+          "message": "Old deploy failed: unrelated incident."
+        },
+        {
+          "unit": "app.service",
+          "at": -689,
+          "boot": 0,
+          "priority": 3,
+          "message": "Main process exited, code=killed, status=9/KILL"
+        },
+        {
+          "unit": "app.service",
+          "at": -684,
+          "boot": 0,
+          "priority": 6,
+          "message": "Started app.service after automatic restart."
+        },
+        {
+          "unit": "app.service",
+          "at": -599,
+          "boot": 0,
+          "priority": 6,
+          "message": "request_id=req_7J2 path=/health status=200"
+        },
+        {
+          "unit": "app.service",
+          "at": -527,
+          "boot": 0,
+          "priority": 3,
+          "message": "request_id=req_8K9 path=/api/items status=500 error=report_timeout"
+        },
+        {
+          "unit": "app.service",
+          "at": -60,
+          "boot": 0,
+          "priority": 6,
+          "message": "request_id=req_late path=/health status=200"
+        },
+        {
+          "unit": "app.service",
+          "at": -30,
+          "boot": 0,
+          "priority": 6,
+          "message": "request_id=req_latest path=/api/items status=200"
+        },
+        {
+          "unit": "backup.service",
+          "at": -527,
+          "boot": 0,
+          "priority": 3,
+          "message": "Backup destination unavailable."
+        }
+      ]
+    },
+    "logging": {}
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "requireCommands": [
+      "journalctl"
+    ],
+    "expectedLogging": {
+      "readOnly": true,
+      "queries": [
+        {
+          "label": "Latest two application records",
+          "unit": "app.service",
+          "count": 2,
+          "contains": [
+            "req_late",
+            "req_latest"
+          ]
+        },
+        {
+          "label": "Exact incident window",
+          "unit": "app.service",
+          "since": -780,
+          "until": -420,
+          "contains": [
+            "status=9/KILL",
+            "Started app.service",
+            "req_8K9"
+          ],
+          "excludes": [
+            "Old deploy",
+            "req_late",
+            "Backup destination"
+          ]
+        }
+      ]
+    }
+  }
+}
