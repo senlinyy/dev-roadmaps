@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "One Package, Two Environments"
 sectionSlug: why-should-one-artifact-move-through-every-environment
 order: 2

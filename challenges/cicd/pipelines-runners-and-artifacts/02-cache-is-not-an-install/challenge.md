@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Works Only With a Warm Cache"
 sectionSlug: how-do-caches-differ-from-artifacts
 order: 2

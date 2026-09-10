@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Works Locally, Fails on a Clean Runner"
 sectionSlug: why-do-clean-runners-and-locked-dependencies-matter
 order: 2

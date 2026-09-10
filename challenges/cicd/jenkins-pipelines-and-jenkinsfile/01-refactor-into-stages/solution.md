@@ -1,25 +1,31 @@
+### Jenkinsfile
+
 ```groovy
 pipeline {
-  agent any
+  agent { label 'linux && node' }
 
   stages {
-    stage('Build') {
-      steps {
-        sh 'mvn -B -DskipTests package'
-      }
-    }
-    stage('Test') {
-      steps {
-        sh 'mvn -B test'
-      }
-    }
-    stage('Package') {
-      steps {
-        sh 'docker build -t devpolaris-orders:${BUILD_NUMBER} .'
-      }
-    }
+stage('Validate') {
+  steps {
+    sh 'npm ci'
+    sh 'npm run lint'
+    sh 'npm test'
+  }
+
+}
+stage('Package') {
+  steps {
+    sh 'npm run build'
+    archiveArtifacts 'dist/app.json'
+  }
+
+}
   }
 }
 ```
 
-Separating checkout, build, test, and package work into named stages makes failures and timing visible in Jenkins. The commands stay unchanged, but the pipeline now exposes clear operational boundaries for retries, review, and later policy gates.
+Validation and packaging have distinct executed stages. Both checks precede exactly one build. Unit or lint regressions stop before any build or archive.
+
+The solution binds later work to the inputs and evidence it actually consumes. It preserves the negative cases instead of turning a failed check into a successful release.
+
+Reference: [Jenkins Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/).

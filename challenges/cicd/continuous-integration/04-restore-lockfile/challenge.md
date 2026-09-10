@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "The Same Source, Different Dependencies"
 sectionSlug: why-do-clean-runners-and-locked-dependencies-matter
 order: 3

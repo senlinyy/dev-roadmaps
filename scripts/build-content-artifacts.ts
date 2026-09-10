@@ -968,7 +968,8 @@ function listStepDirs(groupDir: string): string[] {
   return safeReaddir(groupDir)
     .filter((name) => {
       const stepDir = path.join(groupDir, name);
-      return isDir(stepDir) && exists(path.join(stepDir, 'challenge.md'));
+      const challengePath = path.join(stepDir, 'challenge.md');
+      return isDir(stepDir) && exists(challengePath) && readMatter(challengePath).data.retired !== true;
     })
     .sort();
 }
@@ -985,6 +986,7 @@ function loadStep(groupDir: string, stepId: string): ChallengeStep | null {
   }
 
   const parsed = readMatter(challengePath);
+  if (parsed.data.retired === true) return null;
   const solutionPath = path.join(stepDir, 'solution.md');
   const hintsPath = path.join(stepDir, 'hints.md');
   const solution = exists(solutionPath) ? fs.readFileSync(solutionPath, 'utf-8') : '';

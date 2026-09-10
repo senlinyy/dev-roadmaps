@@ -1,0 +1,24 @@
+{
+  "language": "yaml",
+  "activeFile": "iam/deploy-policy.json",
+  "files": [
+    {
+      "filename": "iam/deploy-policy.json",
+      "initialValue": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Effect\": \"Allow\",\n      \"Action\": \"ecs:*\",\n      \"Resource\": \"*\"\n    }\n  ]\n}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/denied.json",
+      "initialValue": "{\n  \"principal\": \"arn:aws:sts::222222222222:assumed-role/orders-deploy/run-804\",\n  \"deniedAction\": \"iam:PassRole\",\n  \"roles\": [\n    \"arn:aws:iam::222222222222:role/orders-task\",\n    \"arn:aws:iam::222222222222:role/orders-execution\"\n  ],\n  \"service\": \"arn:aws:ecs:eu-west-1:222222222222:service/orders/orders\"\n}\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Only orders-task and orders-execution can be passed to ecs-tasks.amazonaws.com.",
+      "Service update and inspection are scoped to orders/orders.",
+      "The reference explains operations that require wildcard resources rather than pretending every action supports ARN scoping."
+    ]
+  }
+}

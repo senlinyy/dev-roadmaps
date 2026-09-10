@@ -1,48 +1,376 @@
 {
   "language": "yaml",
-  "filename": "release-record.yml",
+  "filename": "deployment.yaml",
+  "activeFile": "deployment.yaml",
   "completionProfile": "yaml",
-  "initialValue": "release:\n  id: rel-2026-04-30-184\n  service: devpolaris-orders-api\n  new_task_definition: orders-api:42\n  version: 1.8.4\n  image_digest: sha256:9c1cfbb322f6f2b8f8cc4d2b9f9e6b77c92c8da7ad9226110f0cf0c30a2a7f54\n\nrollback:\n  target: previous version\n  verification: []\n",
+  "files": [
+    {
+      "filename": "deployment.yaml",
+      "initialValue": "version: 1\nsteps:\n  - inspect: {}\n  - rollout:\n      batch: 4\n      surge: 0\n      readiness: \"process\"\n      timeout: 3\n      drain: 0\n      removeTraffic: false\n      compatibility: false\n  - verify: {}\n"
+    },
+    {
+      "filename": "scenario.json",
+      "initialValue": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"replicas\": 4,\n  \"minimumHealthy\": 3,\n  \"headroom\": 1,\n  \"startup\": 20,\n  \"processAfter\": 2,\n  \"drainSeconds\": 10,\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Compatible candidate\",\n      \"description\": \"Green can coexist with the existing shared state.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"schema\",\n      \"title\": \"Incompatible schema\",\n      \"description\": \"Green cannot read the current expanded schema; blue can.\",\n      \"changes\": {\n        \"releases\": {\n          \"blue\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n            \"source\": \"commit-41\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"green\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"contracted\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"hotfix\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"rebuilt\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"readiness\",\n      \"title\": \"Failed readiness\",\n      \"description\": \"Green never becomes healthy; blue remains compatible.\",\n      \"changes\": {\n        \"releases\": {\n          \"blue\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n            \"source\": \"commit-41\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"green\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": false\n          },\n          \"hotfix\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"rebuilt\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          }\n        }\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "deployment.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "test": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "build": {
+        "passed": true,
+        "message": "Artifacts are prebuilt."
+      }
+    },
+    "deployment": {
+      "kind": "rolling",
+      "releases": {
+        "blue": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+          "source": "commit-41",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "green": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "hotfix": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "rebuilt": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        }
+      },
+      "initial": "blue",
+      "candidate": "green",
+      "previous": "blue",
+      "schema": "expanded",
+      "message": "v1",
+      "session": "shared-v1",
+      "replicas": 4,
+      "minimumHealthy": 3,
+      "headroom": 1,
+      "startup": 20,
+      "processAfter": 2,
+      "drainSeconds": 10,
+      "baselineHealthy": true,
+      "lockAvailable": true,
+      "config": {
+        "DATABASE": "orders-db",
+        "SESSION_STORE": "shared",
+        "CACHE_PREFIX": "orders"
+      },
+      "secretRefs": [
+        "secret/orders-db"
+      ],
+      "queueShared": false,
+      "rollbackWindow": 120,
+      "windows": [],
+      "stickyRequired": false,
+      "maxInitialWeight": 5,
+      "maxWeightStep": 50,
+      "maxErrorRate": 2,
+      "maxErrorIncrease": 0.5,
+      "maxLatency": 300,
+      "maxConversionDrop": 10,
+      "minimumRequests": 100,
+      "minimumSeconds": 300,
+      "approvedSource": "commit-42",
+      "builder": "ci-builder",
+      "approval": {
+        "release": "green",
+        "actor": "release-owner",
+        "approved": true,
+        "environment": "production"
+      },
+      "parity": {
+        "database": "postgres-16",
+        "protocol": "https",
+        "schema": "expanded"
+      },
+      "completed": [],
+      "irreversibleAuthorized": true,
+      "postflightHealthy": true,
+      "afterContractHealthy": true
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "title": "Compatible candidate",
+        "description": "Green can coexist with the existing shared state.",
+        "deployment": {}
+      },
+      {
+        "id": "schema",
+        "title": "Incompatible schema",
+        "description": "Green cannot read the current expanded schema; blue can.",
+        "deployment": {
+          "releases": {
+            "blue": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+              "source": "commit-41",
+              "schemas": [
+                "expanded"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": true
+            },
+            "green": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+              "source": "commit-42",
+              "schemas": [
+                "contracted"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": true
+            },
+            "hotfix": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+              "source": "commit-42",
+              "schemas": [
+                "expanded"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": true
+            },
+            "rebuilt": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+              "source": "commit-42",
+              "schemas": [
+                "expanded"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": true
+            }
+          }
+        }
+      },
+      {
+        "id": "readiness",
+        "title": "Failed readiness",
+        "description": "Green never becomes healthy; blue remains compatible.",
+        "deployment": {
+          "releases": {
+            "blue": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+              "source": "commit-41",
+              "schemas": [
+                "expanded"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": true
+            },
+            "green": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+              "source": "commit-42",
+              "schemas": [
+                "expanded"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": false
+            },
+            "hotfix": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+              "source": "commit-42",
+              "schemas": [
+                "expanded"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": true
+            },
+            "rebuilt": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+              "source": "commit-42",
+              "schemas": [
+                "expanded"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": true
+            }
+          }
+        }
+      }
+    ]
+  },
   "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "scenario.json": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"replicas\": 4,\n  \"minimumHealthy\": 3,\n  \"headroom\": 1,\n  \"startup\": 20,\n  \"processAfter\": 2,\n  \"drainSeconds\": 10,\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Compatible candidate\",\n      \"description\": \"Green can coexist with the existing shared state.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"schema\",\n      \"title\": \"Incompatible schema\",\n      \"description\": \"Green cannot read the current expanded schema; blue can.\",\n      \"changes\": {\n        \"releases\": {\n          \"blue\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n            \"source\": \"commit-41\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"green\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"contracted\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"hotfix\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"rebuilt\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"readiness\",\n      \"title\": \"Failed readiness\",\n      \"description\": \"Green never becomes healthy; blue remains compatible.\",\n      \"changes\": {\n        \"releases\": {\n          \"blue\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n            \"source\": \"commit-41\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"green\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": false\n          },\n          \"hotfix\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"rebuilt\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
       {
-        "path": ["rollback", "task_definition"],
-        "type": "string",
-        "equals": "orders-api:41",
-        "label": "rollback task definition is orders-api:41"
+        "id": "healthy",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "deployed",
+            "release": "green",
+            "verified": true
+          }
+        }
       },
       {
-        "path": ["rollback", "version"],
-        "type": "string",
-        "equals": "1.8.3",
-        "label": "rollback version is recorded"
+        "id": "schema",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "recover",
+              "subject": "blue",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "recovered",
+            "release": "blue",
+            "traffic": 0,
+            "verified": true
+          }
+        }
       },
       {
-        "path": ["rollback", "image_digest"],
-        "type": "string",
-        "equals": "sha256:2b91fe0a7a61",
-        "label": "rollback image digest is recorded"
-      },
-      {
-        "path": ["rollback", "data_compatibility"],
-        "type": "string",
-        "contains": "1.8.3 can read",
-        "label": "rollback includes a data compatibility note"
-      },
-      {
-        "path": ["rollback", "verification"],
-        "type": "array",
-        "includes": "/version reports orders-api:41",
-        "label": "rollback verifies the public version"
-      },
-      {
-        "path": ["rollback", "verification"],
-        "type": "array",
-        "includes": "/smoke/checkout passes",
-        "label": "rollback verifies checkout smoke"
+        "id": "readiness",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "recover",
+              "subject": "blue",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "recovered",
+            "release": "blue",
+            "traffic": 0,
+            "verified": true
+          }
+        }
       }
     ]
   }
 }
-

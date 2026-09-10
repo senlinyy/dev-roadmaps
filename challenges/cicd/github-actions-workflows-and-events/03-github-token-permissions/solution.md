@@ -1,10 +1,51 @@
+### .github/workflows/ci.yml
+
 ```yaml
-jobs:
-  comment:
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: read
+"name": "Checkout delivery"
+"on":
+  "push":
+    "branches":
+      - "main"
+"permissions":
+  "contents": "read"
+"jobs":
+  "validate":
+    "runs-on": "ubuntu-latest"
+    "steps":
+      -
+        "uses": "actions/checkout@v6"
+        "with":
+          "persist-credentials": false
+      -
+        "uses": "actions/setup-node@v7"
+        "with":
+          "node-version": 24
+      -
+        "run": "npm ci"
+      -
+        "run": "npm run lint"
+      -
+        "run": "npm test"
+      -
+        "id": "identity"
+        "run": "echo \"revision=${{ github.sha }}\" >> \"$GITHUB_OUTPUT\""
+    "outputs":
+      "revision": "${{ steps.identity.outputs.revision }}"
+  "report":
+    "needs": "validate"
+    "runs-on": "ubuntu-latest"
+    "steps":
+      -
+        "uses": "actions/checkout@v6"
+        "with":
+          "persist-credentials": false
+      -
+        "run": "./scripts/publish-status.sh"
+      -
+        "run": "echo \"reported=${{ needs.validate.outputs.revision }}\" >> \"$GITHUB_OUTPUT\""
+    "permissions":
+      "contents": "read"
+      "checks": "write"
 ```
 
-- When you declare an explicit `permissions` block, it overrides all defaults. The job only gets the scopes you list. `pull-requests: write` allows the token to create comments on PRs. `contents: read` allows `actions/checkout` to clone the repository.
+The status identifies the exact checked commit. Validation remains read-only while its downstream reporting job has only the authority needed to publish the result.

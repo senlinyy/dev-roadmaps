@@ -1,16 +1,14 @@
+### deployment.yaml
+
 ```yaml
-decision:
-  type: traffic revert
-  reason: previous task set healthy and canary failure came from missing configuration
-  evidence:
-    - canary missing DISCOUNT_RULES_URL
-    - stable task set orders-api:41 stayed healthy
-  rejected_options:
-    - option: patch_forward
-      reason: not needed because artifact code was not the first cause
-    - option: redeploy_previous_artifact
-      reason: not needed because the stable task set was already healthy
-  owner: Maya
+version: 1
+steps:
+  - inspect: {}
+  - recover:
+      release: "hotfix"
+      inspectCompatibility: true
+      timeout: 60
+  - verify: {}
 ```
 
-The decision record connects the recovery action to observed configuration and health evidence. It also explains why a code patch would have added risk without addressing the first known cause.
+Recovery follows the current schema forward to the narrow compatible fix. An unhealthy fix is held without deploying an incompatible previous binary.

@@ -1,15 +1,29 @@
 ---
-title: "Notify the Team on Failure"
-sectionSlug: parallel-branches-post-conditions-and-options
+retired: true
+title: "Keep Failure Evidence Before Cleanup"
+sectionSlug: how-do-parallel-branches-options-and-post-change-execution
 order: 3
+revision: 3
 ---
 
-The devpolaris-orders pipeline runs three stages but says nothing when a build breaks. Ops only finds out when somebody refreshes the Blue Ocean view, which is hours late and silent on weekends.
+## Current situation
 
-You have the current `Jenkinsfile` open. Your job:
+The current stage runs tests, publishes their report, and cleans up as ordinary sequential steps. The same workspace is reused by later builds.
 
-1. **Add a `post` block on the pipeline** that fires when the build fails.
-2. **Inside the `failure` condition**, send a Slack notification by calling `slackSend channel: '#orders-ci', message: "devpolaris-orders ${env.BUILD_NUMBER} failed"`.
-3. **Leave the existing stages untouched.** The grader checks that the original Build, Test, and Package stages still run their `sh` steps.
+## The issue
 
-The grader looks at the structure of the file. It checks that a `post { failure { ... } }` exists on the pipeline and that the failure body calls `slackSend`. It does not care about formatting or where you put the block.
+When tests return a failure, Jenkins stops normal steps before publication and cleanup. The failed run loses the evidence needed to diagnose it.
+
+## Your task
+
+Move reliable finalization into stage post behavior. Run lint and unit tests, build/archive only a healthy application, publish the generated XML on both result paths, and clean only after reporting. Preserve the read-only application and scenario files.
+
+## Success criteria
+
+The regression remains a failed pipeline while its test report is published. No build follows failed tests. Both healthy and failed runs leave a clean workspace, with reporting before final cleanup. Run every supplied case, inspect the evidence, then select Check Run.
+
+:::expand[Simulation format]{kind="note"}
+This is a bounded Jenkins simulation, not a running controller or general Groovy interpreter. Cases reset independently. Unsupported syntax fails explicitly. Declarative stages, agent labels joined by && or ||, explicit-agent parallel branches, Boolean parameter gates, timeout and post behavior are supported. Workspace finalization with agent none belongs in stage post.
+
+The command catalog is npm ci, npm run lint, npm test, npm run build, ./scripts/package.sh, and ./scripts/deploy.sh staging|production. Commands consume fixed fixtures, never execute. Generated paths are dist/app.json, dist/image.json and reports/unit.xml. stash/unstash, junit, archiveArtifacts, deleteDir and cleanWs use these simulated workspaces. Agent settings are an editable lab inventory snapshot, not a JCasC schema.
+:::

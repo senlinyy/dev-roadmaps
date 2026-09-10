@@ -1,13 +1,32 @@
+### deployment.yaml
+
 ```yaml
 version: 1
-Resources:
-  - TargetService:
-      Type: AWS::ECS::Service
-      Properties:
-        TaskDefinition: arn:aws:ecs:us-east-1:123456789012:task-definition/orders-api:42
-        LoadBalancerInfo:
-          ContainerName: orders-api
-          ContainerPort: 8080
+steps:
+  - inspect: {}
+  - prepare:
+      config: "runtime.yaml"
+      secrets:
+        - "secret/orders-db"
+      timeout: 60
+  - validate:
+      checks:
+        - "health"
+        - "config"
+        - "sessions"
+        - "schema"
+        - "queue"
+  - switch:
+      target: "green"
+  - verify: {}
 ```
 
-The AppSpec points CodeDeploy at the replacement task definition and the exact container endpoint registered with the load balancer. Keeping those values aligned prevents green from starting successfully while receiving no test or production traffic.
+### runtime.yaml
+
+```yaml
+DATABASE: "orders-db"
+SESSION_STORE: "shared"
+CACHE_PREFIX: "orders"
+```
+
+Preparing, configuring and validating green before routing traffic keeps a failing candidate isolated and binds the switch to evidence from the candidate environment.

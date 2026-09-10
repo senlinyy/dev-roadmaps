@@ -1,14 +1,31 @@
 ---
-title: "Configure Branch-Filtered Triggers"
-sectionSlug: push-and-pull-request-triggers
+retired: true
+title: "Select Relevant Changes Without Opening Deployment"
+sectionSlug: how-do-repository-events-and-filters-select-work
 order: 2
+revision: 3
 ---
 
-Your team wants to reduce CI costs. Right now, the workflow runs on every push to every branch, which burns through runner minutes on experimental branches that nobody reviews.
+## Current situation
 
-Your task:
+Backend validation and packaging share a workflow in a repository containing backend and documentation.
 
-1. **Configure the workflow** so that it only runs when code is pushed to the production-ready branch, or when a Pull Request targets that branch.
-2. **Use branch filters** under each event to restrict execution.
+## The issue
 
-The grader validates that both event types exist in the `on` block with branch filter arrays, and that the main branch is included.
+The current trigger runs on every push, misses pull requests, and packages feature changes.
+
+## Your task
+
+Validate backend pull requests targeting main and backend pushes to main. Package only main pushes. Docs-only changes and pushes to feature branches must create no jobs.
+
+Edit the workflow. Preserve the read-only repository and scenario files.
+
+## Success criteria
+
+Run every supplied case: backend main push; backend pull request; docs-only push; feature branch push. Correct failure or filtering must stop the affected downstream work, not merely make a run green. Inspect logs, artifacts, and execution evidence before Check Run.
+
+:::expand[Simulation format]{kind="note"}
+GitHub Actions syntax with bounded interpretation, not a real runner. The read-only `.lab/scenario.json` lists event data, runner inventory, action references, and check outcomes. Settings/policy JSON files are explicit lab fixtures, not workflow syntax.
+
+Only catalog actions and the shown npm/script operations are modeled; arbitrary shell commands, network access, containers, credentials, and cloud deployments do not execute. Expressions support context lookup, comparisons, Boolean operators, status functions, and exact-file hashFiles. Unknown operations fail explicitly.
+:::

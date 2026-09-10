@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "A Green Pipeline That Does Not Protect Mainline"
 sectionSlug: which-checks-should-a-ci-pipeline-run
 order: 1

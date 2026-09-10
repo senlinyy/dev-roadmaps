@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Green Pipeline, Wrong Production Binary"
 sectionSlug: why-should-one-artifact-move-through-every-environment
 order: 1

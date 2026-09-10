@@ -1,0 +1,44 @@
+{
+  "language": "yaml",
+  "activeFile": "db/worker.sql",
+  "files": [
+    {
+      "filename": "db/worker.sql",
+      "initialValue": "SELECT 1;\n",
+      "readOnly": false
+    },
+    {
+      "filename": "worker/consume.py",
+      "initialValue": "import json\n\ndef process(body, connection):\n    item = json.loads(body)\n    connection.execute('INSERT INTO orders(id,total_cents) VALUES (%s,%s)', (item['order_id'], item['amount_cents']))\n",
+      "readOnly": false
+    },
+    {
+      "filename": "worker/requirements.txt",
+      "initialValue": "psycopg[binary]==3.2.10\n",
+      "readOnly": true
+    },
+    {
+      "filename": "evidence/messages.json",
+      "initialValue": "[\n  {\n    \"event_id\": \"event-1\",\n    \"order_id\": \"order-1\",\n    \"total_cents\": 100\n  },\n  {\n    \"version\": 2,\n    \"event_id\": \"event-2\",\n    \"order_id\": \"order-2\",\n    \"amount_cents\": 200\n  },\n  {\n    \"event_id\": \"event-1\",\n    \"order_id\": \"order-1\",\n    \"total_cents\": 100\n  }\n]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "db/001-orders.sql",
+      "initialValue": "CREATE TABLE IF NOT EXISTS orders (id text PRIMARY KEY, total_cents integer NOT NULL CHECK(total_cents > 0));\n",
+      "readOnly": true
+    },
+    {
+      "filename": "test/worker_test.py",
+      "initialValue": "import importlib.util\nimport json\nimport os\nimport pathlib\nimport unittest\nimport psycopg\n\nroot = pathlib.Path(__file__).resolve().parents[1]\nspec = importlib.util.spec_from_file_location(\"consumer\", root / \"worker/consume.py\")\nconsumer = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(consumer)\n\nclass WorkerTest(unittest.TestCase):\n    def test_transaction_and_redelivery(self):\n        with psycopg.connect(os.environ[\"DATABASE_URL\"], autocommit=True) as connection:\n            with connection.transaction():\n                connection.execute(\"CREATE TEMP TABLE orders(id text PRIMARY KEY, total_cents integer NOT NULL CHECK(total_cents > 0))\")\n                connection.execute(\"CREATE TEMP TABLE processed_events(event_id text PRIMARY KEY)\")\n            messages = json.loads((root / \"evidence/messages.json\").read_text())\n            self.assertEqual([consumer.process(json.dumps(m), connection) for m in messages], [\"committed\", \"committed\", \"duplicate\"])\n            self.assertEqual(connection.execute(\"SELECT count(*) FROM orders\").fetchone()[0], 2)\n            conflict = {\"version\":2,\"event_id\":\"event-failed\",\"order_id\":\"order-1\",\"amount_cents\":300}\n            with self.assertRaises(psycopg.errors.UniqueViolation):\n                consumer.process(json.dumps(conflict), connection)\n            self.assertEqual(connection.execute(\"SELECT count(*) FROM processed_events WHERE event_id='event-failed'\").fetchone()[0], 0)\n            with self.assertRaises(ValueError):\n                consumer.process(json.dumps({\"version\":3}), connection)\n\nif __name__ == \"__main__\":\n    unittest.main()\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Legacy and version-2 payloads produce the same order representation.",
+      "Duplicate event IDs cannot repeat the transactional database effect.",
+      "Failed parsing or database work does not acknowledge the message."
+    ]
+  }
+}

@@ -1,2 +1,9 @@
-This is not an artifact rollback. The service can keep running the new artifact while the risky behavior is switched off. The audit entry should make that decision obvious later.
+Check why blue is no longer a valid target.
 
+---
+
+Choose a narrower control that does not replace the running artifact.
+
+---
+
+Verification distinguishes effective containment from an unrelated continuing outage.

@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "One Green Job, Missing Platform Coverage"
 sectionSlug: how-do-dependencies-parallelism-and-evidence-shape-the-pipeline-graph
 order: 4

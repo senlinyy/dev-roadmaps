@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "HTTP Is Healthy, Checkout Is Broken"
 sectionSlug: how-does-production-feedback-complete-the-release
 order: 6

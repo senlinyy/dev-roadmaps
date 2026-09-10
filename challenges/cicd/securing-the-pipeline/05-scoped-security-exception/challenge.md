@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "An Exception That Never Expires"
 sectionSlug: how-should-security-gates-and-exceptions-be-designed
 order: 5

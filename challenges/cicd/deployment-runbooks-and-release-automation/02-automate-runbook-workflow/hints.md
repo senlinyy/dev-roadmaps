@@ -1,2 +1,9 @@
-Use a manual trigger because production releases should start with explicit inputs. The workflow should show the runbook order even if scripts hide the long AWS commands.
+Preflight must establish initial-state assumptions before the first mutation.
 
+---
+
+Lock ownership and baseline health block for different reasons.
+
+---
+
+Use the state snapshots to prove that failed preflight produced no effects.

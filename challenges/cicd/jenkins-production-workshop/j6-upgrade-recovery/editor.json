@@ -1,0 +1,24 @@
+{
+  "language": "groovy",
+  "activeFile": "scripts/recover.sh",
+  "files": [
+    {
+      "filename": "scripts/recover.sh",
+      "initialValue": "#!/usr/bin/env bash\ndocker restart jenkins\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/upgrade.log",
+      "initialValue": "Failed Loading plugin JUnit: requires a newer Jenkins core\nAvailable backup: backup/jenkins-home.tar (controller stopped before archive)\nSHA-256 stored in backup/jenkins-home.tar.sha256\nPrevious controller image digest is recorded in approved-image.txt.\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Recovery uses the prior image and a matched pre-upgrade state archive.",
+      "The failed volume remains intact for investigation.",
+      "An existing recovery volume or container causes a stop rather than destructive overwrite."
+    ]
+  }
+}

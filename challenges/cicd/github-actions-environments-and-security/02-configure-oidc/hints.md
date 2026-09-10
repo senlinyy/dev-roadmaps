@@ -1,1 +1,9 @@
-OIDC on the GitHub side needs a token permission and a credential exchange step. Keep the cloud role scoped to the deployment job rather than making static keys available to the repository.
+Trace the requested role, id-token permission, and the resulting subject.
+
+---
+
+GitHub token permission and cloud role trust are independent gates.
+
+---
+
+Remove static keys, scope id-token to release, and match the supplied role’s audience and environment subject.

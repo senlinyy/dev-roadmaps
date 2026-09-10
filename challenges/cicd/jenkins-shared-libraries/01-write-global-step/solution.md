@@ -1,23 +1,45 @@
+### Jenkinsfile
+
 ```groovy
-def call(Map config = [:]) {
-  pipeline {
-    agent {
-      label config.agentLabel ?: 'linux-jdk21'
-    }
-    stages {
-      stage('Build') {
-        steps {
-          sh "mvn -B ${(config.mavenGoals ?: ['package', 'verify']).join(' ')}"
-        }
-      }
-    }
-    post {
-      failure {
-        error "${config.service} failed"
-      }
-    }
+@Library('company-pipeline@v1.4.2') _
+pipeline {
+  agent none
+
+  stages {
+stage('Quality') {
+  agent { label 'linux && node' }
+  steps {
+    standardCheck(command: 'npm run lint')
+    standardCheck(command: 'npm test')
+  }
+
+}
+stage('Package') {
+  agent { label 'linux && node' }
+  steps {
+    checkout scm
+    sh 'npm ci'
+    sh 'npm run build'
+    archiveArtifacts 'dist/app.json'
+  }
+
+}
   }
 }
 ```
 
-- `call` is the entry point Jenkins looks for. The Map default `[:]` lets callers pass nothing and still get a working build. The `?:` operator gives every key a defensible default. The single `Build` stage renders Maven goals from the caller's list (or the default pair). `post.failure` produces an `error` with the service name so Slack/email hooks downstream see exactly which service broke.
+### library/v1/vars/standardCheck.groovy
+
+```groovy
+def call(Map config) {
+  checkout scm
+  sh 'npm ci'
+  sh config.command
+}
+```
+
+Two shared calls run the requested checks, followed by one archived application build. A unit regression stops at its failing check. Unknown or missing API options fail explicitly.
+
+The solution binds later work to the inputs and evidence it actually consumes. It preserves the negative cases instead of turning a failed check into a successful release.
+
+Reference: [Jenkins shared libraries](https://www.jenkins.io/doc/book/pipeline/shared-libraries/).

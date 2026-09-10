@@ -1,22 +1,370 @@
 {
   "language": "yaml",
-  "filename": ".github/workflows/deploy.yml",
   "completionProfile": "github-actions",
-  "initialValue": "name: Deploy\non:\n  push:\n    branches: [main]\n\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm test\n\n  deploy-staging:\n    needs: test\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: ./deploy.sh staging\n\n  deploy-production:\n    needs: deploy-staging\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: ./deploy.sh production",
-  "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
+  "activeFile": ".github/workflows/ci.yml",
+  "files": [
+    {
+      "filename": ".github/workflows/ci.yml",
+      "initialValue": "\"name\": \"Checkout delivery\"\n\"on\":\n  \"push\":\n    \"branches\":\n      - \"main\"\n\"permissions\":\n  \"contents\": \"read\"\n\"jobs\":\n  \"validate\":\n    \"runs-on\": \"ubuntu-latest\"\n    \"steps\":\n      -\n        \"uses\": \"actions/checkout@v6\"\n        \"with\":\n          \"persist-credentials\": false\n      -\n        \"uses\": \"actions/setup-node@v7\"\n        \"with\":\n          \"node-version\": 24\n      -\n        \"run\": \"npm ci\"\n      -\n        \"run\": \"npm run lint\"\n      -\n        \"run\": \"npm test\"\n  \"package\":\n    \"needs\": \"validate\"\n    \"runs-on\": \"ubuntu-latest\"\n    \"steps\":\n      -\n        \"uses\": \"actions/checkout@v6\"\n        \"with\":\n          \"persist-credentials\": false\n      -\n        \"uses\": \"actions/setup-node@v7\"\n        \"with\":\n          \"node-version\": 24\n      -\n        \"run\": \"npm ci\"\n      -\n        \"run\": \"npm run build\"\n      -\n        \"uses\": \"actions/upload-artifact@v4\"\n        \"with\":\n          \"name\": \"app\"\n          \"path\": \"dist\"\n          \"if-no-files-found\": \"error\"\n  \"release\":\n    \"needs\": \"package\"\n    \"runs-on\": \"ubuntu-latest\"\n    \"steps\":\n      -\n        \"uses\": \"actions/download-artifact@v4\"\n        \"with\":\n          \"name\": \"app\"\n          \"path\": \"package\"\n      -\n        \"run\": \"bash package/deploy.sh\"\n    \"env\":\n      \"TARGET\": \"production\"\n"
+    },
+    {
+      "filename": "environment-settings.json",
+      "initialValue": "{\n  \"environments\": {\n    \"production\": {\n      \"branches\": [\n        \"main\",\n        \"feature\"\n      ],\n      \"reviewers\": [],\n      \"preventSelfReview\": false,\n      \"secrets\": [\n        \"PRODUCTION_TOKEN\"\n      ]\n    }\n  }\n}\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build && cp release/deploy.sh dist/deploy.sh\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "readOnly": true,
+      "initialValue": "{\n  \"baseline\": {\n    \"event\": {\n      \"name\": \"push\",\n      \"ref\": \"refs/heads/main\",\n      \"sha\": \"commit-43\",\n      \"repository\": \"acme/checkout\",\n      \"actor\": \"developer\",\n      \"paths\": [\n        \"backend/app.js\"\n      ]\n    },\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"lint fixture passed\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"unit fixture passed\"\n      },\n      \"build\": {\n        \"passed\": true,\n        \"message\": \"build fixture passed\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"integration fixture passed\"\n      },\n      \"audit\": {\n        \"passed\": true,\n        \"message\": \"audit fixture passed\"\n      },\n      \"smoke\": {\n        \"passed\": true,\n        \"message\": \"smoke fixture passed\"\n      }\n    },\n    \"runners\": [\n      {\n        \"name\": \"hosted-linux\",\n        \"labels\": [\n          \"ubuntu-latest\"\n        ],\n        \"group\": \"hosted\",\n        \"os\": \"Linux\",\n        \"ephemeral\": true,\n        \"trusted\": false,\n        \"available\": true\n      },\n      {\n        \"name\": \"hosted-windows\",\n        \"labels\": [\n          \"windows-latest\"\n        ],\n        \"group\": \"hosted\",\n        \"os\": \"Windows\",\n        \"ephemeral\": true,\n        \"trusted\": false,\n        \"available\": true\n      },\n      {\n        \"name\": \"release-worker\",\n        \"labels\": [\n          \"self-hosted\",\n          \"linux\",\n          \"release\"\n        ],\n        \"group\": \"production\",\n        \"os\": \"Linux\",\n        \"ephemeral\": true,\n        \"trusted\": true,\n        \"available\": true\n      },\n      {\n        \"name\": \"legacy-worker\",\n        \"labels\": [\n          \"self-hosted\",\n          \"linux\"\n        ],\n        \"group\": \"legacy\",\n        \"os\": \"Linux\",\n        \"ephemeral\": false,\n        \"trusted\": false,\n        \"available\": true\n      }\n    ],\n    \"actionRefs\": {\n      \"actions/checkout@v6\": \"checkout\",\n      \"actions/setup-node@v7\": \"node\",\n      \"actions/cache@v4\": \"cache\",\n      \"actions/upload-artifact@v4\": \"upload\",\n      \"actions/download-artifact@v4\": \"download\",\n      \"aws-actions/configure-aws-credentials@v5\": \"oidc\"\n    },\n    \"settingsFile\": \"environment-settings.json\",\n    \"approved\": true,\n    \"approvalActor\": \"release-manager\"\n  },\n  \"cases\": [\n    {\n      \"id\": \"approved\",\n      \"title\": \"Approved main release\",\n      \"description\": \"Approved main release. Compare the evidence with the success criteria.\",\n      \"github\": {}\n    },\n    {\n      \"id\": \"pending\",\n      \"title\": \"Approval not granted\",\n      \"description\": \"Approval not granted. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"approved\": false\n      }\n    },\n    {\n      \"id\": \"self\",\n      \"title\": \"Author attempts self-approval\",\n      \"description\": \"Author attempts self-approval. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"event\": {\n          \"name\": \"push\",\n          \"ref\": \"refs/heads/main\",\n          \"sha\": \"commit-43\",\n          \"repository\": \"acme/checkout\",\n          \"actor\": \"release-manager\",\n          \"paths\": [\n            \"backend/app.js\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"feature\",\n      \"title\": \"Feature push excluded\",\n      \"description\": \"Feature push excluded. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"event\": {\n          \"name\": \"push\",\n          \"ref\": \"refs/heads/feature\",\n          \"sha\": \"commit-43\",\n          \"repository\": \"acme/checkout\",\n          \"actor\": \"developer\",\n          \"paths\": [\n            \"backend/app.js\"\n          ]\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    {
+      "filename": "release/deploy.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\nprintf \"Release operation: apply the accompanying app.json to the authorized target.\\n\"\n",
+      "readOnly": true
+    },
+    {
+      "filename": "scripts/publish-status.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\nprintf \"Status operation: publish the validated revision with the job token.\\n\"\n",
+      "readOnly": true
+    },
+    {
+      "filename": "scripts/cleanup.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\nrm -rf -- dist node_modules reports\nrm -f -- .env credentials.json\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "dialect": "github-actions",
+    "filename": ".github/workflows/ci.yml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "github": {
+      "event": {
+        "name": "push",
+        "ref": "refs/heads/main",
+        "sha": "commit-43",
+        "repository": "acme/checkout",
+        "actor": "developer",
+        "paths": [
+          "backend/app.js"
+        ]
+      },
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "lint fixture passed"
+        },
+        "unit": {
+          "passed": true,
+          "message": "unit fixture passed"
+        },
+        "build": {
+          "passed": true,
+          "message": "build fixture passed"
+        },
+        "integration": {
+          "passed": true,
+          "message": "integration fixture passed"
+        },
+        "audit": {
+          "passed": true,
+          "message": "audit fixture passed"
+        },
+        "smoke": {
+          "passed": true,
+          "message": "smoke fixture passed"
+        }
+      },
+      "runners": [
+        {
+          "name": "hosted-linux",
+          "labels": [
+            "ubuntu-latest"
+          ],
+          "group": "hosted",
+          "os": "Linux",
+          "ephemeral": true,
+          "trusted": false,
+          "available": true
+        },
+        {
+          "name": "hosted-windows",
+          "labels": [
+            "windows-latest"
+          ],
+          "group": "hosted",
+          "os": "Windows",
+          "ephemeral": true,
+          "trusted": false,
+          "available": true
+        },
+        {
+          "name": "release-worker",
+          "labels": [
+            "self-hosted",
+            "linux",
+            "release"
+          ],
+          "group": "production",
+          "os": "Linux",
+          "ephemeral": true,
+          "trusted": true,
+          "available": true
+        },
+        {
+          "name": "legacy-worker",
+          "labels": [
+            "self-hosted",
+            "linux"
+          ],
+          "group": "legacy",
+          "os": "Linux",
+          "ephemeral": false,
+          "trusted": false,
+          "available": true
+        }
+      ],
+      "actionRefs": {
+        "actions/checkout@v6": "checkout",
+        "actions/setup-node@v7": "node",
+        "actions/cache@v4": "cache",
+        "actions/upload-artifact@v4": "upload",
+        "actions/download-artifact@v4": "download",
+        "aws-actions/configure-aws-credentials@v5": "oidc"
+      },
+      "settingsFile": "environment-settings.json",
+      "approved": true,
+      "approvalActor": "release-manager"
+    },
+    "cases": [
       {
-        "path": ["jobs", "deploy-staging", "environment"],
-        "type": "string",
-        "equals": "staging",
-        "label": "deploy-staging uses the staging environment"
+        "id": "approved",
+        "title": "Approved main release",
+        "description": "Approved main release. Compare the evidence with the success criteria.",
+        "github": {}
       },
       {
-        "path": ["jobs", "deploy-production", "environment"],
-        "type": "string",
-        "equals": "production",
-        "label": "deploy-production uses the production environment"
+        "id": "pending",
+        "title": "Approval not granted",
+        "description": "Approval not granted. Compare the evidence with the success criteria.",
+        "github": {
+          "approved": false
+        }
+      },
+      {
+        "id": "self",
+        "title": "Author attempts self-approval",
+        "description": "Author attempts self-approval. Compare the evidence with the success criteria.",
+        "github": {
+          "event": {
+            "name": "push",
+            "ref": "refs/heads/main",
+            "sha": "commit-43",
+            "repository": "acme/checkout",
+            "actor": "release-manager",
+            "paths": [
+              "backend/app.js"
+            ]
+          }
+        }
+      },
+      {
+        "id": "feature",
+        "title": "Feature push excluded",
+        "description": "Feature push excluded. Compare the evidence with the success criteria.",
+        "github": {
+          "event": {
+            "name": "push",
+            "ref": "refs/heads/feature",
+            "sha": "commit-43",
+            "repository": "acme/checkout",
+            "actor": "developer",
+            "paths": [
+              "backend/app.js"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build && cp release/deploy.sh dist/deploy.sh\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"event\": {\n      \"name\": \"push\",\n      \"ref\": \"refs/heads/main\",\n      \"sha\": \"commit-43\",\n      \"repository\": \"acme/checkout\",\n      \"actor\": \"developer\",\n      \"paths\": [\n        \"backend/app.js\"\n      ]\n    },\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"lint fixture passed\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"unit fixture passed\"\n      },\n      \"build\": {\n        \"passed\": true,\n        \"message\": \"build fixture passed\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"integration fixture passed\"\n      },\n      \"audit\": {\n        \"passed\": true,\n        \"message\": \"audit fixture passed\"\n      },\n      \"smoke\": {\n        \"passed\": true,\n        \"message\": \"smoke fixture passed\"\n      }\n    },\n    \"runners\": [\n      {\n        \"name\": \"hosted-linux\",\n        \"labels\": [\n          \"ubuntu-latest\"\n        ],\n        \"group\": \"hosted\",\n        \"os\": \"Linux\",\n        \"ephemeral\": true,\n        \"trusted\": false,\n        \"available\": true\n      },\n      {\n        \"name\": \"hosted-windows\",\n        \"labels\": [\n          \"windows-latest\"\n        ],\n        \"group\": \"hosted\",\n        \"os\": \"Windows\",\n        \"ephemeral\": true,\n        \"trusted\": false,\n        \"available\": true\n      },\n      {\n        \"name\": \"release-worker\",\n        \"labels\": [\n          \"self-hosted\",\n          \"linux\",\n          \"release\"\n        ],\n        \"group\": \"production\",\n        \"os\": \"Linux\",\n        \"ephemeral\": true,\n        \"trusted\": true,\n        \"available\": true\n      },\n      {\n        \"name\": \"legacy-worker\",\n        \"labels\": [\n          \"self-hosted\",\n          \"linux\"\n        ],\n        \"group\": \"legacy\",\n        \"os\": \"Linux\",\n        \"ephemeral\": false,\n        \"trusted\": false,\n        \"available\": true\n      }\n    ],\n    \"actionRefs\": {\n      \"actions/checkout@v6\": \"checkout\",\n      \"actions/setup-node@v7\": \"node\",\n      \"actions/cache@v4\": \"cache\",\n      \"actions/upload-artifact@v4\": \"upload\",\n      \"actions/download-artifact@v4\": \"download\",\n      \"aws-actions/configure-aws-credentials@v5\": \"oidc\"\n    },\n    \"settingsFile\": \"environment-settings.json\",\n    \"approved\": true,\n    \"approvalActor\": \"release-manager\"\n  },\n  \"cases\": [\n    {\n      \"id\": \"approved\",\n      \"title\": \"Approved main release\",\n      \"description\": \"Approved main release. Compare the evidence with the success criteria.\",\n      \"github\": {}\n    },\n    {\n      \"id\": \"pending\",\n      \"title\": \"Approval not granted\",\n      \"description\": \"Approval not granted. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"approved\": false\n      }\n    },\n    {\n      \"id\": \"self\",\n      \"title\": \"Author attempts self-approval\",\n      \"description\": \"Author attempts self-approval. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"event\": {\n          \"name\": \"push\",\n          \"ref\": \"refs/heads/main\",\n          \"sha\": \"commit-43\",\n          \"repository\": \"acme/checkout\",\n          \"actor\": \"release-manager\",\n          \"paths\": [\n            \"backend/app.js\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"feature\",\n      \"title\": \"Feature push excluded\",\n      \"description\": \"Feature push excluded. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"event\": {\n          \"name\": \"push\",\n          \"ref\": \"refs/heads/feature\",\n          \"sha\": \"commit-43\",\n          \"repository\": \"acme/checkout\",\n          \"actor\": \"developer\",\n          \"paths\": [\n            \"backend/app.js\"\n          ]\n        }\n      }\n    }\n  ]\n}\n",
+      "release/deploy.sh": "#!/usr/bin/env bash\nset -euo pipefail\nprintf \"Release operation: apply the accompanying app.json to the authorized target.\\n\"\n",
+      "scripts/publish-status.sh": "#!/usr/bin/env bash\nset -euo pipefail\nprintf \"Status operation: publish the validated revision with the job token.\\n\"\n",
+      "scripts/cleanup.sh": "#!/usr/bin/env bash\nset -euo pipefail\nrm -rf -- dist node_modules reports\nrm -f -- .env credentials.json\n"
+    },
+    "cases": [
+      {
+        "id": "approved",
+        "workshop": {
+          "facts": {
+            "deployed": "production",
+            "environmentApproved": "production",
+            "validationPrivileged": false,
+            "source": "commit-43",
+            "checkedSources": [
+              "commit-43"
+            ]
+          },
+          "events": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "status": "passed",
+          "absent": [],
+          "before": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "later": "build"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "later": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "pending",
+        "workshop": {
+          "facts": {
+            "source": "commit-43",
+            "checkedSources": [
+              "commit-43"
+            ]
+          },
+          "events": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "status": "failed",
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ],
+          "before": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "later": "build"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "later": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "self",
+        "workshop": {
+          "facts": {
+            "source": "commit-43",
+            "checkedSources": [
+              "commit-43"
+            ]
+          },
+          "events": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "status": "failed",
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ],
+          "before": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "later": "build"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "later": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "feature",
+        "workshop": {
+          "facts": {
+            "triggered": false
+          },
+          "events": [],
+          "status": "passed",
+          "absent": [],
+          "before": []
+        }
       }
     ]
   }

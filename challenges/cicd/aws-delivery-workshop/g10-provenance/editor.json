@@ -1,0 +1,39 @@
+{
+  "language": "yaml",
+  "activeFile": ".github/workflows/release.yml",
+  "files": [
+    {
+      "filename": ".github/workflows/release.yml",
+      "initialValue": "name: Release\non:\n  push:\n    branches: [main]\npermissions:\n  contents: read\njobs:\n  build:\n    if: github.event_name == 'push' && github.ref == 'refs/heads/main'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      id-token: write\n    environment: build\n    outputs:\n      image: ${{ steps.publish.outputs.image }}\n    env:\n      REPOSITORY: ${{ vars.ECR_REPOSITORY }}\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100\n        with:\n          role-to-assume: ${{ vars.AWS_ROLE_ARN }}\n          aws-region: eu-west-1\n      - id: publish\n        shell: bash\n        run: |\n          set -euo pipefail\n          registry=\"${REPOSITORY%%/*}\"\n          aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin \"$registry\"\n          tag=\"$REPOSITORY:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\"\n          docker build -t \"$tag\" .\n          IMAGE=\"$tag\" bash scripts/smoke.sh\n          docker push \"$tag\"\n          digest=$(aws ecr describe-images --repository-name \"${REPOSITORY#*/}\" --image-ids \"imageTag=$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\" --query 'imageDetails[0].imageDigest' --output text)\n          [[ \"$digest\" =~ ^sha256:[a-f0-9]{64}$ ]]\n          image=\"$REPOSITORY@$digest\"\n          echo \"image=$image\" >> \"$GITHUB_OUTPUT\"\n          jq -n --arg image \"$image\" --arg source \"$GITHUB_SHA\" --arg run \"$GITHUB_RUN_ID\" '{image:$image,source:$source,run:$run}' > release.json\n      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: release\n          path: release.json\n          if-no-files-found: error\n",
+      "readOnly": false
+    },
+    {
+      "filename": "scripts/verify-producer.sh",
+      "initialValue": "#!/usr/bin/env bash\n[[ \"$IMAGE\" == *@sha256:* ]]\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/setup.txt",
+      "initialValue": "Use an isolated AWS training account and existing ECR repository, ECS Fargate orders service, ALB and IAM runtime roles. Example account IDs and acme/orders are explicit sample identifiers: substitute your own consistently. AWS CLI v2, jq, curl and Docker are required on the selected runner. The build environment defines ECR_REPOSITORY and AWS_ROLE_ARN; staging/production additionally define ECS_CLUSTER, ECS_SERVICE and HEALTH_URL. Protect production with required reviewers, prevent self-review and restrict deployment branches to main; configure these in GitHub Settings, not imaginary workflow YAML. Only the dedicated deployment roles may update the service. Live runs cost money; do not use production accounts. No live AWS changes run in this editor.\nUse GitHub CLI with attestation support. Your repository plan must support private-repository attestations if private. The ECR image and attestation must be readable by the verifier.\n",
+      "readOnly": true
+    },
+    {
+      "filename": "iam/build-policy.json",
+      "initialValue": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Effect\": \"Allow\",\n      \"Action\": \"ecr:GetAuthorizationToken\",\n      \"Resource\": \"*\"\n    },\n    {\n      \"Effect\": \"Allow\",\n      \"Action\": [\n        \"ecr:BatchCheckLayerAvailability\",\n        \"ecr:InitiateLayerUpload\",\n        \"ecr:UploadLayerPart\",\n        \"ecr:CompleteLayerUpload\",\n        \"ecr:PutImage\",\n        \"ecr:DescribeImages\"\n      ],\n      \"Resource\": \"arn:aws:ecr:eu-west-1:222222222222:repository/orders\"\n    }\n  ]\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "iam/build-trust.json",
+      "initialValue": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Effect\": \"Allow\",\n      \"Principal\": {\n        \"Federated\": \"arn:aws:iam::222222222222:oidc-provider/token.actions.githubusercontent.com\"\n      },\n      \"Action\": \"sts:AssumeRoleWithWebIdentity\",\n      \"Condition\": {\n        \"StringEquals\": {\n          \"token.actions.githubusercontent.com:aud\": \"sts.amazonaws.com\",\n          \"token.actions.githubusercontent.com:sub\": \"repo:acme/orders:environment:build\"\n        }\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Attestation generation binds the published digest to the trusted release workflow.",
+      "Verification checks the expected repository and signer workflow and fails closed.",
+      "An unrelated digest or untrusted producer is rejected before deployment."
+    ]
+  }
+}

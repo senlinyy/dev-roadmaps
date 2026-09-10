@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Ready to Release Is Not Approved to Release"
 sectionSlug: how-do-environments-and-approval-gates-add-evidence
 order: 3

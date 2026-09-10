@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "The Build Exists, but the Next Worker Cannot Use It"
 sectionSlug: why-do-artifacts-carry-outputs-between-jobs
 order: 1

@@ -1,15 +1,31 @@
 ---
-title: "Restrict GITHUB_TOKEN Permissions"
-sectionSlug: workflows-jobs-and-steps
+retired: true
+title: "Publish the Right Result with the Right Authority"
+sectionSlug: how-do-contexts-variables-and-expressions-provide-data
 order: 3
+revision: 3
 ---
 
-Your team follows the principle of least privilege. A new workflow job needs to post automated comments on Pull Requests with test coverage results. By default, the GITHUB_TOKEN may have broader permissions than necessary.
+## Current situation
 
-Your task:
+The status publisher reports a branch label instead of the checked commit and runs with repository-wide write permissions.
 
-1. **Declare an explicit permissions block** on the job so it only gets the access it needs.
-2. **Grant write access** to the scope that controls PR interactions (comments, reviews, labels).
-3. **Grant read access** to the scope that controls code checkout.
+## The issue
 
-The grader validates that the permissions block exists with the correct scope-to-access-level mapping.
+Status identity is misleading, and application validation receives unnecessary write authority.
+
+## Your task
+
+Publish the current SHA through step and job outputs, consume it downstream, and scope checks: write to the report job. Validation must remain read-only.
+
+Edit the workflow. Preserve the read-only repository and scenario files.
+
+## Success criteria
+
+Run every supplied case: current commit; different commit; failed tests withhold success. Correct failure or filtering must stop the affected downstream work, not merely make a run green. Inspect logs, artifacts, and execution evidence before Check Run.
+
+:::expand[Simulation format]{kind="note"}
+GitHub Actions syntax with bounded interpretation, not a real runner. The read-only `.lab/scenario.json` lists event data, runner inventory, action references, and check outcomes. Settings/policy JSON files are explicit lab fixtures, not workflow syntax.
+
+Only catalog actions and the shown npm/script operations are modeled; arbitrary shell commands, network access, containers, credentials, and cloud deployments do not execute. Expressions support context lookup, comparisons, Boolean operators, status functions, and exact-file hashFiles. Unknown operations fail explicitly.
+:::

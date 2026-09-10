@@ -1,0 +1,34 @@
+{
+  "language": "yaml",
+  "activeFile": ".github/workflows/identity.yml",
+  "files": [
+    {
+      "filename": ".github/workflows/identity.yml",
+      "initialValue": "name: Identity\non: [workflow_dispatch]\njobs:\n  identify:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100\n        with:\n          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}\n          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}\n          aws-region: eu-west-1\n      - run: aws sts get-caller-identity\n",
+      "readOnly": false
+    },
+    {
+      "filename": "iam/trust.json",
+      "initialValue": "{\"Version\":\"2012-10-17\",\"Statement\":[]}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/identity.json",
+      "initialValue": "{\n  \"aud\": \"sts.amazonaws.com\",\n  \"sub\": \"repo:acme/orders:environment:production\",\n  \"account\": \"222222222222\",\n  \"role\": \"orders-deploy\",\n  \"subjectFormat\": \"legacy; this existing training repository has not opted into immutable subjects\"\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "evidence/setup.txt",
+      "initialValue": "Use an isolated AWS training account and existing ECR repository, ECS Fargate orders service, ALB and IAM runtime roles. Example account IDs and acme/orders are explicit sample identifiers: substitute your own consistently. AWS CLI v2, jq, curl and Docker are required on the selected runner. The build environment defines ECR_REPOSITORY and AWS_ROLE_ARN; staging/production additionally define ECS_CLUSTER, ECS_SERVICE and HEALTH_URL. Protect production with required reviewers, prevent self-review and restrict deployment branches to main; configure these in GitHub Settings, not imaginary workflow YAML. Only the dedicated deployment roles may update the service. Live runs cost money; do not use production accounts. No live AWS changes run in this editor.",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "The production environment requests a token and assumes only the named role.",
+      "Trust matches the supplied audience and exact environment subject.",
+      "An unauthorized environment or repository is denied; old keys are retired only after validation."
+    ]
+  }
+}

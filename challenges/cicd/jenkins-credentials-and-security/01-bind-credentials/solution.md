@@ -1,31 +1,42 @@
+### Jenkinsfile
+
 ```groovy
 pipeline {
-  agent any
+  agent none
 
   stages {
-    stage('Build') {
-      steps {
-        sh 'mvn -B package'
-      }
-    }
-    stage('Deploy') {
-      steps {
-        withCredentials([
-          [$class: 'AmazonWebServicesCredentialsBinding',
-           credentialsId: 'devpolaris-aws-deploy',
-           accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-           secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'],
-          string(credentialsId: 'devpolaris-slack-webhook', variable: 'SLACK_WEBHOOK')
-        ]) {
-          sh '''
-            aws s3 cp target/orders.jar s3://devpolaris-artifacts/
-            curl -X POST -d 'deployed' $SLACK_WEBHOOK
-          '''
-        }
-      }
-    }
+stage('Validate') {
+  agent { label 'linux && node' }
+  steps {
+    checkout scm
+    sh 'npm ci'
+    sh 'npm run lint'
+    sh 'npm test'
+    sh 'npm run build'
+    stash name: 'application', includes: 'dist/app.json'
+  }
+  post {
+    always { junit 'reports/*.xml' }
+    cleanup { deleteDir() }
+  }
+}
+stage('Publish') {
+  agent { label 'linux && release' }
+  steps {
+    unstash 'application'
+    withCredentials([string(credentialsId: 'registry-publish', variable: 'PUBLISH_TOKEN')]) {
+  sh './scripts/publish.sh'
+}
+  }
+when { allOf { branch 'main'
+ not { changeRequest() } } }
+}
   }
 }
 ```
 
-The two credentials are bound only for the duration of the closure, exposed as environment variables, and eligible for Jenkins masking. Removing the literal values from the Jenkinsfile prevents source-control exposure, while keeping the binding around only the deploy command limits credential scope. Masking is a safety net, so deploy commands must still avoid intentionally printing secrets.
+Healthy main publishes the validated bytes and removes the binding. PRs validate without credential access. Missing credentials fail closed. No sensitive exposure or active binding remains.
+
+The solution binds later work to the inputs and evidence it actually consumes. It preserves the negative cases instead of turning a failed check into a successful release.
+
+Reference: [Jenkins Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/).

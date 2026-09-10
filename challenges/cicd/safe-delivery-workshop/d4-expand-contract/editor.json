@@ -1,0 +1,34 @@
+{
+  "language": "yaml",
+  "activeFile": "db/expand.sql",
+  "files": [
+    {
+      "filename": "db/expand.sql",
+      "initialValue": "ALTER TABLE customers RENAME COLUMN name TO display_name;\n",
+      "readOnly": false
+    },
+    {
+      "filename": "db/read-customer.sql",
+      "initialValue": "SELECT id, display_name FROM customers WHERE id = 1;\n",
+      "readOnly": false
+    },
+    {
+      "filename": "db/contract.sql",
+      "initialValue": "SELECT 1;\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/schema.sql",
+      "initialValue": "CREATE TABLE customers(id bigint PRIMARY KEY, name text NOT NULL);\nINSERT INTO customers VALUES (1, 'Ada');\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Old writes populate the new column during coexistence.",
+      "New reads work before and after backfill while old queries remain valid.",
+      "Dropping the old column is delayed until old binaries and writers are retired."
+    ]
+  }
+}

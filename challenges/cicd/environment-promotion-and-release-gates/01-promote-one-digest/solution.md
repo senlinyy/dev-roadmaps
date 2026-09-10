@@ -1,24 +1,41 @@
+### deployment.yaml
+
 ```yaml
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    outputs:
-      image_digest: ${{ steps.digest.outputs.image_digest }}
-
-  deploy-staging:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - run: ./scripts/deploy-ecs.sh orders-api-staging "${{ needs.build.outputs.image_digest }}"
-      - run: ./scripts/smoke.sh https://orders-api-staging.devpolaris.example
-
-  deploy-production:
-    needs: [build, deploy-staging]
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - run: ./scripts/deploy-ecs.sh orders-api-prod "${{ needs.build.outputs.image_digest }}"
+version: 1
+steps:
+  - inspect: {}
+  - select:
+      release: "green"
+  - attest:
+      source: "commit-42"
+      builder: "ci-builder"
+  - stage:
+      config: "runtime.yaml"
+      secrets:
+        - "secret/orders-db"
+      parity: "parity.yaml"
+  - smoke: {}
+  - authorize:
+      environment: "production"
+      actor: "release-owner"
+  - promote: {}
+  - verify: {}
 ```
 
-The build job exposes one immutable digest, and both deployment jobs consume that output. Production waits for build and staging, so it promotes the tested artifact instead of rebuilding from mutable source and tool state.
+### runtime.yaml
+
+```yaml
+DATABASE: "orders-db"
+SESSION_STORE: "shared"
+CACHE_PREFIX: "orders"
+```
+
+### parity.yaml
+
+```yaml
+database: "postgres-16"
+protocol: "https"
+schema: "expanded"
+```
+
+One immutable artifact remains the subject of provenance, staging, authorization and production. A staged failure stops that chain before production changes.

@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Yesterday’s Worker Changes Today’s Result"
 sectionSlug: how-do-controllers-and-runners-divide-responsibility
 order: 5

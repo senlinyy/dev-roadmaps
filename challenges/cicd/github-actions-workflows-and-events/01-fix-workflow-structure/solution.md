@@ -1,10 +1,53 @@
+### .github/workflows/ci.yml
+
 ```yaml
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm test
+"name": "Checkout delivery"
+"on":
+  "push":
+    "branches":
+      - "main"
+"permissions":
+  "contents": "read"
+"jobs":
+  "validate":
+    "runs-on": "ubuntu-latest"
+    "steps":
+      -
+        "uses": "actions/checkout@v6"
+        "with":
+          "persist-credentials": false
+      -
+        "uses": "actions/setup-node@v7"
+        "with":
+          "node-version": 24
+      -
+        "run": "npm ci"
+      -
+        "run": "npm run lint"
+      -
+        "run": "npm test"
+  "package":
+    "needs": "validate"
+    "runs-on": "ubuntu-latest"
+    "steps":
+      -
+        "uses": "actions/checkout@v6"
+        "with":
+          "persist-credentials": false
+      -
+        "uses": "actions/setup-node@v7"
+        "with":
+          "node-version": 24
+      -
+        "run": "npm ci"
+      -
+        "run": "npm run build"
+      -
+        "uses": "actions/upload-artifact@v4"
+        "with":
+          "name": "app"
+          "path": "dist"
+          "if-no-files-found": "error"
 ```
 
-- GitHub Actions requires a strict hierarchy: Workflow > Jobs > Steps. The `steps` array must be a child of the job name, and every job must declare its runner via `runs-on`. Without it, GitHub does not know which VM image to provision.
+Validation owns its checkout and installation. Packaging prepares a separate workspace and waits for passing checks, so a failed candidate cannot produce a release artifact.

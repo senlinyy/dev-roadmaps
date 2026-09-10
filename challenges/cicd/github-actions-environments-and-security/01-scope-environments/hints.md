@@ -1,1 +1,9 @@
-The `environment` key is a job-level property that associates the job with a named environment defined in Settings > Environments. Secrets attached to that environment are only available to jobs that declare it. The environment name is a string like `staging` or `production`.
+Inspect when the release job requests the environment and which reviewer is eligible.
+
+---
+
+Protection must apply before the job receives environment-scoped authority.
+
+---
+
+Bind production, restrict main, require the release manager, and prevent self-review.

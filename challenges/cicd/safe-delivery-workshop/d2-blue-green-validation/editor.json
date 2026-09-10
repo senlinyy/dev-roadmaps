@@ -1,0 +1,29 @@
+{
+  "language": "yaml",
+  "activeFile": "ecs/update.json",
+  "files": [
+    {
+      "filename": "ecs/update.json",
+      "initialValue": "{\n  \"cluster\": \"orders\",\n  \"service\": \"orders\",\n  \"deploymentController\": {\n    \"type\": \"ECS\"\n  },\n  \"deploymentConfiguration\": {\n    \"strategy\": \"BLUE_GREEN\",\n    \"bakeTimeInMinutes\": 0\n  },\n  \"loadBalancers\": [\n    {\n      \"targetGroupArn\": \"arn:aws:elasticloadbalancing:eu-west-1:222222222222:targetgroup/orders-blue/1111111111111111\",\n      \"containerName\": \"orders\",\n      \"containerPort\": 3000,\n      \"advancedConfiguration\": {\n        \"alternateTargetGroupArn\": \"arn:aws:elasticloadbalancing:eu-west-1:222222222222:targetgroup/orders-green/2222222222222222\",\n        \"productionListenerRule\": \"arn:aws:elasticloadbalancing:eu-west-1:222222222222:listener-rule/app/orders/1111111111111111/2222222222222222/3333333333333333\",\n        \"testListenerRule\": \"arn:aws:elasticloadbalancing:eu-west-1:222222222222:listener-rule/app/orders/1111111111111111/4444444444444444/5555555555555555\",\n        \"roleArn\": \"arn:aws:iam::222222222222:role/orders-elb-management\"\n      }\n    }\n  ]\n}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "lambda/pretraffic.py",
+      "initialValue": "def handler(event, context):\n    return {'hookStatus': 'SUCCEEDED'}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/setup.txt",
+      "initialValue": "Existing sandbox only: replace sample target group, listener-rule and role ARNs with provisioned resources. Both target groups use IP targets and /ready checks. The Lambda TEST_URL points to the private test listener, never the production URL. Its network configuration can reach that listener. orders-hook-invoke can invoke only this function; orders-elb-management permits ECS-managed target-group traffic changes. CloudWatch orders-release-errors already exists.\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "The test listener reaches green before the validation hook runs.",
+      "A failed HTTP/response contract returns FAILED and blocks promotion.",
+      "The prior revision remains available for the specified bake period and alarm rollback."
+    ]
+  }
+}

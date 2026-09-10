@@ -1,18 +1,29 @@
 ---
-title: "Gate Deploys with Parameters and `when`"
-sectionSlug: parameters-environment-and-when-gating
+retired: true
+title: "Separate Validation From Release Intent"
+sectionSlug: how-do-parameters-environment-and-when-select-a-path
 order: 4
+revision: 3
 ---
 
-The devpolaris-orders pipeline always deploys to staging on every push to `main`, then waits for a manual `Promote` button before production. The team wants two changes:
+## Current situation
 
-1. The pipeline should accept a `DEPLOY_ENV` parameter (`staging` or `production`) and a `RUN_INTEGRATION_TESTS` boolean parameter (default `true`).
-2. The `Deploy` stage should only run when `DEPLOY_ENV` equals `production` AND the build is on the `main` branch.
+The same multibranch Jenkinsfile serves pull requests, main validation, and manually requested staging releases.
 
-The Jenkinsfile already has a `Build` stage and a placeholder `Deploy` stage. Your job:
+## The issue
 
-1. **Add a `parameters` block** at the pipeline level with a `choice` parameter named `DEPLOY_ENV` (choices `['staging', 'production']`) and a `booleanParam` named `RUN_INTEGRATION_TESTS` defaulting to `true`.
-2. **Add a `when` block to the existing `Deploy` stage** that combines `branch 'main'` with `expression { params.DEPLOY_ENV == 'production' }`. Wrap them in `allOf { ... }` so both must hold.
-3. **Leave the `Build` stage and `Deploy` stage `steps` block** untouched.
+The current workflow deploys every build. User intent, branch identity, and change-request context are not separate gates.
 
-The grader checks the parameter shape and the `when` block structure.
+## Your task
+
+Declare DEPLOY as a Boolean defaulting to false and TARGET_ENV defaulting to staging. Validate and build every case. Transfer the built application to a trusted release stage only for main, outside a change request, when DEPLOY is true. Preserve the read-only application and scenario files.
+
+## Success criteria
+
+PR, feature, and main-without-intent cases pass validation but have no deployment. Requested main deployment promotes the built bytes to staging. A regression never deploys. Run every supplied case, inspect the evidence, then select Check Run.
+
+:::expand[Simulation format]{kind="note"}
+This is a bounded Jenkins simulation, not a running controller or general Groovy interpreter. Cases reset independently. Unsupported syntax fails explicitly. Declarative stages, agent labels joined by && or ||, explicit-agent parallel branches, Boolean parameter gates, timeout and post behavior are supported. Workspace finalization with agent none belongs in stage post.
+
+The command catalog is npm ci, npm run lint, npm test, npm run build, ./scripts/package.sh, and ./scripts/deploy.sh staging|production. Commands consume fixed fixtures, never execute. Generated paths are dist/app.json, dist/image.json and reports/unit.xml. stash/unstash, junit, archiveArtifacts, deleteDir and cleanWs use these simulated workspaces. Agent settings are an editable lab inventory snapshot, not a JCasC schema.
+:::

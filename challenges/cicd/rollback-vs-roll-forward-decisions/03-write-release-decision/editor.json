@@ -1,51 +1,285 @@
 {
   "language": "yaml",
-  "filename": "release-decision.yml",
+  "filename": "deployment.yaml",
+  "activeFile": "deployment.yaml",
   "completionProfile": "yaml",
-  "initialValue": "release: rel-2026-04-30-184\nservice: devpolaris-orders-api\ntimeline:\n  - 19:05 canary moved to ten percent\n  - 19:11 canary 5xx rate reached 6.8 percent\n\ndecision:\n  type: unknown\n  reason: needs follow-up\n  evidence: []\n  rejected_options: []\n",
-  "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
-      {
-        "path": ["decision", "type"],
-        "type": "string",
-        "equals": "traffic revert",
-        "label": "decision type is traffic revert"
+  "files": [
+    {
+      "filename": "deployment.yaml",
+      "initialValue": "version: 1\nsteps:\n  - inspect: {}\n  - mitigate:\n      action: \"zero-traffic\"\n  - recover:\n      release: \"blue\"\n      inspectCompatibility: true\n      timeout: 60\n"
+    },
+    {
+      "filename": "scenario.json",
+      "initialValue": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"green\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"contracted\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"contracted\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": false\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"contracted\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"startup\": 20,\n  \"cases\": [\n    {\n      \"id\": \"fixed\",\n      \"title\": \"Compatible hotfix\",\n      \"description\": \"Hotfix understands contracted state and passes health.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"bad-hotfix\",\n      \"title\": \"Hotfix health failure\",\n      \"description\": \"The compatible hotfix fails its application check.\",\n      \"changes\": {\n        \"releases\": {\n          \"blue\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n            \"source\": \"commit-41\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"green\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"contracted\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": false\n          },\n          \"hotfix\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"contracted\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": false\n          },\n          \"rebuilt\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          }\n        }\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "deployment.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Not used by deployment lab."
       },
-      {
-        "path": ["decision", "reason"],
-        "type": "string",
-        "contains": "previous task set healthy",
-        "label": "reason explains why traffic revert fit"
+      "test": {
+        "passed": true,
+        "message": "Not used by deployment lab."
       },
-      {
-        "path": ["decision", "evidence"],
-        "type": "array",
-        "includes": "canary missing DISCOUNT_RULES_URL",
-        "label": "evidence includes missing DISCOUNT_RULES_URL"
-      },
-      {
-        "path": ["decision", "evidence"],
-        "type": "array",
-        "includes": "stable task set orders-api:41 stayed healthy",
-        "label": "evidence includes healthy stable task set"
-      },
-      {
-        "path": ["decision", "rejected_options"],
-        "type": "array",
-        "containsObject": {
-          "option": "patch_forward",
-          "reason": "not needed because artifact code was not the first cause"
+      "build": {
+        "passed": true,
+        "message": "Artifacts are prebuilt."
+      }
+    },
+    "deployment": {
+      "kind": "recovery",
+      "releases": {
+        "blue": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+          "source": "commit-41",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
         },
-        "label": "patch forward rejection is recorded"
+        "green": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+          "source": "commit-42",
+          "schemas": [
+            "contracted"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": false
+        },
+        "hotfix": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+          "source": "commit-42",
+          "schemas": [
+            "contracted"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "rebuilt": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        }
+      },
+      "initial": "green",
+      "candidate": "green",
+      "previous": "blue",
+      "schema": "contracted",
+      "message": "v1",
+      "session": "shared-v1",
+      "replicas": 4,
+      "minimumHealthy": 3,
+      "headroom": 1,
+      "startup": 20,
+      "processAfter": 2,
+      "drainSeconds": 10,
+      "baselineHealthy": true,
+      "lockAvailable": true,
+      "config": {
+        "DATABASE": "orders-db",
+        "SESSION_STORE": "shared",
+        "CACHE_PREFIX": "orders"
+      },
+      "secretRefs": [
+        "secret/orders-db"
+      ],
+      "queueShared": false,
+      "rollbackWindow": 120,
+      "windows": [],
+      "stickyRequired": false,
+      "maxInitialWeight": 5,
+      "maxWeightStep": 50,
+      "maxErrorRate": 2,
+      "maxErrorIncrease": 0.5,
+      "maxLatency": 300,
+      "maxConversionDrop": 10,
+      "minimumRequests": 100,
+      "minimumSeconds": 300,
+      "approvedSource": "commit-42",
+      "builder": "ci-builder",
+      "approval": {
+        "release": "green",
+        "actor": "release-owner",
+        "approved": true,
+        "environment": "production"
+      },
+      "parity": {
+        "database": "postgres-16",
+        "protocol": "https",
+        "schema": "expanded"
+      },
+      "completed": [],
+      "irreversibleAuthorized": true,
+      "postflightHealthy": true,
+      "afterContractHealthy": true
+    },
+    "cases": [
+      {
+        "id": "fixed",
+        "title": "Compatible hotfix",
+        "description": "Hotfix understands contracted state and passes health.",
+        "deployment": {}
       },
       {
-        "path": ["decision", "owner"],
-        "type": "string",
-        "equals": "Maya",
-        "label": "decision owner is recorded"
+        "id": "bad-hotfix",
+        "title": "Hotfix health failure",
+        "description": "The compatible hotfix fails its application check.",
+        "deployment": {
+          "releases": {
+            "blue": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+              "source": "commit-41",
+              "schemas": [
+                "expanded"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": true
+            },
+            "green": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+              "source": "commit-42",
+              "schemas": [
+                "contracted"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": false
+            },
+            "hotfix": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+              "source": "commit-42",
+              "schemas": [
+                "contracted"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": false
+            },
+            "rebuilt": {
+              "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+              "source": "commit-42",
+              "schemas": [
+                "expanded"
+              ],
+              "messages": [
+                "v1",
+                "v2"
+              ],
+              "sessions": [
+                "shared-v1"
+              ],
+              "healthy": true
+            }
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "scenario.json": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"green\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"contracted\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"contracted\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": false\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"contracted\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"startup\": 20,\n  \"cases\": [\n    {\n      \"id\": \"fixed\",\n      \"title\": \"Compatible hotfix\",\n      \"description\": \"Hotfix understands contracted state and passes health.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"bad-hotfix\",\n      \"title\": \"Hotfix health failure\",\n      \"description\": \"The compatible hotfix fails its application check.\",\n      \"changes\": {\n        \"releases\": {\n          \"blue\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n            \"source\": \"commit-41\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          },\n          \"green\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"contracted\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": false\n          },\n          \"hotfix\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"contracted\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": false\n          },\n          \"rebuilt\": {\n            \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n            \"source\": \"commit-42\",\n            \"schemas\": [\n              \"expanded\"\n            ],\n            \"messages\": [\n              \"v1\",\n              \"v2\"\n            ],\n            \"sessions\": [\n              \"shared-v1\"\n            ],\n            \"healthy\": true\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "fixed",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "recover",
+              "subject": "hotfix",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "recovered",
+            "release": "hotfix",
+            "verified": true
+          }
+        }
+      },
+      {
+        "id": "bad-hotfix",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "deploy",
+              "subject": "boundary",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "held",
+            "release": "green"
+          }
+        }
       }
     ]
   }
 }
-

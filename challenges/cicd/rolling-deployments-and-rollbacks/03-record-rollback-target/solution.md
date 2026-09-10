@@ -1,12 +1,19 @@
+### deployment.yaml
+
 ```yaml
-rollback:
-  task_definition: orders-api:41
-  version: 1.8.3
-  image_digest: sha256:2b91fe0a7a61
-  data_compatibility: 1.8.3 can read rows written during the 1.8.4 rollout
-  verification:
-    - /version reports orders-api:41
-    - /smoke/checkout passes
+version: 1
+steps:
+  - inspect: {}
+  - rollout:
+      batch: 1
+      surge: 1
+      readiness: "application"
+      timeout: 60
+      drain: 20
+      removeTraffic: true
+      compatibility: true
+      onFailure: "rollback"
+  - verify: {}
 ```
 
-The rollback target is an immutable, known-good production state rather than a relative label. Compatibility and verification fields protect against a rollback that restores old code but cannot safely handle current data.
+Compatibility is checked before exposure. Readiness failures also enter the recovery branch; the simulator restores and health-checks the retained blue release rather than recording a textual rollback intention.

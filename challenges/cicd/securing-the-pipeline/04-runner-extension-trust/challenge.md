@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Untrusted Work Reaches a Trusted Runner"
 sectionSlug: why-are-runners-and-pipeline-extensions-trust-boundaries
 order: 4

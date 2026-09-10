@@ -1,2 +1,9 @@
-The gate belongs on the job that needs production credentials, not on a manual shell step. `concurrency` belongs at workflow level here because the whole production release path should be serialized.
+A passed smoke check does not identify a production decision owner.
 
+---
+
+Compare actor, environment and selected candidate with the approval evidence.
+
+---
+
+Do not change artifact selection to chase an approval for different bytes.

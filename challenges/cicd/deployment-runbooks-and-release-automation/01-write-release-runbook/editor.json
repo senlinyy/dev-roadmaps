@@ -1,72 +1,240 @@
 {
   "language": "yaml",
-  "filename": "runbook.yml",
+  "filename": "deployment.yaml",
+  "activeFile": "deployment.yaml",
   "completionProfile": "yaml",
-  "initialValue": "runbook:\n  service: devpolaris-orders-api\n  release_id: rel-2026-04-30-184\n  pre_checks:\n    - staging looks fine\n  owners: {}\n  stop_rules: []\n  rollback_target:\n    task_definition: previous\n",
+  "files": [
+    {
+      "filename": "deployment.yaml",
+      "initialValue": "version: 1\nsteps:\n  - inspect: {}\n  - preflight:\n      checks:\n        - \"baseline\"\n  - execute:\n      operation: \"deploy\"\n      retry: \"repeat\"\n  - execute:\n      operation: \"record\"\n      retry: \"repeat\"\n  - postflight:\n      onFailure: \"ignore\"\n"
+    },
+    {
+      "filename": "scenario.json",
+      "initialValue": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"baselineHealthy\": true,\n  \"lockAvailable\": true,\n  \"headroom\": 1,\n  \"approval\": {\n    \"release\": \"green\",\n    \"actor\": \"release-owner\",\n    \"approved\": true,\n    \"environment\": \"production\"\n  },\n  \"completed\": [],\n  \"irreversibleAuthorized\": true,\n  \"postflightHealthy\": true,\n  \"afterContractHealthy\": true,\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Healthy release\",\n      \"description\": \"All preflight and postflight predicates pass.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"postflight-failure\",\n      \"title\": \"Postflight regression\",\n      \"description\": \"The deployment commits but user-facing verification fails.\",\n      \"changes\": {\n        \"postflightHealthy\": false\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "deployment.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "test": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "build": {
+        "passed": true,
+        "message": "Artifacts are prebuilt."
+      }
+    },
+    "deployment": {
+      "kind": "runbook",
+      "releases": {
+        "blue": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+          "source": "commit-41",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "green": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "hotfix": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "rebuilt": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        }
+      },
+      "initial": "blue",
+      "candidate": "green",
+      "previous": "blue",
+      "schema": "expanded",
+      "message": "v1",
+      "session": "shared-v1",
+      "replicas": 4,
+      "minimumHealthy": 3,
+      "headroom": 1,
+      "startup": 20,
+      "processAfter": 2,
+      "drainSeconds": 10,
+      "baselineHealthy": true,
+      "lockAvailable": true,
+      "config": {
+        "DATABASE": "orders-db",
+        "SESSION_STORE": "shared",
+        "CACHE_PREFIX": "orders"
+      },
+      "secretRefs": [
+        "secret/orders-db"
+      ],
+      "queueShared": false,
+      "rollbackWindow": 120,
+      "windows": [],
+      "stickyRequired": false,
+      "maxInitialWeight": 5,
+      "maxWeightStep": 50,
+      "maxErrorRate": 2,
+      "maxErrorIncrease": 0.5,
+      "maxLatency": 300,
+      "maxConversionDrop": 10,
+      "minimumRequests": 100,
+      "minimumSeconds": 300,
+      "approvedSource": "commit-42",
+      "builder": "ci-builder",
+      "approval": {
+        "release": "green",
+        "actor": "release-owner",
+        "approved": true,
+        "environment": "production"
+      },
+      "parity": {
+        "database": "postgres-16",
+        "protocol": "https",
+        "schema": "expanded"
+      },
+      "completed": [],
+      "irreversibleAuthorized": true,
+      "postflightHealthy": true,
+      "afterContractHealthy": true
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "title": "Healthy release",
+        "description": "All preflight and postflight predicates pass.",
+        "deployment": {}
+      },
+      {
+        "id": "postflight-failure",
+        "title": "Postflight regression",
+        "description": "The deployment commits but user-facing verification fails.",
+        "deployment": {
+          "postflightHealthy": false
+        }
+      }
+    ]
+  },
   "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "scenario.json": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"baselineHealthy\": true,\n  \"lockAvailable\": true,\n  \"headroom\": 1,\n  \"approval\": {\n    \"release\": \"green\",\n    \"actor\": \"release-owner\",\n    \"approved\": true,\n    \"environment\": \"production\"\n  },\n  \"completed\": [],\n  \"irreversibleAuthorized\": true,\n  \"postflightHealthy\": true,\n  \"afterContractHealthy\": true,\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Healthy release\",\n      \"description\": \"All preflight and postflight predicates pass.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"postflight-failure\",\n      \"title\": \"Postflight regression\",\n      \"description\": \"The deployment commits but user-facing verification fails.\",\n      \"changes\": {\n        \"postflightHealthy\": false\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
       {
-        "path": ["runbook", "pre_checks"],
-        "type": "array",
-        "includes": "artifact digest exists",
-        "label": "pre-checks include artifact digest"
+        "id": "healthy",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "verify",
+              "subject": "postflight",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "deploy",
+              "subject": "record",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "deployed",
+            "release": "green",
+            "verified": true,
+            "effects": {
+              "migrate-expand": 1,
+              "deploy": 1,
+              "record": 1
+            }
+          }
+        }
       },
       {
-        "path": ["runbook", "pre_checks"],
-        "type": "array",
-        "includes": "staging runs same digest",
-        "label": "pre-checks include staging digest match"
-      },
-      {
-        "path": ["runbook", "pre_checks"],
-        "type": "array",
-        "includes": "production is healthy",
-        "label": "pre-checks include production health"
-      },
-      {
-        "path": ["runbook", "pre_checks"],
-        "type": "array",
-        "includes": "required env vars exist",
-        "label": "pre-checks include required env vars"
-      },
-      {
-        "path": ["runbook", "owners", "release_lead"],
-        "type": "string",
-        "equals": "Maya",
-        "label": "release lead is named"
-      },
-      {
-        "path": ["runbook", "owners", "app_engineer"],
-        "type": "string",
-        "equals": "Theo",
-        "label": "app engineer is named"
-      },
-      {
-        "path": ["runbook", "owners", "platform_engineer"],
-        "type": "string",
-        "equals": "Iris",
-        "label": "platform engineer is named"
-      },
-      {
-        "path": ["runbook", "stop_rules"],
-        "type": "array",
-        "minItems": 4,
-        "label": "runbook has at least four stop rules"
-      },
-      {
-        "path": ["runbook", "rollback_target", "task_definition"],
-        "type": "string",
-        "equals": "orders-api:41",
-        "label": "rollback target task definition is named"
-      },
-      {
-        "path": ["runbook", "rollback_target", "image_digest"],
-        "type": "string",
-        "equals": "sha256:6447f5a96a80a87f19f6a6549e6dc03f63a2b8124c9d1c2f4a71f5b95ab9a621",
-        "label": "rollback target image digest is named"
+        "id": "postflight-failure",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "recover",
+              "subject": "blue",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "recovered",
+            "release": "blue",
+            "verified": true,
+            "effects": {
+              "migrate-expand": 1,
+              "deploy": 1
+            }
+          }
+        }
       }
     ]
   }
 }
-

@@ -1,2 +1,9 @@
-A rollback target should be a real production state, not the words "previous version." Include the task definition, the digest, and the proof you will check after moving the service back.
+Use the release compatibility data before replacing serving replicas.
 
+---
+
+Stopping alone is not the requested outcome in the failure cases.
+
+---
+
+The rollback branch must restore a usable retained release and produce recovery verification.

@@ -1,16 +1,31 @@
 ---
-title: "Call a Reusable Security Workflow"
-sectionSlug: reusable-workflows
+retired: true
+title: "Share a Validation Job Without Losing Its Result"
+sectionSlug: how-do-reusable-workflows-pass-inputs-secrets-and-outputs
 order: 4
+revision: 3
 ---
 
-Three services copy the same security job, so the platform team has moved that policy into a reusable workflow. Complete both files so the shared workflow exposes a typed service input and the caller invokes the approved version as a job.
+## Current situation
 
-Your job:
+Services need a reusable validation job with a typed runtime input and a returned commit identity.
 
-1. **Expose a required string input** named `service-name` through `workflow_call` in the shared workflow.
-2. **Keep security permissions on the shared job** with read-only contents and write access for security events.
-3. **Call the shared workflow** from the service repository at `acme/platform-workflows/.github/workflows/service-security.yml@v1`.
-4. **Pass `checkout-api`** as the `service-name` input from the caller.
+## The issue
 
-The grader checks the interface in the reusable workflow and its use at the caller job boundary.
+The caller invokes the workflow as a step; the shared workflow lacks a usable input/output contract.
+
+## Your task
+
+Move the reusable call to job level, declare workflow_call, thread the node input into setup, and return the validated revision through step, job, and workflow outputs.
+
+Edit the workflow and `.github/workflows/shared.yml`. Preserve the read-only repository and scenario files.
+
+## Success criteria
+
+Run every supplied case: reusable checks pass; reusable checks fail. Correct failure or filtering must stop the affected downstream work, not merely make a run green. Inspect logs, artifacts, and execution evidence before Check Run.
+
+:::expand[Simulation format]{kind="note"}
+GitHub Actions syntax with bounded interpretation, not a real runner. The read-only `.lab/scenario.json` lists event data, runner inventory, action references, and check outcomes. Settings/policy JSON files are explicit lab fixtures, not workflow syntax.
+
+Only catalog actions and the shown npm/script operations are modeled; arbitrary shell commands, network access, containers, credentials, and cloud deployments do not execute. Expressions support context lookup, comparisons, Boolean operators, status functions, and exact-file hashFiles. Unknown operations fail explicitly.
+:::

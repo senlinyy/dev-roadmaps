@@ -1,31 +1,41 @@
+### Jenkinsfile
+
 ```groovy
 pipeline {
-  agent any
-
-  parameters {
-    choice(name: 'DEPLOY_ENV', choices: ['staging', 'production'], description: 'Target deployment environment')
-    booleanParam(name: 'RUN_INTEGRATION_TESTS', defaultValue: true, description: 'Run the integration suite')
+  agent none
+parameters {
+ booleanParam(name: 'DEPLOY', defaultValue: false)
+ string(name: 'TARGET_ENV', defaultValue: 'staging')
+}
+  stages {
+stage('Validate') {
+  agent { label 'linux && node' }
+  steps {
+    checkout scm
+    sh 'npm ci'
+    sh 'npm run lint'
+    sh 'npm test'
+    sh 'npm run build'
+    stash name: 'application', includes: 'dist/app.json'
   }
 
-  stages {
-    stage('Build') {
-      steps {
-        sh 'mvn -B package'
-      }
-    }
-    stage('Deploy') {
-      when {
-        allOf {
-          branch 'main'
-          expression { params.DEPLOY_ENV == 'production' }
-        }
-      }
-      steps {
-        sh './deploy.sh'
-      }
-    }
+}
+stage('Deploy') {
+  agent { label 'linux && release' }
+  steps {
+    unstash 'application'
+    sh './scripts/deploy.sh $TARGET_ENV'
+  }
+when { allOf { branch 'main'
+ not { changeRequest() }
+ expression { return params.DEPLOY } } }
+}
   }
 }
 ```
 
-- The `when { allOf { ... } }` block makes both conditions hold before the stage runs: pull requests skip Deploy, and a `staging` build on `main` also skips it. `branch` is a built-in `when` directive; `expression` lets you embed any Groovy boolean (here, the user's selected parameter).
+PR, feature, and main-without-intent cases pass validation but have no deployment. Requested main deployment promotes the built bytes to staging. A regression never deploys.
+
+The solution binds later work to the inputs and evidence it actually consumes. It preserves the negative cases instead of turning a failed check into a successful release.
+
+Reference: [Jenkins Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/).

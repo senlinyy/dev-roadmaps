@@ -1,0 +1,29 @@
+{
+  "language": "yaml",
+  "activeFile": "scripts/scan.sh",
+  "files": [
+    {
+      "filename": "scripts/scan.sh",
+      "initialValue": "#!/usr/bin/env bash\ntrivy image \"$IMAGE\" || true\n",
+      "readOnly": false
+    },
+    {
+      "filename": ".trivyignore.yaml",
+      "initialValue": "vulnerabilities:\n  - id: CVE-2024-0000\n    statement: ignored forever\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/security.txt",
+      "initialValue": "Scanner is installed on the security runner from an organization-approved pinned distribution.\nNo vulnerability exception has been approved for this release.\nThe image is already built; IMAGE must be a registry@sha256 reference.\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Blocking findings produce a failed gate.",
+      "JSON scan results and an SBOM are retained on failure.",
+      "Exceptions require an identified vulnerability, owner, reason and future expiry; none are silently preapproved."
+    ]
+  }
+}

@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Make Useful Feedback Arrive Earlier"
 sectionSlug: which-checks-should-a-ci-pipeline-run
 order: 4

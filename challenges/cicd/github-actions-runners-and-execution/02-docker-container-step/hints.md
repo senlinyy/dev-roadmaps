@@ -1,1 +1,9 @@
-A Docker-backed step still lives in the normal `steps` list, but it references a container image instead of an action repository. Keep the command small and explicit so reviewers can see what runs inside the image.
+Inspect the runner OS, job image, and service health outcome together.
+
+---
+
+Starting a database container does not establish readiness.
+
+---
+
+Use Linux, the supplied Node image, and a health-check retry window that tolerates the slow case.

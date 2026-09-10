@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Recover Without Rebuilding Yesterday"
 sectionSlug: how-should-rollback-and-recovery-be-designed
 order: 5

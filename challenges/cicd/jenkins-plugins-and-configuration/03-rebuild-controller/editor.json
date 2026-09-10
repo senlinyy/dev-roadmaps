@@ -1,0 +1,391 @@
+{
+  "language": "yaml",
+  "completionProfile": "yaml",
+  "activeFile": "maintenance.yaml",
+  "files": [
+    {
+      "filename": "maintenance.yaml",
+      "initialValue": "operations:\n  - promote\n"
+    },
+    {
+      "filename": "Dockerfile",
+      "initialValue": "FROM jenkins/jenkins:lab-core-1-jdk21\n"
+    },
+    {
+      "filename": "plugins.txt",
+      "initialValue": "git:latest\n"
+    },
+    {
+      "filename": "jenkins.yaml",
+      "initialValue": "jenkins:\n  systemMessage: Checkout controller managed by code\n  numExecutors: 2\n  mode: EXCLUSIVE\n  securityRealm:\n    local:\n      allowsSignup: false\n      users:\n        - id: jenkins-admin\n          password: '${JENKINS_ADMIN_PASSWORD}'\n  authorizationStrategy:\n    loggedInUsersCanDoAnything:\n      allowAnonymousRead: false\nunclassified:\n  location:\n    url: https://jenkins.example.com/\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {}\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"dependencies\": {}\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const total = prices => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": "smoke/Jenkinsfile",
+      "initialValue": "pipeline {\n  agent none\n\n  stages {\nstage('Agent smoke') {\n  agent { label 'linux && node' }\n  steps {\n    checkout scm\n    sh 'npm ci'\n    sh 'npm test'\n  }\n\n}\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "initialValue": "{\n  \"baseline\": {\n    \"revision\": \"checkout-43\",\n    \"branch\": \"main\",\n    \"agents\": [\n      {\n        \"name\": \"built-in\",\n        \"labels\": [\n          \"built-in\"\n        ],\n        \"tools\": [\n          \"node\",\n          \"docker\"\n        ],\n        \"online\": true,\n        \"executors\": 0,\n        \"safeExecutors\": 2,\n        \"trusted\": true,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"node-a\",\n        \"labels\": [\n          \"linux\",\n          \"node\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"node-b\",\n        \"labels\": [\n          \"linux\",\n          \"node\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"image-a\",\n        \"labels\": [\n          \"linux\",\n          \"docker\"\n        ],\n        \"tools\": [\n          \"docker\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": true\n      },\n      {\n        \"name\": \"release-a\",\n        \"labels\": [\n          \"linux\",\n          \"release\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": true,\n        \"ephemeral\": true\n      }\n    ],\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"lint fixture passed\",\n        \"duration\": 7,\n        \"tool\": \"node\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"unit fixture passed\",\n        \"duration\": 11,\n        \"tool\": \"node\"\n      },\n      \"build\": {\n        \"passed\": true,\n        \"message\": \"build fixture passed\",\n        \"duration\": 9,\n        \"tool\": \"node\"\n      }\n    },\n    \"controller\": {\n      \"images\": {\n        \"jenkins/jenkins:lab-core-1-jdk21\": {\n          \"core\": 1,\n          \"java\": 21\n        },\n        \"jenkins/jenkins:lab-core-2-jdk21\": {\n          \"core\": 2,\n          \"java\": 21\n        }\n      },\n      \"plugins\": {\n        \"configuration-as-code:lab-1\": {\n          \"core\": 1,\n          \"dependencies\": {}\n        },\n        \"git:lab-1\": {\n          \"core\": 1,\n          \"dependencies\": {\n            \"git-client\": \"lab-1\"\n          }\n        },\n        \"git-client:lab-1\": {\n          \"core\": 1,\n          \"dependencies\": {}\n        },\n        \"workflow-aggregator:lab-1\": {\n          \"core\": 1,\n          \"dependencies\": {}\n        },\n        \"configuration-as-code:lab-2\": {\n          \"core\": 2,\n          \"dependencies\": {}\n        },\n        \"git:lab-2\": {\n          \"core\": 2,\n          \"dependencies\": {\n            \"git-client\": \"lab-2\"\n          }\n        },\n        \"git-client:lab-2\": {\n          \"core\": 2,\n          \"dependencies\": {}\n        },\n        \"workflow-aggregator:lab-2\": {\n          \"core\": 2,\n          \"dependencies\": {}\n        }\n      },\n      \"secretNames\": [\n        \"JENKINS_ADMIN_PASSWORD\"\n      ],\n      \"bootHealthy\": true,\n      \"initial\": {\n        \"image\": \"jenkins/jenkins:lab-core-1-jdk21\",\n        \"plugins\": {\n          \"configuration-as-code\": \"lab-1\",\n          \"git\": \"lab-1\",\n          \"git-client\": \"lab-1\",\n          \"workflow-aggregator\": \"lab-1\"\n        },\n        \"message\": \"Manual controller\"\n      },\n      \"expectedMessage\": \"Checkout controller managed by code\",\n      \"expectedImage\": \"jenkins/jenkins:lab-core-2-jdk21\",\n      \"expectedPlugins\": {\n        \"configuration-as-code\": \"lab-2\",\n        \"git\": \"lab-2\",\n        \"git-client\": \"lab-2\",\n        \"workflow-aggregator\": \"lab-2\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Healthy checkout\",\n      \"description\": \"Healthy checkout. Inspect the stage and workspace evidence.\",\n      \"jenkins\": {}\n    },\n    {\n      \"id\": \"secret-unavailable\",\n      \"title\": \"Runtime administrator reference is missing\",\n      \"description\": \"Runtime administrator reference is missing. Inspect the stage and workspace evidence.\",\n      \"jenkins\": {\n        \"controller\": {\n          \"images\": {\n            \"jenkins/jenkins:lab-core-1-jdk21\": {\n              \"core\": 1,\n              \"java\": 21\n            },\n            \"jenkins/jenkins:lab-core-2-jdk21\": {\n              \"core\": 2,\n              \"java\": 21\n            }\n          },\n          \"plugins\": {\n            \"configuration-as-code:lab-1\": {\n              \"core\": 1,\n              \"dependencies\": {}\n            },\n            \"git:lab-1\": {\n              \"core\": 1,\n              \"dependencies\": {\n                \"git-client\": \"lab-1\"\n              }\n            },\n            \"git-client:lab-1\": {\n              \"core\": 1,\n              \"dependencies\": {}\n            },\n            \"workflow-aggregator:lab-1\": {\n              \"core\": 1,\n              \"dependencies\": {}\n            },\n            \"configuration-as-code:lab-2\": {\n              \"core\": 2,\n              \"dependencies\": {}\n            },\n            \"git:lab-2\": {\n              \"core\": 2,\n              \"dependencies\": {\n                \"git-client\": \"lab-2\"\n              }\n            },\n            \"git-client:lab-2\": {\n              \"core\": 2,\n              \"dependencies\": {}\n            },\n            \"workflow-aggregator:lab-2\": {\n              \"core\": 2,\n              \"dependencies\": {}\n            }\n          },\n          \"secretNames\": [],\n          \"bootHealthy\": true,\n          \"initial\": {\n            \"image\": \"jenkins/jenkins:lab-core-1-jdk21\",\n            \"plugins\": {\n              \"configuration-as-code\": \"lab-1\",\n              \"git\": \"lab-1\",\n              \"git-client\": \"lab-1\",\n              \"workflow-aggregator\": \"lab-1\"\n            },\n            \"message\": \"Manual controller\"\n          },\n          \"expectedMessage\": \"Checkout controller managed by code\",\n          \"expectedImage\": \"jenkins/jenkins:lab-core-2-jdk21\",\n          \"expectedPlugins\": {\n            \"configuration-as-code\": \"lab-2\",\n            \"git\": \"lab-2\",\n            \"git-client\": \"lab-2\",\n            \"workflow-aggregator\": \"lab-2\"\n          }\n        }\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "dialect": "jenkins",
+    "filename": "maintenance.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "jenkins": {
+      "revision": "checkout-43",
+      "branch": "main",
+      "agents": [
+        {
+          "name": "built-in",
+          "labels": [
+            "built-in"
+          ],
+          "tools": [
+            "node",
+            "docker"
+          ],
+          "online": true,
+          "executors": 0,
+          "safeExecutors": 2,
+          "trusted": true,
+          "ephemeral": false
+        },
+        {
+          "name": "node-a",
+          "labels": [
+            "linux",
+            "node"
+          ],
+          "tools": [
+            "node"
+          ],
+          "online": true,
+          "executors": 1,
+          "safeExecutors": 1,
+          "trusted": false,
+          "ephemeral": false
+        },
+        {
+          "name": "node-b",
+          "labels": [
+            "linux",
+            "node"
+          ],
+          "tools": [
+            "node"
+          ],
+          "online": true,
+          "executors": 1,
+          "safeExecutors": 1,
+          "trusted": false,
+          "ephemeral": false
+        },
+        {
+          "name": "image-a",
+          "labels": [
+            "linux",
+            "docker"
+          ],
+          "tools": [
+            "docker"
+          ],
+          "online": true,
+          "executors": 1,
+          "safeExecutors": 1,
+          "trusted": false,
+          "ephemeral": true
+        },
+        {
+          "name": "release-a",
+          "labels": [
+            "linux",
+            "release"
+          ],
+          "tools": [
+            "node"
+          ],
+          "online": true,
+          "executors": 1,
+          "safeExecutors": 1,
+          "trusted": true,
+          "ephemeral": true
+        }
+      ],
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "lint fixture passed",
+          "duration": 7,
+          "tool": "node"
+        },
+        "unit": {
+          "passed": true,
+          "message": "unit fixture passed",
+          "duration": 11,
+          "tool": "node"
+        },
+        "build": {
+          "passed": true,
+          "message": "build fixture passed",
+          "duration": 9,
+          "tool": "node"
+        }
+      },
+      "controller": {
+        "images": {
+          "jenkins/jenkins:lab-core-1-jdk21": {
+            "core": 1,
+            "java": 21
+          },
+          "jenkins/jenkins:lab-core-2-jdk21": {
+            "core": 2,
+            "java": 21
+          }
+        },
+        "plugins": {
+          "configuration-as-code:lab-1": {
+            "core": 1,
+            "dependencies": {}
+          },
+          "git:lab-1": {
+            "core": 1,
+            "dependencies": {
+              "git-client": "lab-1"
+            }
+          },
+          "git-client:lab-1": {
+            "core": 1,
+            "dependencies": {}
+          },
+          "workflow-aggregator:lab-1": {
+            "core": 1,
+            "dependencies": {}
+          },
+          "configuration-as-code:lab-2": {
+            "core": 2,
+            "dependencies": {}
+          },
+          "git:lab-2": {
+            "core": 2,
+            "dependencies": {
+              "git-client": "lab-2"
+            }
+          },
+          "git-client:lab-2": {
+            "core": 2,
+            "dependencies": {}
+          },
+          "workflow-aggregator:lab-2": {
+            "core": 2,
+            "dependencies": {}
+          }
+        },
+        "secretNames": [
+          "JENKINS_ADMIN_PASSWORD"
+        ],
+        "bootHealthy": true,
+        "initial": {
+          "image": "jenkins/jenkins:lab-core-1-jdk21",
+          "plugins": {
+            "configuration-as-code": "lab-1",
+            "git": "lab-1",
+            "git-client": "lab-1",
+            "workflow-aggregator": "lab-1"
+          },
+          "message": "Manual controller"
+        },
+        "expectedMessage": "Checkout controller managed by code",
+        "expectedImage": "jenkins/jenkins:lab-core-2-jdk21",
+        "expectedPlugins": {
+          "configuration-as-code": "lab-2",
+          "git": "lab-2",
+          "git-client": "lab-2",
+          "workflow-aggregator": "lab-2"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "title": "Healthy checkout",
+        "description": "Healthy checkout. Inspect the stage and workspace evidence.",
+        "jenkins": {}
+      },
+      {
+        "id": "secret-unavailable",
+        "title": "Runtime administrator reference is missing",
+        "description": "Runtime administrator reference is missing. Inspect the stage and workspace evidence.",
+        "jenkins": {
+          "controller": {
+            "images": {
+              "jenkins/jenkins:lab-core-1-jdk21": {
+                "core": 1,
+                "java": 21
+              },
+              "jenkins/jenkins:lab-core-2-jdk21": {
+                "core": 2,
+                "java": 21
+              }
+            },
+            "plugins": {
+              "configuration-as-code:lab-1": {
+                "core": 1,
+                "dependencies": {}
+              },
+              "git:lab-1": {
+                "core": 1,
+                "dependencies": {
+                  "git-client": "lab-1"
+                }
+              },
+              "git-client:lab-1": {
+                "core": 1,
+                "dependencies": {}
+              },
+              "workflow-aggregator:lab-1": {
+                "core": 1,
+                "dependencies": {}
+              },
+              "configuration-as-code:lab-2": {
+                "core": 2,
+                "dependencies": {}
+              },
+              "git:lab-2": {
+                "core": 2,
+                "dependencies": {
+                  "git-client": "lab-2"
+                }
+              },
+              "git-client:lab-2": {
+                "core": 2,
+                "dependencies": {}
+              },
+              "workflow-aggregator:lab-2": {
+                "core": 2,
+                "dependencies": {}
+              }
+            },
+            "secretNames": [],
+            "bootHealthy": true,
+            "initial": {
+              "image": "jenkins/jenkins:lab-core-1-jdk21",
+              "plugins": {
+                "configuration-as-code": "lab-1",
+                "git": "lab-1",
+                "git-client": "lab-1",
+                "workflow-aggregator": "lab-1"
+              },
+              "message": "Manual controller"
+            },
+            "expectedMessage": "Checkout controller managed by code",
+            "expectedImage": "jenkins/jenkins:lab-core-2-jdk21",
+            "expectedPlugins": {
+              "configuration-as-code": "lab-2",
+              "git": "lab-2",
+              "git-client": "lab-2",
+              "workflow-aggregator": "lab-2"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {}\n}\n",
+      "package-lock.json": "{\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"dependencies\": {}\n    }\n  }\n}\n",
+      "src/app.js": "export const total = prices => prices.reduce((sum, price) => sum + price, 0);\n",
+      "smoke/Jenkinsfile": "pipeline {\n  agent none\n\n  stages {\nstage('Agent smoke') {\n  agent { label 'linux && node' }\n  steps {\n    checkout scm\n    sh 'npm ci'\n    sh 'npm test'\n  }\n\n}\n  }\n}\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"revision\": \"checkout-43\",\n    \"branch\": \"main\",\n    \"agents\": [\n      {\n        \"name\": \"built-in\",\n        \"labels\": [\n          \"built-in\"\n        ],\n        \"tools\": [\n          \"node\",\n          \"docker\"\n        ],\n        \"online\": true,\n        \"executors\": 0,\n        \"safeExecutors\": 2,\n        \"trusted\": true,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"node-a\",\n        \"labels\": [\n          \"linux\",\n          \"node\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"node-b\",\n        \"labels\": [\n          \"linux\",\n          \"node\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"image-a\",\n        \"labels\": [\n          \"linux\",\n          \"docker\"\n        ],\n        \"tools\": [\n          \"docker\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": true\n      },\n      {\n        \"name\": \"release-a\",\n        \"labels\": [\n          \"linux\",\n          \"release\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": true,\n        \"ephemeral\": true\n      }\n    ],\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"lint fixture passed\",\n        \"duration\": 7,\n        \"tool\": \"node\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"unit fixture passed\",\n        \"duration\": 11,\n        \"tool\": \"node\"\n      },\n      \"build\": {\n        \"passed\": true,\n        \"message\": \"build fixture passed\",\n        \"duration\": 9,\n        \"tool\": \"node\"\n      }\n    },\n    \"controller\": {\n      \"images\": {\n        \"jenkins/jenkins:lab-core-1-jdk21\": {\n          \"core\": 1,\n          \"java\": 21\n        },\n        \"jenkins/jenkins:lab-core-2-jdk21\": {\n          \"core\": 2,\n          \"java\": 21\n        }\n      },\n      \"plugins\": {\n        \"configuration-as-code:lab-1\": {\n          \"core\": 1,\n          \"dependencies\": {}\n        },\n        \"git:lab-1\": {\n          \"core\": 1,\n          \"dependencies\": {\n            \"git-client\": \"lab-1\"\n          }\n        },\n        \"git-client:lab-1\": {\n          \"core\": 1,\n          \"dependencies\": {}\n        },\n        \"workflow-aggregator:lab-1\": {\n          \"core\": 1,\n          \"dependencies\": {}\n        },\n        \"configuration-as-code:lab-2\": {\n          \"core\": 2,\n          \"dependencies\": {}\n        },\n        \"git:lab-2\": {\n          \"core\": 2,\n          \"dependencies\": {\n            \"git-client\": \"lab-2\"\n          }\n        },\n        \"git-client:lab-2\": {\n          \"core\": 2,\n          \"dependencies\": {}\n        },\n        \"workflow-aggregator:lab-2\": {\n          \"core\": 2,\n          \"dependencies\": {}\n        }\n      },\n      \"secretNames\": [\n        \"JENKINS_ADMIN_PASSWORD\"\n      ],\n      \"bootHealthy\": true,\n      \"initial\": {\n        \"image\": \"jenkins/jenkins:lab-core-1-jdk21\",\n        \"plugins\": {\n          \"configuration-as-code\": \"lab-1\",\n          \"git\": \"lab-1\",\n          \"git-client\": \"lab-1\",\n          \"workflow-aggregator\": \"lab-1\"\n        },\n        \"message\": \"Manual controller\"\n      },\n      \"expectedMessage\": \"Checkout controller managed by code\",\n      \"expectedImage\": \"jenkins/jenkins:lab-core-2-jdk21\",\n      \"expectedPlugins\": {\n        \"configuration-as-code\": \"lab-2\",\n        \"git\": \"lab-2\",\n        \"git-client\": \"lab-2\",\n        \"workflow-aggregator\": \"lab-2\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Healthy checkout\",\n      \"description\": \"Healthy checkout. Inspect the stage and workspace evidence.\",\n      \"jenkins\": {}\n    },\n    {\n      \"id\": \"secret-unavailable\",\n      \"title\": \"Runtime administrator reference is missing\",\n      \"description\": \"Runtime administrator reference is missing. Inspect the stage and workspace evidence.\",\n      \"jenkins\": {\n        \"controller\": {\n          \"images\": {\n            \"jenkins/jenkins:lab-core-1-jdk21\": {\n              \"core\": 1,\n              \"java\": 21\n            },\n            \"jenkins/jenkins:lab-core-2-jdk21\": {\n              \"core\": 2,\n              \"java\": 21\n            }\n          },\n          \"plugins\": {\n            \"configuration-as-code:lab-1\": {\n              \"core\": 1,\n              \"dependencies\": {}\n            },\n            \"git:lab-1\": {\n              \"core\": 1,\n              \"dependencies\": {\n                \"git-client\": \"lab-1\"\n              }\n            },\n            \"git-client:lab-1\": {\n              \"core\": 1,\n              \"dependencies\": {}\n            },\n            \"workflow-aggregator:lab-1\": {\n              \"core\": 1,\n              \"dependencies\": {}\n            },\n            \"configuration-as-code:lab-2\": {\n              \"core\": 2,\n              \"dependencies\": {}\n            },\n            \"git:lab-2\": {\n              \"core\": 2,\n              \"dependencies\": {\n                \"git-client\": \"lab-2\"\n              }\n            },\n            \"git-client:lab-2\": {\n              \"core\": 2,\n              \"dependencies\": {}\n            },\n            \"workflow-aggregator:lab-2\": {\n              \"core\": 2,\n              \"dependencies\": {}\n            }\n          },\n          \"secretNames\": [],\n          \"bootHealthy\": true,\n          \"initial\": {\n            \"image\": \"jenkins/jenkins:lab-core-1-jdk21\",\n            \"plugins\": {\n              \"configuration-as-code\": \"lab-1\",\n              \"git\": \"lab-1\",\n              \"git-client\": \"lab-1\",\n              \"workflow-aggregator\": \"lab-1\"\n            },\n            \"message\": \"Manual controller\"\n          },\n          \"expectedMessage\": \"Checkout controller managed by code\",\n          \"expectedImage\": \"jenkins/jenkins:lab-core-2-jdk21\",\n          \"expectedPlugins\": {\n            \"configuration-as-code\": \"lab-2\",\n            \"git\": \"lab-2\",\n            \"git-client\": \"lab-2\",\n            \"workflow-aggregator\": \"lab-2\"\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "build",
+              "subject": "controller-image",
+              "outcome": "passed"
+            },
+            {
+              "action": "setup",
+              "subject": "controller-boot",
+              "outcome": "passed"
+            },
+            {
+              "action": "verify",
+              "subject": "controller-smoke",
+              "outcome": "passed"
+            },
+            {
+              "action": "deploy",
+              "subject": "controller",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "running": true,
+            "currentCandidate": true,
+            "recovered": false
+          }
+        }
+      },
+      {
+        "id": "secret-unavailable",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "setup",
+              "subject": "controller-boot",
+              "outcome": "failed"
+            }
+          ],
+          "facts": {
+            "running": false
+          },
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

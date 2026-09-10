@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Correct Tag, Untrusted Artifact"
 sectionSlug: how-do-sboms-digests-signatures-and-provenance-protect-artifacts
 order: 3

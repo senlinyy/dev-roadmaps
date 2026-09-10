@@ -1,39 +1,272 @@
 {
   "language": "groovy",
-  "filename": "Jenkinsfile",
   "completionProfile": "jenkinsfile",
-  "initialValue": "pipeline {\n  agent any\n\n  stages {\n    stage('Test') {\n      steps {\n        sh 'mvn test'\n      }\n    }\n    stage('Build Image') {\n      steps {\n        sh 'docker build -t registry.example.com/checkout-api:${BUILD_NUMBER} .'\n      }\n    }\n  }\n}\n",
+  "activeFile": "Jenkinsfile",
+  "files": [
+    {
+      "filename": "Jenkinsfile",
+      "initialValue": "pipeline {\n  agent none\n\n  stages {\nstage('Release') {\n  agent { label 'linux && node' }\n  steps {\n    checkout scm\n    sh 'npm ci'\n    sh 'npm run lint'\n    sh 'npm test'\n    sh 'npm run build'\n    sh './scripts/package.sh'\n    archiveArtifacts 'dist/image.json'\n  }\n\n}\n  }\n}\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {}\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"dependencies\": {}\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const total = prices => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "initialValue": "{\n  \"baseline\": {\n    \"revision\": \"checkout-43\",\n    \"branch\": \"main\",\n    \"agents\": [\n      {\n        \"name\": \"built-in\",\n        \"labels\": [\n          \"built-in\"\n        ],\n        \"tools\": [\n          \"node\",\n          \"docker\"\n        ],\n        \"online\": true,\n        \"executors\": 0,\n        \"safeExecutors\": 2,\n        \"trusted\": true,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"node-a\",\n        \"labels\": [\n          \"linux\",\n          \"node\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"node-b\",\n        \"labels\": [\n          \"linux\",\n          \"node\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"image-a\",\n        \"labels\": [\n          \"linux\",\n          \"docker\"\n        ],\n        \"tools\": [\n          \"docker\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": true\n      },\n      {\n        \"name\": \"release-a\",\n        \"labels\": [\n          \"linux\",\n          \"release\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": true,\n        \"ephemeral\": true\n      }\n    ],\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"lint fixture passed\",\n        \"duration\": 7,\n        \"tool\": \"node\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"unit fixture passed\",\n        \"duration\": 11,\n        \"tool\": \"node\"\n      },\n      \"build\": {\n        \"passed\": true,\n        \"message\": \"build fixture passed\",\n        \"duration\": 9,\n        \"tool\": \"node\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Healthy checkout\",\n      \"description\": \"Healthy checkout. Inspect the stage and workspace evidence.\",\n      \"jenkins\": {}\n    },\n    {\n      \"id\": \"test-failure\",\n      \"title\": \"Unit test regression\",\n      \"description\": \"Unit test regression. Inspect the stage and workspace evidence.\",\n      \"jenkins\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"lint fixture passed\",\n            \"duration\": 7,\n            \"tool\": \"node\"\n          },\n          \"unit\": {\n            \"passed\": false,\n            \"message\": \"unit regression in checkout-43\",\n            \"duration\": 11,\n            \"tool\": \"node\"\n          },\n          \"build\": {\n            \"passed\": true,\n            \"message\": \"build fixture passed\",\n            \"duration\": 9,\n            \"tool\": \"node\"\n          }\n        }\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "dialect": "jenkins",
+    "filename": "Jenkinsfile",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "jenkins": {
+      "revision": "checkout-43",
+      "branch": "main",
+      "agents": [
+        {
+          "name": "built-in",
+          "labels": [
+            "built-in"
+          ],
+          "tools": [
+            "node",
+            "docker"
+          ],
+          "online": true,
+          "executors": 0,
+          "safeExecutors": 2,
+          "trusted": true,
+          "ephemeral": false
+        },
+        {
+          "name": "node-a",
+          "labels": [
+            "linux",
+            "node"
+          ],
+          "tools": [
+            "node"
+          ],
+          "online": true,
+          "executors": 1,
+          "safeExecutors": 1,
+          "trusted": false,
+          "ephemeral": false
+        },
+        {
+          "name": "node-b",
+          "labels": [
+            "linux",
+            "node"
+          ],
+          "tools": [
+            "node"
+          ],
+          "online": true,
+          "executors": 1,
+          "safeExecutors": 1,
+          "trusted": false,
+          "ephemeral": false
+        },
+        {
+          "name": "image-a",
+          "labels": [
+            "linux",
+            "docker"
+          ],
+          "tools": [
+            "docker"
+          ],
+          "online": true,
+          "executors": 1,
+          "safeExecutors": 1,
+          "trusted": false,
+          "ephemeral": true
+        },
+        {
+          "name": "release-a",
+          "labels": [
+            "linux",
+            "release"
+          ],
+          "tools": [
+            "node"
+          ],
+          "online": true,
+          "executors": 1,
+          "safeExecutors": 1,
+          "trusted": true,
+          "ephemeral": true
+        }
+      ],
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "lint fixture passed",
+          "duration": 7,
+          "tool": "node"
+        },
+        "unit": {
+          "passed": true,
+          "message": "unit fixture passed",
+          "duration": 11,
+          "tool": "node"
+        },
+        "build": {
+          "passed": true,
+          "message": "build fixture passed",
+          "duration": 9,
+          "tool": "node"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "title": "Healthy checkout",
+        "description": "Healthy checkout. Inspect the stage and workspace evidence.",
+        "jenkins": {}
+      },
+      {
+        "id": "test-failure",
+        "title": "Unit test regression",
+        "description": "Unit test regression. Inspect the stage and workspace evidence.",
+        "jenkins": {
+          "checks": {
+            "lint": {
+              "passed": true,
+              "message": "lint fixture passed",
+              "duration": 7,
+              "tool": "node"
+            },
+            "unit": {
+              "passed": false,
+              "message": "unit regression in checkout-43",
+              "duration": 11,
+              "tool": "node"
+            },
+            "build": {
+              "passed": true,
+              "message": "build fixture passed",
+              "duration": 9,
+              "tool": "node"
+            }
+          }
+        }
+      }
+    ]
+  },
   "grader": {
-    "strategy": "groovy-structure",
-    "expected": [
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {}\n}\n",
+      "package-lock.json": "{\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"dependencies\": {}\n    }\n  }\n}\n",
+      "src/app.js": "export const total = prices => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"revision\": \"checkout-43\",\n    \"branch\": \"main\",\n    \"agents\": [\n      {\n        \"name\": \"built-in\",\n        \"labels\": [\n          \"built-in\"\n        ],\n        \"tools\": [\n          \"node\",\n          \"docker\"\n        ],\n        \"online\": true,\n        \"executors\": 0,\n        \"safeExecutors\": 2,\n        \"trusted\": true,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"node-a\",\n        \"labels\": [\n          \"linux\",\n          \"node\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"node-b\",\n        \"labels\": [\n          \"linux\",\n          \"node\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": false\n      },\n      {\n        \"name\": \"image-a\",\n        \"labels\": [\n          \"linux\",\n          \"docker\"\n        ],\n        \"tools\": [\n          \"docker\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": false,\n        \"ephemeral\": true\n      },\n      {\n        \"name\": \"release-a\",\n        \"labels\": [\n          \"linux\",\n          \"release\"\n        ],\n        \"tools\": [\n          \"node\"\n        ],\n        \"online\": true,\n        \"executors\": 1,\n        \"safeExecutors\": 1,\n        \"trusted\": true,\n        \"ephemeral\": true\n      }\n    ],\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"lint fixture passed\",\n        \"duration\": 7,\n        \"tool\": \"node\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"unit fixture passed\",\n        \"duration\": 11,\n        \"tool\": \"node\"\n      },\n      \"build\": {\n        \"passed\": true,\n        \"message\": \"build fixture passed\",\n        \"duration\": 9,\n        \"tool\": \"node\"\n      }\n    }\n  },\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"Healthy checkout\",\n      \"description\": \"Healthy checkout. Inspect the stage and workspace evidence.\",\n      \"jenkins\": {}\n    },\n    {\n      \"id\": \"test-failure\",\n      \"title\": \"Unit test regression\",\n      \"description\": \"Unit test regression. Inspect the stage and workspace evidence.\",\n      \"jenkins\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"lint fixture passed\",\n            \"duration\": 7,\n            \"tool\": \"node\"\n          },\n          \"unit\": {\n            \"passed\": false,\n            \"message\": \"unit regression in checkout-43\",\n            \"duration\": 11,\n            \"tool\": \"node\"\n          },\n          \"build\": {\n            \"passed\": true,\n            \"message\": \"build fixture passed\",\n            \"duration\": 9,\n            \"tool\": \"node\"\n          }\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
       {
-        "path": ["pipeline"],
-        "bodyMatches": "agent\\s+none",
-        "label": "pipeline delegates agent selection to stages"
+        "id": "healthy",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed"
+            },
+            {
+              "action": "build",
+              "subject": "build",
+              "outcome": "passed"
+            },
+            {
+              "action": "build",
+              "subject": "image",
+              "outcome": "passed"
+            },
+            {
+              "action": "download",
+              "subject": "application",
+              "outcome": "passed"
+            },
+            {
+              "action": "upload",
+              "subject": "dist/image.json",
+              "outcome": "passed"
+            }
+          ],
+          "facts": {
+            "controllerWork": false,
+            "buildCount": 1
+          },
+          "before": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "later": "build"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "later": "build"
+            }
+          ]
+        }
       },
       {
-        "path": ["pipeline", "stages", "stage", "agent"],
-        "pathArgs": [null, null, "Test", null],
-        "bodyContains": "linux && maven",
-        "label": "Test stage selects the Maven-capable Linux pool"
-      },
-      {
-        "path": ["pipeline", "stages", "stage", "steps"],
-        "pathArgs": [null, null, "Test", null],
-        "bodyContains": "mvn test",
-        "label": "Test stage keeps the Maven test command"
-      },
-      {
-        "path": ["pipeline", "stages", "stage", "agent"],
-        "pathArgs": [null, null, "Build Image", null],
-        "bodyContains": "linux && docker",
-        "label": "Build Image stage selects the Docker-capable Linux pool"
-      },
-      {
-        "path": ["pipeline", "stages", "stage", "steps"],
-        "pathArgs": [null, null, "Build Image", null],
-        "bodyContains": "docker build",
-        "label": "Build Image stage keeps the Docker build command"
+        "id": "test-failure",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "failed"
+            }
+          ],
+          "facts": {},
+          "absent": [
+            {
+              "action": "build"
+            },
+            {
+              "action": "deploy"
+            }
+          ]
+        }
       }
     ]
   }

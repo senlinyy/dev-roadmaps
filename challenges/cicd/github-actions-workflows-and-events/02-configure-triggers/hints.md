@@ -1,1 +1,9 @@
-Configure each event separately. The push branch filter applies to the branch being pushed; the pull request branch filter applies to the PR base branch.
+Compare the PR base branch with the push ref and changed paths.
+
+---
+
+Trigger filters decide whether a run exists; job conditions decide what that run may do.
+
+---
+
+Filter backend changes for main, then restrict packaging to trusted push events.

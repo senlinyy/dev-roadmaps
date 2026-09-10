@@ -1,1 +1,9 @@
-Scope the token at the smallest level that still lets the job do its work. This job reads repository contents and writes PR feedback; it does not need broad repository write access.
+Follow the revision from the validation step to the reporting job.
+
+---
+
+Outputs cross explicit step/job boundaries; token permissions belong to the job that uses them.
+
+---
+
+Publish github.sha, map it as a job output, and grant checks: write only to reporting.

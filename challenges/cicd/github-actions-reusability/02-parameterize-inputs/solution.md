@@ -1,17 +1,75 @@
-```yaml
-inputs:
-  node-version:
-    description: "Node.js version to install"
-    required: false
-    default: '22'
+### .github/workflows/ci.yml
 
-runs:
-  using: "composite"
-  steps:
-    - name: Setup Node
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ inputs.node-version }}
+```yaml
+"name": "Checkout delivery"
+"on":
+  "workflow_dispatch":
+    "inputs":
+      "node":
+        "type": "choice"
+        "required": true
+        "options":
+          - "22"
+          - "24"
+"permissions":
+  "contents": "read"
+"jobs":
+  "validate":
+    "runs-on": "ubuntu-latest"
+    "steps":
+      -
+        "uses": "actions/checkout@v6"
+        "with":
+          "persist-credentials": false
+      -
+        "id": "validation"
+        "uses": "./.github/actions/validate"
+        "with":
+          "node": "${{ inputs.node }}"
+          "directory": "backend"
+      -
+        "run": "echo \"validated=${{ steps.validation.outputs.revision }}\" >> \"$GITHUB_OUTPUT\""
 ```
 
-- By declaring `node-version` as an input with a default of `22`, existing workflows do not break. New callers can override it with `with: { node-version: '18' }`. The `${{ inputs.node-version }}` expression resolves at runtime to the caller's value.
+### .github/actions/validate/action.yml
+
+```yaml
+"name": "Checkout validation"
+"description": "Validate checkout on the caller worker"
+"inputs":
+  "node":
+    "description": "Node version"
+    "required": true
+  "directory":
+    "description": "Project directory"
+    "required": true
+"outputs":
+  "revision":
+    "description": "Validated source"
+    "value": "${{ steps.identity.outputs.revision }}"
+"runs":
+  "using": "composite"
+  "steps":
+    -
+      "uses": "actions/setup-node@v7"
+      "with":
+        "node-version": "${{ inputs.node }}"
+    -
+      "run": "npm ci"
+      "shell": "bash"
+      "working-directory": "${{ inputs.directory }}"
+    -
+      "run": "npm run lint"
+      "shell": "bash"
+      "working-directory": "${{ inputs.directory }}"
+    -
+      "run": "npm test"
+      "shell": "bash"
+      "working-directory": "${{ inputs.directory }}"
+    -
+      "id": "identity"
+      "shell": "bash"
+      "run": "echo \"revision=${{ github.sha }}\" >> \"$GITHUB_OUTPUT\""
+```
+
+Action discovery uses the repository action path. Application commands use the caller-supplied project directory, so runtime and path choices no longer rely on hidden constants.

@@ -1,0 +1,490 @@
+{
+  "language": "yaml",
+  "completionProfile": "github-actions",
+  "activeFile": ".github/workflows/ci.yml",
+  "files": [
+    {
+      "filename": ".github/workflows/ci.yml",
+      "initialValue": "\"name\": \"Checkout delivery\"\n\"on\":\n  \"pull_request_target\":\n    \"branches\":\n      - \"main\"\n  \"push\":\n    \"branches\":\n      - \"main\"\n\"permissions\": \"write-all\"\n\"jobs\":\n  \"validate\":\n    \"runs-on\": \"ubuntu-latest\"\n    \"steps\":\n      -\n        \"uses\": \"actions/checkout@v6\"\n        \"with\":\n          \"ref\": \"${{ github.event.pull_request.head.sha }}\"\n      -\n        \"uses\": \"actions/setup-node@v7\"\n        \"with\":\n          \"node-version\": 24\n      -\n        \"run\": \"npm ci\"\n      -\n        \"run\": \"npm run lint\"\n      -\n        \"run\": \"npm test\"\n    \"environment\": \"production\"\n  \"package\":\n    \"needs\": \"validate\"\n    \"runs-on\": \"ubuntu-latest\"\n    \"steps\":\n      -\n        \"uses\": \"actions/checkout@v6\"\n        \"with\":\n          \"persist-credentials\": false\n      -\n        \"uses\": \"actions/setup-node@v7\"\n        \"with\":\n          \"node-version\": 24\n      -\n        \"run\": \"npm ci\"\n      -\n        \"run\": \"npm run build\"\n      -\n        \"uses\": \"actions/upload-artifact@v4\"\n        \"with\":\n          \"name\": \"app\"\n          \"path\": \"dist\"\n          \"if-no-files-found\": \"error\"\n  \"release\":\n    \"runs-on\": \"ubuntu-latest\"\n    \"steps\":\n      -\n        \"uses\": \"actions/download-artifact@v4\"\n        \"with\":\n          \"name\": \"app\"\n          \"path\": \"package\"\n      -\n        \"uses\": \"aws-actions/configure-aws-credentials@v5\"\n        \"with\":\n          \"role-to-assume\": \"arn:aws:iam::123456789012:role/checkout-production\"\n          \"aws-region\": \"us-east-1\"\n      -\n        \"run\": \"bash package/deploy.sh\"\n    \"environment\": \"production\"\n    \"permissions\": \"write-all\"\n    \"env\":\n      \"AWS_ACCESS_KEY_ID\": \"dummy\"\n"
+    },
+    {
+      "filename": "cloud-trust.json",
+      "initialValue": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Effect\": \"Allow\",\n      \"Principal\": {\n        \"Federated\": \"arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com\"\n      },\n      \"Action\": \"sts:AssumeRoleWithWebIdentity\",\n      \"Condition\": {\n        \"StringLike\": {\n          \"token.actions.githubusercontent.com:sub\": \"repo:*\",\n          \"token.actions.githubusercontent.com:aud\": \"*\"\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    {
+      "filename": "environment-settings.json",
+      "initialValue": "{\n  \"environments\": {\n    \"production\": {\n      \"branches\": [\n        \"main\"\n      ],\n      \"reviewers\": [],\n      \"preventSelfReview\": false,\n      \"secrets\": [\n        \"PRODUCTION_TOKEN\"\n      ]\n    }\n  }\n}\n"
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build && cp release/deploy.sh dist/deploy.sh\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/app.js",
+      "initialValue": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".lab/scenario.json",
+      "readOnly": true,
+      "initialValue": "{\n  \"baseline\": {\n    \"event\": {\n      \"name\": \"push\",\n      \"ref\": \"refs/heads/main\",\n      \"sha\": \"commit-43\",\n      \"repository\": \"acme/checkout\",\n      \"actor\": \"developer\",\n      \"paths\": [\n        \"backend/app.js\"\n      ]\n    },\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"lint fixture passed\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"unit fixture passed\"\n      },\n      \"build\": {\n        \"passed\": true,\n        \"message\": \"build fixture passed\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"integration fixture passed\"\n      },\n      \"audit\": {\n        \"passed\": true,\n        \"message\": \"audit fixture passed\"\n      },\n      \"smoke\": {\n        \"passed\": true,\n        \"message\": \"smoke fixture passed\"\n      }\n    },\n    \"runners\": [\n      {\n        \"name\": \"hosted-linux\",\n        \"labels\": [\n          \"ubuntu-latest\"\n        ],\n        \"group\": \"hosted\",\n        \"os\": \"Linux\",\n        \"ephemeral\": true,\n        \"trusted\": false,\n        \"available\": true\n      },\n      {\n        \"name\": \"hosted-windows\",\n        \"labels\": [\n          \"windows-latest\"\n        ],\n        \"group\": \"hosted\",\n        \"os\": \"Windows\",\n        \"ephemeral\": true,\n        \"trusted\": false,\n        \"available\": true\n      },\n      {\n        \"name\": \"release-worker\",\n        \"labels\": [\n          \"self-hosted\",\n          \"linux\",\n          \"release\"\n        ],\n        \"group\": \"production\",\n        \"os\": \"Linux\",\n        \"ephemeral\": true,\n        \"trusted\": true,\n        \"available\": true\n      },\n      {\n        \"name\": \"legacy-worker\",\n        \"labels\": [\n          \"self-hosted\",\n          \"linux\"\n        ],\n        \"group\": \"legacy\",\n        \"os\": \"Linux\",\n        \"ephemeral\": false,\n        \"trusted\": false,\n        \"available\": true\n      }\n    ],\n    \"actionRefs\": {\n      \"actions/checkout@v6\": \"checkout\",\n      \"actions/setup-node@v7\": \"node\",\n      \"actions/cache@v4\": \"cache\",\n      \"actions/upload-artifact@v4\": \"upload\",\n      \"actions/download-artifact@v4\": \"download\",\n      \"aws-actions/configure-aws-credentials@v5\": \"oidc\"\n    },\n    \"role\": \"arn:aws:iam::123456789012:role/checkout-production\",\n    \"trustFile\": \"cloud-trust.json\",\n    \"settingsFile\": \"environment-settings.json\",\n    \"approved\": true,\n    \"approvalActor\": \"release-manager\"\n  },\n  \"cases\": [\n    {\n      \"id\": \"release\",\n      \"title\": \"Approved healthy main\",\n      \"description\": \"Approved healthy main. Compare the evidence with the success criteria.\",\n      \"github\": {}\n    },\n    {\n      \"id\": \"failed-tests\",\n      \"title\": \"Failed validation\",\n      \"description\": \"Failed validation. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"lint fixture passed\"\n          },\n          \"unit\": {\n            \"passed\": false,\n            \"message\": \"Checkout regression\"\n          },\n          \"build\": {\n            \"passed\": true,\n            \"message\": \"build fixture passed\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"integration fixture passed\"\n          },\n          \"audit\": {\n            \"passed\": true,\n            \"message\": \"audit fixture passed\"\n          },\n          \"smoke\": {\n            \"passed\": true,\n            \"message\": \"smoke fixture passed\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"fork\",\n      \"title\": \"Untrusted contributor\",\n      \"description\": \"Untrusted contributor. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"event\": {\n          \"name\": \"pull_request\",\n          \"ref\": \"refs/pull/9/merge\",\n          \"sha\": \"commit-43\",\n          \"repository\": \"acme/checkout\",\n          \"actor\": \"developer\",\n          \"paths\": [\n            \"backend/app.js\"\n          ],\n          \"fork\": true,\n          \"base\": \"main\"\n        }\n      }\n    },\n    {\n      \"id\": \"approval\",\n      \"title\": \"Approval absent\",\n      \"description\": \"Approval absent. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"approved\": false\n      }\n    },\n    {\n      \"id\": \"repository\",\n      \"title\": \"Wrong repository\",\n      \"description\": \"Wrong repository. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"event\": {\n          \"name\": \"push\",\n          \"ref\": \"refs/heads/main\",\n          \"sha\": \"commit-43\",\n          \"repository\": \"outsider/checkout\",\n          \"actor\": \"developer\",\n          \"paths\": [\n            \"backend/app.js\"\n          ]\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    {
+      "filename": "release/deploy.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\nprintf \"Release operation: apply the accompanying app.json to the authorized target.\\n\"\n",
+      "readOnly": true
+    },
+    {
+      "filename": "scripts/publish-status.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\nprintf \"Status operation: publish the validated revision with the job token.\\n\"\n",
+      "readOnly": true
+    },
+    {
+      "filename": "scripts/cleanup.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\nrm -rf -- dist node_modules reports\nrm -f -- .env credentials.json\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "dialect": "github-actions",
+    "filename": ".github/workflows/ci.yml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Lint"
+      },
+      "test": {
+        "passed": true,
+        "message": "Tests"
+      },
+      "build": {
+        "passed": true,
+        "message": "Build"
+      }
+    },
+    "github": {
+      "event": {
+        "name": "push",
+        "ref": "refs/heads/main",
+        "sha": "commit-43",
+        "repository": "acme/checkout",
+        "actor": "developer",
+        "paths": [
+          "backend/app.js"
+        ]
+      },
+      "checks": {
+        "lint": {
+          "passed": true,
+          "message": "lint fixture passed"
+        },
+        "unit": {
+          "passed": true,
+          "message": "unit fixture passed"
+        },
+        "build": {
+          "passed": true,
+          "message": "build fixture passed"
+        },
+        "integration": {
+          "passed": true,
+          "message": "integration fixture passed"
+        },
+        "audit": {
+          "passed": true,
+          "message": "audit fixture passed"
+        },
+        "smoke": {
+          "passed": true,
+          "message": "smoke fixture passed"
+        }
+      },
+      "runners": [
+        {
+          "name": "hosted-linux",
+          "labels": [
+            "ubuntu-latest"
+          ],
+          "group": "hosted",
+          "os": "Linux",
+          "ephemeral": true,
+          "trusted": false,
+          "available": true
+        },
+        {
+          "name": "hosted-windows",
+          "labels": [
+            "windows-latest"
+          ],
+          "group": "hosted",
+          "os": "Windows",
+          "ephemeral": true,
+          "trusted": false,
+          "available": true
+        },
+        {
+          "name": "release-worker",
+          "labels": [
+            "self-hosted",
+            "linux",
+            "release"
+          ],
+          "group": "production",
+          "os": "Linux",
+          "ephemeral": true,
+          "trusted": true,
+          "available": true
+        },
+        {
+          "name": "legacy-worker",
+          "labels": [
+            "self-hosted",
+            "linux"
+          ],
+          "group": "legacy",
+          "os": "Linux",
+          "ephemeral": false,
+          "trusted": false,
+          "available": true
+        }
+      ],
+      "actionRefs": {
+        "actions/checkout@v6": "checkout",
+        "actions/setup-node@v7": "node",
+        "actions/cache@v4": "cache",
+        "actions/upload-artifact@v4": "upload",
+        "actions/download-artifact@v4": "download",
+        "aws-actions/configure-aws-credentials@v5": "oidc"
+      },
+      "role": "arn:aws:iam::123456789012:role/checkout-production",
+      "trustFile": "cloud-trust.json",
+      "settingsFile": "environment-settings.json",
+      "approved": true,
+      "approvalActor": "release-manager"
+    },
+    "cases": [
+      {
+        "id": "release",
+        "title": "Approved healthy main",
+        "description": "Approved healthy main. Compare the evidence with the success criteria.",
+        "github": {}
+      },
+      {
+        "id": "failed-tests",
+        "title": "Failed validation",
+        "description": "Failed validation. Compare the evidence with the success criteria.",
+        "github": {
+          "checks": {
+            "lint": {
+              "passed": true,
+              "message": "lint fixture passed"
+            },
+            "unit": {
+              "passed": false,
+              "message": "Checkout regression"
+            },
+            "build": {
+              "passed": true,
+              "message": "build fixture passed"
+            },
+            "integration": {
+              "passed": true,
+              "message": "integration fixture passed"
+            },
+            "audit": {
+              "passed": true,
+              "message": "audit fixture passed"
+            },
+            "smoke": {
+              "passed": true,
+              "message": "smoke fixture passed"
+            }
+          }
+        }
+      },
+      {
+        "id": "fork",
+        "title": "Untrusted contributor",
+        "description": "Untrusted contributor. Compare the evidence with the success criteria.",
+        "github": {
+          "event": {
+            "name": "pull_request",
+            "ref": "refs/pull/9/merge",
+            "sha": "commit-43",
+            "repository": "acme/checkout",
+            "actor": "developer",
+            "paths": [
+              "backend/app.js"
+            ],
+            "fork": true,
+            "base": "main"
+          }
+        }
+      },
+      {
+        "id": "approval",
+        "title": "Approval absent",
+        "description": "Approval absent. Compare the evidence with the success criteria.",
+        "github": {
+          "approved": false
+        }
+      },
+      {
+        "id": "repository",
+        "title": "Wrong repository",
+        "description": "Wrong repository. Compare the evidence with the success criteria.",
+        "github": {
+          "event": {
+            "name": "push",
+            "ref": "refs/heads/main",
+            "sha": "commit-43",
+            "repository": "outsider/checkout",
+            "actor": "developer",
+            "paths": [
+              "backend/app.js"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "package.json": "{\n  \"name\": \"checkout-service\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"vitest run\",\n    \"build\": \"vite build && cp release/deploy.sh dist/deploy.sh\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"9.0.0\",\n    \"vitest\": \"3.0.0\",\n    \"vite\": \"6.0.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"checkout-service\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"devDependencies\": {\n        \"eslint\": \"9.0.0\",\n        \"vitest\": \"3.0.0\",\n        \"vite\": \"6.0.0\"\n      }\n    },\n    \"node_modules/eslint\": {\n      \"version\": \"9.0.0\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"3.0.0\"\n    },\n    \"node_modules/vite\": {\n      \"version\": \"6.0.0\"\n    }\n  }\n}\n",
+      "src/app.js": "export const checkoutTotal = (prices) => prices.reduce((sum, price) => sum + price, 0);\n",
+      ".lab/scenario.json": "{\n  \"baseline\": {\n    \"event\": {\n      \"name\": \"push\",\n      \"ref\": \"refs/heads/main\",\n      \"sha\": \"commit-43\",\n      \"repository\": \"acme/checkout\",\n      \"actor\": \"developer\",\n      \"paths\": [\n        \"backend/app.js\"\n      ]\n    },\n    \"checks\": {\n      \"lint\": {\n        \"passed\": true,\n        \"message\": \"lint fixture passed\"\n      },\n      \"unit\": {\n        \"passed\": true,\n        \"message\": \"unit fixture passed\"\n      },\n      \"build\": {\n        \"passed\": true,\n        \"message\": \"build fixture passed\"\n      },\n      \"integration\": {\n        \"passed\": true,\n        \"message\": \"integration fixture passed\"\n      },\n      \"audit\": {\n        \"passed\": true,\n        \"message\": \"audit fixture passed\"\n      },\n      \"smoke\": {\n        \"passed\": true,\n        \"message\": \"smoke fixture passed\"\n      }\n    },\n    \"runners\": [\n      {\n        \"name\": \"hosted-linux\",\n        \"labels\": [\n          \"ubuntu-latest\"\n        ],\n        \"group\": \"hosted\",\n        \"os\": \"Linux\",\n        \"ephemeral\": true,\n        \"trusted\": false,\n        \"available\": true\n      },\n      {\n        \"name\": \"hosted-windows\",\n        \"labels\": [\n          \"windows-latest\"\n        ],\n        \"group\": \"hosted\",\n        \"os\": \"Windows\",\n        \"ephemeral\": true,\n        \"trusted\": false,\n        \"available\": true\n      },\n      {\n        \"name\": \"release-worker\",\n        \"labels\": [\n          \"self-hosted\",\n          \"linux\",\n          \"release\"\n        ],\n        \"group\": \"production\",\n        \"os\": \"Linux\",\n        \"ephemeral\": true,\n        \"trusted\": true,\n        \"available\": true\n      },\n      {\n        \"name\": \"legacy-worker\",\n        \"labels\": [\n          \"self-hosted\",\n          \"linux\"\n        ],\n        \"group\": \"legacy\",\n        \"os\": \"Linux\",\n        \"ephemeral\": false,\n        \"trusted\": false,\n        \"available\": true\n      }\n    ],\n    \"actionRefs\": {\n      \"actions/checkout@v6\": \"checkout\",\n      \"actions/setup-node@v7\": \"node\",\n      \"actions/cache@v4\": \"cache\",\n      \"actions/upload-artifact@v4\": \"upload\",\n      \"actions/download-artifact@v4\": \"download\",\n      \"aws-actions/configure-aws-credentials@v5\": \"oidc\"\n    },\n    \"role\": \"arn:aws:iam::123456789012:role/checkout-production\",\n    \"trustFile\": \"cloud-trust.json\",\n    \"settingsFile\": \"environment-settings.json\",\n    \"approved\": true,\n    \"approvalActor\": \"release-manager\"\n  },\n  \"cases\": [\n    {\n      \"id\": \"release\",\n      \"title\": \"Approved healthy main\",\n      \"description\": \"Approved healthy main. Compare the evidence with the success criteria.\",\n      \"github\": {}\n    },\n    {\n      \"id\": \"failed-tests\",\n      \"title\": \"Failed validation\",\n      \"description\": \"Failed validation. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"checks\": {\n          \"lint\": {\n            \"passed\": true,\n            \"message\": \"lint fixture passed\"\n          },\n          \"unit\": {\n            \"passed\": false,\n            \"message\": \"Checkout regression\"\n          },\n          \"build\": {\n            \"passed\": true,\n            \"message\": \"build fixture passed\"\n          },\n          \"integration\": {\n            \"passed\": true,\n            \"message\": \"integration fixture passed\"\n          },\n          \"audit\": {\n            \"passed\": true,\n            \"message\": \"audit fixture passed\"\n          },\n          \"smoke\": {\n            \"passed\": true,\n            \"message\": \"smoke fixture passed\"\n          }\n        }\n      }\n    },\n    {\n      \"id\": \"fork\",\n      \"title\": \"Untrusted contributor\",\n      \"description\": \"Untrusted contributor. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"event\": {\n          \"name\": \"pull_request\",\n          \"ref\": \"refs/pull/9/merge\",\n          \"sha\": \"commit-43\",\n          \"repository\": \"acme/checkout\",\n          \"actor\": \"developer\",\n          \"paths\": [\n            \"backend/app.js\"\n          ],\n          \"fork\": true,\n          \"base\": \"main\"\n        }\n      }\n    },\n    {\n      \"id\": \"approval\",\n      \"title\": \"Approval absent\",\n      \"description\": \"Approval absent. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"approved\": false\n      }\n    },\n    {\n      \"id\": \"repository\",\n      \"title\": \"Wrong repository\",\n      \"description\": \"Wrong repository. Compare the evidence with the success criteria.\",\n      \"github\": {\n        \"event\": {\n          \"name\": \"push\",\n          \"ref\": \"refs/heads/main\",\n          \"sha\": \"commit-43\",\n          \"repository\": \"outsider/checkout\",\n          \"actor\": \"developer\",\n          \"paths\": [\n            \"backend/app.js\"\n          ]\n        }\n      }\n    }\n  ]\n}\n",
+      "release/deploy.sh": "#!/usr/bin/env bash\nset -euo pipefail\nprintf \"Release operation: apply the accompanying app.json to the authorized target.\\n\"\n",
+      "scripts/publish-status.sh": "#!/usr/bin/env bash\nset -euo pipefail\nprintf \"Status operation: publish the validated revision with the job token.\\n\"\n",
+      "scripts/cleanup.sh": "#!/usr/bin/env bash\nset -euo pipefail\nrm -rf -- dist node_modules reports\nrm -f -- .env credentials.json\n"
+    },
+    "cases": [
+      {
+        "id": "release",
+        "workshop": {
+          "facts": {
+            "buildCount": 1,
+            "deployed": "production",
+            "validationPrivileged": false,
+            "staticCredentials": false,
+            "trustRejectsOtherAudience": true,
+            "trustRejectsOtherRepository": true,
+            "source": "commit-43",
+            "checkedSources": [
+              "commit-43"
+            ]
+          },
+          "events": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "status": "passed",
+          "absent": [],
+          "before": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "later": "build"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "later": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "failed-tests",
+        "workshop": {
+          "facts": {
+            "buildCount": 0,
+            "source": "commit-43",
+            "checkedSources": [
+              "commit-43"
+            ]
+          },
+          "events": [
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "failed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "status": "failed",
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ],
+          "before": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "later": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "fork",
+        "workshop": {
+          "facts": {
+            "buildCount": 0,
+            "validationPrivileged": false,
+            "source": "commit-43",
+            "checkedSources": [
+              "commit-43"
+            ]
+          },
+          "events": [
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "status": "passed",
+          "absent": [
+            {
+              "action": "access"
+            },
+            {
+              "action": "deploy"
+            }
+          ],
+          "before": [
+            {
+              "action": "check",
+              "subject": "unit",
+              "later": "build"
+            },
+            {
+              "action": "check",
+              "subject": "lint",
+              "later": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "approval",
+        "workshop": {
+          "facts": {
+            "source": "commit-43",
+            "checkedSources": [
+              "commit-43"
+            ]
+          },
+          "events": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "status": "failed",
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ],
+          "before": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "later": "build"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "later": "build"
+            }
+          ]
+        }
+      },
+      {
+        "id": "repository",
+        "workshop": {
+          "facts": {
+            "source": "commit-43",
+            "checkedSources": [
+              "commit-43"
+            ]
+          },
+          "events": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "status": "failed",
+          "absent": [
+            {
+              "action": "deploy"
+            }
+          ],
+          "before": [
+            {
+              "action": "check",
+              "subject": "lint",
+              "later": "build"
+            },
+            {
+              "action": "check",
+              "subject": "unit",
+              "later": "build"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

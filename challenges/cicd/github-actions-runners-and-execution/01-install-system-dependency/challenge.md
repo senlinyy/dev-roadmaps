@@ -1,14 +1,31 @@
 ---
-title: "Install a Missing System Dependency"
-sectionSlug: installing-system-dependencies
+retired: true
+title: "Make a Clean Runner Reproducible"
+sectionSlug: how-do-checkout-and-dependency-installation-materialize-a-workspace
 order: 1
+revision: 3
 ---
 
-A Python build is failing on `ubuntu-latest` because the `psycopg2` library needs the `libpq-dev` system package before pip can compile its C extension. The build log shows `pg_config executable not found`.
+## Current situation
 
-Your task:
+A developer machine passes tests, but hosted workers start without repository files or Node setup.
 
-1. **Add a new step** before the `pip install` step that installs `libpq-dev` using the runner's package manager.
-2. **Ensure the package manager index is updated** before installation so the package can be found.
+## The issue
 
-The grader checks that your workflow contains a step with an `apt-get install` command positioned before the pip install step.
+Preparation happens in a different job and uses an unlocked install.
+
+## Your task
+
+Rebuild each job’s preparation sequence with checkout, Node 24, and locked installation. Keep packaging downstream of lint and unit checks.
+
+Edit the workflow. Preserve the read-only repository and scenario files.
+
+## Success criteria
+
+Run every supplied case: fresh worker; unit failure. Correct failure or filtering must stop the affected downstream work, not merely make a run green. Inspect logs, artifacts, and execution evidence before Check Run.
+
+:::expand[Simulation format]{kind="note"}
+GitHub Actions syntax with bounded interpretation, not a real runner. The read-only `.lab/scenario.json` lists event data, runner inventory, action references, and check outcomes. Settings/policy JSON files are explicit lab fixtures, not workflow syntax.
+
+Only catalog actions and the shown npm/script operations are modeled; arbitrary shell commands, network access, containers, credentials, and cloud deployments do not execute. Expressions support context lookup, comparisons, Boolean operators, status functions, and exact-file hashFiles. Unknown operations fail explicitly.
+:::

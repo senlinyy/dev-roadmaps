@@ -1,1 +1,9 @@
-This failure is below Python: the runner needs the PostgreSQL client development headers before `pip install` compiles the dependency. Put the operating-system package step before dependency installation and refresh the package index first.
+Inspect what exists at the start of each hosted job.
+
+---
+
+Files and installed tools from a preparation job do not automatically appear downstream.
+
+---
+
+Give each job checkout and Node setup, use npm ci, and connect checks to packaging.

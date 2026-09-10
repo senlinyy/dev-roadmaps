@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "The Workflow Can Remove Its Own Protection"
 sectionSlug: how-do-review-audit-detection-and-recovery-protect-the-chain
 order: 6

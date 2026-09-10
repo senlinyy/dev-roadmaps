@@ -1,14 +1,29 @@
 ---
-title: "Fill in the Pipeline Skeleton"
-sectionSlug: anatomy-of-a-declarative-pipeline
+retired: true
+title: "Carry the Build Across an Agent Boundary"
+sectionSlug: how-do-agents-and-filesystems-affect-stages
 order: 2
+revision: 3
 ---
 
-A new repo has a Jenkinsfile that is missing the structural blocks needed for a declarative pipeline. The build runs but Jenkins reports `WorkflowScript: 1: Missing required section "agent"`. Your job:
+## Current situation
 
-1. **Pin the build to a labeled agent** by adding `agent { label 'linux-jdk21' }` directly under `pipeline`.
-2. **Add an `environment` block** at the pipeline level that exports `MAVEN_OPTS = "-Xmx1g"`.
-3. **Add an `options` block** with `timeout(time: 30, unit: 'MINUTES')` and `disableConcurrentBuilds()` so a stuck build cannot block the queue.
-4. **Leave the existing `Verify` stage in place.** The grader checks the new blocks plus that the existing stage still runs `sh 'mvn -B verify'`.
+Validation and application compilation happen on a Node agent. A later image-packaging stage has a Docker agent with its own filesystem.
 
-The grader checks block structure. It does not care about formatting or order, but every named block must exist with the right contents.
+## The issue
+
+The later stage assumes the earlier stage's output follows it. A fresh checkout contains source, not the generated application package.
+
+## Your task
+
+Repair both stages and the transfer between them. Run lint and unit checks, build once, stash the application, then unstash and package those bytes on Docker capacity. Archive the resulting image record. Preserve the read-only application and scenario files.
+
+## Success criteria
+
+One passing application build crosses the workspace boundary through the application stash. Image packaging and archive succeed; a unit regression creates neither package. Run every supplied case, inspect the evidence, then select Check Run.
+
+:::expand[Simulation format]{kind="note"}
+This is a bounded Jenkins simulation, not a running controller or general Groovy interpreter. Cases reset independently. Unsupported syntax fails explicitly. Declarative stages, agent labels joined by && or ||, explicit-agent parallel branches, Boolean parameter gates, timeout and post behavior are supported. Workspace finalization with agent none belongs in stage post.
+
+The command catalog is npm ci, npm run lint, npm test, npm run build, ./scripts/package.sh, and ./scripts/deploy.sh staging|production. Commands consume fixed fixtures, never execute. Generated paths are dist/app.json, dist/image.json and reports/unit.xml. stash/unstash, junit, archiveArtifacts, deleteDir and cleanWs use these simulated workspaces. Agent settings are an editable lab inventory snapshot, not a JCasC schema.
+:::

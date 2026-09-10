@@ -1,0 +1,231 @@
+{
+  "language": "yaml",
+  "filename": "deployment.yaml",
+  "activeFile": "deployment.yaml",
+  "completionProfile": "yaml",
+  "files": [
+    {
+      "filename": "deployment.yaml",
+      "initialValue": "version: 1\nsteps:\n  - inspect: {}\n  - switch:\n      target: \"green\"\n  - prepare:\n      config: \"runtime.yaml\"\n      secrets: []\n      timeout: 3\n  - validate:\n      checks:\n        - \"health\"\n  - verify: {}\n  - retire: {}\n"
+    },
+    {
+      "filename": "runtime.yaml",
+      "initialValue": "DATABASE: \"preview-db\"\nSESSION_STORE: \"local\"\nCACHE_PREFIX: \"preview\"\n"
+    },
+    {
+      "filename": "scenario.json",
+      "initialValue": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"startup\": 20,\n  \"config\": {\n    \"DATABASE\": \"orders-db\",\n    \"SESSION_STORE\": \"shared\",\n    \"CACHE_PREFIX\": \"orders\"\n  },\n  \"secretRefs\": [\n    \"secret/orders-db\"\n  ],\n  \"queueShared\": false,\n  \"rollbackWindow\": 120,\n  \"cases\": [\n    {\n      \"id\": \"ordinary-window\",\n      \"title\": \"Ordinary rollback window\",\n      \"description\": \"Retain blue for at least 120 seconds after the switch.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"long-window\",\n      \"title\": \"Long rollback window\",\n      \"description\": \"Retain blue for at least 240 seconds after the switch.\",\n      \"changes\": {\n        \"rollbackWindow\": 240\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "deployment.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "test": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "build": {
+        "passed": true,
+        "message": "Artifacts are prebuilt."
+      }
+    },
+    "deployment": {
+      "kind": "blue-green",
+      "releases": {
+        "blue": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+          "source": "commit-41",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "green": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "hotfix": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "rebuilt": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        }
+      },
+      "initial": "blue",
+      "candidate": "green",
+      "previous": "blue",
+      "schema": "expanded",
+      "message": "v1",
+      "session": "shared-v1",
+      "replicas": 4,
+      "minimumHealthy": 3,
+      "headroom": 1,
+      "startup": 20,
+      "processAfter": 2,
+      "drainSeconds": 10,
+      "baselineHealthy": true,
+      "lockAvailable": true,
+      "config": {
+        "DATABASE": "orders-db",
+        "SESSION_STORE": "shared",
+        "CACHE_PREFIX": "orders"
+      },
+      "secretRefs": [
+        "secret/orders-db"
+      ],
+      "queueShared": false,
+      "rollbackWindow": 120,
+      "windows": [],
+      "stickyRequired": false,
+      "maxInitialWeight": 5,
+      "maxWeightStep": 50,
+      "maxErrorRate": 2,
+      "maxErrorIncrease": 0.5,
+      "maxLatency": 300,
+      "maxConversionDrop": 10,
+      "minimumRequests": 100,
+      "minimumSeconds": 300,
+      "approvedSource": "commit-42",
+      "builder": "ci-builder",
+      "approval": {
+        "release": "green",
+        "actor": "release-owner",
+        "approved": true,
+        "environment": "production"
+      },
+      "parity": {
+        "database": "postgres-16",
+        "protocol": "https",
+        "schema": "expanded"
+      },
+      "completed": [],
+      "irreversibleAuthorized": true,
+      "postflightHealthy": true,
+      "afterContractHealthy": true
+    },
+    "cases": [
+      {
+        "id": "ordinary-window",
+        "title": "Ordinary rollback window",
+        "description": "Retain blue for at least 120 seconds after the switch.",
+        "deployment": {}
+      },
+      {
+        "id": "long-window",
+        "title": "Long rollback window",
+        "description": "Retain blue for at least 240 seconds after the switch.",
+        "deployment": {
+          "rollbackWindow": 240
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "scenario.json": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"startup\": 20,\n  \"config\": {\n    \"DATABASE\": \"orders-db\",\n    \"SESSION_STORE\": \"shared\",\n    \"CACHE_PREFIX\": \"orders\"\n  },\n  \"secretRefs\": [\n    \"secret/orders-db\"\n  ],\n  \"queueShared\": false,\n  \"rollbackWindow\": 120,\n  \"cases\": [\n    {\n      \"id\": \"ordinary-window\",\n      \"title\": \"Ordinary rollback window\",\n      \"description\": \"Retain blue for at least 120 seconds after the switch.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"long-window\",\n      \"title\": \"Long rollback window\",\n      \"description\": \"Retain blue for at least 240 seconds after the switch.\",\n      \"changes\": {\n        \"rollbackWindow\": 240\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "ordinary-window",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "cleanup",
+              "subject": "blue",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "deployed",
+            "release": "green",
+            "verified": true,
+            "retained": false
+          }
+        }
+      },
+      {
+        "id": "long-window",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "cleanup",
+              "subject": "blue",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "deployed",
+            "release": "green",
+            "verified": true,
+            "retained": false
+          }
+        }
+      }
+    ]
+  }
+}

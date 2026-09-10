@@ -1,15 +1,31 @@
 ---
-title: "Run a Step Inside a Docker Container"
-sectionSlug: containers-and-services
+retired: true
+title: "Give Integration Tests a Real Execution Contract"
+sectionSlug: how-do-job-containers-and-service-containers-change-execution
 order: 2
+revision: 3
 ---
 
-Your security team maintains a vulnerability scanner that only runs on Alpine Linux. Instead of installing Alpine-specific tools on the Ubuntu runner, you want to execute a single step inside a Docker container.
+## Current situation
 
-Your task:
+Integration tests need a Node container and a PostgreSQL service on an eligible worker.
 
-1. **Add a step** that runs inside a Docker container image instead of directly on the runner.
-2. **Run the approved `docker://alpine:3.20` image** rather than an unpinned image.
-3. **Use `/bin/sh` as entrypoint** with args `-c "echo 'Scanning...'"` so the review shows the exact command executed in the container.
+## The issue
 
-The grader checks that one step in the scan job uses the approved image and command together.
+The workflow selects Windows and assumes an unconfigured database is already ready.
+
+## Your task
+
+Use the supplied node:24 image on Linux. Configure the postgres:17 service as postgres with pg_isready health checks; tolerate 12 seconds of startup, and never build after failed integration.
+
+Edit the workflow. Preserve the read-only repository and scenario files.
+
+## Success criteria
+
+Run every supplied case: database ready; database starts slowly; database never healthy. Correct failure or filtering must stop the affected downstream work, not merely make a run green. Inspect logs, artifacts, and execution evidence before Check Run.
+
+:::expand[Simulation format]{kind="note"}
+GitHub Actions syntax with bounded interpretation, not a real runner. The read-only `.lab/scenario.json` lists event data, runner inventory, action references, and check outcomes. Settings/policy JSON files are explicit lab fixtures, not workflow syntax.
+
+Only catalog actions and the shown npm/script operations are modeled; arbitrary shell commands, network access, containers, credentials, and cloud deployments do not execute. Expressions support context lookup, comparisons, Boolean operators, status functions, and exact-file hashFiles. Unknown operations fail explicitly.
+:::

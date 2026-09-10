@@ -1,2 +1,9 @@
-A useful runbook names the questions and owners before the graph is red. The rollback target should be the exact state to return to, not the word "previous."
+A release record should describe a verified outcome, not merely a successful command.
 
+---
+
+The compatible migration precedes application replacement.
+
+---
+
+The failure branch must restore service without writing a success record.

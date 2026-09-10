@@ -235,6 +235,8 @@ For GitHub Actions, the trust policy should check the token audience and subject
 
 Here is a simplified trust policy for a production deployment role. The account number, repository name, and role name are examples, but the condition shape is the important part.
 
+This example uses the legacy subject format of an existing repository. Repositories created after July 15, 2026, or opted in to immutable subject claims can include owner and repository IDs in `sub`. Match the repository's actual subject format instead of copying the example literally. An environment-based subject also needs GitHub deployment branch restrictions; the environment name alone does not restrict the source branch. See the [current AWS OIDC guidance](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws).
+
 ```json
 {
   "Version": "2012-10-17",
@@ -259,6 +261,8 @@ Here is a simplified trust policy for a production deployment role. The account 
 This policy trusts tokens from the GitHub OIDC provider only when the audience and subject match the expected values. The `sub` value ties the role to the `my-org/node-service` repository and the `production` environment. A different repository or environment would produce a different subject and fail this trust check.
 
 The role also needs permission policies that describe what it can do after assumption. A deployment role might update one ECS service, read one container registry path, or modify one CloudFormation stack. The trust policy controls who can assume the role. The permission policy controls what the assumed role can do.
+
+For the full ECR/ECS implementation, continue with [GitHub Actions to AWS](/roadmaps/devops#article-cicd-aws-delivery-workshop). Its authorization example separates the deployment role, task execution role and application task role, scopes `iam:PassRole`, and carries one image digest through staging and production. The editor includes complete helpers and policies; no AWS deployment is simulated or automatically certified.
 
 This difference is easy to miss. The role's **trust policy** answers “may this external identity become the role?” Its conditions might accept only `repo:my-org/node-service:environment:production`. The role's **permissions policy** answers “after assumption, which AWS operations and resources may the role use?” It might allow one `ecs:UpdateService` action against one production service.
 

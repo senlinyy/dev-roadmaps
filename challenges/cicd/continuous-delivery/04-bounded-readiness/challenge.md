@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Deployment Started, Service Never Became Ready"
 sectionSlug: how-do-health-checks-and-gradual-rollouts-limit-failure
 order: 4

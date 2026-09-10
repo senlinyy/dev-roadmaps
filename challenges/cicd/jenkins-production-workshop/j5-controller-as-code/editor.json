@@ -1,0 +1,34 @@
+{
+  "language": "groovy",
+  "activeFile": "Dockerfile",
+  "files": [
+    {
+      "filename": "Dockerfile",
+      "initialValue": "FROM jenkins/jenkins:lts\n",
+      "readOnly": false
+    },
+    {
+      "filename": "plugins.lock",
+      "initialValue": "workflow-aggregator\n",
+      "readOnly": false
+    },
+    {
+      "filename": "jenkins.yaml",
+      "initialValue": "jenkins:\n  numExecutors: 2\n  securityRealm:\n    none: {}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/bootstrap.txt",
+      "initialValue": "Provide JENKINS_ADMIN_PASSWORD, AGENT_SSH_PRIVATE_KEY and AGENT_HOST_PUBLIC_KEY from a secret manager at startup. The agent host named agent already has Java 21, Node 22, npm, git and tar, an unprivileged jenkins SSH account and the matching authorized key. Do not expose the controller publicly during bootstrap.\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Controller image and plugin inventory are explicit reviewable inputs.",
+      "Authentication is enabled; only the named administrator receives administrative access.",
+      "An independently provisioned Node 22 agent connects with host-key verification and runs the representative Jenkinsfile."
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "language": "groovy",
+  "activeFile": "compose.yaml",
+  "files": [
+    {
+      "filename": "compose.yaml",
+      "initialValue": "services:\n  jenkins:\n    image: jenkins/jenkins:lts\n    ports: ['8080:8080']\n    volumes: ['jenkins:/var/jenkins_home', '/var/run/docker.sock:/var/run/docker.sock']\nvolumes:\n  jenkins: {}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "release/Jenkinsfile",
+      "initialValue": "pipeline { agent any; stages { stage('Release') { steps { checkout scm; sh './deploy-from-artifact.sh' } } } }\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/boundary.txt",
+      "initialValue": "ci jobs are configured as multibranch and accept fork PRs. Release administrators own a separate protected release-automation repository. OCI artifacts must be verified before deployment; no CI-supplied executable files are accepted. Both controller images must be built using the authenticated JCasC baseline with distinct agent definitions and secrets.\nFor this independent snapshot, the artifact producer is the trusted GitHub Actions release workflow, and Jenkins is the release orchestrator. Supply GH_TOKEN with attestation read access, EXPECTED_REPO, IMAGE, REPOSITORY, CLUSTER, SERVICE and HEALTH_URL through protected job configuration. Authenticate to ECR before provenance verification. The trusted deployment agent has the scoped AWS workload identity.\nEXPECTED_SOURCE is the approved release source commit.\n",
+      "readOnly": true
+    },
+    {
+      "filename": "scripts/deploy.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\n: \"${CLUSTER:?}\" \"${SERVICE:?}\" \"${IMAGE:?}\" \"${REPOSITORY:?}\" \"${HEALTH_URL:?}\"\n[[ \"$IMAGE\" == \"$REPOSITORY\"@sha256:* ]]\n[[ \"${IMAGE##*@}\" =~ ^sha256:[a-f0-9]{64}$ ]]\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\naws ecs describe-services --cluster \"$CLUSTER\" --services \"$SERVICE\" > \"$work/service.json\"\njq -e '.failures == [] and (.services | length == 1)' \"$work/service.json\" >/dev/null\ncurrent=$(jq -r '.services[0].taskDefinition' \"$work/service.json\")\naws ecs describe-task-definition --task-definition \"$current\" > \"$work/current.json\"\njq --arg image \"$IMAGE\" '.taskDefinition\n  | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)\n  | if ([.containerDefinitions[] | select(.name == \"orders\")] | length) != 1 then error(\"Expected one orders container\") else . end\n  | (.containerDefinitions[] | select(.name == \"orders\") | .image) = $image' \"$work/current.json\" > \"$work/task.json\"\ncandidate=$(aws ecs register-task-definition --cli-input-json \"file://$work/task.json\" --query taskDefinition.taskDefinitionArn --output text)\naws ecs update-service --cluster \"$CLUSTER\" --service \"$SERVICE\" --task-definition \"$candidate\" >/dev/null\naws ecs wait services-stable --cluster \"$CLUSTER\" --services \"$SERVICE\"\naws ecs describe-services --cluster \"$CLUSTER\" --services \"$SERVICE\" > \"$work/after.json\"\njq -e --arg td \"$candidate\" '.services[0] | .taskDefinition == $td and .runningCount == .desiredCount and .desiredCount > 0' \"$work/after.json\" >/dev/null\ncurl --fail --silent --show-error --max-time 20 \"$HEALTH_URL/orders\" | jq -e '.orders | type == \"array\"'\njq -n --arg image \"$IMAGE\" --arg previous \"$current\" --arg deployed \"$candidate\" '{image:$image,previousTaskDefinition:$previous,taskDefinition:$deployed}' > deployment.json\n",
+      "readOnly": true
+    },
+    {
+      "filename": "scripts/verify-producer.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\n: \"${IMAGE:?}\" \"${EXPECTED_REPO:?}\" \"${GH_TOKEN:?}\" \"${EXPECTED_SOURCE:?Approved source commit}\"\n[[ \"$IMAGE\" =~ @sha256:[a-f0-9]{64}$ ]]\ngh attestation verify \"oci://$IMAGE\" --repo \"$EXPECTED_REPO\" --signer-workflow \"$EXPECTED_REPO/.github/workflows/release.yml\" --source-ref refs/heads/main --source-digest \"$EXPECTED_SOURCE\" --deny-self-hosted-runners --format json > provenance-verification.json\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Untrusted jobs cannot schedule release agents or read release credentials.",
+      "CI and release controllers do not share JENKINS_HOME or host Docker access.",
+      "The release job executes protected automation, not the contributor's Jenkinsfile or archived scripts."
+    ]
+  }
+}

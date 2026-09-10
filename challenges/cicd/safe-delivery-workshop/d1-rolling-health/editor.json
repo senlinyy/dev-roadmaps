@@ -1,0 +1,39 @@
+{
+  "language": "yaml",
+  "activeFile": "src/server.js",
+  "files": [
+    {
+      "filename": "src/server.js",
+      "initialValue": "import http from 'node:http';\nconst port = Number(process.env.PORT || 3000);\nlet ready = true;\nconst server = http.createServer((req, res) => {\n  if (req.url === '/ready') {\n    res.writeHead(ready ? 200 : 503).end(ready ? 'ready' : 'draining');\n  } else if (req.url === '/version') {\n    res.end(process.env.RELEASE_ID || 'development');\n  } else if (req.url === '/orders') {\n    res.setHeader('content-type', 'application/json');\n    res.end(JSON.stringify({orders: []}));\n  } else {\n    res.writeHead(404).end();\n  }\n});\nserver.listen(port, '0.0.0.0');\nprocess.on('SIGTERM', () => {\n  ready = false;\n  process.exit(0);\n  setTimeout(() => process.exit(1), 25000).unref();\n});\n",
+      "readOnly": false
+    },
+    {
+      "filename": "ecs/task.json",
+      "initialValue": "{\n  \"family\": \"orders\",\n  \"networkMode\": \"awsvpc\",\n  \"requiresCompatibilities\": [\n    \"FARGATE\"\n  ],\n  \"cpu\": \"256\",\n  \"memory\": \"512\",\n  \"executionRoleArn\": \"arn:aws:iam::222222222222:role/orders-execution\",\n  \"taskRoleArn\": \"arn:aws:iam::222222222222:role/orders-task\",\n  \"containerDefinitions\": [\n    {\n      \"name\": \"orders\",\n      \"image\": \"222222222222.dkr.ecr.eu-west-1.amazonaws.com/orders@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n      \"essential\": true,\n      \"portMappings\": [\n        {\n          \"containerPort\": 3000,\n          \"protocol\": \"tcp\"\n        }\n      ],\n      \"stopTimeout\": 2,\n      \"healthCheck\": {\n        \"command\": [\n          \"CMD-SHELL\",\n          \"exit 0\"\n        ],\n        \"interval\": 10,\n        \"timeout\": 5,\n        \"retries\": 3,\n        \"startPeriod\": 30\n      }\n    }\n  ]\n}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "ecs/update.json",
+      "initialValue": "{\"cluster\":\"orders\",\"service\":\"orders\",\"deploymentConfiguration\":{\"maximumPercent\":100,\"minimumHealthyPercent\":50}}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "alb/attributes.json",
+      "initialValue": "[{\"Key\":\"deregistration_delay.timeout_seconds\",\"Value\":\"0\"}]\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/requests.log",
+      "initialValue": "desiredCount=4; available healthy tasks during rollout=2\nSIGTERM -> process exits immediately\nclient: connection reset after 8 seconds of a 15-second request\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Healthy capacity stays at the desired count while replacements start.",
+      "The application stops accepting new requests and allows bounded in-flight work to finish.",
+      "ALB drain, ECS stopTimeout and application timeout are coherent; unhealthy candidates trigger rollback."
+    ]
+  }
+}

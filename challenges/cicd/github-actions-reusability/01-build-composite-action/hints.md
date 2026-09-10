@@ -1,1 +1,9 @@
-Look under the action metadata's `runs` block. A composite action has an action type that tells GitHub it is made of workflow-like steps, and command steps inside that action need an explicit shell so callers on different operating systems behave predictably.
+Trace the action input and each output mapping back to its producer.
+
+---
+
+A composite action shares the caller runner but needs an explicit public interface.
+
+---
+
+Parameterize Node, keep locked validation inside the action, and return the current SHA through its output.

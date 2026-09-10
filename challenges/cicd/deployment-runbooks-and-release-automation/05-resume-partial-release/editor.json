@@ -1,0 +1,301 @@
+{
+  "language": "yaml",
+  "filename": "deployment.yaml",
+  "activeFile": "deployment.yaml",
+  "completionProfile": "yaml",
+  "files": [
+    {
+      "filename": "deployment.yaml",
+      "initialValue": "version: 1\nsteps:\n  - inspect: {}\n  - preflight:\n      checks:\n        - \"baseline\"\n  - execute:\n      operation: \"deploy\"\n      retry: \"repeat\"\n  - execute:\n      operation: \"record\"\n      retry: \"repeat\"\n  - postflight:\n      onFailure: \"ignore\"\n"
+    },
+    {
+      "filename": "scenario.json",
+      "initialValue": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"baselineHealthy\": true,\n  \"lockAvailable\": true,\n  \"headroom\": 1,\n  \"approval\": {\n    \"release\": \"green\",\n    \"actor\": \"release-owner\",\n    \"approved\": true,\n    \"environment\": \"production\"\n  },\n  \"completed\": [],\n  \"irreversibleAuthorized\": true,\n  \"postflightHealthy\": true,\n  \"afterContractHealthy\": true,\n  \"cases\": [\n    {\n      \"id\": \"fresh\",\n      \"title\": \"Fresh execution\",\n      \"description\": \"No operations have committed yet.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"resume\",\n      \"title\": \"Resume after deployment\",\n      \"description\": \"The expand migration and deployment are already committed.\",\n      \"changes\": {\n        \"initial\": \"green\",\n        \"completed\": [\n          \"migrate-expand\",\n          \"deploy\"\n        ]\n      }\n    },\n    {\n      \"id\": \"lost-ack\",\n      \"title\": \"Lost deployment acknowledgement\",\n      \"description\": \"Deployment commits before acknowledgement is lost.\",\n      \"changes\": {\n        \"interruptAfter\": \"deploy\"\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "deployment.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "test": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "build": {
+        "passed": true,
+        "message": "Artifacts are prebuilt."
+      }
+    },
+    "deployment": {
+      "kind": "runbook",
+      "releases": {
+        "blue": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+          "source": "commit-41",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "green": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "hotfix": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "rebuilt": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        }
+      },
+      "initial": "blue",
+      "candidate": "green",
+      "previous": "blue",
+      "schema": "expanded",
+      "message": "v1",
+      "session": "shared-v1",
+      "replicas": 4,
+      "minimumHealthy": 3,
+      "headroom": 1,
+      "startup": 20,
+      "processAfter": 2,
+      "drainSeconds": 10,
+      "baselineHealthy": true,
+      "lockAvailable": true,
+      "config": {
+        "DATABASE": "orders-db",
+        "SESSION_STORE": "shared",
+        "CACHE_PREFIX": "orders"
+      },
+      "secretRefs": [
+        "secret/orders-db"
+      ],
+      "queueShared": false,
+      "rollbackWindow": 120,
+      "windows": [],
+      "stickyRequired": false,
+      "maxInitialWeight": 5,
+      "maxWeightStep": 50,
+      "maxErrorRate": 2,
+      "maxErrorIncrease": 0.5,
+      "maxLatency": 300,
+      "maxConversionDrop": 10,
+      "minimumRequests": 100,
+      "minimumSeconds": 300,
+      "approvedSource": "commit-42",
+      "builder": "ci-builder",
+      "approval": {
+        "release": "green",
+        "actor": "release-owner",
+        "approved": true,
+        "environment": "production"
+      },
+      "parity": {
+        "database": "postgres-16",
+        "protocol": "https",
+        "schema": "expanded"
+      },
+      "completed": [],
+      "irreversibleAuthorized": true,
+      "postflightHealthy": true,
+      "afterContractHealthy": true
+    },
+    "cases": [
+      {
+        "id": "fresh",
+        "title": "Fresh execution",
+        "description": "No operations have committed yet.",
+        "deployment": {}
+      },
+      {
+        "id": "resume",
+        "title": "Resume after deployment",
+        "description": "The expand migration and deployment are already committed.",
+        "deployment": {
+          "initial": "green",
+          "completed": [
+            "migrate-expand",
+            "deploy"
+          ]
+        }
+      },
+      {
+        "id": "lost-ack",
+        "title": "Lost deployment acknowledgement",
+        "description": "Deployment commits before acknowledgement is lost.",
+        "deployment": {
+          "interruptAfter": "deploy"
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "scenario.json": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"baselineHealthy\": true,\n  \"lockAvailable\": true,\n  \"headroom\": 1,\n  \"approval\": {\n    \"release\": \"green\",\n    \"actor\": \"release-owner\",\n    \"approved\": true,\n    \"environment\": \"production\"\n  },\n  \"completed\": [],\n  \"irreversibleAuthorized\": true,\n  \"postflightHealthy\": true,\n  \"afterContractHealthy\": true,\n  \"cases\": [\n    {\n      \"id\": \"fresh\",\n      \"title\": \"Fresh execution\",\n      \"description\": \"No operations have committed yet.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"resume\",\n      \"title\": \"Resume after deployment\",\n      \"description\": \"The expand migration and deployment are already committed.\",\n      \"changes\": {\n        \"initial\": \"green\",\n        \"completed\": [\n          \"migrate-expand\",\n          \"deploy\"\n        ]\n      }\n    },\n    {\n      \"id\": \"lost-ack\",\n      \"title\": \"Lost deployment acknowledgement\",\n      \"description\": \"Deployment commits before acknowledgement is lost.\",\n      \"changes\": {\n        \"interruptAfter\": \"deploy\"\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
+      {
+        "id": "fresh",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "verify",
+              "subject": "postflight",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "deploy",
+              "subject": "record",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "deployed",
+            "release": "green",
+            "verified": true,
+            "effects": {
+              "migrate-expand": 1,
+              "deploy": 1,
+              "record": 1
+            }
+          }
+        }
+      },
+      {
+        "id": "resume",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "check",
+              "subject": "checkpoint:migrate-expand",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "check",
+              "subject": "checkpoint:deploy",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "verify",
+              "subject": "postflight",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "deployed",
+            "release": "green",
+            "verified": true,
+            "effects": {
+              "migrate-expand": 1,
+              "deploy": 1,
+              "record": 1
+            }
+          }
+        }
+      },
+      {
+        "id": "lost-ack",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "verify",
+              "subject": "postflight",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "deploy",
+              "subject": "record",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "deployed",
+            "release": "green",
+            "verified": true,
+            "effects": {
+              "migrate-expand": 1,
+              "deploy": 1,
+              "record": 1
+            }
+          }
+        }
+      }
+    ]
+  }
+}

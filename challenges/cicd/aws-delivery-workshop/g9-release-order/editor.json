@@ -1,0 +1,34 @@
+{
+  "language": "yaml",
+  "activeFile": "scripts/check-current-release.sh",
+  "files": [
+    {
+      "filename": "scripts/check-current-release.sh",
+      "initialValue": "#!/usr/bin/env bash\nexit 0\n",
+      "readOnly": false
+    },
+    {
+      "filename": ".github/workflows/release.yml",
+      "initialValue": "name: Release\non:\n  push:\n    branches: [main]\npermissions:\n  contents: read\njobs:\n  build:\n    if: github.event_name == 'push' && github.ref == 'refs/heads/main'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      id-token: write\n    environment: build\n    outputs:\n      image: ${{ steps.publish.outputs.image }}\n    env:\n      REPOSITORY: ${{ vars.ECR_REPOSITORY }}\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100\n        with:\n          role-to-assume: ${{ vars.AWS_ROLE_ARN }}\n          aws-region: eu-west-1\n      - id: publish\n        shell: bash\n        run: |\n          set -euo pipefail\n          registry=\"${REPOSITORY%%/*}\"\n          aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin \"$registry\"\n          tag=\"$REPOSITORY:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\"\n          docker build -t \"$tag\" .\n          IMAGE=\"$tag\" bash scripts/smoke.sh\n          docker push \"$tag\"\n          digest=$(aws ecr describe-images --repository-name \"${REPOSITORY#*/}\" --image-ids \"imageTag=$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\" --query 'imageDetails[0].imageDigest' --output text)\n          [[ \"$digest\" =~ ^sha256:[a-f0-9]{64}$ ]]\n          image=\"$REPOSITORY@$digest\"\n          echo \"image=$image\" >> \"$GITHUB_OUTPUT\"\n          jq -n --arg image \"$image\" --arg source \"$GITHUB_SHA\" --arg run \"$GITHUB_RUN_ID\" '{image:$image,source:$source,run:$run}' > release.json\n      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: release\n          path: release.json\n          if-no-files-found: error\n  staging:\n    needs: [build]\n    runs-on: ubuntu-24.04\n    environment: staging\n    permissions:\n      contents: read\n      id-token: write\n    concurrency:\n      group: orders-staging\n      cancel-in-progress: true\n    env:\n      IMAGE: ${{ needs.build.outputs.image }}\n      REPOSITORY: ${{ vars.ECR_REPOSITORY }}\n      CLUSTER: ${{ vars.ECS_CLUSTER }}\n      SERVICE: ${{ vars.ECS_SERVICE }}\n      HEALTH_URL: ${{ vars.HEALTH_URL }}\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100\n        with:\n          role-to-assume: ${{ vars.AWS_ROLE_ARN }}\n          aws-region: eu-west-1\n      - run: bash scripts/deploy.sh\n      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: deployment-staging\n          path: deployment.json\n          if-no-files-found: error\n  production:\n    needs: [build, staging]\n    runs-on: ubuntu-24.04\n    environment: production\n    permissions:\n      contents: read\n      id-token: write\n    concurrency:\n      group: orders-production\n      cancel-in-progress: false\n    env:\n      IMAGE: ${{ needs.build.outputs.image }}\n      REPOSITORY: ${{ vars.ECR_REPOSITORY }}\n      CLUSTER: ${{ vars.ECS_CLUSTER }}\n      SERVICE: ${{ vars.ECS_SERVICE }}\n      HEALTH_URL: ${{ vars.HEALTH_URL }}\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100\n        with:\n          role-to-assume: ${{ vars.AWS_ROLE_ARN }}\n          aws-region: eu-west-1\n      - run: bash scripts/deploy.sh\n      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: deployment-production\n          path: deployment.json\n          if-no-files-found: error\n",
+      "readOnly": false
+    },
+    {
+      "filename": "scripts/deploy.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\n: \"${CLUSTER:?}\" \"${SERVICE:?}\" \"${IMAGE:?}\" \"${REPOSITORY:?}\" \"${HEALTH_URL:?}\"\n[[ \"$IMAGE\" == \"$REPOSITORY\"@sha256:* ]]\n[[ \"${IMAGE##*@}\" =~ ^sha256:[a-f0-9]{64}$ ]]\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\naws ecs describe-services --cluster \"$CLUSTER\" --services \"$SERVICE\" > \"$work/service.json\"\njq -e '.failures == [] and (.services | length == 1)' \"$work/service.json\" >/dev/null\ncurrent=$(jq -r '.services[0].taskDefinition' \"$work/service.json\")\naws ecs describe-task-definition --task-definition \"$current\" > \"$work/current.json\"\njq --arg image \"$IMAGE\" '.taskDefinition\n  | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)\n  | if ([.containerDefinitions[] | select(.name == \"orders\")] | length) != 1 then error(\"Expected one orders container\") else . end\n  | (.containerDefinitions[] | select(.name == \"orders\") | .image) = $image' \"$work/current.json\" > \"$work/task.json\"\ncandidate=$(aws ecs register-task-definition --cli-input-json \"file://$work/task.json\" --query taskDefinition.taskDefinitionArn --output text)\naws ecs update-service --cluster \"$CLUSTER\" --service \"$SERVICE\" --task-definition \"$candidate\" >/dev/null\naws ecs wait services-stable --cluster \"$CLUSTER\" --services \"$SERVICE\"\naws ecs describe-services --cluster \"$CLUSTER\" --services \"$SERVICE\" > \"$work/after.json\"\njq -e --arg td \"$candidate\" '.services[0] | .taskDefinition == $td and .runningCount == .desiredCount and .desiredCount > 0' \"$work/after.json\" >/dev/null\ncurl --fail --silent --show-error --max-time 20 \"$HEALTH_URL/orders\" | jq -e '.orders | type == \"array\"'\njq -n --arg image \"$IMAGE\" --arg previous \"$current\" --arg deployed \"$candidate\" '{image:$image,previousTaskDefinition:$previous,taskDefinition:$deployed}' > deployment.json\n",
+      "readOnly": true
+    },
+    {
+      "filename": "evidence/releases.txt",
+      "initialValue": "run 804: commit aaaa, waiting approval\nrun 805: commit bbbb, current protected main, already deployed\nOnly this workflow's production role may update the service. Rollbacks are separate operator-approved operations.\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Production concurrency is repository/service specific and cancel-in-progress is false.",
+      "An older source commit is rejected before service mutation.",
+      "The solution does not claim GitHub queues are FIFO or that a main-ref check is an atomic cloud lock."
+    ]
+  }
+}

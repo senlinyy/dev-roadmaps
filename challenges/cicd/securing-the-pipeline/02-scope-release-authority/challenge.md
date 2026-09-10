@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Every Job Can See Production Secrets"
 sectionSlug: how-should-pipelines-handle-secrets-and-credentials
 order: 2

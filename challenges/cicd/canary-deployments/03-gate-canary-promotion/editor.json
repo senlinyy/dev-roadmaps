@@ -1,49 +1,458 @@
 {
   "language": "yaml",
-  "filename": ".github/workflows/canary.yml",
-  "completionProfile": "github-actions",
-  "initialValue": "name: Canary Orders API\non:\n  workflow_dispatch:\n    inputs:\n      image_digest:\n        description: Tested image digest\n        required: true\n        type: string\n\njobs:\n  canary:\n    runs-on: ubuntu-latest\n    environment: production\n    steps:\n      - run: ./scripts/create-codedeploy-canary.sh \"${{ inputs.image_digest }}\"\n      - run: ./scripts/check-codedeploy-success.sh \"$DEPLOYMENT_ID\"\n      - run: ./scripts/watch-canary.sh \"$DEPLOYMENT_ID\" --minutes 5\n",
+  "filename": "deployment.yaml",
+  "activeFile": "deployment.yaml",
+  "completionProfile": "yaml",
+  "files": [
+    {
+      "filename": "deployment.yaml",
+      "initialValue": "version: 1\nsteps:\n  - inspect: {}\n  - canary:\n      weights:\n        - \"100\"\n      policy: \"analysis.yaml\"\n      assignment: \"random\"\n"
+    },
+    {
+      "filename": "analysis.yaml",
+      "initialValue": "minRequests: 0\nminSeconds: 0\nmaxErrorRate: 10\nmaxErrorIncrease: 10\nmaxLatency: 5000\nmaxConversionDrop: 90\nmissing: \"pass\"\n"
+    },
+    {
+      "filename": "scenario.json",
+      "initialValue": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"windows\": [\n    {\n      \"weight\": 5,\n      \"seconds\": 300,\n      \"baseline\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      },\n      \"candidate\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      }\n    },\n    {\n      \"weight\": 25,\n      \"seconds\": 300,\n      \"baseline\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      },\n      \"candidate\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      }\n    },\n    {\n      \"weight\": 50,\n      \"seconds\": 300,\n      \"baseline\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      },\n      \"candidate\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      }\n    },\n    {\n      \"weight\": 100,\n      \"seconds\": 300,\n      \"baseline\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      },\n      \"candidate\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      }\n    }\n  ],\n  \"stickyRequired\": true,\n  \"maxInitialWeight\": 5,\n  \"maxWeightStep\": 50,\n  \"minimumRequests\": 100,\n  \"minimumSeconds\": 300,\n  \"maxErrorRate\": 2,\n  \"maxErrorIncrease\": 0.5,\n  \"maxLatency\": 300,\n  \"maxConversionDrop\": 10,\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"All windows healthy\",\n      \"description\": \"Four complete passing windows.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"late-regression\",\n      \"title\": \"Regression at 50%\",\n      \"description\": \"The first two windows pass; the third reaches 600ms.\",\n      \"changes\": {\n        \"windows\": [\n          {\n            \"weight\": 5,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 25,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 50,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 600,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 100,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          }\n        ]\n      }\n    },\n    {\n      \"id\": \"lost-baseline\",\n      \"title\": \"Baseline lost at 25%\",\n      \"description\": \"The second window lacks its baseline sample.\",\n      \"changes\": {\n        \"windows\": [\n          {\n            \"weight\": 5,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 25,\n            \"seconds\": 300,\n            \"baseline\": null,\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 50,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 100,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          }\n        ]\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "deployment.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "test": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "build": {
+        "passed": true,
+        "message": "Artifacts are prebuilt."
+      }
+    },
+    "deployment": {
+      "kind": "canary",
+      "releases": {
+        "blue": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+          "source": "commit-41",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "green": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "hotfix": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "rebuilt": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        }
+      },
+      "initial": "blue",
+      "candidate": "green",
+      "previous": "blue",
+      "schema": "expanded",
+      "message": "v1",
+      "session": "shared-v1",
+      "replicas": 4,
+      "minimumHealthy": 3,
+      "headroom": 1,
+      "startup": 20,
+      "processAfter": 2,
+      "drainSeconds": 10,
+      "baselineHealthy": true,
+      "lockAvailable": true,
+      "config": {
+        "DATABASE": "orders-db",
+        "SESSION_STORE": "shared",
+        "CACHE_PREFIX": "orders"
+      },
+      "secretRefs": [
+        "secret/orders-db"
+      ],
+      "queueShared": false,
+      "rollbackWindow": 120,
+      "windows": [
+        {
+          "weight": 5,
+          "seconds": 300,
+          "baseline": {
+            "requests": 500,
+            "errorRate": 0.1,
+            "latency": 180,
+            "conversion": 10
+          },
+          "candidate": {
+            "requests": 500,
+            "errorRate": 0.1,
+            "latency": 180,
+            "conversion": 10
+          }
+        },
+        {
+          "weight": 25,
+          "seconds": 300,
+          "baseline": {
+            "requests": 500,
+            "errorRate": 0.1,
+            "latency": 180,
+            "conversion": 10
+          },
+          "candidate": {
+            "requests": 500,
+            "errorRate": 0.1,
+            "latency": 180,
+            "conversion": 10
+          }
+        },
+        {
+          "weight": 50,
+          "seconds": 300,
+          "baseline": {
+            "requests": 500,
+            "errorRate": 0.1,
+            "latency": 180,
+            "conversion": 10
+          },
+          "candidate": {
+            "requests": 500,
+            "errorRate": 0.1,
+            "latency": 180,
+            "conversion": 10
+          }
+        },
+        {
+          "weight": 100,
+          "seconds": 300,
+          "baseline": {
+            "requests": 500,
+            "errorRate": 0.1,
+            "latency": 180,
+            "conversion": 10
+          },
+          "candidate": {
+            "requests": 500,
+            "errorRate": 0.1,
+            "latency": 180,
+            "conversion": 10
+          }
+        }
+      ],
+      "stickyRequired": true,
+      "maxInitialWeight": 5,
+      "maxWeightStep": 50,
+      "maxErrorRate": 2,
+      "maxErrorIncrease": 0.5,
+      "maxLatency": 300,
+      "maxConversionDrop": 10,
+      "minimumRequests": 100,
+      "minimumSeconds": 300,
+      "approvedSource": "commit-42",
+      "builder": "ci-builder",
+      "approval": {
+        "release": "green",
+        "actor": "release-owner",
+        "approved": true,
+        "environment": "production"
+      },
+      "parity": {
+        "database": "postgres-16",
+        "protocol": "https",
+        "schema": "expanded"
+      },
+      "completed": [],
+      "irreversibleAuthorized": true,
+      "postflightHealthy": true,
+      "afterContractHealthy": true
+    },
+    "cases": [
+      {
+        "id": "healthy",
+        "title": "All windows healthy",
+        "description": "Four complete passing windows.",
+        "deployment": {}
+      },
+      {
+        "id": "late-regression",
+        "title": "Regression at 50%",
+        "description": "The first two windows pass; the third reaches 600ms.",
+        "deployment": {
+          "windows": [
+            {
+              "weight": 5,
+              "seconds": 300,
+              "baseline": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              },
+              "candidate": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              }
+            },
+            {
+              "weight": 25,
+              "seconds": 300,
+              "baseline": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              },
+              "candidate": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              }
+            },
+            {
+              "weight": 50,
+              "seconds": 300,
+              "baseline": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              },
+              "candidate": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 600,
+                "conversion": 10
+              }
+            },
+            {
+              "weight": 100,
+              "seconds": 300,
+              "baseline": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              },
+              "candidate": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "lost-baseline",
+        "title": "Baseline lost at 25%",
+        "description": "The second window lacks its baseline sample.",
+        "deployment": {
+          "windows": [
+            {
+              "weight": 5,
+              "seconds": 300,
+              "baseline": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              },
+              "candidate": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              }
+            },
+            {
+              "weight": 25,
+              "seconds": 300,
+              "baseline": null,
+              "candidate": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              }
+            },
+            {
+              "weight": 50,
+              "seconds": 300,
+              "baseline": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              },
+              "candidate": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              }
+            },
+            {
+              "weight": 100,
+              "seconds": 300,
+              "baseline": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              },
+              "candidate": {
+                "requests": 500,
+                "errorRate": 0.1,
+                "latency": 180,
+                "conversion": 10
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
   "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "scenario.json": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"windows\": [\n    {\n      \"weight\": 5,\n      \"seconds\": 300,\n      \"baseline\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      },\n      \"candidate\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      }\n    },\n    {\n      \"weight\": 25,\n      \"seconds\": 300,\n      \"baseline\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      },\n      \"candidate\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      }\n    },\n    {\n      \"weight\": 50,\n      \"seconds\": 300,\n      \"baseline\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      },\n      \"candidate\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      }\n    },\n    {\n      \"weight\": 100,\n      \"seconds\": 300,\n      \"baseline\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      },\n      \"candidate\": {\n        \"requests\": 500,\n        \"errorRate\": 0.1,\n        \"latency\": 180,\n        \"conversion\": 10\n      }\n    }\n  ],\n  \"stickyRequired\": true,\n  \"maxInitialWeight\": 5,\n  \"maxWeightStep\": 50,\n  \"minimumRequests\": 100,\n  \"minimumSeconds\": 300,\n  \"maxErrorRate\": 2,\n  \"maxErrorIncrease\": 0.5,\n  \"maxLatency\": 300,\n  \"maxConversionDrop\": 10,\n  \"cases\": [\n    {\n      \"id\": \"healthy\",\n      \"title\": \"All windows healthy\",\n      \"description\": \"Four complete passing windows.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"late-regression\",\n      \"title\": \"Regression at 50%\",\n      \"description\": \"The first two windows pass; the third reaches 600ms.\",\n      \"changes\": {\n        \"windows\": [\n          {\n            \"weight\": 5,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 25,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 50,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 600,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 100,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          }\n        ]\n      }\n    },\n    {\n      \"id\": \"lost-baseline\",\n      \"title\": \"Baseline lost at 25%\",\n      \"description\": \"The second window lacks its baseline sample.\",\n      \"changes\": {\n        \"windows\": [\n          {\n            \"weight\": 5,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 25,\n            \"seconds\": 300,\n            \"baseline\": null,\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 50,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          },\n          {\n            \"weight\": 100,\n            \"seconds\": 300,\n            \"baseline\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            },\n            \"candidate\": {\n              \"requests\": 500,\n              \"errorRate\": 0.1,\n              \"latency\": 180,\n              \"conversion\": 10\n            }\n          }\n        ]\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
       {
-        "path": ["concurrency", "group"],
-        "type": "string",
-        "equals": "orders-api-canary",
-        "label": "workflow serializes canaries for orders-api"
+        "id": "healthy",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "observe",
+              "subject": "window-4",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "deployed",
+            "release": "green",
+            "traffic": 100,
+            "verified": true
+          }
+        }
       },
       {
-        "path": ["concurrency", "cancel-in-progress"],
-        "type": "boolean",
-        "equals": false,
-        "label": "workflow does not cancel an in-flight canary"
+        "id": "late-regression",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "observe",
+              "subject": "window-3",
+              "outcome": "blocked",
+              "count": 1
+            },
+            {
+              "action": "recover",
+              "subject": "traffic",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "aborted",
+            "release": "blue",
+            "traffic": 0,
+            "verified": true
+          }
+        }
       },
       {
-        "path": ["jobs", "canary", "environment", "name"],
-        "type": "string",
-        "equals": "production",
-        "label": "canary runs under the production environment"
-      },
-      {
-        "path": ["jobs", "canary", "steps"],
-        "containsObject": {
-          "run": "./scripts/create-codedeploy-canary.sh \"${{ inputs.image_digest }}\""
-        },
-        "label": "canary job creates the deployment"
-      },
-      {
-        "path": ["jobs", "canary", "steps"],
-        "containsObject": {
-          "run": "./scripts/watch-canary.sh \"$DEPLOYMENT_ID\" --minutes 5"
-        },
-        "label": "canary job watches the canary"
-      },
-      {
-        "path": ["jobs", "canary", "steps"],
-        "containsObject": {
-          "run": "./scripts/check-codedeploy-success.sh \"$DEPLOYMENT_ID\""
-        },
-        "label": "canary job checks CodeDeploy success"
+        "id": "lost-baseline",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "observe",
+              "subject": "window-2",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "held",
+            "traffic": 25
+          }
+        }
       }
     ]
   }

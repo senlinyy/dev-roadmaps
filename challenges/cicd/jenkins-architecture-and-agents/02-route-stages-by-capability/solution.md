@@ -1,22 +1,37 @@
+### Jenkinsfile
+
 ```groovy
 pipeline {
   agent none
 
   stages {
-    stage('Test') {
-      agent { label 'linux && maven' }
-      steps {
-        sh 'mvn test'
-      }
-    }
-    stage('Build Image') {
-      agent { label 'linux && docker' }
-      steps {
-        sh 'docker build -t registry.example.com/checkout-api:${BUILD_NUMBER} .'
-      }
-    }
+stage('Validate') {
+  agent { label 'linux && node' }
+  steps {
+    checkout scm
+    sh 'npm ci'
+    sh 'npm run lint'
+    sh 'npm test'
+    sh 'npm run build'
+    stash name: 'application', includes: 'dist/app.json'
+  }
+
+}
+stage('Package') {
+  agent { label 'linux && docker' }
+  steps {
+    unstash 'application'
+    sh './scripts/package.sh'
+    archiveArtifacts artifacts: 'dist/image.json', fingerprint: true
+  }
+
+}
   }
 }
 ```
 
-Stage-level capability labels keep Docker privileges away from the Maven-only pool and let Jenkins schedule work without binding the pipeline to named machines. `agent none` prevents Jenkins from holding an unnecessary top-level executor.
+Both checks pass, one application build is transferred and packaged, and dist/image.json is archived. A unit regression blocks both builds. No workload uses the controller.
+
+The solution binds later work to the inputs and evidence it actually consumes. It preserves the negative cases instead of turning a failed check into a successful release.
+
+Reference: [Jenkins Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/).

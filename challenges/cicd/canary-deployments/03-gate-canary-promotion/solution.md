@@ -1,17 +1,30 @@
-```yaml
-concurrency:
-  group: orders-api-canary
-  cancel-in-progress: false
+### deployment.yaml
 
-jobs:
-  canary:
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-    steps:
-      - run: ./scripts/create-codedeploy-canary.sh "${{ inputs.image_digest }}"
-      - run: ./scripts/watch-canary.sh "$DEPLOYMENT_ID" --minutes 5
-      - run: ./scripts/check-codedeploy-success.sh "$DEPLOYMENT_ID"
+```yaml
+version: 1
+steps:
+  - inspect: {}
+  - canary:
+      weights:
+        - "5"
+        - "25"
+        - "50"
+        - "100"
+      policy: "analysis.yaml"
+      assignment: "sticky"
+  - verify: {}
 ```
 
-Production environment protection provides the approval boundary, while concurrency prevents overlapping canaries from corrupting the comparison window. The workflow creates the canary, observes its signals, and confirms the deployment result before treating it as successful.
+### analysis.yaml
+
+```yaml
+minRequests: 100
+minSeconds: 300
+maxErrorRate: 2
+maxErrorIncrease: 0.5
+maxLatency: 300
+maxConversionDrop: 10
+missing: "hold"
+```
+
+The policy evaluates both releases at each authored exposure, requires enough evidence, enforces technical and business budgets, and stops before a later traffic increase when a window is inconclusive or regresses.

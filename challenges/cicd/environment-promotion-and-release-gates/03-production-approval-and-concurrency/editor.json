@@ -1,42 +1,289 @@
 {
   "language": "yaml",
-  "filename": ".github/workflows/promote.yml",
-  "completionProfile": "github-actions",
-  "initialValue": "name: Promote Orders API\non:\n  workflow_dispatch:\n    inputs:\n      image_digest:\n        description: Tested image digest\n        required: true\n        type: string\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo \"Using ${{ inputs.image_digest }}\"\n\n  deploy-staging:\n    needs: build\n    runs-on: ubuntu-latest\n    environment: staging\n    steps:\n      - run: ./scripts/deploy-ecs.sh orders-api-staging \"${{ inputs.image_digest }}\"\n      - run: ./scripts/smoke.sh https://orders-api-staging.devpolaris.example\n\n  deploy-production:\n    needs: deploy-staging\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./scripts/deploy-ecs.sh orders-api-prod \"${{ inputs.image_digest }}\"\n      - run: ./scripts/smoke.sh https://orders-api.devpolaris.example",
+  "filename": "deployment.yaml",
+  "activeFile": "deployment.yaml",
+  "completionProfile": "yaml",
+  "files": [
+    {
+      "filename": "deployment.yaml",
+      "initialValue": "version: 1\nsteps:\n  - inspect: {}\n  - select:\n      release: \"green\"\n  - stage:\n      config: \"runtime.yaml\"\n      secrets: []\n      parity: \"parity.yaml\"\n  - select:\n      release: \"rebuilt\"\n  - promote: {}\n"
+    },
+    {
+      "filename": "runtime.yaml",
+      "initialValue": "DATABASE: \"build-time-db\"\nSESSION_STORE: \"local\"\nCACHE_PREFIX: \"preview\"\n"
+    },
+    {
+      "filename": "parity.yaml",
+      "initialValue": "database: \"sqlite\"\nprotocol: \"http\"\nschema: \"legacy\"\n"
+    },
+    {
+      "filename": "scenario.json",
+      "initialValue": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"config\": {\n    \"DATABASE\": \"orders-db\",\n    \"SESSION_STORE\": \"shared\",\n    \"CACHE_PREFIX\": \"orders\"\n  },\n  \"secretRefs\": [\n    \"secret/orders-db\"\n  ],\n  \"approvedSource\": \"commit-42\",\n  \"builder\": \"ci-builder\",\n  \"approval\": {\n    \"release\": \"green\",\n    \"actor\": \"release-owner\",\n    \"approved\": true,\n    \"environment\": \"production\"\n  },\n  \"parity\": {\n    \"database\": \"postgres-16\",\n    \"protocol\": \"https\",\n    \"schema\": \"expanded\"\n  },\n  \"cases\": [\n    {\n      \"id\": \"authorized\",\n      \"title\": \"Authorized green\",\n      \"description\": \"release-owner approved green for production.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"other-candidate\",\n      \"title\": \"Approval for different bytes\",\n      \"description\": \"The approval names rebuilt, not green.\",\n      \"changes\": {\n        \"approval\": {\n          \"release\": \"rebuilt\",\n          \"actor\": \"release-owner\",\n          \"approved\": true,\n          \"environment\": \"production\"\n        }\n      }\n    },\n    {\n      \"id\": \"self-approval\",\n      \"title\": \"Builder self-approval\",\n      \"description\": \"The authorizing actor is ci-builder, not the independent release owner.\",\n      \"changes\": {\n        \"approval\": {\n          \"release\": \"green\",\n          \"actor\": \"ci-builder\",\n          \"approved\": true,\n          \"environment\": \"production\"\n        }\n      }\n    }\n  ]\n}\n",
+      "readOnly": true
+    }
+  ],
+  "pipeline": {
+    "version": 2,
+    "filename": "deployment.yaml",
+    "checks": {
+      "lint": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "test": {
+        "passed": true,
+        "message": "Not used by deployment lab."
+      },
+      "build": {
+        "passed": true,
+        "message": "Artifacts are prebuilt."
+      }
+    },
+    "deployment": {
+      "kind": "promotion",
+      "releases": {
+        "blue": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"blue\",\"build\":\"build-blue\"}",
+          "source": "commit-41",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "green": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"green\",\"build\":\"build-green\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "hotfix": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"hotfix\",\"build\":\"build-hotfix\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        },
+        "rebuilt": {
+          "content": "{\"application\":\"orders-api\",\"release\":\"rebuilt\",\"build\":\"build-rebuilt\"}",
+          "source": "commit-42",
+          "schemas": [
+            "expanded"
+          ],
+          "messages": [
+            "v1",
+            "v2"
+          ],
+          "sessions": [
+            "shared-v1"
+          ],
+          "healthy": true
+        }
+      },
+      "initial": "blue",
+      "candidate": "green",
+      "previous": "blue",
+      "schema": "expanded",
+      "message": "v1",
+      "session": "shared-v1",
+      "replicas": 4,
+      "minimumHealthy": 3,
+      "headroom": 1,
+      "startup": 20,
+      "processAfter": 2,
+      "drainSeconds": 10,
+      "baselineHealthy": true,
+      "lockAvailable": true,
+      "config": {
+        "DATABASE": "orders-db",
+        "SESSION_STORE": "shared",
+        "CACHE_PREFIX": "orders"
+      },
+      "secretRefs": [
+        "secret/orders-db"
+      ],
+      "queueShared": false,
+      "rollbackWindow": 120,
+      "windows": [],
+      "stickyRequired": false,
+      "maxInitialWeight": 5,
+      "maxWeightStep": 50,
+      "maxErrorRate": 2,
+      "maxErrorIncrease": 0.5,
+      "maxLatency": 300,
+      "maxConversionDrop": 10,
+      "minimumRequests": 100,
+      "minimumSeconds": 300,
+      "approvedSource": "commit-42",
+      "builder": "ci-builder",
+      "approval": {
+        "release": "green",
+        "actor": "release-owner",
+        "approved": true,
+        "environment": "production"
+      },
+      "parity": {
+        "database": "postgres-16",
+        "protocol": "https",
+        "schema": "expanded"
+      },
+      "completed": [],
+      "irreversibleAuthorized": true,
+      "postflightHealthy": true,
+      "afterContractHealthy": true
+    },
+    "cases": [
+      {
+        "id": "authorized",
+        "title": "Authorized green",
+        "description": "release-owner approved green for production.",
+        "deployment": {}
+      },
+      {
+        "id": "other-candidate",
+        "title": "Approval for different bytes",
+        "description": "The approval names rebuilt, not green.",
+        "deployment": {
+          "approval": {
+            "release": "rebuilt",
+            "actor": "release-owner",
+            "approved": true,
+            "environment": "production"
+          }
+        }
+      },
+      {
+        "id": "self-approval",
+        "title": "Builder self-approval",
+        "description": "The authorizing actor is ci-builder, not the independent release owner.",
+        "deployment": {
+          "approval": {
+            "release": "green",
+            "actor": "ci-builder",
+            "approved": true,
+            "environment": "production"
+          }
+        }
+      }
+    ]
+  },
   "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
+    "strategy": "pipeline",
+    "preservedFiles": {
+      "scenario.json": "{\n  \"service\": \"orders-api\",\n  \"initial\": \"blue\",\n  \"candidate\": \"green\",\n  \"previous\": \"blue\",\n  \"schema\": \"expanded\",\n  \"message\": \"v1\",\n  \"session\": \"shared-v1\",\n  \"releases\": {\n    \"blue\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"blue\\\",\\\"build\\\":\\\"build-blue\\\"}\",\n      \"source\": \"commit-41\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"green\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"green\\\",\\\"build\\\":\\\"build-green\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"hotfix\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"hotfix\\\",\\\"build\\\":\\\"build-hotfix\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    },\n    \"rebuilt\": {\n      \"content\": \"{\\\"application\\\":\\\"orders-api\\\",\\\"release\\\":\\\"rebuilt\\\",\\\"build\\\":\\\"build-rebuilt\\\"}\",\n      \"source\": \"commit-42\",\n      \"schemas\": [\n        \"expanded\"\n      ],\n      \"messages\": [\n        \"v1\",\n        \"v2\"\n      ],\n      \"sessions\": [\n        \"shared-v1\"\n      ],\n      \"healthy\": true\n    }\n  },\n  \"config\": {\n    \"DATABASE\": \"orders-db\",\n    \"SESSION_STORE\": \"shared\",\n    \"CACHE_PREFIX\": \"orders\"\n  },\n  \"secretRefs\": [\n    \"secret/orders-db\"\n  ],\n  \"approvedSource\": \"commit-42\",\n  \"builder\": \"ci-builder\",\n  \"approval\": {\n    \"release\": \"green\",\n    \"actor\": \"release-owner\",\n    \"approved\": true,\n    \"environment\": \"production\"\n  },\n  \"parity\": {\n    \"database\": \"postgres-16\",\n    \"protocol\": \"https\",\n    \"schema\": \"expanded\"\n  },\n  \"cases\": [\n    {\n      \"id\": \"authorized\",\n      \"title\": \"Authorized green\",\n      \"description\": \"release-owner approved green for production.\",\n      \"changes\": {}\n    },\n    {\n      \"id\": \"other-candidate\",\n      \"title\": \"Approval for different bytes\",\n      \"description\": \"The approval names rebuilt, not green.\",\n      \"changes\": {\n        \"approval\": {\n          \"release\": \"rebuilt\",\n          \"actor\": \"release-owner\",\n          \"approved\": true,\n          \"environment\": \"production\"\n        }\n      }\n    },\n    {\n      \"id\": \"self-approval\",\n      \"title\": \"Builder self-approval\",\n      \"description\": \"The authorizing actor is ci-builder, not the independent release owner.\",\n      \"changes\": {\n        \"approval\": {\n          \"release\": \"green\",\n          \"actor\": \"ci-builder\",\n          \"approved\": true,\n          \"environment\": \"production\"\n        }\n      }\n    }\n  ]\n}\n"
+    },
+    "cases": [
       {
-        "path": ["concurrency", "group"],
-        "type": "string",
-        "equals": "production-orders-api",
-        "label": "workflow uses a production concurrency group"
+        "id": "authorized",
+        "workshop": {
+          "status": "passed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "verify",
+              "subject": "staging",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "approve",
+              "subject": "production",
+              "outcome": "passed",
+              "count": 1
+            },
+            {
+              "action": "deploy",
+              "subject": "production",
+              "outcome": "passed",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "deployed",
+            "release": "green",
+            "sameDigest": true,
+            "verified": true
+          }
+        }
       },
       {
-        "path": ["concurrency", "cancel-in-progress"],
-        "type": "boolean",
-        "equals": false,
-        "label": "production deploys do not cancel an in-flight release"
+        "id": "other-candidate",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "deploy",
+              "subject": "boundary",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "held",
+            "release": "blue",
+            "sameDigest": false
+          }
+        }
       },
       {
-        "path": ["jobs", "deploy-production", "needs"],
-        "type": "array",
-        "equals": ["build", "deploy-staging"],
-        "label": "production depends on build and deploy-staging"
-      },
-      {
-        "path": ["jobs", "deploy-production", "environment", "name"],
-        "type": "string",
-        "equals": "production",
-        "label": "production job uses the production environment"
-      },
-      {
-        "path": ["jobs", "deploy-production", "environment", "url"],
-        "type": "string",
-        "equals": "https://orders-api.devpolaris.example",
-        "label": "production environment includes the public URL"
+        "id": "self-approval",
+        "workshop": {
+          "status": "failed",
+          "events": [
+            {
+              "action": "check",
+              "subject": "initial-state",
+              "outcome": "passed"
+            },
+            {
+              "action": "deploy",
+              "subject": "boundary",
+              "outcome": "blocked",
+              "count": 1
+            }
+          ],
+          "facts": {
+            "safe": true,
+            "decision": "held",
+            "release": "blue",
+            "sameDigest": false
+          }
+        }
       }
     ]
   }
 }
-

@@ -1,18 +1,41 @@
-```yaml
-concurrency:
-  group: production-orders-api
-  cancel-in-progress: false
+### deployment.yaml
 
-jobs:
-  deploy-production:
-    needs: [build, deploy-staging]
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: https://orders-api.devpolaris.example
-    steps:
-      - run: ./scripts/deploy-ecs.sh orders-api-prod "${{ inputs.image_digest }}"
-      - run: ./scripts/smoke.sh https://orders-api.devpolaris.example
+```yaml
+version: 1
+steps:
+  - inspect: {}
+  - select:
+      release: "green"
+  - attest:
+      source: "commit-42"
+      builder: "ci-builder"
+  - stage:
+      config: "runtime.yaml"
+      secrets:
+        - "secret/orders-db"
+      parity: "parity.yaml"
+  - smoke: {}
+  - authorize:
+      environment: "production"
+      actor: "release-owner"
+  - promote: {}
+  - verify: {}
 ```
 
-The protected production environment provides the human release gate, while a stable concurrency group serializes production changes. Setting cancellation to false lets an active deployment finish safely instead of interrupting it halfway through a traffic change.
+### runtime.yaml
+
+```yaml
+DATABASE: "orders-db"
+SESSION_STORE: "shared"
+CACHE_PREFIX: "orders"
+```
+
+### parity.yaml
+
+```yaml
+database: "postgres-16"
+protocol: "https"
+schema: "expanded"
+```
+
+Production authorization is a separate digest-bound gate. Neither a different candidate approval nor the builder authorizing itself completes the required chain.

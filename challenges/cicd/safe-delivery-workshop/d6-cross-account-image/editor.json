@@ -1,0 +1,34 @@
+{
+  "language": "yaml",
+  "activeFile": "scripts/promote-image.sh",
+  "files": [
+    {
+      "filename": "scripts/promote-image.sh",
+      "initialValue": "#!/usr/bin/env bash\ndocker build -t \"$DESTINATION:production\" .\ndocker push \"$DESTINATION:production\"\n",
+      "readOnly": false
+    },
+    {
+      "filename": "iam/source-policy.json",
+      "initialValue": "{\"Version\":\"2012-10-17\",\"Statement\":[]}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "iam/destination-policy.json",
+      "initialValue": "{\"Version\":\"2012-10-17\",\"Statement\":[]}\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/accounts.txt",
+      "initialValue": "SOURCE_PROFILE and DESTINATION_PROFILE are approved AWS CLI role profiles, not embedded keys. They assume roles in accounts 111111111111 and 222222222222 respectively. Both eu-west-1 ECR orders repositories exist. Tools: AWS CLI v2, skopeo, jq. Substitute real account IDs before use. Supply a real existing DIGEST. Signed referrers are separate from image manifests and require their own transfer/verification policy.\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Copy selects a source digest and preserves all platform manifests.",
+      "Destination digest matches the approved digest before deployment.",
+      "Source reads and destination writes are repository-scoped."
+    ]
+  }
+}

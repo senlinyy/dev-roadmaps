@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Green Checks, Unsafe Merge"
 sectionSlug: how-do-required-checks-protect-the-shared-mainline
 order: 5

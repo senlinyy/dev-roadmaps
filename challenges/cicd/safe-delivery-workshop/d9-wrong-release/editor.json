@@ -1,0 +1,29 @@
+{
+  "language": "yaml",
+  "activeFile": "scripts/recover-release.sh",
+  "files": [
+    {
+      "filename": "scripts/recover-release.sh",
+      "initialValue": "#!/usr/bin/env bash\naws ecs update-service --cluster orders --service orders --force-new-deployment\n",
+      "readOnly": false
+    },
+    {
+      "filename": "scripts/validate-image.sh",
+      "initialValue": "#!/usr/bin/env bash\nexit 0\n",
+      "readOnly": false
+    },
+    {
+      "filename": "evidence/releases.json",
+      "initialValue": "{\n  \"staging\": {\n    \"task\": \"orders:42\",\n    \"image\": \"orders@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n    \"tested\": true\n  },\n  \"production\": {\n    \"task\": \"orders:43\",\n    \"image\": \"orders@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n  },\n  \"pipeline\": [\n    \"build a\",\n    \"staging verifies a\",\n    \"approval\",\n    \"production rebuild creates b\"\n  ],\n  \"database\": {\n    \"expand\": true,\n    \"contract\": false,\n    \"oldWritersCompatible\": true\n  }\n}\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Evidence identifies the rebuild after staging approval.",
+      "Recovery rejects unexpected current state and selects verified known-good bytes.",
+      "Future deployment rejects tags and does not rebuild during recovery."
+    ]
+  }
+}

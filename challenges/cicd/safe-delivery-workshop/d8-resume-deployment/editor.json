@@ -1,0 +1,34 @@
+{
+  "language": "yaml",
+  "activeFile": "scripts/resume.py",
+  "files": [
+    {
+      "filename": "scripts/resume.py",
+      "initialValue": "import subprocess\nsubprocess.run(['bash','scripts/deploy.sh'], check=True)\n",
+      "readOnly": false
+    },
+    {
+      "filename": "requirements.txt",
+      "initialValue": "boto3==1.40.40\n",
+      "readOnly": true
+    },
+    {
+      "filename": "release.json",
+      "initialValue": "{\n  \"release\": \"orders-805\",\n  \"cluster\": \"orders\",\n  \"service\": \"orders\",\n  \"previous\": \"arn:aws:ecs:eu-west-1:222222222222:task-definition/orders:41\",\n  \"candidate\": \"arn:aws:ecs:eu-west-1:222222222222:task-definition/orders:42\",\n  \"image\": \"222222222222.dkr.ecr.eu-west-1.amazonaws.com/orders@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "evidence/coordinator.txt",
+      "initialValue": "Existing table orders-releases: string partition key service. Item service=orders/orders, desiredRelease=orders-805. Protected coordinator changes desiredRelease only when owner is absent. Only deployment identity claims/completes. All service writers use this coordinator. CI serializes attempts per service, including same-release retries. No TTL on active ownership. Release records are protected approved inputs, not arbitrary user JSON.\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Retry reuses the candidate without building or registering another task definition.",
+      "Superseded desired releases and unexpected service revisions are rejected.",
+      "Failure retains the claim; success records completion."
+    ]
+  }
+}

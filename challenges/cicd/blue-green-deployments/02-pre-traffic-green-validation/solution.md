@@ -1,15 +1,32 @@
-```yaml
-env:
-  TEST_URL: https://orders-api-test.devpolaris.example
-  EXPECTED_TASK_DEFINITION: orders-api:42
+### deployment.yaml
 
-jobs:
-  validate-green:
-    runs-on: ubuntu-latest
-    steps:
-      - run: ./scripts/check-ready.sh "$TEST_URL/readyz"
-      - run: ./scripts/check-version.sh "$TEST_URL" "$EXPECTED_TASK_DEFINITION"
-      - run: ./scripts/smoke-checkout.sh "$TEST_URL"
+```yaml
+version: 1
+steps:
+  - inspect: {}
+  - prepare:
+      config: "runtime.yaml"
+      secrets:
+        - "secret/orders-db"
+      timeout: 60
+  - validate:
+      checks:
+        - "health"
+        - "config"
+        - "sessions"
+        - "schema"
+        - "queue"
+  - switch:
+      target: "green"
+  - verify: {}
 ```
 
-Before the traffic switch, the public endpoint still represents blue. Running readiness, version, and checkout checks through the test listener proves that green is both reachable and running the intended task definition.
+### runtime.yaml
+
+```yaml
+DATABASE: "orders-db"
+SESSION_STORE: "shared"
+CACHE_PREFIX: "orders"
+```
+
+Correct shared runtime settings remove environment drift. A separate codec failure still blocks the switch, demonstrating that configuration cannot repair incompatible application bytes.

@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Unit Tests Pass, Integration Fails"
 sectionSlug: what-does-a-ci-runner-actually-do
 order: 6

@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "The Failed Test Lost Its Evidence"
 sectionSlug: why-do-artifacts-carry-outputs-between-jobs
 order: 3

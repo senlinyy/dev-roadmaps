@@ -1,10 +1,9 @@
 ---
 title: "Rolling Deployments"
-description: "Automate an ECS rolling rollout, recognize rollout failure modes, and keep the previous task definition ready for rollback."
+description: "Simulate safe capacity, application readiness, graceful draining and compatible rollout recovery."
 articleId: article-cicd-deployment-strategies-rolling-deployments-and-rollbacks
 articleSlug: rolling-deployments-and-rollbacks
 difficulty: medium
 order: 11
 tags: ["deployment", "rolling", "ecs", "rollback", "readiness"]
 ---
-

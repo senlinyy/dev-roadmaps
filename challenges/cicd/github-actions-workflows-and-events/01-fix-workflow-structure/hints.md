@@ -1,1 +1,9 @@
-YAML indentation defines ownership. A workflow owns jobs, a job owns its runner choice, and that job owns its steps. Move the command list under a named job instead of making it a sibling of the job map.
+Inspect which job actually owns package.json and node_modules.
+
+---
+
+A needs edge transfers completion, not the upstream filesystem.
+
+---
+
+Prepare validation and packaging separately; make packaging wait for validation.

@@ -1,29 +1,33 @@
+### deployment.yaml
+
 ```yaml
-verification:
-  window:
-    start: 2026-04-30T21:00:00Z
-    end: 2026-04-30T21:15:00Z
-  metrics:
-    - name: 5xx rate
-      target: below 0.2%
-      observed: 0.03%
-    - name: checkout success
-      target: above 99.0%
-      observed: 99.5%
-    - name: p95 latency
-      target: below 250 ms
-      observed: 190 ms
-    - name: payment provider errors
-      target: no increase
-      observed: no increase
-    - name: new error pattern
-      target: none
-      observed: none
-final_state:
-  production_task_definition: orders-api:42
-  traffic_percent: 100
-  verified_by: Maya
-  verified_at: 2026-04-30T21:15:00Z
+version: 1
+steps:
+  - inspect: {}
+  - preflight:
+      checks:
+        - "baseline"
+        - "lock"
+        - "capacity"
+        - "compatibility"
+        - "rollback"
+        - "authorization"
+  - execute:
+      operation: "migrate-expand"
+      retry: "resume"
+  - execute:
+      operation: "deploy"
+      retry: "resume"
+  - postflight:
+      onFailure: "rollback"
+  - execute:
+      operation: "record"
+      retry: "resume"
+  - execute:
+      operation: "contract"
+      retry: "resume"
+  - postflight:
+      onFailure: "escalate"
 ```
 
-The record ties the production state to a defined observation window and concrete service signals. That evidence makes the release auditable and gives the next operator a baseline for comparison.
+Irreversible contract is separately authorized after verified release state. Later failure stops automation and escalates without crossing back through an unavailable binary rollback path.

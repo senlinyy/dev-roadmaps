@@ -1,2 +1,9 @@
-The deployment being in progress is not enough. Put the watch step between canary creation and final success, and serialize production canaries so two releases cannot blur the same metrics.
+Compare release-segmented windows, not just the combined service totals.
 
+---
+
+Each exposure needs adequate samples and elapsed time before the next weight; a passing error threshold alone is insufficient.
+
+---
+
+Use the stated release budgets and inspect where the failure case must stop.

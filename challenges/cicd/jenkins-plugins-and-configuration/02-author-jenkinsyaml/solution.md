@@ -1,23 +1,36 @@
+### maintenance.yaml
+
+```yaml
+operations:
+  - build
+  - boot
+  - smoke
+  - promote
+```
+
+### jenkins.yaml
+
 ```yaml
 jenkins:
-  systemMessage: "devpolaris-jenkins (managed by CasC)"
+  systemMessage: Checkout controller managed by code
   numExecutors: 0
   mode: EXCLUSIVE
   securityRealm:
     local:
       allowsSignup: false
       users:
-        - id: devpolaris-admin
-          password: ${POLARIS_ADMIN_PASSWORD}
+        - id: jenkins-admin
+          password: '${JENKINS_ADMIN_PASSWORD}'
   authorizationStrategy:
-    roleBased:
-      roles:
-        global:
-          - name: admin
-            permissions:
-              - "Overall/Administer"
-            assignments:
-              - devpolaris-admin
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+unclassified:
+  location:
+    url: https://jenkins.example.com/
 ```
 
-- `numExecutors: 0` plus `mode: EXCLUSIVE` is the standard production pair: the controller never runs builds, and unlabeled jobs cannot accidentally land on labeled agents either. The local realm uses an env-var-resolved password so the cleartext never sits in git. Role-based auth gives the admin user a single global role with a clear permission set; further roles can be added under the same `global:` list or via `items:` and `agents:` for finer scoping.
+Smoke checks loaded settings and the Node job, not only YAML syntax. Missing secrets prevent boot and promotion. The one-admin realm is an isolated training fixture, not an organization-wide authorization design.
+
+The solution binds later work to the inputs and evidence it actually consumes. It preserves the negative cases instead of turning a failed check into a successful release.
+
+Reference: [Jenkins Configuration as Code](https://www.jenkins.io/doc/book/managing/casc/).

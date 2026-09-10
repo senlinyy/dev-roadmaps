@@ -1,4 +1,5 @@
 ---
+retired: true
 title: "Stop an Unsafe Release"
 sectionSlug: how-should-security-gates-and-exceptions-be-designed
 order: 1

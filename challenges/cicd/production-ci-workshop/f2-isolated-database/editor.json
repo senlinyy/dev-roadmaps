@@ -1,0 +1,79 @@
+{
+  "language": "yaml",
+  "activeFile": ".github/workflows/integration.yml",
+  "files": [
+    {
+      "filename": ".github/workflows/integration.yml",
+      "initialValue": "name: Integration\non: [pull_request]\njobs:\n  integration:\n    runs-on: ubuntu-24.04\n    env:\n      DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020\n        with:\n          node-version: '22'\n          cache: npm\n      - run: npm ci\n      - run: npm run integration\n",
+      "readOnly": false
+    },
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"name\": \"orders-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"build\": \"tsc\",\n    \"lint\": \"tsc --noEmit\",\n    \"test\": \"node --test test/unit.test.mjs\",\n    \"integration\": \"node --test test/integration.test.mjs\",\n    \"start\": \"node dist/server.js\"\n  },\n  \"devDependencies\": {\n    \"typescript\": \"5.9.3\"\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "tsconfig.json",
+      "initialValue": "{\"compilerOptions\":{\"target\":\"ES2022\",\"module\":\"NodeNext\",\"outDir\":\"dist\",\"allowJs\":true},\"include\":[\"src/**/*\"]}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/server.js",
+      "initialValue": "import http from 'node:http';\nconst port = Number(process.env.PORT || 3000);\nlet ready = true;\nconst server = http.createServer((req, res) => {\n  if (req.url === '/ready') {\n    res.writeHead(ready ? 200 : 503).end(ready ? 'ready' : 'draining');\n  } else if (req.url === '/version') {\n    res.end(process.env.RELEASE_ID || 'development');\n  } else if (req.url === '/orders') {\n    res.setHeader('content-type', 'application/json');\n    res.end(JSON.stringify({orders: []}));\n  } else {\n    res.writeHead(404).end();\n  }\n});\nserver.listen(port, '0.0.0.0');\nprocess.on('SIGTERM', () => {\n  ready = false;\n  server.close(() => process.exit(0));\n  setTimeout(() => process.exit(1), 25000).unref();\n});\n",
+      "readOnly": true
+    },
+    {
+      "filename": "test/unit.test.mjs",
+      "initialValue": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport {total} from '../src/order.js';\ntest('sums line items', () => assert.equal(total([1200,800]), 2000));\ntest('rejects empty and invalid orders', () => {\n  for (const items of [[], [0], [-1], [1.5]]) assert.throws(() => total(items));\n});\n",
+      "readOnly": true
+    },
+    {
+      "filename": "test/integration.test.mjs",
+      "initialValue": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport {execFileSync} from 'node:child_process';\ntest('orders schema is usable', () => {\n  const result = execFileSync('psql', [process.env.DATABASE_URL, '-v', 'ON_ERROR_STOP=1', '-Atc', \"BEGIN; INSERT INTO orders(id,total_cents) VALUES ('ci-order',100); SELECT total_cents FROM orders WHERE id='ci-order'; ROLLBACK;\"], {encoding:'utf8'});\n  assert.match(result, /100/);\n});\n",
+      "readOnly": true
+    },
+    {
+      "filename": "db/001-orders.sql",
+      "initialValue": "CREATE TABLE IF NOT EXISTS orders (id text PRIMARY KEY, total_cents integer NOT NULL CHECK(total_cents > 0));\n",
+      "readOnly": true
+    },
+    {
+      "filename": "Dockerfile",
+      "initialValue": "FROM node:22-bookworm-slim AS build\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY tsconfig.json ./\nCOPY src ./src\nRUN npm run build\nFROM node:22-bookworm-slim\nENV NODE_ENV=production\nWORKDIR /app\nCOPY --from=build --chown=node:node /app/dist ./dist\nCOPY --from=build --chown=node:node /app/package.json ./package.json\nUSER node\nEXPOSE 3000\nCMD [\"node\",\"dist/server.js\"]\n",
+      "readOnly": true
+    },
+    {
+      "filename": ".dockerignore",
+      "initialValue": "node_modules\ndist\n.git\n.env*\n",
+      "readOnly": true
+    },
+    {
+      "filename": "scripts/smoke.sh",
+      "initialValue": "#!/usr/bin/env bash\nset -euo pipefail\n: \"${IMAGE:?Set an immutable image reference}\"\ncontainer=$(docker run -d -p 127.0.0.1::3000 \"$IMAGE\")\ntrap 'docker logs \"$container\"; docker rm -f \"$container\" >/dev/null' EXIT\nport=$(docker inspect --format '{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}' \"$container\")\nfor attempt in {1..30}; do\n  if curl -fsS \"http://127.0.0.1:$port/ready\"; then\n    curl -fsS \"http://127.0.0.1:$port/orders\" | jq -e '.orders | type == \"array\"'\n    exit 0\n  fi\n  sleep 1\ndone\nexit 1\n",
+      "readOnly": true
+    },
+    {
+      "filename": "package-lock.json",
+      "initialValue": "{\n  \"name\": \"orders-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"orders-api\",\n      \"version\": \"1.0.0\",\n      \"devDependencies\": {\n        \"typescript\": \"5.9.3\"\n      }\n    },\n    \"node_modules/typescript\": {\n      \"version\": \"5.9.3\",\n      \"resolved\": \"https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz\",\n      \"integrity\": \"sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==\",\n      \"dev\": true,\n      \"license\": \"Apache-2.0\",\n      \"bin\": {\n        \"tsc\": \"bin/tsc\",\n        \"tsserver\": \"bin/tsserver\"\n      },\n      \"engines\": {\n        \"node\": \">=14.17\"\n      }\n    }\n  }\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/order.js",
+      "initialValue": "export function total(items) {\n  if (!items.length || items.some(value => !Number.isInteger(value) || value <= 0)) throw new Error('Invalid order');\n  return items.reduce((sum, value) => sum + value, 0);\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "evidence/database.log",
+      "initialValue": "ERROR: duplicate key value violates unique constraint orders_pkey\nTwo runs used staging-orders.internal/orders simultaneously.\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "reference-review",
+    "checklist": [
+      "Each job uses a fresh PostgreSQL instance with explicit readiness.",
+      "Migrations and test assertions run against that job's database.",
+      "A bad migration fails CI without touching staging."
+    ]
+  }
+}
